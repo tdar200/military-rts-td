@@ -47,7 +47,7 @@ can never diverge.
 | Co-op | Deferred until after single-player MVP | Sim supports it; networking is real work |
 | Core language | **Rust** | Strict, fast, multi-target, no GC |
 | Backend↔frontend | **Shared deterministic core, zero drift** | Same crate on client + server |
-| Render shell | **Macroquad** (recommended) | Lightweight 2D, tiny WASM, all platforms; Bevy is the fallback |
+| Render shell | **Macroquad** (decided) | Pure-Rust immediate-mode shell; tiny WASM, all 5 targets (Android first-class). Godot+gdext / Bevy evaluated & rejected |
 | Determinism | **Fixed-point math** (`fixed` crate), no floats in core | Float math diverges across targets |
 
 ## Architecture — one shared core, many shells
@@ -96,8 +96,10 @@ server/      # headless build of `core` for authoritative validation / lockstep
 - Same shell code compiles to desktop (native), web (WASM → canvas/WebGL via
   miniquad), and mobile (iOS/Android via miniquad). UI via `egui` if needed
   (WASM-compatible).
-- **Bevy 0.18** is the documented fallback if we later need heavier rendering;
-  the core is engine-agnostic so swapping shells is contained.
+- **Godot+gdext / Bevy 0.18** were evaluated and rejected for v1 (Godot adds a C++
+  engine + FFI boundary with experimental Rust-on-mobile/web; Bevy has heavy API
+  churn and rougher mobile). The core is engine-agnostic, so the shell is swappable
+  later if needs change.
 
 ### Backend server (same core, authoritative)
 
@@ -262,7 +264,8 @@ The shared-core design makes this straightforward:
 - Exact map dimensions, lane count (2 vs 3), and flanking-terrain ratio.
 - Fixed-point configuration: which `fixed` type/precision; `cordic` vs lookup
   tables for trig.
-- Render shell confirm: **Macroquad** (recommended) vs Bevy 0.18.
+- Render shell: **Macroquad — decided.** (Godot+gdext and Bevy 0.18 evaluated and
+  rejected for v1; core is engine-agnostic so the shell is swappable later.)
 - Mobile delivery: direct miniquad build vs a `uniffi`-exposed core behind native
   UI (only relevant if shells diverge per platform).
 - Flow-field vs A* split: how much movement is lane-following vs free A*.
