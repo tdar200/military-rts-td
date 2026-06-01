@@ -514,6 +514,156 @@ impl Sim {
     }
 }
 
+impl Sim {
+    /// Rule-based commands for `player` this tick: follow a build order, train
+    /// infantry from an idle barracks, and attack-move idle units toward the
+    /// enemy base. Pure function of state (no RNG), so AI-vs-AI replays bit-for-bit.
+    #[must_use]
+    pub fn ai_commands(&self, player: PlayerId) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        let Some(cc_tile) = self.command_center_tile(player) else {
+            return cmds; // no base, no orders
+        };
+        let credits = self.credits(player);
+
+        // Build order: act on the first missing essential, then build no more
+        // this tick (keeps spending paced and deterministic).
+        let mut building_this_tick = false;
+        for kind in [
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Barracks,
+        ] {
+            if !self.has_building(player, kind) {
+                if credits >= kind.stats().cost {
+                    if let Some((x, y)) = self.find_buildable_near(cc_tile) {
+                        cmds.push(Command::Build {
+                            owner: player,
+                            kind,
+                            x,
+                            y,
+                        });
+                    }
+                }
+                building_this_tick = true;
+                break;
+            }
+        }
+
+        // Economy is up: train infantry from an idle barracks.
+        if !building_this_tick {
+            if let Some(barracks) = self.idle_barracks(player) {
+                if credits >= UnitKind::Infantry.stats().cost {
+                    cmds.push(Command::Train {
+                        owner: player,
+                        barracks,
+                        kind: UnitKind::Infantry,
+                    });
+                }
+            }
+        }
+
+        // Always push idle units toward the enemy base.
+        if let Some(target) = self.enemy_command_center_pos(player) {
+            for unit in self.idle_units(player) {
+                cmds.push(Command::Move {
+                    owner: player,
+                    unit,
+                    target,
+                });
+            }
+        }
+        cmds
+    }
+
+    fn command_center_tile(&self, player: PlayerId) -> Option<(u16, u16)> {
+        self.entities
+            .iter()
+            .find(|e| {
+                e.alive
+                    && e.owner == player
+                    && e.kind == Kind::Building(BuildingKind::CommandCenter)
+            })
+            .and_then(|e| e.tile)
+    }
+
+    fn enemy_command_center_pos(&self, player: PlayerId) -> Option<Vec2> {
+        let enemy = PlayerId(1 - player.0);
+        self.entities
+            .iter()
+            .find(|e| {
+                e.alive && e.owner == enemy && e.kind == Kind::Building(BuildingKind::CommandCenter)
+            })
+            .map(|e| e.pos)
+    }
+
+    fn has_building(&self, player: PlayerId, kind: BuildingKind) -> bool {
+        self.entities
+            .iter()
+            .any(|e| e.alive && e.owner == player && e.kind == Kind::Building(kind))
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
+    fn idle_barracks(&self, player: PlayerId) -> Option<EntityId> {
+        self.entities
+            .iter()
+            .enumerate()
+            .find(|(_, e)| {
+                e.alive
+                    && e.owner == player
+                    && e.kind == Kind::Building(BuildingKind::Barracks)
+                    && e.build_queue.is_empty()
+            })
+            .map(|(i, _)| EntityId(i as u32))
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
+    fn idle_units(&self, player: PlayerId) -> Vec<EntityId> {
+        self.entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.alive
+                    && e.owner == player
+                    && matches!(e.kind, Kind::Unit(_))
+                    && e.move_target.is_none()
+            })
+            .map(|(i, _)| EntityId(i as u32))
+            .collect()
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "scan stays within the bounds-checked, non-negative u16 grid"
+    )]
+    fn find_buildable_near(&self, center: (u16, u16)) -> Option<(u16, u16)> {
+        let cx = i32::from(center.0);
+        let cy = i32::from(center.1);
+        for r in 1..=24i32 {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()) != r {
+                        continue;
+                    }
+                    let x = cx + dx;
+                    let y = cy + dy;
+                    if x >= 0 && y >= 0 && self.map.tile(x, y).is_some_and(|t| t.buildable) {
+                        return Some((x as u16, y as u16));
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BuildingKind, Command, EntityId, PlayerId, Sim, UnitKind};
@@ -697,5 +847,37 @@ mod tests {
             b.step(&[]);
             assert_eq!(a.state_hash(), b.state_hash());
         }
+    }
+
+    #[test]
+    fn ai_builds_up_its_economy_and_army() {
+        let mut s = Sim::new(Map::new(32, 32), 1, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 4, 4);
+        for _ in 0..400 {
+            let cmds = s.ai_commands(P0);
+            s.step(&cmds);
+        }
+        // It should have expanded its base and trained at least one unit.
+        assert!(s.unit_count(P0) >= 1);
+        assert!(s.entity_count() >= 4); // CC + power + refinery + barracks (+ units)
+    }
+
+    fn run_ai_vs_ai(seed: u64) -> Vec<u64> {
+        let mut s = Sim::new(Map::new(40, 40), seed, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 4, 4);
+        s.add_building(P1, BuildingKind::CommandCenter, 35, 35);
+        let mut hashes = Vec::new();
+        for _ in 0..300 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            hashes.push(s.state_hash());
+        }
+        hashes
+    }
+
+    #[test]
+    fn ai_vs_ai_is_deterministic() {
+        assert_eq!(run_ai_vs_ai(7), run_ai_vs_ai(7));
     }
 }
