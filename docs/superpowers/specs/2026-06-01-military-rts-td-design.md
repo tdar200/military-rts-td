@@ -1,6 +1,6 @@
 # Military RTS + Tower Defense — Design Spec
 
-**Date:** 2026-06-01
+**Date:** 2026-06-01 (revised 2026-06-02: shared Rust core / multi-device pivot)
 **Status:** Approved (brainstorming complete) — ready for implementation planning
 **Working title:** *(TBD — placeholder project name: `military-rts-td`)*
 
@@ -9,17 +9,27 @@
 A military real-time strategy game fused with tower defense and DOTA-style lane
 pressure: build a base and economy, defend it with units and static towers, and
 push the lanes to destroy the enemy base. Single-player vs AI first, architected
-so PvP can be added later.
+so PvP can be added later. Built on a **single deterministic Rust core** shared
+across desktop, web, mobile, **and the backend server** — so client and server
+can never diverge.
 
 ## Goals & constraints
 
 - **Goal:** A polished, shippable/sellable game. Long road accepted.
 - **Audience hook ("the game that doesn't quit"):** replayability from the
   attack/defend tension and varied skirmish matches.
-- **Engine:** Godot 4 with C#. Free (no royalties), strong 2D tooling. Unity (C#)
-  is an acceptable alternative; the architecture is engine-agnostic by design.
-- **Perspective:** 2D / 2.5D top-down (Path A). 3D explicitly deferred — the sim
-  core could drive a 3D renderer later if the game succeeds.
+- **Zero backend↔frontend drift (hard requirement):** frontend and backend run
+  the *exact same* deterministic simulation core. They must never disagree. This
+  is what enables authoritative server validation and lockstep PvP.
+- **Strictest possible compiler:** Rust, with maximal lint strictness (deny
+  warnings, Clippy pedantic, forbid `unsafe` in the core, and **forbid float
+  arithmetic in the deterministic core** so determinism is compiler-enforced).
+- **Performance:** native-fast core; no GC pauses; tight fixed-timestep sim.
+- **Multi-device bundling (first-class):** one core crate compiles to Windows,
+  macOS, Linux (native), the browser (WASM), and mobile (iOS/Android), plus a
+  headless server build.
+- **Perspective:** 2D / 2.5D top-down. 3D explicitly deferred — the core could
+  drive a 3D renderer later if the game succeeds.
 - **Mode:** Single-player & co-op *vs AI* is the target; **single-player ships
   first**, co-op deferred, PvP deferred (but architecturally enabled).
 
@@ -35,45 +45,91 @@ so PvP can be added later.
 | Replayability | Skirmish + AI core first, campaign later | Engine is the valuable part |
 | Resource gathering | Passive trickle (no harvester micro) in v1 | Simpler, still strategic |
 | Co-op | Deferred until after single-player MVP | Sim supports it; networking is real work |
+| Core language | **Rust** | Strict, fast, multi-target, no GC |
+| Backend↔frontend | **Shared deterministic core, zero drift** | Same crate on client + server |
+| Render shell | **Macroquad** (recommended) | Lightweight 2D, tiny WASM, all platforms; Bevy is the fallback |
+| Determinism | **Fixed-point math** (`fixed` crate), no floats in core | Float math diverges across targets |
 
-## Architecture — the simulation / render split
+## Architecture — one shared core, many shells
 
-The single most important architectural decision. The game is two layers:
+The defining decision: a single **deterministic simulation core** crate that
+every target shares. Nothing platform-specific, no rendering, no I/O, no floats.
 
-### Simulation layer (deterministic, headless)
+```
+core/        # pure Rust sim crate — deterministic, fixed-point, no_std-friendly
+data/        # unit/building/tower stats as data files (RON/JSON), not code
+render-shell # thin per-platform view+input layer (Macroquad) -> desktop/web/mobile
+server/      # headless build of `core` for authoritative validation / lockstep
+```
 
-- Pure C#, **no Godot/engine dependencies**, **no rendering**.
+### Simulation core (deterministic, headless, portable)
+
+- **Pure Rust, no engine/OS dependencies, no rendering.** `no_std`-friendly to
+  mechanically prevent accidental use of system time, threads, or I/O.
 - Advances the world in discrete **fixed-timestep ticks**.
 - Holds all game state: units, buildings, towers, resources, projectiles, AI.
 - **Determinism rules (hard requirements):**
-  - No floating-point from engine physics; use fixed-point or carefully
-    controlled integer/deterministic math for all sim quantities.
-  - No `System.Random` — only a **seeded, deterministic RNG** owned by the sim.
-  - No reading wall-clock time or frame time inside the sim.
-  - Same starting state + same ordered input stream ⇒ **identical** end state.
-- Player and AI both feed the sim via **queued, ordered commands** (build here,
+  - **No floating point.** All sim quantities (positions, velocities, health,
+    timers) use a **fixed-point type** (`fixed` crate). Trig/roots via `cordic`
+    or lookup tables — never `std` transcendental functions (they diverge across
+    libm/WASM). This rule is **enforced by a Clippy lint denying float
+    arithmetic in the core crate**, not just by convention.
+  - **Seeded, deterministic RNG only** (e.g. a small PRNG owned by the sim). No
+    OS entropy, no thread-local RNG.
+  - **No wall-clock / frame-time reads** inside the core.
+  - Same starting state + same ordered input stream ⇒ **bit-identical** end
+    state on every target (desktop, WASM, mobile, server).
+- Player and AI both feed the core via **queued, ordered commands** (build here,
   move these units, set rally, etc.).
-- **Fixed-point is non-negotiable** (research-confirmed): cross-platform float
-  math drifts (observed `87` vs `87.000000002424` for the same calc on different
-  CPUs), and even an integer stored in a `float` can drift. Adopt a C# fixed-point
-  type for *every* sim quantity (positions, velocities, health, timers) from day
-  one — retrofitting later is painful. Candidate libraries: FixPointCS /
-  FixedMath.Net (evaluate during planning).
+- **Why fixed-point (research-confirmed):** cross-target float math diverges —
+  32- vs 64-bit (x87 vs SSE2), compiler/opt differences, and especially
+  transcendental functions across libm/WASM. Observed drift as small as
+  `87` vs `87.000000002424` compounds into desyncs. Fixed-point is the proven
+  cross-platform-deterministic approach (cf. rustsim's deterministic physics).
 
-### Render layer (Godot)
+### Render shells (thin, per-platform)
 
-- Godot scenes/sprites read sim state each frame and draw it, with
-  **interpolation** between ticks for visual smoothness.
-- Captures player input and translates it into sim commands.
-- Owns nothing authoritative — purely a view + input shell.
+- A lightweight **Macroquad** layer reads core state each frame and draws it,
+  with **interpolation** between ticks for visual smoothness.
+- Captures input and translates it into core commands. Owns nothing
+  authoritative — purely a view + input shell.
+- Same shell code compiles to desktop (native), web (WASM → canvas/WebGL via
+  miniquad), and mobile (iOS/Android via miniquad). UI via `egui` if needed
+  (WASM-compatible).
+- **Bevy 0.18** is the documented fallback if we later need heavier rendering;
+  the core is engine-agnostic so swapping shells is contained.
+
+### Backend server (same core, authoritative)
+
+- The **server links the identical `core` crate**, compiled headless/native.
+- Roles: authoritative validation (re-simulate from inputs to detect cheating /
+  desync), matchmaking/lobby, and the lockstep relay for PvP later.
+- Because client and server run the same deterministic code, "is the client
+  lying?" reduces to "does the server's re-simulation match?" — no separate,
+  drift-prone server logic to maintain.
 
 ### Why this split
 
-- The sim is **fully headless-testable** (thousands of battles in unit tests, no
-  window).
+- The core is **fully headless-testable** (thousands of battles in unit tests,
+  no window, on any platform incl. CI).
 - AI, balance, tower/lane logic live in clean, isolated, testable code.
-- **Lockstep PvP later** becomes "synchronize input streams across clients"
-  rather than "rewrite the game."
+- **Multi-device bundling is intrinsic:** one core, many thin shells.
+- **Zero drift + lockstep PvP** become "synchronize the input streams" rather
+  than "reconcile two different implementations."
+
+## Strictness, build & multi-device bundling
+
+- **Workspace:** Cargo workspace with `core`, `render-shell`, `server`, `data`.
+- **Lints (strictest):** `#![forbid(unsafe_code)]` in `core`; deny warnings;
+  Clippy `pedantic` + `nursery` denied; **deny float arithmetic in `core`**
+  (`clippy::float_arithmetic`) to compiler-enforce determinism; `cargo-deny` for
+  dependency/license/security gating.
+- **Targets:** native desktop (Win/macOS/Linux), `wasm32-unknown-unknown`
+  (browser), iOS/Android (via miniquad/macroquad), and a headless `server`
+  binary. CI builds and tests all targets.
+- **Performance posture:** fixed-timestep core decoupled from render frame rate;
+  data-oriented state (contiguous arrays/slotmaps) for cache-friendliness;
+  profile before optimizing.
 
 ## The match
 
@@ -95,9 +151,9 @@ The single most important architectural decision. The game is two layers:
 Performance lesson from the field: naive per-unit pathfinding tanks an RTS
 (reports of `<15 fps` at ~300 units doing per-frame pathfinding). Our approach:
 
-- **Roll our own deterministic pathfinding inside the sim** — fixed-point grid
-  A* plus **flow-fields**. Do **not** use Godot's `NavigationAgent` /
-  `NavigationServer`: it is float-based (non-deterministic) and does not scale.
+- **Pathfinding lives in the deterministic core** — fixed-point grid A* plus
+  **flow-fields**. Do **not** use an engine navmesh/agent: float-based ones are
+  non-deterministic and per-unit pathing does not scale.
 - **Lanes are a performance ally:** precompute a **flow-field per lane** toward
   the enemy base once; units cheaply follow the field instead of each running
   A*. Reserve per-unit A* for off-lane maneuvering and re-routing around new
@@ -129,10 +185,10 @@ Rock-paper-scissors so balance is legible and the AI is teachable:
 - **Anti-armor** — strong vs tanks; weak vs infantry swarm.
 - **Air** (helicopters) — hits anything, fragile; weak vs dedicated AA.
 - **Total vision: ~5–6 unit types. MVP: 3.**
-- Combat is **auto-resolved by the sim**: attack range, cooldown, and a
+- Combat is **auto-resolved by the core**: attack range, cooldown, and a
   **damage-type vs armor-type table**.
-- **All unit/building/tower stats live in data files (JSON / Godot resources),
-  not code** — balancing is editing a table, not recompiling.
+- **All unit/building/tower stats live in data files (RON/JSON), not code** —
+  balancing is editing a table, not recompiling. Stats parse into fixed-point.
 
 ## Towers / static defense (the TD half)
 
@@ -146,13 +202,13 @@ Rock-paper-scissors so balance is legible and the AI is teachable:
 
 ## AI opponent
 
-- Because everything is in the deterministic sim, the AI is **just another input
+- Because everything is in the deterministic core, the AI is **just another input
   source** — no special engine hooks.
 - **MVP AI:** rule-based / behavior-tree with build orders and simple lane
   pressure logic: maintain economy ratio → mass army to a threshold → push the
   weakest lane → retreat if losing. (Research note: behavior trees are the
   modular, designer-friendly standard and stay predictable — a good fit for a
-  deterministic sim; FSMs scale poorly. Open RTS-BT reference implementations
+  deterministic core; FSMs scale poorly. Open RTS-BT reference implementations
   exist to study.)
 - **Difficulty:** resource handicaps + aggression tuning.
 - **Testable:** AI-vs-AI matches run headlessly in CI to catch balance breaks and
@@ -171,20 +227,25 @@ Rock-paper-scissors so balance is legible and the AI is teachable:
 - **1 rule-based AI** with difficulty tuning.
 - Full attack/defend → destroy-base loop.
 - Win/lose screens.
+- **Runs on at least desktop + web from the shared core** (proves the bundling
+  promise early); server build exists headless even if PvP isn't wired yet.
 
-**Deferred (all slot onto the same sim core later):**
+**Deferred (all slot onto the same core later):**
 
-- Air units, multiple factions, campaign, co-op, PvP, polished art.
+- Air units, multiple factions, campaign, co-op, PvP matchmaking, polished art,
+  mobile store packaging.
 
 ## Testing strategy
 
-The sim/render split makes this straightforward:
+The shared-core design makes this straightforward:
 
-- **TDD on the sim layer.** Unit tests for: resource ticks, damage resolution,
+- **TDD on the core.** Unit tests for: resource ticks, damage resolution,
   building placement rules, win/lose detection.
-- **Determinism tests:** same seed + same inputs ⇒ identical end state.
+- **Determinism tests:** same seed + same inputs ⇒ identical end state —
+  **including cross-target** (native vs WASM produce the same final hash).
 - **AI-vs-AI smoke matches** as integration tests.
-- **Render layer:** light manual testing — all *logic* is covered headlessly.
+- **Render/shell layer:** light manual testing — all *logic* is covered
+  headlessly.
 
 ## Out of scope (explicitly, for now)
 
@@ -193,26 +254,38 @@ The sim/render split makes this straightforward:
 - Campaign/story content authoring.
 - Machine-learning AI.
 - More than two resources; harvester micro.
+- Mobile app-store packaging (the build targets exist; shipping to stores later).
 
 ## Open questions / future decisions
 
 - Final game name / faction identities / art direction.
 - Exact map dimensions, lane count (2 vs 3), and flanking-terrain ratio.
-- Fixed-point math library choice (evaluate FixPointCS / FixedMath.Net) vs
-  hand-rolled deterministic math in C#.
-- Whether Godot 4 C# or Unity C# is the final engine (low-stakes, reversible).
+- Fixed-point configuration: which `fixed` type/precision; `cordic` vs lookup
+  tables for trig.
+- Render shell confirm: **Macroquad** (recommended) vs Bevy 0.18.
+- Mobile delivery: direct miniquad build vs a `uniffi`-exposed core behind native
+  UI (only relevant if shells diverge per platform).
 - Flow-field vs A* split: how much movement is lane-following vs free A*.
+- Serialization format for save/replay and lockstep input logs.
 
-## References (from research, 2026-06-01)
+## References (from research, 2026-06-01 / 2026-06-02)
 
-- Deterministic lockstep + fixed-point math: bonsai7 "Determinism and fixed point
+- Deterministic lockstep + fixed-point: bonsai7 "Determinism and fixed point
   math"; "Deterministic Lockstep Networking Demystified" (LinkedIn, 2024);
   MonoGame forum thread on float determinism in an RTS.
-- Float drift evidence: Unity Discussions "Lockstep syncing transform properties"
-  (`87` vs `87.000000002424` across CPUs).
-- Godot RTS performance: Godot forum "optimize multiple pathfinding" (<15 fps at
-  300 units); r/godot "Godot 4 suitable for RTS? 1000 characters" and "optimize
-  RTS for hundreds/thousands of units" (throttle paths, group/battalion logic,
-  particles/shaders for individuals).
+- Float drift across targets: Unity Discussions "Lockstep syncing transform
+  properties" (`87` vs `87.000000002424`); SO "Cross Platform Floating Point
+  Consistency" (32- vs 64-bit x87/SSE2, optimization flags, transcendentals);
+  gamedev.SE "How are deterministic games possible…".
+- Rust determinism: rustsim "This month in rustsim #11" (cross-platform
+  deterministic physics via fixed-point); r/rust discussion on WASM float
+  behavior.
+- Rust engines (Feb 2026): Aarambh Dev Hub "Rust Game Engines in 2026: Bevy vs
+  Macroquad vs ggez vs Fyrox" (Bevy 0.18 / Macroquad 0.4.14); macroquad project
+  page (miniquad → desktop/web/mobile); r/rust_gamedev "Choose game engine for
+  native and wasm"; DuBlog "Making an ECS WebAssembly Game with Rust and Bevy".
+- Godot RTS performance (still informs pathfinding strategy): Godot forum
+  "optimize multiple pathfinding" (<15 fps at 300 units); r/godot threads on
+  RTS unit-count optimization.
 - AI: ScienceDirect "Survey of Behavior Trees"; Mina Pêcheux "Making an RTS game"
-  Unity/C# series (open GitHub) for BT-driven unit/AI patterns.
+  (BT-driven unit/AI patterns).
