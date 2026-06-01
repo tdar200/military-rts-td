@@ -19,3 +19,17 @@ macroquad = "0.4"
 
 [lints]
 workspace = true
+
+# Android packaging config, read by `cargo-apk` (see MOBILE.md). Ignored by a
+# normal `cargo build`.
+[package.metadata.android]
+package = "com.example.militaryrts"
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+assets = "../../web"
+
+[package.metadata.android.application]
+label = "Military RTS"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 33

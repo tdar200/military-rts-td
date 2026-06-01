@@ -45,6 +45,26 @@ pub fn gather_commands(sim: &Sim, selected: &mut Option<EntityId>, cell: f32) ->
         }
     }
 
+    // Touch (mobile): a tap on a friendly unit selects it; a tap on empty ground
+    // moves the selected unit. Same command set as mouse/keyboard — the sim never
+    // knows which device produced the input.
+    for touch in touches() {
+        if touch.phase != TouchPhase::Started {
+            continue;
+        }
+        let tx = touch.position.x / cell;
+        let ty = touch.position.y / cell;
+        if let Some(unit) = nearest_friendly_unit(sim, tx, ty) {
+            *selected = Some(unit);
+        } else if let Some(unit) = *selected {
+            cmds.push(Command::Move {
+                owner: HUMAN,
+                unit,
+                target: SimVec::new(f32_to_fixed(tx), f32_to_fixed(ty)),
+            });
+        }
+    }
+
     let tile = (wx as u16, wy as u16);
     if is_key_pressed(KeyCode::P) {
         cmds.push(build(BuildingKind::PowerPlant, tile));
