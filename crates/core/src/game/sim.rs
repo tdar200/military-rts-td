@@ -95,6 +95,33 @@ pub enum Command {
     },
 }
 
+/// Building or unit, for the render/UI layer (public projection of the internal
+/// entity kind).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum EntityKindView {
+    /// A building of the given kind.
+    Building(BuildingKind),
+    /// A unit of the given kind.
+    Unit(UnitKind),
+}
+
+/// A read-only snapshot of one living entity, for rendering and UI.
+#[derive(Clone, Copy, Debug)]
+pub struct EntityView {
+    /// Stable handle, for issuing commands back to the sim.
+    pub id: EntityId,
+    /// Owning player.
+    pub owner: PlayerId,
+    /// Building or unit (and which kind).
+    pub kind: EntityKindView,
+    /// World position.
+    pub pos: Vec2,
+    /// Current health.
+    pub hp: Fixed,
+    /// Maximum health (for health bars).
+    pub max_hp: Fixed,
+}
+
 /// The deterministic RTS world.
 #[derive(Clone, Debug)]
 pub struct Sim {
@@ -218,6 +245,31 @@ impl Sim {
     #[must_use]
     pub fn position(&self, id: EntityId) -> Option<Vec2> {
         self.entity(id).filter(|e| e.alive).map(|e| e.pos)
+    }
+
+    /// A snapshot of every living entity, for the render/UI layer.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
+    pub fn views(&self) -> Vec<EntityView> {
+        self.entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.alive)
+            .map(|(i, e)| EntityView {
+                id: EntityId(i as u32),
+                owner: e.owner,
+                kind: match e.kind {
+                    Kind::Building(b) => EntityKindView::Building(b),
+                    Kind::Unit(u) => EntityKindView::Unit(u),
+                },
+                pos: e.pos,
+                hp: e.hp,
+                max_hp: max_hp(e.kind),
+            })
+            .collect()
     }
 
     /// The winner: the only player still holding a Command Center, if exactly
@@ -724,7 +776,7 @@ impl Sim {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildingKind, Command, EntityId, PlayerId, Sim, UnitKind};
+    use super::{BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim, UnitKind};
     use crate::fixed::Fixed;
     use crate::game::map::Map;
     use crate::vec::Vec2;
@@ -878,6 +930,27 @@ mod tests {
         both.add_building(P0, BuildingKind::CommandCenter, 1, 1);
         both.add_building(P1, BuildingKind::CommandCenter, 10, 10);
         assert_eq!(both.winner(), None);
+    }
+
+    #[test]
+    fn views_report_living_entities_for_rendering() {
+        let mut s = Sim::new(Map::new(16, 16), 1, f(0));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 1, 1);
+        let tank = s.add_unit(P1, UnitKind::Tank, v(3, 3));
+        let views = s.views();
+        assert_eq!(views.len(), 2);
+        let cc_view = views.iter().find(|w| w.id == cc).unwrap();
+        assert_eq!(cc_view.owner, P0);
+        assert!(matches!(
+            cc_view.kind,
+            EntityKindView::Building(BuildingKind::CommandCenter)
+        ));
+        let tank_view = views.iter().find(|w| w.id == tank).unwrap();
+        assert_eq!(tank_view.pos, v(3, 3));
+        assert!(matches!(
+            tank_view.kind,
+            EntityKindView::Unit(UnitKind::Tank)
+        ));
     }
 
     fn scenario(seed: u64) -> Sim {
