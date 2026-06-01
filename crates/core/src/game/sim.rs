@@ -19,6 +19,10 @@ use alloc::vec::Vec;
 /// Number of players (single-player vs one AI for now; `PvP` later).
 pub const PLAYER_COUNT: usize = 2;
 
+/// How often (in ticks) the AI re-issues move orders to idle units, throttling
+/// pathfinding work.
+const MOVE_REISSUE_PERIOD: u64 = 20;
+
 /// Identifies a player (`0` or `1`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PlayerId(pub u8);
@@ -612,14 +616,19 @@ impl Sim {
             }
         }
 
-        // Always push idle units toward the enemy base.
-        if let Some(target) = self.enemy_command_center_pos(player) {
-            for unit in self.idle_units(player) {
-                cmds.push(Command::Move {
-                    owner: player,
-                    unit,
-                    target,
-                });
+        // Periodically push idle units toward the enemy base. Re-issuing a Move
+        // (and thus running A*) for every idle unit every tick is the classic RTS
+        // perf trap; throttling by tick keeps pathfinding cheap and is still fully
+        // deterministic.
+        if self.tick.is_multiple_of(MOVE_REISSUE_PERIOD) {
+            if let Some(target) = self.enemy_command_center_pos(player) {
+                for unit in self.idle_units(player) {
+                    cmds.push(Command::Move {
+                        owner: player,
+                        unit,
+                        target,
+                    });
+                }
             }
         }
         cmds
