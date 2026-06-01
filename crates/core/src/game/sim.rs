@@ -9,6 +9,7 @@
 
 use crate::fixed::Fixed;
 use crate::game::map::{Map, Tile};
+use crate::game::path::find_path;
 use crate::game::stats::{damage_multiplier, ArmorType, AttackProfile, BuildingKind, UnitKind};
 use crate::hash::Fnv;
 use crate::rng::Rng;
@@ -43,6 +44,8 @@ struct Entity {
     hp: Fixed,
     cooldown: u32,
     move_target: Option<Vec2>,
+    /// Remaining tile waypoints toward `move_target` (from A*), nearest first.
+    path: Vec<(u16, u16)>,
     tile: Option<(u16, u16)>,
     build_queue: Vec<UnitKind>,
     build_progress: u32,
@@ -117,6 +120,14 @@ const fn max_hp(kind: Kind) -> Fixed {
         Kind::Unit(u) => u.stats().max_hp,
         Kind::Building(b) => b.stats().max_hp,
     }
+}
+
+/// World-space center of tile `(x, y)`.
+fn tile_center(x: u16, y: u16) -> Vec2 {
+    Vec2::new(
+        Fixed::from_int(i32::from(x)) + Fixed::from_ratio(1, 2),
+        Fixed::from_int(i32::from(y)) + Fixed::from_ratio(1, 2),
+    )
 }
 
 const fn unit_tag(u: UnitKind) -> u64 {
@@ -261,6 +272,11 @@ impl Sim {
             for q in &e.build_queue {
                 h.write_u64(unit_tag(*q));
             }
+            h.write_u64(e.path.len() as u64);
+            for &(wx, wy) in &e.path {
+                h.write_u64(u64::from(wx));
+                h.write_u64(u64::from(wy));
+            }
         }
         h.finish()
     }
@@ -291,6 +307,7 @@ impl Sim {
             hp: max_hp(Kind::Building(kind)),
             cooldown: 0,
             move_target: None,
+            path: Vec::new(),
             tile: Some((x, y)),
             build_queue: Vec::new(),
             build_progress: 0,
@@ -313,6 +330,7 @@ impl Sim {
             hp: max_hp(Kind::Unit(kind)),
             cooldown: 0,
             move_target: None,
+            path: Vec::new(),
             tile: None,
             build_queue: Vec::new(),
             build_progress: 0,
@@ -375,13 +393,34 @@ impl Sim {
                 unit,
                 target,
             } => {
-                if let Some(e) = self.entities.get_mut(unit.0 as usize) {
-                    if e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_)) {
+                let idx = unit.0 as usize;
+                let valid = self.entities.get(idx).is_some_and(|e| {
+                    e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_))
+                });
+                if valid {
+                    let start = self.world_to_tile(self.entities[idx].pos);
+                    let goal = self.world_to_tile(target);
+                    if let Some(path) = find_path(&self.map, start, goal) {
+                        let e = &mut self.entities[idx];
                         e.move_target = Some(target);
+                        e.path = path;
                     }
                 }
             }
         }
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "value is clamped into the non-negative u16 grid before the cast"
+    )]
+    fn world_to_tile(&self, p: Vec2) -> (u16, u16) {
+        let max_x = i64::from(self.map.width()) - 1;
+        let max_y = i64::from(self.map.height()) - 1;
+        let x = p.x.to_int_floor().clamp(0, max_x) as u16;
+        let y = p.y.to_int_floor().clamp(0, max_y) as u16;
+        (x, y)
     }
 
     fn run_economy(&mut self) -> [bool; PLAYER_COUNT] {
@@ -442,18 +481,28 @@ impl Sim {
             if !e.alive {
                 continue;
             }
-            if let Kind::Unit(uk) = e.kind {
-                if let Some(target) = e.move_target {
-                    let speed = uk.stats().speed;
-                    let dir = target - e.pos;
-                    let dist = dir.length();
-                    if dist <= speed {
-                        e.pos = target;
-                        e.move_target = None;
-                    } else {
-                        e.pos = e.pos + dir.scale(speed / dist);
-                    }
+            let Kind::Unit(uk) = e.kind else { continue };
+            let Some(target) = e.move_target else {
+                continue;
+            };
+            let speed = uk.stats().speed;
+            // Head to the next waypoint, or straight to the target once the path
+            // is exhausted.
+            let subgoal = e
+                .path
+                .first()
+                .map_or(target, |&(wx, wy)| tile_center(wx, wy));
+            let dir = subgoal - e.pos;
+            let dist = dir.length();
+            if dist <= speed {
+                e.pos = subgoal;
+                if e.path.is_empty() {
+                    e.move_target = None;
+                } else {
+                    e.path.remove(0);
                 }
+            } else {
+                e.pos = e.pos + dir.scale(speed / dist);
             }
         }
     }
@@ -787,6 +836,27 @@ mod tests {
         }
         assert!(!s.is_alive(wall));
         assert!(s.is_alive(tank));
+    }
+
+    #[test]
+    fn unit_does_not_move_to_a_walled_off_target() {
+        let mut s = Sim::new(Map::new(8, 8), 1, f(0));
+        // A full wall on column x=4 splits the map in two.
+        for y in 0..8 {
+            s.add_building(P1, BuildingKind::Wall, 4, y);
+        }
+        let u = s.add_unit(P0, UnitKind::Infantry, v(0, 0));
+        let before = s.position(u);
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: u,
+            target: Vec2::new(f(7), f(7)),
+        }]);
+        for _ in 0..50 {
+            s.step(&[]);
+        }
+        // No route across the wall, so the unit never accepted a move target.
+        assert_eq!(s.position(u), before);
     }
 
     #[test]
