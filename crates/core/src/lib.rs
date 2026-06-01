@@ -21,6 +21,7 @@
 extern crate alloc;
 
 pub mod fixed;
+pub mod game;
 pub mod hash;
 pub mod rng;
 pub mod vec;
