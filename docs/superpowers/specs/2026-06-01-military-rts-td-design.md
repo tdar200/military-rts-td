@@ -53,6 +53,12 @@ The single most important architectural decision. The game is two layers:
   - Same starting state + same ordered input stream ⇒ **identical** end state.
 - Player and AI both feed the sim via **queued, ordered commands** (build here,
   move these units, set rally, etc.).
+- **Fixed-point is non-negotiable** (research-confirmed): cross-platform float
+  math drifts (observed `87` vs `87.000000002424` for the same calc on different
+  CPUs), and even an integer stored in a `float` can drift. Adopt a C# fixed-point
+  type for *every* sim quantity (positions, velocities, health, timers) from day
+  one — retrofitting later is painful. Candidate libraries: FixPointCS /
+  FixedMath.Net (evaluate during planning).
 
 ### Render layer (Godot)
 
@@ -83,6 +89,22 @@ The single most important architectural decision. The game is two layers:
   5. Defend against their counter-pushes/waves.
 - The core tension — and the replayability hook — is **splitting resources and
   attention between offense and defense.**
+
+## Pathfinding & movement (research-informed)
+
+Performance lesson from the field: naive per-unit pathfinding tanks an RTS
+(reports of `<15 fps` at ~300 units doing per-frame pathfinding). Our approach:
+
+- **Roll our own deterministic pathfinding inside the sim** — fixed-point grid
+  A* plus **flow-fields**. Do **not** use Godot's `NavigationAgent` /
+  `NavigationServer`: it is float-based (non-deterministic) and does not scale.
+- **Lanes are a performance ally:** precompute a **flow-field per lane** toward
+  the enemy base once; units cheaply follow the field instead of each running
+  A*. Reserve per-unit A* for off-lane maneuvering and re-routing around new
+  buildings/walls.
+- **Throttle path requests:** queue them and cap recomputes per tick rather than
+  repathing every unit every tick.
+- Keep MVP unit counts modest; treat large formations as groups where possible.
 
 ## Economy & base building
 
@@ -128,7 +150,10 @@ Rock-paper-scissors so balance is legible and the AI is teachable:
   source** — no special engine hooks.
 - **MVP AI:** rule-based / behavior-tree with build orders and simple lane
   pressure logic: maintain economy ratio → mass army to a threshold → push the
-  weakest lane → retreat if losing.
+  weakest lane → retreat if losing. (Research note: behavior trees are the
+  modular, designer-friendly standard and stay predictable — a good fit for a
+  deterministic sim; FSMs scale poorly. Open RTS-BT reference implementations
+  exist to study.)
 - **Difficulty:** resource handicaps + aggression tuning.
 - **Testable:** AI-vs-AI matches run headlessly in CI to catch balance breaks and
   crashes.
@@ -173,5 +198,21 @@ The sim/render split makes this straightforward:
 
 - Final game name / faction identities / art direction.
 - Exact map dimensions, lane count (2 vs 3), and flanking-terrain ratio.
-- Fixed-point math library choice vs hand-rolled deterministic math in C#.
+- Fixed-point math library choice (evaluate FixPointCS / FixedMath.Net) vs
+  hand-rolled deterministic math in C#.
 - Whether Godot 4 C# or Unity C# is the final engine (low-stakes, reversible).
+- Flow-field vs A* split: how much movement is lane-following vs free A*.
+
+## References (from research, 2026-06-01)
+
+- Deterministic lockstep + fixed-point math: bonsai7 "Determinism and fixed point
+  math"; "Deterministic Lockstep Networking Demystified" (LinkedIn, 2024);
+  MonoGame forum thread on float determinism in an RTS.
+- Float drift evidence: Unity Discussions "Lockstep syncing transform properties"
+  (`87` vs `87.000000002424` across CPUs).
+- Godot RTS performance: Godot forum "optimize multiple pathfinding" (<15 fps at
+  300 units); r/godot "Godot 4 suitable for RTS? 1000 characters" and "optimize
+  RTS for hundreds/thousands of units" (throttle paths, group/battalion logic,
+  particles/shaders for individuals).
+- AI: ScienceDirect "Survey of Behavior Trees"; Mina Pêcheux "Making an RTS game"
+  Unity/C# series (open GitHub) for BT-driven unit/AI patterns.
