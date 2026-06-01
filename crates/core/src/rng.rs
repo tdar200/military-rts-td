@@ -20,6 +20,13 @@ impl Rng {
         Self { state: seed }
     }
 
+    /// Returns the current internal state — for serialization, save-games, and
+    /// folding the generator into the world's determinism hash.
+    #[must_use]
+    pub const fn current_state(&self) -> u64 {
+        self.state
+    }
+
     /// Returns the next 64-bit value and advances the state (`SplitMix64`).
     #[must_use]
     pub const fn next_u64(&mut self) -> u64 {

@@ -18,8 +18,13 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(clippy::float_arithmetic)]
 
+extern crate alloc;
+
 pub mod fixed;
+pub mod hash;
 pub mod rng;
+pub mod vec;
+pub mod world;
 
 /// Simulation ticks per second. The sim advances in fixed steps of
 /// `1 / TICKS_PER_SECOND` seconds, decoupled from any render frame rate.
