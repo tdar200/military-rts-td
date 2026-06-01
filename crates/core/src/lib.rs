@@ -18,6 +18,9 @@
 #![cfg_attr(not(test), no_std)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod fixed;
+pub mod rng;
+
 /// Simulation ticks per second. The sim advances in fixed steps of
 /// `1 / TICKS_PER_SECOND` seconds, decoupled from any render frame rate.
 pub const TICKS_PER_SECOND: u32 = 30;
