@@ -70,6 +70,27 @@ impl Fixed {
     pub const fn round_to_int(self) -> i64 {
         (self.0 + (1 << (Self::FRAC_BITS - 1))) >> Self::FRAC_BITS
     }
+
+    /// Non-negative square root. Negative inputs clamp to zero.
+    ///
+    /// Computed exactly via integer `isqrt`: `sqrt(raw / 2^F) == isqrt(raw << F)`
+    /// in raw units, so the result is deterministic on every platform.
+    #[must_use]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "guarded to be non-negative before widening to u128"
+    )]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "isqrt of an in-range value fits back into i64"
+    )]
+    pub const fn sqrt(self) -> Self {
+        if self.0 <= 0 {
+            return Self::ZERO;
+        }
+        let scaled = (self.0 as u128) << Self::FRAC_BITS;
+        Self(scaled.isqrt() as i64)
+    }
 }
 
 impl Add for Fixed {
@@ -197,5 +218,30 @@ mod tests {
         assert_eq!(Fixed::from_ratio(7, 2).round_to_int(), 4); // 3.5 -> 4
         assert_eq!(Fixed::from_ratio(5, 2).round_to_int(), 3); // 2.5 -> 3
         assert_eq!(Fixed::from_ratio(4, 3).round_to_int(), 1); // 1.33 -> 1
+    }
+
+    #[test]
+    fn sqrt_of_perfect_squares() {
+        assert_eq!(Fixed::from_int(0).sqrt(), Fixed::from_int(0));
+        assert_eq!(Fixed::from_int(1).sqrt(), Fixed::from_int(1));
+        assert_eq!(Fixed::from_int(4).sqrt(), Fixed::from_int(2));
+        assert_eq!(Fixed::from_int(9).sqrt(), Fixed::from_int(3));
+        assert_eq!(Fixed::from_int(25).sqrt(), Fixed::from_int(5));
+    }
+
+    #[test]
+    fn sqrt_of_two_is_close_to_root_two() {
+        let r = Fixed::from_int(2).sqrt();
+        assert!(r > Fixed::from_ratio(141, 100));
+        assert!(r < Fixed::from_ratio(142, 100));
+        // r*r should be very close to 2
+        let sq = r * r;
+        assert!(sq > Fixed::from_ratio(199, 100));
+        assert!(sq < Fixed::from_ratio(201, 100));
+    }
+
+    #[test]
+    fn sqrt_of_negative_clamps_to_zero() {
+        assert_eq!(Fixed::from_int(-4).sqrt(), Fixed::ZERO);
     }
 }

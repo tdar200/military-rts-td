@@ -5,3 +5,5 @@
 //! economy, buildings, units, combat, pathfinding, and AI.
 
 pub mod map;
+pub mod sim;
+pub mod stats;

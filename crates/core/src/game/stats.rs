@@ -1,0 +1,265 @@
+//! Combat stat tables and the kinds of units and buildings.
+//!
+//! These are the balance numbers, expressed in deterministic [`Fixed`] /
+//! integer-tick terms. They live in code for now; the `rts-data` crate will load
+//! them from `RON` later so balancing is editing a table, not recompiling. The
+//! rock-paper-scissors damage matrix is what makes unit composition matter.
+
+use crate::fixed::Fixed;
+
+/// How an attack damages things.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum DamageType {
+    /// Small-arms fire: strong vs flesh, weak vs armour.
+    Ballistic,
+    /// Dedicated anti-armour: strong vs vehicles, weak vs flesh.
+    AntiArmor,
+    /// High explosive: strong vs structures.
+    Explosive,
+}
+
+/// How a target resists damage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum ArmorType {
+    /// Infantry.
+    Flesh,
+    /// Vehicles.
+    Plated,
+    /// Buildings and walls.
+    Structure,
+}
+
+/// A repeating attack: how hard, what type, how far, how often.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct AttackProfile {
+    /// Base damage per shot, before the armour multiplier.
+    pub damage: Fixed,
+    /// Damage type, matched against the target's [`ArmorType`].
+    pub damage_type: DamageType,
+    /// Maximum range (world units).
+    pub range: Fixed,
+    /// Ticks between shots.
+    pub period: u32,
+}
+
+/// Stats for a mobile unit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct UnitStats {
+    /// Maximum health.
+    pub max_hp: Fixed,
+    /// Armour class.
+    pub armor: ArmorType,
+    /// Attack profile (all units can attack).
+    pub attack: AttackProfile,
+    /// Movement speed in world units per tick.
+    pub speed: Fixed,
+    /// Credit cost to train.
+    pub cost: Fixed,
+    /// Ticks to train.
+    pub build_time: u32,
+}
+
+/// Stats for a building.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct BuildingStats {
+    /// Maximum health.
+    pub max_hp: Fixed,
+    /// Armour class (always [`ArmorType::Structure`]).
+    pub armor: ArmorType,
+    /// Power produced per tick.
+    pub power_produced: i32,
+    /// Power consumed per tick.
+    pub power_consumed: i32,
+    /// Credits generated per tick while powered (refineries).
+    pub credit_income: Fixed,
+    /// Whether this building can train units (barracks).
+    pub produces_units: bool,
+    /// Attack profile, if this building is a defensive tower.
+    pub attack: Option<AttackProfile>,
+    /// Credit cost to construct.
+    pub cost: Fixed,
+}
+
+/// The kinds of mobile unit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum UnitKind {
+    /// Cheap, fast, anti-flesh swarm.
+    Infantry,
+    /// Tough, slow, anti-everything via explosives.
+    Tank,
+    /// Anti-armour specialist.
+    AntiArmor,
+}
+
+/// The kinds of building.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum BuildingKind {
+    /// The base; destroying the enemy's wins the game.
+    CommandCenter,
+    /// Produces power.
+    PowerPlant,
+    /// Generates credit income while powered.
+    Refinery,
+    /// Trains units.
+    Barracks,
+    /// Defensive anti-ground tower.
+    GunTurret,
+    /// Cheap blocker.
+    Wall,
+}
+
+/// The rock-paper-scissors damage matrix: how `damage_type` fares against
+/// `armor`. `1.0` is neutral; above favours the attacker, below the defender.
+#[must_use]
+pub const fn damage_multiplier(damage_type: DamageType, armor: ArmorType) -> Fixed {
+    match (damage_type, armor) {
+        (DamageType::Ballistic, ArmorType::Flesh)
+        | (DamageType::Explosive, ArmorType::Structure) => Fixed::from_ratio(3, 2),
+        (DamageType::Ballistic, ArmorType::Plated) | (DamageType::AntiArmor, ArmorType::Flesh) => {
+            Fixed::from_ratio(1, 2)
+        }
+        (DamageType::AntiArmor, ArmorType::Plated) => Fixed::from_ratio(7, 4),
+        _ => Fixed::ONE,
+    }
+}
+
+impl UnitKind {
+    /// The balance stats for this unit kind.
+    #[must_use]
+    pub const fn stats(self) -> UnitStats {
+        match self {
+            Self::Infantry => UnitStats {
+                max_hp: Fixed::from_int(50),
+                armor: ArmorType::Flesh,
+                attack: AttackProfile {
+                    damage: Fixed::from_int(6),
+                    damage_type: DamageType::Ballistic,
+                    range: Fixed::from_int(3),
+                    period: 8,
+                },
+                speed: Fixed::from_ratio(15, 100),
+                cost: Fixed::from_int(50),
+                build_time: 30,
+            },
+            Self::Tank => UnitStats {
+                max_hp: Fixed::from_int(220),
+                armor: ArmorType::Plated,
+                attack: AttackProfile {
+                    damage: Fixed::from_int(30),
+                    damage_type: DamageType::Explosive,
+                    range: Fixed::from_int(4),
+                    period: 20,
+                },
+                speed: Fixed::from_ratio(10, 100),
+                cost: Fixed::from_int(200),
+                build_time: 90,
+            },
+            Self::AntiArmor => UnitStats {
+                max_hp: Fixed::from_int(70),
+                armor: ArmorType::Flesh,
+                attack: AttackProfile {
+                    damage: Fixed::from_int(22),
+                    damage_type: DamageType::AntiArmor,
+                    range: Fixed::from_int(4),
+                    period: 16,
+                },
+                speed: Fixed::from_ratio(12, 100),
+                cost: Fixed::from_int(110),
+                build_time: 50,
+            },
+        }
+    }
+}
+
+impl BuildingKind {
+    /// The balance stats for this building kind.
+    #[must_use]
+    pub const fn stats(self) -> BuildingStats {
+        // Defaults shared by most structures; overridden per kind below.
+        const fn base(max_hp: i32, cost: i32) -> BuildingStats {
+            BuildingStats {
+                max_hp: Fixed::from_int(max_hp),
+                armor: ArmorType::Structure,
+                power_produced: 0,
+                power_consumed: 0,
+                credit_income: Fixed::ZERO,
+                produces_units: false,
+                attack: None,
+                cost: Fixed::from_int(cost),
+            }
+        }
+        match self {
+            Self::CommandCenter => base(1000, 0),
+            Self::PowerPlant => BuildingStats {
+                power_produced: 100,
+                ..base(300, 100)
+            },
+            Self::Refinery => BuildingStats {
+                power_consumed: 20,
+                credit_income: Fixed::from_int(5),
+                ..base(300, 150)
+            },
+            Self::Barracks => BuildingStats {
+                power_consumed: 30,
+                produces_units: true,
+                ..base(400, 200)
+            },
+            Self::GunTurret => BuildingStats {
+                power_consumed: 25,
+                attack: Some(AttackProfile {
+                    damage: Fixed::from_int(10),
+                    damage_type: DamageType::Ballistic,
+                    range: Fixed::from_int(5),
+                    period: 10,
+                }),
+                ..base(250, 120)
+            },
+            Self::Wall => base(200, 20),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ArmorType, BuildingKind, DamageType, UnitKind};
+    use crate::fixed::Fixed;
+
+    #[test]
+    fn ballistic_is_strong_vs_flesh_weak_vs_plated() {
+        assert!(super::damage_multiplier(DamageType::Ballistic, ArmorType::Flesh) > Fixed::ONE);
+        assert!(super::damage_multiplier(DamageType::Ballistic, ArmorType::Plated) < Fixed::ONE);
+    }
+
+    #[test]
+    fn anti_armor_is_strong_vs_plated_weak_vs_flesh() {
+        assert!(super::damage_multiplier(DamageType::AntiArmor, ArmorType::Plated) > Fixed::ONE);
+        assert!(super::damage_multiplier(DamageType::AntiArmor, ArmorType::Flesh) < Fixed::ONE);
+    }
+
+    #[test]
+    fn explosive_is_strong_vs_structure() {
+        assert!(super::damage_multiplier(DamageType::Explosive, ArmorType::Structure) > Fixed::ONE);
+    }
+
+    #[test]
+    fn tank_is_tougher_and_costlier_than_infantry() {
+        let inf = UnitKind::Infantry.stats();
+        let tank = UnitKind::Tank.stats();
+        assert!(tank.max_hp > inf.max_hp);
+        assert!(tank.cost > inf.cost);
+        assert!(inf.speed > tank.speed); // infantry is faster
+    }
+
+    #[test]
+    fn power_plant_produces_and_refinery_earns() {
+        assert!(BuildingKind::PowerPlant.stats().power_produced > 0);
+        assert!(BuildingKind::Refinery.stats().credit_income > Fixed::ZERO);
+        assert!(BuildingKind::CommandCenter.stats().max_hp > Fixed::from_int(500));
+    }
+
+    #[test]
+    fn turret_attacks_but_command_center_does_not() {
+        assert!(BuildingKind::GunTurret.stats().attack.is_some());
+        assert!(BuildingKind::CommandCenter.stats().attack.is_none());
+    }
+}

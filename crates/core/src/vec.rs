@@ -47,6 +47,12 @@ impl Vec2 {
     pub fn length_squared(self) -> Fixed {
         self.dot(self)
     }
+
+    /// Euclidean length `|self|`.
+    #[must_use]
+    pub fn length(self) -> Fixed {
+        self.length_squared().sqrt()
+    }
 }
 
 impl Add for Vec2 {
@@ -106,5 +112,12 @@ mod tests {
     fn length_squared_is_dot_with_self() {
         // 3^2 + 4^2 = 25
         assert_eq!(v(3, 4).length_squared(), Fixed::from_int(25));
+    }
+
+    #[test]
+    fn length_is_euclidean_distance() {
+        // 3-4-5 right triangle
+        assert_eq!(v(3, 4).length(), Fixed::from_int(5));
+        assert_eq!(Vec2::ZERO.length(), Fixed::ZERO);
     }
 }
