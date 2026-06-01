@@ -1,0 +1,16 @@
+[package]
+name = "rts-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The server links the *same* core crate, headless. Later it re-simulates a
+# recorded input log and checks the final-state hash against the client's,
+# proving zero client/server drift.
+[dependencies]
+rts-core = { path = "../core" }
+
+[lints]
+workspace = true

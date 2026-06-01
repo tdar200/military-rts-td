@@ -1,0 +1,19 @@
+[package]
+name = "rts-render-shell"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "rts"
+path = "src/main.rs"
+
+# Macroquad + egui-macroquad land in the desktop-shell milestone. This scaffold
+# only links the core to prove the dependency wiring.
+[dependencies]
+rts-core = { path = "../core" }
+
+[lints]
+workspace = true

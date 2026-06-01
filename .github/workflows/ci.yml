@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      # Strict gate: any warning, any pedantic/nursery violation, and (in `core`)
+      # any float arithmetic fails the build.
+      - name: Clippy (strict)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test (headless core + workspace)
+        run: cargo test --workspace
+
+      # Prove the core compiles to the browser target.
+      - name: Build core for WASM
+        run: cargo build -p rts-core --target wasm32-unknown-unknown
+
+  deny:
+    name: cargo-deny (licenses · advisories · sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

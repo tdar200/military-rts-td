@@ -1,0 +1,15 @@
+[package]
+name = "rts-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Zero external dependencies on purpose: the deterministic core owns every line
+# of its math (fixed-point + PRNG) so determinism is fully under our control and
+# the crate stays `no_std`-clean across all targets.
+[dependencies]
+
+[lints]
+workspace = true
