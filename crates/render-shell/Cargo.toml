@@ -10,10 +10,12 @@ publish = false
 name = "rts"
 path = "src/main.rs"
 
-# Macroquad + egui-macroquad land in the desktop-shell milestone. This scaffold
-# only links the core to prove the dependency wiring.
+# Macroquad is the thin render/input shell. It compiles to desktop natively and
+# to the browser via wasm32 (and to mobile via miniquad). The deterministic
+# simulation stays entirely in rts-core.
 [dependencies]
 rts-core = { path = "../core" }
+macroquad = "0.4"
 
 [lints]
 workspace = true

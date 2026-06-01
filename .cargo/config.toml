@@ -1,0 +1,5 @@
+# Macroquad/miniquad provide their WebGL + platform functions as JavaScript
+# imports (resolved at runtime by macroquad's `gl.js`), so the wasm linker must
+# emit undefined symbols as imports instead of erroring.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--allow-undefined"]

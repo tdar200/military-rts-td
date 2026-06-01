@@ -1032,4 +1032,20 @@ mod tests {
     fn ai_vs_ai_is_deterministic() {
         assert_eq!(run_ai_vs_ai(7), run_ai_vs_ai(7));
     }
+
+    #[test]
+    fn golden_hash_pins_cross_target_determinism() {
+        // A fixed scripted AI-vs-AI run. This constant must be byte-identical on
+        // every target — native, wasm, mobile, server. A mismatch when this test
+        // is run on another platform is a determinism regression, full stop.
+        let mut s = Sim::new(Map::new(40, 40), 12_345, f(1500));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        for _ in 0..120 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+        }
+        assert_eq!(s.state_hash(), 550_683_050_117_153_338);
+    }
 }

@@ -31,9 +31,9 @@ jobs:
       - name: Test (headless core + workspace)
         run: cargo test --workspace
 
-      # Prove the core compiles to the browser target.
-      - name: Build core for WASM
-        run: cargo build -p rts-core --target wasm32-unknown-unknown
+      # Prove the core and the render shell both compile to the browser target.
+      - name: Build core + shell for WASM
+        run: cargo build -p rts-core -p rts-render-shell --target wasm32-unknown-unknown
 
   deny:
     name: cargo-deny (licenses · advisories · sources)
