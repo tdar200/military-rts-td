@@ -8,7 +8,7 @@
 use crate::fixed::Fixed;
 
 /// Number of techs in the tree.
-pub const TECH_COUNT: usize = 13;
+pub const TECH_COUNT: usize = 16;
 
 /// Which global stat a tech improves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -23,6 +23,8 @@ pub enum TechBranch {
     Mobility,
     /// Advances the player to the next era.
     Era,
+    /// Adds to the player's max energy shield.
+    Shields,
 }
 
 /// One research upgrade.
@@ -166,6 +168,33 @@ pub const TECHS: [TechDef; TECH_COUNT] = [
         prereq: Some(11),
         bonus: Fixed::ZERO,
     },
+    TechDef {
+        id: 13,
+        name: "Shield I",
+        branch: TechBranch::Shields,
+        cost: Fixed::from_int(300),
+        duration: 450,
+        prereq: None,
+        bonus: Fixed::from_int(30),
+    },
+    TechDef {
+        id: 14,
+        name: "Shield II",
+        branch: TechBranch::Shields,
+        cost: Fixed::from_int(450),
+        duration: 600,
+        prereq: Some(13),
+        bonus: Fixed::from_int(40),
+    },
+    TechDef {
+        id: 15,
+        name: "Shield III",
+        branch: TechBranch::Shields,
+        cost: Fixed::from_int(600),
+        duration: 750,
+        prereq: Some(14),
+        bonus: Fixed::from_int(50),
+    },
 ];
 
 // Keep TECH_COUNT in sync with the table: the last tech's id must be the last
@@ -191,6 +220,17 @@ pub const fn is_era_key(id: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{is_era_key, tech, TechBranch, TECHS, TECH_COUNT};
+
+    #[test]
+    fn is_shield_branch() {
+        assert_eq!(tech(13).unwrap().branch, TechBranch::Shields);
+        assert_eq!(tech(14).unwrap().branch, TechBranch::Shields);
+        assert_eq!(tech(15).unwrap().branch, TechBranch::Shields);
+        // Chain by prereq: 14→13, 15→14.
+        assert_eq!(tech(14).unwrap().prereq, Some(13));
+        assert_eq!(tech(15).unwrap().prereq, Some(14));
+        assert_eq!(TECH_COUNT, 16);
+    }
 
     #[test]
     fn tree_is_well_formed() {
