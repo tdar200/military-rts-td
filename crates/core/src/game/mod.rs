@@ -12,3 +12,4 @@ pub mod path;
 pub mod scenario;
 pub mod sim;
 pub mod stats;
+pub mod tech;
