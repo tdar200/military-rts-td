@@ -16,6 +16,7 @@
 )]
 
 mod input;
+mod sprites;
 mod ui;
 
 use macroquad::prelude::*;
@@ -23,6 +24,7 @@ use rts_core::fixed::Fixed;
 use rts_core::game::scenario::lane_defense;
 use rts_core::game::sim::{EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
+use sprites::Sprites;
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
 const TICK_DT: f32 = 1.0 / 30.0;
@@ -58,6 +60,7 @@ fn tile_to_px(v: Fixed, cell: f32) -> f32 {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    let sprites = Sprites::load().await;
     let mut sim = new_match();
     let mut selected: Option<EntityId> = None;
     let mut build_mode: Option<BuildingKind> = None;
@@ -102,8 +105,8 @@ async fn main() {
             accumulator -= TICK_DT;
         }
 
-        draw(&sim, selected, build_mode, cell);
-        ui::draw(&sim, build_mode, paused);
+        draw(&sim, selected, build_mode, cell, &sprites);
+        ui::draw(&sim, build_mode, paused, &sprites);
         if let Some(winner) = sim.winner() {
             draw_game_over(winner);
         }
@@ -128,30 +131,52 @@ fn draw_game_over(winner: PlayerId) {
     draw_text(hint, (w - hd.width) / 2.0, h / 2.0 + 40.0, 24.0, WHITE);
 }
 
-fn draw(sim: &Sim, selected: Option<EntityId>, build_mode: Option<BuildingKind>, cell: f32) {
+fn draw(
+    sim: &Sim,
+    selected: Option<EntityId>,
+    build_mode: Option<BuildingKind>,
+    cell: f32,
+    sprites: &Sprites,
+) {
     clear_background(Color::from_rgba(18, 22, 18, 255));
     draw_terrain(sim, cell);
     for v in sim.views() {
         let x = tile_to_px(v.pos.x, cell);
         let y = WORLD_TOP + tile_to_px(v.pos.y, cell);
-        let color = if v.owner == HUMAN { SKYBLUE } else { RED };
-        match v.kind {
-            EntityKindView::Building(b) => {
-                let size = if matches!(b, BuildingKind::CommandCenter) {
-                    cell * 1.6
+        let tint = if v.owner == HUMAN { SKYBLUE } else { RED };
+        let (texture, size) = match v.kind {
+            EntityKindView::Building(b) => (
+                sprites.building(b),
+                if matches!(b, BuildingKind::CommandCenter) {
+                    cell * 1.9
                 } else {
-                    cell * 1.1
-                };
-                draw_rectangle(x - size / 2.0, y - size / 2.0, size, size, color);
-            }
-            EntityKindView::Unit(u) => {
-                let radius = if matches!(u, UnitKind::Tank) {
-                    cell * 0.5
+                    cell * 1.45
+                },
+            ),
+            EntityKindView::Unit(u) => (
+                sprites.unit(u),
+                if matches!(u, UnitKind::Tank) {
+                    cell * 1.2
                 } else {
-                    cell * 0.35
-                };
-                draw_circle(x, y, radius, color);
-            }
+                    cell * 1.0
+                },
+            ),
+        };
+        if let Some(texture) = texture {
+            draw_texture_ex(
+                texture,
+                x - size / 2.0,
+                y - size / 2.0,
+                tint,
+                DrawTextureParams {
+                    dest_size: Some(vec2(size, size)),
+                    ..DrawTextureParams::default()
+                },
+            );
+        } else if matches!(v.kind, EntityKindView::Unit(_)) {
+            draw_circle(x, y, size * 0.4, tint);
+        } else {
+            draw_rectangle(x - size / 2.0, y - size / 2.0, size, size, tint);
         }
         draw_health_bar(x, y, cell, v.hp, v.max_hp);
         if Some(v.id) == selected {

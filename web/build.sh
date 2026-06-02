@@ -15,6 +15,9 @@ fi
 
 cargo build -p rts-render-shell --target wasm32-unknown-unknown "${CARGO_FLAGS[@]}"
 cp "$ROOT/target/wasm32-unknown-unknown/$PROFILE_DIR/rts.wasm" "$ROOT/web/rts.wasm"
+# Ship the sprite assets next to the page so the browser can fetch them.
+mkdir -p "$ROOT/web/assets"
+cp "$ROOT"/assets/*.png "$ROOT/web/assets/"
 
 echo "Serving http://localhost:8000/ (Ctrl-C to stop)"
 cd "$ROOT/web"

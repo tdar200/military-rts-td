@@ -4,9 +4,11 @@ on:
   push:
   pull_request:
 
+# Note: warnings are denied via the workspace `[lints]` table, not a global
+# RUSTFLAGS — a RUSTFLAGS env would override the wasm `--allow-undefined`
+# link-arg in .cargo/config.toml that macroquad needs.
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
   check:

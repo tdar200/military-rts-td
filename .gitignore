@@ -1,4 +1,7 @@
 /target
+# Generated web bundle (built by web/build.sh from crate + assets/)
+/web/rts.wasm
+/web/assets/
 **/*.rs.bk
 *.pdb
 # Editor / OS noise

@@ -2,6 +2,7 @@
 //! build/train buttons (with cost + affordability). Buttons feed the same
 //! `Command` set as the hotkeys, so the UI is just another input source.
 
+use crate::sprites::Sprites;
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
@@ -102,10 +103,17 @@ pub fn handle_click(sim: &Sim, build_mode: &mut Option<BuildingKind>) -> Vec<Com
     cmds
 }
 
+fn action_texture(sprites: &Sprites, action: Action) -> Option<&Texture2D> {
+    match action {
+        Action::Build(k) => sprites.building(k),
+        Action::Train(k) => sprites.unit(k),
+    }
+}
+
 /// Draws the resource bar and the command bar.
-pub fn draw(sim: &Sim, build_mode: Option<BuildingKind>, paused: bool) {
+pub fn draw(sim: &Sim, build_mode: Option<BuildingKind>, paused: bool, sprites: &Sprites) {
     draw_top_bar(sim, paused);
-    draw_command_bar(sim, build_mode);
+    draw_command_bar(sim, build_mode, sprites);
 }
 
 fn draw_top_bar(sim: &Sim, paused: bool) {
@@ -131,7 +139,7 @@ fn draw_top_bar(sim: &Sim, paused: bool) {
     }
 }
 
-fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>) {
+fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprites) {
     let top = screen_height() - CMD_BAR_H;
     draw_rectangle(
         0.0,
@@ -158,6 +166,19 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>) {
         };
         draw_rectangle(b.rect.x, b.rect.y, b.rect.w, b.rect.h, bg);
         draw_rectangle_lines(b.rect.x, b.rect.y, b.rect.w, b.rect.h, 1.0, DARKGRAY);
+        if let Some(texture) = action_texture(sprites, b.action) {
+            let s = 30.0;
+            draw_texture_ex(
+                texture,
+                b.rect.x + b.rect.w - s - 6.0,
+                b.rect.y + (b.rect.h - s) / 2.0,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(s, s)),
+                    ..DrawTextureParams::default()
+                },
+            );
+        }
         draw_text(b.label, b.rect.x + 6.0, b.rect.y + 18.0, 16.0, WHITE);
         let price_text = format!("${}", price.to_bits() / 65536);
         let price_color = if affordable { GREEN } else { RED };
