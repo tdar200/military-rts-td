@@ -75,13 +75,18 @@ fn layout() -> [Button; 7] {
         }
     };
     [
-        mk(0, "Power", 'P', Action::Build(BuildingKind::PowerPlant)),
-        mk(1, "Refinery", 'R', Action::Build(BuildingKind::Refinery)),
-        mk(2, "Barracks", 'B', Action::Build(BuildingKind::Barracks)),
-        mk(3, "Gun Turret", 'G', Action::Build(BuildingKind::GunTurret)),
-        mk(4, "AA Turret", 'A', Action::Build(BuildingKind::AaTurret)),
+        mk(0, "Reactor", 'P', Action::Build(BuildingKind::PowerPlant)),
+        mk(1, "Extractor", 'R', Action::Build(BuildingKind::Refinery)),
+        mk(2, "Hangar", 'B', Action::Build(BuildingKind::Barracks)),
+        mk(
+            3,
+            "Laser Turret",
+            'G',
+            Action::Build(BuildingKind::GunTurret),
+        ),
+        mk(4, "Flak Turret", 'A', Action::Build(BuildingKind::AaTurret)),
         mk(5, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
-        mk(6, "Helicopter", 'H', Action::Train(UnitKind::Helicopter)),
+        mk(6, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
     ]
 }
 
@@ -249,23 +254,59 @@ fn medallion(cx: f32, cy: f32, r: f32, tex: Option<&Texture2D>, tint: Color, rin
     draw_circle_lines(cx, cy, r, 2.0, ring);
 }
 
-const fn kind_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
+/// Display name + one-line role for an entity, themed by faction (Human P0 vs the
+/// Alien AI). Stats are identical across factions — only the cosmetic name and
+/// blurb differ.
+fn kind_name_role(kind: EntityKindView, owner: PlayerId) -> (&'static str, &'static str) {
+    if owner == HUMAN {
+        human_name_role(kind)
+    } else {
+        // Any non-human owner (P1 today) is the alien faction.
+        alien_name_role(kind)
+    }
+}
+
+const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
     match kind {
         EntityKindView::Unit(UnitKind::Infantry) => ("Infantry", "Cheap anti-infantry"),
         EntityKindView::Unit(UnitKind::Tank) => ("Tank", "Heavy armour, anti-ground"),
         EntityKindView::Unit(UnitKind::AntiArmor) => {
             ("Anti-Armor", "Beats tanks, weak vs infantry")
         }
-        EntityKindView::Unit(UnitKind::Helicopter) => ("Helicopter", "Air — only AA can hit it"),
+        EntityKindView::Unit(UnitKind::Helicopter) => ("Gunship", "Air — only flak can hit it"),
         EntityKindView::Building(BuildingKind::CommandCenter) => {
-            ("Command Center", "Your base — protect it")
+            ("Command Nexus", "Your base — protect it")
         }
-        EntityKindView::Building(BuildingKind::PowerPlant) => ("Power Plant", "Supplies power"),
-        EntityKindView::Building(BuildingKind::Refinery) => ("Refinery", "+credits while powered"),
-        EntityKindView::Building(BuildingKind::Barracks) => ("Barracks", "Trains units"),
-        EntityKindView::Building(BuildingKind::GunTurret) => ("Gun Turret", "Anti-ground defence"),
-        EntityKindView::Building(BuildingKind::AaTurret) => ("AA Turret", "Anti-air defence"),
-        EntityKindView::Building(BuildingKind::Wall) => ("Wall", "Blocks movement"),
+        EntityKindView::Building(BuildingKind::PowerPlant) => ("Reactor", "Supplies power"),
+        EntityKindView::Building(BuildingKind::Refinery) => ("Extractor", "+credits while powered"),
+        EntityKindView::Building(BuildingKind::Barracks) => ("Hangar", "Trains units"),
+        EntityKindView::Building(BuildingKind::GunTurret) => {
+            ("Laser Turret", "Anti-ground defence")
+        }
+        EntityKindView::Building(BuildingKind::AaTurret) => ("Flak Turret", "Anti-air defence"),
+        EntityKindView::Building(BuildingKind::Wall) => ("Barrier", "Blocks movement"),
+    }
+}
+
+const fn alien_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
+    match kind {
+        EntityKindView::Unit(UnitKind::Infantry) => ("Drone", "Cheap anti-infantry swarm"),
+        EntityKindView::Unit(UnitKind::Tank) => ("Crawler", "Heavy armour, anti-ground"),
+        EntityKindView::Unit(UnitKind::AntiArmor) => ("Lancer", "Beats armour, weak vs swarm"),
+        EntityKindView::Unit(UnitKind::Helicopter) => ("Wasp", "Flyer — only flak can hit it"),
+        EntityKindView::Building(BuildingKind::CommandCenter) => {
+            ("Core Node", "Alien core — destroy it")
+        }
+        EntityKindView::Building(BuildingKind::PowerPlant) => {
+            ("Power Node", "Powers the alien base")
+        }
+        EntityKindView::Building(BuildingKind::Refinery) => {
+            ("Extractor", "Feeds the alien economy")
+        }
+        EntityKindView::Building(BuildingKind::Barracks) => ("Assembler", "Builds alien units"),
+        EntityKindView::Building(BuildingKind::GunTurret) => ("Sentry", "Anti-ground defence"),
+        EntityKindView::Building(BuildingKind::AaTurret) => ("Interceptor", "Anti-air defence"),
+        EntityKindView::Building(BuildingKind::Wall) => ("Barrier", "Blocks movement"),
     }
 }
 
@@ -281,7 +322,7 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     let Some(view) = sim.views().into_iter().find(|v| v.id == id) else {
         return;
     };
-    let (name, role) = kind_name_role(view.kind);
+    let (name, role) = kind_name_role(view.kind, view.owner);
     let panel_w = 252.0;
     let panel_h = 66.0;
     let px = 12.0;
@@ -403,7 +444,7 @@ fn draw_minimap(sim: &Sim) {
 }
 
 fn draw_tooltip(button: Rect, action: Action, price: i64, sprites: &Sprites) {
-    let (name, role) = kind_name_role(action_kind(action));
+    let (name, role) = kind_name_role(action_kind(action), HUMAN);
     let cost_s = format!("Cost  ${price}");
     let font = sprites.font();
     let font_bold = sprites.font_bold();
@@ -617,4 +658,39 @@ fn draw_button(
         TEXT_DIM,
         f,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{kind_name_role, HUMAN};
+    use rts_core::game::sim::{EntityKindView, PlayerId};
+    use rts_core::game::stats::{BuildingKind, UnitKind};
+
+    const ALIEN: PlayerId = PlayerId(1);
+
+    #[test]
+    fn names_are_faction_aware() {
+        let inf = EntityKindView::Unit(UnitKind::Infantry);
+        assert_eq!(kind_name_role(inf, HUMAN).0, "Infantry");
+        assert_eq!(kind_name_role(inf, ALIEN).0, "Drone");
+
+        let cc = EntityKindView::Building(BuildingKind::CommandCenter);
+        assert_eq!(kind_name_role(cc, HUMAN).0, "Command Nexus");
+        assert_eq!(kind_name_role(cc, ALIEN).0, "Core Node");
+
+        let heli = EntityKindView::Unit(UnitKind::Helicopter);
+        assert_eq!(kind_name_role(heli, HUMAN).0, "Gunship");
+        assert_eq!(kind_name_role(heli, ALIEN).0, "Wasp");
+
+        // The blurb (.1) is part of the reskin — pin one so copy regressions fail.
+        assert_eq!(
+            kind_name_role(heli, ALIEN).1,
+            "Flyer — only flak can hit it"
+        );
+
+        // Wall is intentionally "Barrier" for both factions.
+        let wall = EntityKindView::Building(BuildingKind::Wall);
+        assert_eq!(kind_name_role(wall, HUMAN).0, "Barrier");
+        assert_eq!(kind_name_role(wall, ALIEN).0, "Barrier");
+    }
 }
