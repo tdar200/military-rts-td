@@ -1211,10 +1211,12 @@ impl Sim {
         let (researched_mask, active_research) = self.research_state(player);
         if self.has_research_lab(player) && active_research.is_none() {
             // Priority by tech id: Economy I(6) → Weapons I(0) → Armor I(3) →
-            // Reach Orbital(10) → Economy II(7) → Weapons II(1) → Armor II(4) →
-            // Reach Interplanetary(11) → Mobility I(8) → Weapons III(2) →
-            // Armor III(5) → Reach Interstellar(12) → Mobility II(9).
-            const RESEARCH_PRIORITY: [u32; 13] = [6, 0, 3, 10, 7, 1, 4, 11, 8, 2, 5, 12, 9];
+            // Shield I(13) → Reach Orbital(10) → Economy II(7) → Weapons II(1) →
+            // Armor II(4) → Shield II(14) → Reach Interplanetary(11) → Mobility I(8) →
+            // Weapons III(2) → Armor III(5) → Shield III(15) → Reach Interstellar(12) →
+            // Mobility II(9).
+            const RESEARCH_PRIORITY: [u32; 16] =
+                [6, 0, 3, 13, 10, 7, 1, 4, 14, 11, 8, 2, 5, 15, 12, 9];
             for tech_id in RESEARCH_PRIORITY {
                 let def = crate::game::tech::TECHS[tech_id as usize];
                 let researched = researched_mask & (1u32 << tech_id) != 0;
@@ -1978,5 +1980,23 @@ mod tests {
             s2.step(&[]);
         }
         assert!(!s2.is_alive(heli2));
+    }
+
+    #[test]
+    fn ai_researches_shields() {
+        // Over a long match the AI should eventually research a Shield tech,
+        // giving its units a non-zero shield max.
+        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        for _ in 0..8000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+        }
+        assert!(
+            s.player_shield_max(P0) > crate::fixed::Fixed::ZERO,
+            "AI (P0) should have researched a Shield tech after 8000 ticks"
+        );
     }
 }
