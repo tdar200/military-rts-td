@@ -747,6 +747,35 @@ impl Sim {
         crate::game::hex::from_world(p, self.map.width(), self.map.height())
     }
 
+    /// Sum of researched-tech bonuses for `player` in `branch`.
+    fn branch_bonus(&self, player: PlayerId, branch: crate::game::tech::TechBranch) -> Fixed {
+        let mask = self.players[usize::from(player.0)].researched_techs;
+        let mut total = Fixed::ZERO;
+        let mut i = 0u32;
+        while (i as usize) < crate::game::tech::TECH_COUNT {
+            if mask & (1u32 << i) != 0 {
+                let t = crate::game::tech::TECHS[i as usize];
+                if t.branch == branch {
+                    total = total + t.bonus;
+                }
+            }
+            i += 1;
+        }
+        total
+    }
+    fn player_weapon_bonus(&self, p: PlayerId) -> Fixed {
+        self.branch_bonus(p, crate::game::tech::TechBranch::Weapons)
+    }
+    fn player_armor_bonus(&self, p: PlayerId) -> Fixed {
+        self.branch_bonus(p, crate::game::tech::TechBranch::Armor)
+    }
+    fn player_economy_bonus(&self, p: PlayerId) -> Fixed {
+        self.branch_bonus(p, crate::game::tech::TechBranch::Economy)
+    }
+    fn player_mobility_bonus(&self, p: PlayerId) -> Fixed {
+        self.branch_bonus(p, crate::game::tech::TechBranch::Mobility)
+    }
+
     fn run_economy(&mut self) -> [bool; PLAYER_COUNT] {
         let mut produced = [0i32; PLAYER_COUNT];
         let mut consumed = [0i32; PLAYER_COUNT];
@@ -771,7 +800,8 @@ impl Sim {
             } else {
                 Fixed::from_ratio(1, 2)
             };
-            self.players[p].credits = self.players[p].credits + income[p] * factor;
+            let econ = self.player_economy_bonus(PlayerId(u8::try_from(p).unwrap()));
+            self.players[p].credits = self.players[p].credits + (income[p] + econ) * factor;
         }
         powered
     }
@@ -822,6 +852,9 @@ impl Sim {
     }
 
     fn run_movement(&mut self) {
+        let mobility: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
+            self.player_mobility_bonus(PlayerId(u8::try_from(p).unwrap()))
+        });
         for e in &mut self.entities {
             if !e.alive {
                 continue;
@@ -830,7 +863,7 @@ impl Sim {
             let Some(target) = e.move_target else {
                 continue;
             };
-            let speed = uk.stats().speed;
+            let speed = uk.stats().speed + mobility[usize::from(e.owner.0)];
             // Head to the next waypoint, or straight to the target once the path
             // is exhausted.
             let subgoal = e
@@ -887,6 +920,14 @@ impl Sim {
             }
         }
 
+        // Research bonuses apply to ALL of a player's entities, buildings included:
+        // armor mitigates damage to structures, and weapon buffs the attacks of
+        // armed buildings (turrets / command center). This is intentional.
+        let weapon: [Fixed; PLAYER_COUNT] =
+            core::array::from_fn(|p| self.player_weapon_bonus(PlayerId(u8::try_from(p).unwrap())));
+        let armor: [Fixed; PLAYER_COUNT] =
+            core::array::from_fn(|p| self.player_armor_bonus(PlayerId(u8::try_from(p).unwrap())));
+
         let mut damage: Vec<(usize, Fixed)> = Vec::new();
         let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
         let mut candidates: Vec<usize> = Vec::new();
@@ -938,13 +979,27 @@ impl Sim {
             }
             if let Some((j, _)) = best {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
-                damage.push((j, profile.damage * mult));
+                damage.push((j, profile.damage * mult + weapon[usize::from(e.owner.0)]));
                 lines.push((e.pos, snap[j].2));
                 e.cooldown = profile.period;
             }
         }
         for (j, dmg) in damage {
-            self.entities[j].hp = self.entities[j].hp - dmg;
+            let mit = armor[usize::from(self.entities[j].owner.0)];
+            // Armor research subtracts flat mitigation, but a mitigated hit still
+            // deals at least 1 (no immunity). With no armor research (mit == 0),
+            // damage is unchanged, keeping base combat identical.
+            let net = if mit > Fixed::ZERO {
+                let reduced = dmg - mit;
+                if reduced < Fixed::ONE {
+                    Fixed::ONE
+                } else {
+                    reduced
+                }
+            } else {
+                dmg
+            };
+            self.entities[j].hp = self.entities[j].hp - net;
         }
         self.attacks = lines;
     }
@@ -1639,6 +1694,19 @@ mod tests {
         let (mask, active) = s.research_state(P0);
         assert_eq!(mask & 1, 1, "Weapons I bit set after duration");
         assert!(active.is_none());
+    }
+
+    #[test]
+    fn research_bonus_helpers_start_at_zero_and_tech_bonuses_are_positive() {
+        use crate::game::tech::TECHS;
+        assert!(TECHS[0].bonus > Fixed::ZERO); // Weapons I
+        assert!(TECHS[3].bonus > Fixed::ZERO); // Armor I
+        let s = Sim::new(Map::new(10, 10), 1, f(0));
+        // No research yet → every branch bonus is zero.
+        assert_eq!(s.player_weapon_bonus(P0), Fixed::ZERO);
+        assert_eq!(s.player_armor_bonus(P0), Fixed::ZERO);
+        assert_eq!(s.player_economy_bonus(P0), Fixed::ZERO);
+        assert_eq!(s.player_mobility_bonus(P0), Fixed::ZERO);
     }
 
     #[test]
