@@ -40,6 +40,43 @@ pub struct AttackProfile {
     pub range: Fixed,
     /// Ticks between shots.
     pub period: u32,
+    /// Whether this attack can hit ground targets.
+    pub targets_ground: bool,
+    /// Whether this attack can hit air targets.
+    pub targets_air: bool,
+}
+
+impl AttackProfile {
+    /// A ground-only attack (the common case).
+    #[must_use]
+    pub const fn ground(damage: Fixed, damage_type: DamageType, range: Fixed, period: u32) -> Self {
+        Self {
+            damage,
+            damage_type,
+            range,
+            period,
+            targets_ground: true,
+            targets_air: false,
+        }
+    }
+
+    /// An air-only attack (anti-air weapons).
+    #[must_use]
+    pub const fn anti_air(
+        damage: Fixed,
+        damage_type: DamageType,
+        range: Fixed,
+        period: u32,
+    ) -> Self {
+        Self {
+            damage,
+            damage_type,
+            range,
+            period,
+            targets_ground: false,
+            targets_air: true,
+        }
+    }
 }
 
 /// Stats for a mobile unit.
@@ -57,6 +94,8 @@ pub struct UnitStats {
     pub cost: Fixed,
     /// Ticks to train.
     pub build_time: u32,
+    /// Whether this unit flies — only attackable by anti-air, and ignores terrain.
+    pub is_air: bool,
 }
 
 /// Stats for a building.
@@ -89,6 +128,8 @@ pub enum UnitKind {
     Tank,
     /// Anti-armour specialist.
     AntiArmor,
+    /// Flying gunship: strong vs ground, only killable by anti-air.
+    Helicopter,
 }
 
 /// The kinds of building.
@@ -104,6 +145,8 @@ pub enum BuildingKind {
     Barracks,
     /// Defensive anti-ground tower.
     GunTurret,
+    /// Defensive anti-air tower.
+    AaTurret,
     /// Cheap blocker.
     Wall,
 }
@@ -131,41 +174,58 @@ impl UnitKind {
             Self::Infantry => UnitStats {
                 max_hp: Fixed::from_int(50),
                 armor: ArmorType::Flesh,
-                attack: AttackProfile {
-                    damage: Fixed::from_int(6),
-                    damage_type: DamageType::Ballistic,
-                    range: Fixed::from_int(3),
-                    period: 8,
-                },
+                attack: AttackProfile::ground(
+                    Fixed::from_int(6),
+                    DamageType::Ballistic,
+                    Fixed::from_int(3),
+                    8,
+                ),
                 speed: Fixed::from_ratio(15, 100),
                 cost: Fixed::from_int(50),
                 build_time: 30,
+                is_air: false,
             },
             Self::Tank => UnitStats {
                 max_hp: Fixed::from_int(220),
                 armor: ArmorType::Plated,
-                attack: AttackProfile {
-                    damage: Fixed::from_int(30),
-                    damage_type: DamageType::Explosive,
-                    range: Fixed::from_int(4),
-                    period: 20,
-                },
+                attack: AttackProfile::ground(
+                    Fixed::from_int(30),
+                    DamageType::Explosive,
+                    Fixed::from_int(4),
+                    20,
+                ),
                 speed: Fixed::from_ratio(10, 100),
                 cost: Fixed::from_int(200),
                 build_time: 90,
+                is_air: false,
             },
             Self::AntiArmor => UnitStats {
                 max_hp: Fixed::from_int(70),
                 armor: ArmorType::Flesh,
-                attack: AttackProfile {
-                    damage: Fixed::from_int(22),
-                    damage_type: DamageType::AntiArmor,
-                    range: Fixed::from_int(4),
-                    period: 16,
-                },
+                attack: AttackProfile::ground(
+                    Fixed::from_int(22),
+                    DamageType::AntiArmor,
+                    Fixed::from_int(4),
+                    16,
+                ),
                 speed: Fixed::from_ratio(12, 100),
                 cost: Fixed::from_int(110),
                 build_time: 50,
+                is_air: false,
+            },
+            Self::Helicopter => UnitStats {
+                max_hp: Fixed::from_int(90),
+                armor: ArmorType::Plated,
+                attack: AttackProfile::ground(
+                    Fixed::from_int(16),
+                    DamageType::Ballistic,
+                    Fixed::from_int(4),
+                    9,
+                ),
+                speed: Fixed::from_ratio(20, 100),
+                cost: Fixed::from_int(160),
+                build_time: 70,
+                is_air: true,
             },
         }
     }
@@ -206,13 +266,23 @@ impl BuildingKind {
             },
             Self::GunTurret => BuildingStats {
                 power_consumed: 25,
-                attack: Some(AttackProfile {
-                    damage: Fixed::from_int(10),
-                    damage_type: DamageType::Ballistic,
-                    range: Fixed::from_int(5),
-                    period: 10,
-                }),
+                attack: Some(AttackProfile::ground(
+                    Fixed::from_int(10),
+                    DamageType::Ballistic,
+                    Fixed::from_int(5),
+                    10,
+                )),
                 ..base(250, 120)
+            },
+            Self::AaTurret => BuildingStats {
+                power_consumed: 30,
+                attack: Some(AttackProfile::anti_air(
+                    Fixed::from_int(20),
+                    DamageType::AntiArmor,
+                    Fixed::from_int(6),
+                    8,
+                )),
+                ..base(220, 140)
             },
             Self::Wall => base(200, 20),
         }

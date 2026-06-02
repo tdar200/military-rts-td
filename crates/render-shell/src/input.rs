@@ -51,6 +51,9 @@ pub fn gather_commands(
     if is_key_pressed(KeyCode::G) {
         *build_mode = Some(BuildingKind::GunTurret);
     }
+    if is_key_pressed(KeyCode::A) {
+        *build_mode = Some(BuildingKind::AaTurret);
+    }
     if is_key_pressed(KeyCode::Escape) {
         *build_mode = None;
     }
@@ -83,6 +86,15 @@ pub fn gather_commands(
                 owner: HUMAN,
                 barracks,
                 kind: UnitKind::Infantry,
+            });
+        }
+    }
+    if is_key_pressed(KeyCode::H) {
+        if let Some(barracks) = first_friendly_barracks(sim) {
+            cmds.push(Command::Train {
+                owner: HUMAN,
+                barracks,
+                kind: UnitKind::Helicopter,
             });
         }
     }

@@ -27,12 +27,21 @@ enum DamageKind {
     Explosive,
 }
 
+#[must_use]
+const fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct AttackData {
     damage: i32,
     damage_type: DamageKind,
     range: i32,
     period: u32,
+    #[serde(default = "default_true")]
+    targets_ground: bool,
+    #[serde(default)]
+    targets_air: bool,
 }
 
 #[derive(Deserialize)]
@@ -43,6 +52,8 @@ struct UnitData {
     speed_milli: i32,
     cost: i32,
     build_time: u32,
+    #[serde(default)]
+    is_air: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,11 +72,13 @@ struct BalanceData {
     infantry: UnitData,
     tank: UnitData,
     anti_armor: UnitData,
+    helicopter: UnitData,
     command_center: BuildingData,
     power_plant: BuildingData,
     refinery: BuildingData,
     barracks: BuildingData,
     gun_turret: BuildingData,
+    aa_turret: BuildingData,
     wall: BuildingData,
 }
 
@@ -91,6 +104,8 @@ const fn to_attack(a: &AttackData) -> AttackProfile {
         damage_type: to_damage(a.damage_type),
         range: Fixed::from_int(a.range),
         period: a.period,
+        targets_ground: a.targets_ground,
+        targets_air: a.targets_air,
     }
 }
 
@@ -102,6 +117,7 @@ fn to_unit(u: &UnitData) -> UnitStats {
         speed: Fixed::from_ratio(i64::from(u.speed_milli), 1000),
         cost: Fixed::from_int(u.cost),
         build_time: u.build_time,
+        is_air: u.is_air,
     }
 }
 
@@ -129,6 +145,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_unit(&data.infantry),
             to_unit(&data.tank),
             to_unit(&data.anti_armor),
+            to_unit(&data.helicopter),
         ],
         [
             to_building(&data.command_center),
@@ -136,6 +153,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_building(&data.refinery),
             to_building(&data.barracks),
             to_building(&data.gun_turret),
+            to_building(&data.aa_turret),
             to_building(&data.wall),
         ],
     ))

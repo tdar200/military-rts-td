@@ -193,7 +193,7 @@ fn draw_hud(sim: &Sim) {
     };
     draw_text(&status, 8.0, line, 24.0, WHITE);
     draw_text(
-        "L-click: select unit   R-click: move   keys B/P/R/G: build   T: train infantry",
+        "L-click select   R-click move   build B/P/R/G/A   train T:infantry H:heli",
         8.0,
         screen_height() - 4.0,
         16.0,

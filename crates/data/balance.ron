@@ -20,6 +20,11 @@
         attack: (damage: 22, damage_type: AntiArmor, range: 4, period: 16),
         speed_milli: 120, cost: 110, build_time: 50,
     ),
+    helicopter: (
+        max_hp: 90, armor: Plated,
+        attack: (damage: 16, damage_type: Ballistic, range: 4, period: 9),
+        speed_milli: 200, cost: 160, build_time: 70, is_air: true,
+    ),
     command_center: (
         max_hp: 1000, power_produced: 0, power_consumed: 0, credit_income: 0,
         produces_units: false, attack: None, cost: 0,
@@ -41,6 +46,12 @@
         produces_units: false,
         attack: Some((damage: 10, damage_type: Ballistic, range: 5, period: 10)),
         cost: 120,
+    ),
+    aa_turret: (
+        max_hp: 220, power_produced: 0, power_consumed: 30, credit_income: 0,
+        produces_units: false,
+        attack: Some((damage: 20, damage_type: AntiArmor, range: 6, period: 8, targets_ground: false, targets_air: true)),
+        cost: 140,
     ),
     wall: (
         max_hp: 200, power_produced: 0, power_consumed: 0, credit_income: 0,

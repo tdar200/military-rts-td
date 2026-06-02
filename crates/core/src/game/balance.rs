@@ -11,8 +11,8 @@ use crate::game::stats::{BuildingKind, BuildingStats, UnitKind, UnitStats};
 /// A complete set of unit and building stats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
-    units: [UnitStats; 3],
-    buildings: [BuildingStats; 6],
+    units: [UnitStats; 4],
+    buildings: [BuildingStats; 7],
 }
 
 impl Balance {
@@ -24,6 +24,7 @@ impl Balance {
                 UnitKind::Infantry.stats(),
                 UnitKind::Tank.stats(),
                 UnitKind::AntiArmor.stats(),
+                UnitKind::Helicopter.stats(),
             ],
             buildings: [
                 BuildingKind::CommandCenter.stats(),
@@ -31,6 +32,7 @@ impl Balance {
                 BuildingKind::Refinery.stats(),
                 BuildingKind::Barracks.stats(),
                 BuildingKind::GunTurret.stats(),
+                BuildingKind::AaTurret.stats(),
                 BuildingKind::Wall.stats(),
             ],
         }
@@ -38,7 +40,7 @@ impl Balance {
 
     /// Builds a balance from explicit tables (used by data loaders).
     #[must_use]
-    pub const fn from_tables(units: [UnitStats; 3], buildings: [BuildingStats; 6]) -> Self {
+    pub const fn from_tables(units: [UnitStats; 4], buildings: [BuildingStats; 7]) -> Self {
         Self { units, buildings }
     }
 
@@ -49,6 +51,7 @@ impl Balance {
             UnitKind::Infantry => self.units[0],
             UnitKind::Tank => self.units[1],
             UnitKind::AntiArmor => self.units[2],
+            UnitKind::Helicopter => self.units[3],
         }
     }
 
@@ -61,7 +64,8 @@ impl Balance {
             BuildingKind::Refinery => self.buildings[2],
             BuildingKind::Barracks => self.buildings[3],
             BuildingKind::GunTurret => self.buildings[4],
-            BuildingKind::Wall => self.buildings[5],
+            BuildingKind::AaTurret => self.buildings[5],
+            BuildingKind::Wall => self.buildings[6],
         }
     }
 }

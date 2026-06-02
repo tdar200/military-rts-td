@@ -205,6 +205,14 @@ const fn unit_tag(u: UnitKind) -> u64 {
         UnitKind::Infantry => 1,
         UnitKind::Tank => 2,
         UnitKind::AntiArmor => 3,
+        UnitKind::Helicopter => 4,
+    }
+}
+
+const fn is_air_of(balance: &Balance, kind: Kind) -> bool {
+    match kind {
+        Kind::Unit(u) => balance.unit(u).is_air,
+        Kind::Building(_) => false,
     }
 }
 
@@ -218,6 +226,7 @@ const fn kind_tag(kind: Kind) -> u64 {
                 BuildingKind::Refinery => 3,
                 BuildingKind::Barracks => 4,
                 BuildingKind::GunTurret => 5,
+                BuildingKind::AaTurret => 7,
                 BuildingKind::Wall => 6,
             };
             0x200 | t
@@ -533,6 +542,13 @@ impl Sim {
     /// passable tile beside it and then closes the last step directly — so
     /// "attack the base" actually routes there.
     fn order_unit_to(&mut self, idx: usize, target: Vec2) {
+        if is_air_of(&self.balance, self.entities[idx].kind) {
+            // Air units fly straight to the target, ignoring terrain.
+            let e = &mut self.entities[idx];
+            e.move_target = Some(target);
+            e.path = Vec::new();
+            return;
+        }
         let start = self.world_to_tile(self.entities[idx].pos);
         let goal_tile = self.world_to_tile(target);
         let goal = if self.is_passable_tile(goal_tile) {
@@ -748,10 +764,18 @@ impl Sim {
         reason = "grid cell coordinates are clamped into the map bounds before use"
     )]
     fn run_combat(&mut self) {
-        let snap: Vec<(bool, u8, Vec2, ArmorType)> = self
+        let snap: Vec<(bool, u8, Vec2, ArmorType, bool)> = self
             .entities
             .iter()
-            .map(|e| (e.alive, e.owner.0, e.pos, armor_of(&self.balance, e.kind)))
+            .map(|e| {
+                (
+                    e.alive,
+                    e.owner.0,
+                    e.pos,
+                    armor_of(&self.balance, e.kind),
+                    is_air_of(&self.balance, e.kind),
+                )
+            })
             .collect();
 
         // Spatial grid over living entities so target lookup is ~O(neighbours)
@@ -802,6 +826,14 @@ impl Sim {
             for &j in &candidates {
                 let t = snap[j];
                 if t.1 == e.owner.0 {
+                    continue;
+                }
+                // Respect air/ground targeting: AA hits only air, most weapons
+                // hit only ground.
+                let target_is_air = t.4;
+                if (target_is_air && !profile.targets_air)
+                    || (!target_is_air && !profile.targets_ground)
+                {
                     continue;
                 }
                 let dist_sq = (t.2 - e.pos).length_squared();
@@ -1371,5 +1403,27 @@ mod tests {
         // The next spawn reuses the wall's freed slot rather than growing the list.
         let reused = s.add_unit(P0, UnitKind::Infantry, v(5, 5));
         assert_eq!(reused, wall);
+    }
+
+    #[test]
+    fn air_is_immune_to_ground_fire_but_dies_to_anti_air() {
+        // A helicopter shreds adjacent infantry, which cannot hit air at all.
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        let heli = s.add_unit(P0, UnitKind::Helicopter, v(5, 5));
+        let inf = s.add_unit(P1, UnitKind::Infantry, v(6, 5));
+        for _ in 0..200 {
+            s.step(&[]);
+        }
+        assert!(s.is_alive(heli));
+        assert!(!s.is_alive(inf));
+
+        // An AA turret brings the helicopter down.
+        let mut s2 = Sim::new(Map::new(20, 20), 1, f(0));
+        let heli2 = s2.add_unit(P0, UnitKind::Helicopter, v(5, 5));
+        s2.add_building(P1, BuildingKind::AaTurret, 6, 5);
+        for _ in 0..400 {
+            s2.step(&[]);
+        }
+        assert!(!s2.is_alive(heli2));
     }
 }
