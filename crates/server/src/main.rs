@@ -21,10 +21,20 @@ struct MatchOutcome {
     log: Vec<Vec<Command>>,
 }
 
+/// Loads the balance table from `balance.ron` in the working directory if present
+/// (tune the game with no recompile), otherwise the embedded default.
+fn load_balance() -> rts_core::game::balance::Balance {
+    std::fs::read_to_string("balance.ron")
+        .ok()
+        .and_then(|s| rts_data::load(&s).ok())
+        .unwrap_or_else(rts_data::load_default)
+}
+
 /// Builds the standard two-base AI-vs-AI scenario. Identical setup is essential:
 /// the input log only reproduces the match if both runs start from this world.
 fn new_match(seed: u64) -> Sim {
     let mut sim = Sim::new(Map::new(40, 40), seed, Fixed::from_int(3000));
+    sim.set_balance(load_balance());
     sim.add_building(PlayerId(0), BuildingKind::CommandCenter, 4, 4);
     sim.add_building(PlayerId(1), BuildingKind::CommandCenter, 35, 35);
     sim

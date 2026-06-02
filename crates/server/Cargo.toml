@@ -11,6 +11,7 @@ publish = false
 # proving zero client/server drift.
 [dependencies]
 rts-core = { path = "../core" }
+rts-data = { path = "../data" }
 
 [lints]
 workspace = true

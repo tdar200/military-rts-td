@@ -8,6 +8,7 @@
 //! identical.
 
 use crate::fixed::Fixed;
+use crate::game::balance::Balance;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
 use crate::game::stats::{damage_multiplier, ArmorType, AttackProfile, BuildingKind, UnitKind};
@@ -156,26 +157,27 @@ pub struct Sim {
     entities: Vec<Entity>,
     waves: Option<WaveConfig>,
     wave_count: u32,
+    balance: Balance,
 }
 
-const fn armor_of(kind: Kind) -> ArmorType {
+const fn armor_of(balance: &Balance, kind: Kind) -> ArmorType {
     match kind {
-        Kind::Unit(u) => u.stats().armor,
-        Kind::Building(b) => b.stats().armor,
+        Kind::Unit(u) => balance.unit(u).armor,
+        Kind::Building(b) => balance.building(b).armor,
     }
 }
 
-const fn attack_of(kind: Kind) -> Option<AttackProfile> {
+const fn attack_of(balance: &Balance, kind: Kind) -> Option<AttackProfile> {
     match kind {
-        Kind::Unit(u) => Some(u.stats().attack),
-        Kind::Building(b) => b.stats().attack,
+        Kind::Unit(u) => Some(balance.unit(u).attack),
+        Kind::Building(b) => balance.building(b).attack,
     }
 }
 
-const fn max_hp(kind: Kind) -> Fixed {
+const fn max_hp(balance: &Balance, kind: Kind) -> Fixed {
     match kind {
-        Kind::Unit(u) => u.stats().max_hp,
-        Kind::Building(b) => b.stats().max_hp,
+        Kind::Unit(u) => balance.unit(u).max_hp,
+        Kind::Building(b) => balance.building(b).max_hp,
     }
 }
 
@@ -227,7 +229,13 @@ impl Sim {
             entities: Vec::new(),
             waves: None,
             wave_count: 0,
+            balance: Balance::const_default(),
         }
+    }
+
+    /// Replaces the balance table (e.g. one loaded from data).
+    pub const fn set_balance(&mut self, balance: Balance) {
+        self.balance = balance;
     }
 
     /// Enables periodic enemy waves (the attack/defend loop).
@@ -300,7 +308,7 @@ impl Sim {
                 },
                 pos: e.pos,
                 hp: e.hp,
-                max_hp: max_hp(e.kind),
+                max_hp: max_hp(&self.balance, e.kind),
             })
             .collect()
     }
@@ -388,13 +396,14 @@ impl Sim {
             Fixed::from_int(i32::from(y)) + Fixed::from_ratio(1, 2),
         );
         self.map.set_tile(x, y, Tile::BLOCKED);
+        let hp = max_hp(&self.balance, Kind::Building(kind));
         let id = EntityId(self.entities.len() as u32);
         self.entities.push(Entity {
             owner,
             kind: Kind::Building(kind),
             alive: true,
             pos,
-            hp: max_hp(Kind::Building(kind)),
+            hp,
             cooldown: 0,
             move_target: None,
             path: Vec::new(),
@@ -411,13 +420,14 @@ impl Sim {
         reason = "entity index fits u32 for any real game"
     )]
     pub fn add_unit(&mut self, owner: PlayerId, kind: UnitKind, pos: Vec2) -> EntityId {
+        let hp = max_hp(&self.balance, Kind::Unit(kind));
         let id = EntityId(self.entities.len() as u32);
         self.entities.push(Entity {
             owner,
             kind: Kind::Unit(kind),
             alive: true,
             pos,
-            hp: max_hp(Kind::Unit(kind)),
+            hp,
             cooldown: 0,
             move_target: None,
             path: Vec::new(),
@@ -539,7 +549,7 @@ impl Sim {
                     .map
                     .tile(i32::from(x), i32::from(y))
                     .is_some_and(|t| t.buildable);
-                let cost = kind.stats().cost;
+                let cost = self.balance.building(kind).cost;
                 let p = usize::from(owner.0);
                 if buildable && self.players[p].credits >= cost {
                     self.players[p].credits = self.players[p].credits - cost;
@@ -551,7 +561,7 @@ impl Sim {
                 barracks,
                 kind,
             } => {
-                let cost = kind.stats().cost;
+                let cost = self.balance.unit(kind).cost;
                 let p = usize::from(owner.0);
                 let ok = self.entity(barracks).is_some_and(|e| {
                     e.alive
@@ -603,7 +613,7 @@ impl Sim {
                 continue;
             }
             if let Kind::Building(b) = e.kind {
-                let st = b.stats();
+                let st = self.balance.building(b);
                 let p = usize::from(e.owner.0);
                 produced[p] += st.power_produced;
                 consumed[p] += st.power_consumed;
@@ -634,7 +644,7 @@ impl Sim {
             }
             if let Some(&front) = e.build_queue.first() {
                 e.build_progress += 1;
-                if e.build_progress >= front.stats().build_time {
+                if e.build_progress >= self.balance.unit(front).build_time {
                     e.build_progress = 0;
                     e.build_queue.remove(0);
                     let pos = e.pos + Vec2::new(Fixed::ONE, Fixed::ZERO);
@@ -682,14 +692,14 @@ impl Sim {
         let snap: Vec<(bool, u8, Vec2, ArmorType)> = self
             .entities
             .iter()
-            .map(|e| (e.alive, e.owner.0, e.pos, armor_of(e.kind)))
+            .map(|e| (e.alive, e.owner.0, e.pos, armor_of(&self.balance, e.kind)))
             .collect();
         let mut damage: Vec<(usize, Fixed)> = Vec::new();
         for e in &mut self.entities {
             if !e.alive {
                 continue;
             }
-            let Some(profile) = attack_of(e.kind) else {
+            let Some(profile) = attack_of(&self.balance, e.kind) else {
                 continue;
             };
             if e.cooldown > 0 {

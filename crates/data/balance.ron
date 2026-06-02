@@ -1,0 +1,49 @@
+// Balance table for the military RTS. Edit these numbers to tune the game — no
+// recompile of the core needed; the shell/server load this at startup.
+//
+// Whole-number fields are literal; `speed_milli` is tiles-per-tick × 1000
+// (e.g. 150 = 0.15 tiles/tick). Damage/armour types: Ballistic|AntiArmor|Explosive
+// and Flesh|Plated|Structure.
+(
+    infantry: (
+        max_hp: 50, armor: Flesh,
+        attack: (damage: 6, damage_type: Ballistic, range: 3, period: 8),
+        speed_milli: 150, cost: 50, build_time: 30,
+    ),
+    tank: (
+        max_hp: 220, armor: Plated,
+        attack: (damage: 30, damage_type: Explosive, range: 4, period: 20),
+        speed_milli: 100, cost: 200, build_time: 90,
+    ),
+    anti_armor: (
+        max_hp: 70, armor: Flesh,
+        attack: (damage: 22, damage_type: AntiArmor, range: 4, period: 16),
+        speed_milli: 120, cost: 110, build_time: 50,
+    ),
+    command_center: (
+        max_hp: 1000, power_produced: 0, power_consumed: 0, credit_income: 0,
+        produces_units: false, attack: None, cost: 0,
+    ),
+    power_plant: (
+        max_hp: 300, power_produced: 100, power_consumed: 0, credit_income: 0,
+        produces_units: false, attack: None, cost: 100,
+    ),
+    refinery: (
+        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 5,
+        produces_units: false, attack: None, cost: 150,
+    ),
+    barracks: (
+        max_hp: 400, power_produced: 0, power_consumed: 30, credit_income: 0,
+        produces_units: true, attack: None, cost: 200,
+    ),
+    gun_turret: (
+        max_hp: 250, power_produced: 0, power_consumed: 25, credit_income: 0,
+        produces_units: false,
+        attack: Some((damage: 10, damage_type: Ballistic, range: 5, period: 10)),
+        cost: 120,
+    ),
+    wall: (
+        max_hp: 200, power_produced: 0, power_consumed: 0, credit_income: 0,
+        produces_units: false, attack: None, cost: 20,
+    ),
+)

@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 rts-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
 
 [lints]
 workspace = true
