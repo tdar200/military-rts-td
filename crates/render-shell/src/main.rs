@@ -36,8 +36,8 @@ use theme::{
     hp_color, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOOD,
     GRID, GROUND, GROUND_MACRO, HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2,
     MAP_PLAINS, OLIVE, PANEL, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW,
-    REGAL_BG, REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL, TEXT,
-    TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
+    REGAL_BG, REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL,
+    TEXT, TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
 };
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
@@ -845,6 +845,7 @@ fn draw(
         };
         draw_piece(x, y, size, texture, team, is_building);
         draw_health_bar(x, y, cell, v.hp, v.max_hp);
+        draw_shield_bar(x, y, cell, v.shield, v.max_shield);
         if Some(v.id) == selected {
             draw_circle_lines(x, y, size * 0.62, 2.0, SELECT_RING);
         }
@@ -1119,6 +1120,22 @@ fn draw_health_bar(x: f32, y: f32, cell: f32, hp: Fixed, max_hp: Fixed) {
     draw_rectangle(left - 1.0, top - 1.0, width + 2.0, 6.0, WALL_EDGE); // frame plate
     draw_rectangle(left, top, width, 4.0, HP_TRACK);
     draw_rectangle(left, top, width * frac, 4.0, hp_color(frac));
+}
+
+/// Cyan shield bar drawn directly above the HP bar. Only visible when the entity
+/// has a non-zero shield max (i.e. the owner has researched at least Shield I).
+fn draw_shield_bar(x: f32, y: f32, cell: f32, shield: Fixed, max_shield: Fixed) {
+    if max_shield <= Fixed::ZERO {
+        return;
+    }
+    let frac = (shield.to_bits() as f32 / max_shield.to_bits() as f32).clamp(0.0, 1.0);
+    let width = cell * 1.1;
+    let left = x - width / 2.0;
+    // Position 3 px above the HP bar track (HP bar top = y - cell * 0.82).
+    let top = y - cell * 0.82 - 4.0;
+    draw_rectangle(left - 1.0, top - 1.0, width + 2.0, 4.0, WALL_EDGE); // frame plate
+    draw_rectangle(left, top, width, 2.0, HP_TRACK);
+    draw_rectangle(left, top, width * frac, 2.0, SHIELD);
 }
 
 #[cfg(test)]

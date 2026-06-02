@@ -96,6 +96,8 @@ pub const SELECT_RING: Color = GOLD_HI;
 pub const TRACER: Color = color_u8!(255, 228, 140, 200);
 /// Health-bar track (behind the colored fill), on-map and in the selection panel.
 pub const HP_TRACK: Color = color_u8!(40, 46, 34, 255);
+/// Energy-shield bar tint.
+pub const SHIELD: Color = color_u8!(90, 200, 235, 255);
 
 // --- REGAL register (Civ-VII menu): parchment + antiquarian field + deco gold ---
 /// Deep antiquarian teal-green menu field.
