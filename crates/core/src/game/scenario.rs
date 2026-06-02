@@ -84,4 +84,42 @@ mod tests {
         assert!(s.map().tile(20, 2).unwrap().passable); // top lane open
         assert!(s.map().tile(20, 18).unwrap().passable); // bottom lane open
     }
+
+    #[test]
+    fn an_undefended_base_falls_and_the_match_is_won() {
+        // The enemy plays (AI + waves); the human does nothing, so the base falls
+        // and the win condition fires for the enemy. Drives a full match to a
+        // decisive result through real simulation.
+        let mut s = lane_defense(1);
+        let mut winner = None;
+        for _ in 0..8000 {
+            let enemy = s.ai_commands(PlayerId(1));
+            s.step(&enemy);
+            if let Some(w) = s.winner() {
+                winner = Some(w);
+                break;
+            }
+        }
+        assert_eq!(winner, Some(PlayerId(1)));
+    }
+
+    #[test]
+    fn a_recorded_match_replays_to_the_same_result() {
+        // Save = (seed, input log). Replaying the log from the same seed
+        // reproduces the exact final state — the determinism-based save/replay.
+        let mut original = lane_defense(5);
+        let mut log = Vec::new();
+        for _ in 0..400 {
+            let enemy = original.ai_commands(PlayerId(1));
+            original.step(&enemy);
+            log.push(enemy);
+        }
+        let expected = original.state_hash();
+
+        let mut replay = lane_defense(5);
+        for batch in &log {
+            replay.step(batch);
+        }
+        assert_eq!(replay.state_hash(), expected);
+    }
 }
