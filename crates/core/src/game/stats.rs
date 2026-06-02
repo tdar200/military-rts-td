@@ -209,6 +209,8 @@ pub enum BuildingKind {
     AaTurret,
     /// Cheap blocker.
     Wall,
+    /// Enables research (consumes power; no attack, no production).
+    ResearchLab,
 }
 
 /// The rock-paper-scissors damage matrix: how `damage_type` fares against
@@ -345,6 +347,10 @@ impl BuildingKind {
                 ..base(220, 140)
             },
             Self::Wall => base(200, 20),
+            Self::ResearchLab => BuildingStats {
+                power_consumed: 25,
+                ..base(300, 250)
+            },
         }
     }
 }

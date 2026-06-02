@@ -20,7 +20,7 @@ use crate::game::stats::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
     units: [[[UnitStats; 4]; FACTION_COUNT]; ERA_COUNT],
-    buildings: [[[BuildingStats; 7]; FACTION_COUNT]; ERA_COUNT],
+    buildings: [[[BuildingStats; 8]; FACTION_COUNT]; ERA_COUNT],
 }
 
 impl Balance {
@@ -43,6 +43,7 @@ impl Balance {
                 BuildingKind::GunTurret.stats(),
                 BuildingKind::AaTurret.stats(),
                 BuildingKind::Wall.stats(),
+                BuildingKind::ResearchLab.stats(),
             ],
         )
     }
@@ -51,7 +52,7 @@ impl Balance {
     /// every era and faction. Used by data loaders; per-era/faction divergence is
     /// introduced in a later phase.
     #[must_use]
-    pub const fn from_tables(units: [UnitStats; 4], buildings: [BuildingStats; 7]) -> Self {
+    pub const fn from_tables(units: [UnitStats; 4], buildings: [BuildingStats; 8]) -> Self {
         Self {
             units: [[units; FACTION_COUNT]; ERA_COUNT],
             buildings: [[buildings; FACTION_COUNT]; ERA_COUNT],
@@ -87,6 +88,7 @@ impl Balance {
             BuildingKind::GunTurret => tier[4],
             BuildingKind::AaTurret => tier[5],
             BuildingKind::Wall => tier[6],
+            BuildingKind::ResearchLab => tier[7],
         }
     }
 
@@ -127,7 +129,7 @@ mod tests {
         UnitKind::AntiArmor,
         UnitKind::Helicopter,
     ];
-    const BUILDING_KINDS: [BuildingKind; 7] = [
+    const BUILDING_KINDS: [BuildingKind; 8] = [
         BuildingKind::CommandCenter,
         BuildingKind::PowerPlant,
         BuildingKind::Refinery,
@@ -135,6 +137,7 @@ mod tests {
         BuildingKind::GunTurret,
         BuildingKind::AaTurret,
         BuildingKind::Wall,
+        BuildingKind::ResearchLab,
     ];
 
     #[test]
@@ -160,6 +163,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn research_lab_exists_and_is_a_powered_structure() {
+        use crate::game::stats::BuildingKind;
+        let b = Balance::default();
+        let st = b.building(BuildingKind::ResearchLab);
+        assert!(st.power_consumed > 0, "research lab draws power");
+        assert!(!st.produces_units);
+        assert!(st.attack.is_none());
+        assert!(st.cost > crate::fixed::Fixed::ZERO);
     }
 
     #[test]

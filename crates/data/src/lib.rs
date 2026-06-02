@@ -80,6 +80,7 @@ struct BalanceData {
     gun_turret: BuildingData,
     aa_turret: BuildingData,
     wall: BuildingData,
+    research_lab: BuildingData,
 }
 
 const fn to_armor(a: ArmorKind) -> ArmorType {
@@ -155,6 +156,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_building(&data.gun_turret),
             to_building(&data.aa_turret),
             to_building(&data.wall),
+            to_building(&data.research_lab),
         ],
     ))
 }

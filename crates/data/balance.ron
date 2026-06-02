@@ -57,4 +57,8 @@
         max_hp: 200, power_produced: 0, power_consumed: 0, credit_income: 0,
         produces_units: false, attack: None, cost: 20,
     ),
+    research_lab: (
+        max_hp: 300, power_produced: 0, power_consumed: 25, credit_income: 0,
+        produces_units: false, attack: None, cost: 250,
+    ),
 )

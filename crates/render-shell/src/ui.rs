@@ -285,6 +285,9 @@ const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         }
         EntityKindView::Building(BuildingKind::AaTurret) => ("Flak Turret", "Anti-air defence"),
         EntityKindView::Building(BuildingKind::Wall) => ("Barrier", "Blocks movement"),
+        EntityKindView::Building(BuildingKind::ResearchLab) => {
+            ("Research Lab", "Researches upgrades")
+        }
     }
 }
 
@@ -307,6 +310,9 @@ const fn alien_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         EntityKindView::Building(BuildingKind::GunTurret) => ("Sentry", "Anti-ground defence"),
         EntityKindView::Building(BuildingKind::AaTurret) => ("Interceptor", "Anti-air defence"),
         EntityKindView::Building(BuildingKind::Wall) => ("Barrier", "Blocks movement"),
+        EntityKindView::Building(BuildingKind::ResearchLab) => {
+            ("Fabricator", "Researches alien upgrades")
+        }
     }
 }
 

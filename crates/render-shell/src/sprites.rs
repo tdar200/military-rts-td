@@ -36,7 +36,9 @@ const fn building_name(kind: BuildingKind) -> &'static str {
         BuildingKind::CommandCenter => "command_center",
         BuildingKind::PowerPlant => "power_plant",
         BuildingKind::Refinery => "refinery",
-        BuildingKind::Barracks => "barracks",
+        // ResearchLab reuses the barracks sprite as a placeholder; when a real
+        // research_lab asset is added, update this arm AND the `ALL` preload list.
+        BuildingKind::Barracks | BuildingKind::ResearchLab => "barracks",
         BuildingKind::GunTurret => "gun_turret",
         BuildingKind::AaTurret => "aa_turret",
         BuildingKind::Wall => "wall",
