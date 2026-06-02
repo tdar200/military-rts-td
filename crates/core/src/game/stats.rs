@@ -29,6 +29,66 @@ pub enum ArmorType {
     Structure,
 }
 
+/// Number of technology eras (Modern → Interstellar).
+pub const ERA_COUNT: usize = 4;
+
+/// Number of factions (Human, Alien).
+pub const FACTION_COUNT: usize = 2;
+
+/// The technology era a roster tier belongs to. Later eras upgrade the roster in
+/// place; Era 1 (`Modern`) is the game's starting tier.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Era {
+    /// 21st-century conventional military (the starting era).
+    Modern,
+    /// Moon / Mars orbital tier.
+    Orbital,
+    /// Solar-system / interplanetary tier.
+    Interplanetary,
+    /// Interstellar tier — the alien-war endgame.
+    Interstellar,
+}
+
+/// Which side a roster tier belongs to. Aliens mirror human stats in v1 (cosmetic
+/// only); the faction axis exists so the rosters can diverge later.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Faction {
+    /// Humanity (the player's default side).
+    Human,
+    /// The alien invaders.
+    Alien,
+}
+
+impl Era {
+    /// Dense index into era-keyed tables, in `0..ERA_COUNT`.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Modern => 0,
+            Self::Orbital => 1,
+            Self::Interplanetary => 2,
+            Self::Interstellar => 3,
+        }
+    }
+}
+
+impl Faction {
+    /// Dense index into faction-keyed tables, in `0..FACTION_COUNT`.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Human => 0,
+            Self::Alien => 1,
+        }
+    }
+}
+
+// Keep the `*_COUNT` constants in sync with the enums: `index()` is dense and
+// the last variant's index must be exactly `COUNT - 1`. A forgotten count bump
+// after adding a variant is then a compile error, not a silent table-size bug.
+const _: () = assert!(Era::Interstellar.index() + 1 == ERA_COUNT);
+const _: () = assert!(Faction::Alien.index() + 1 == FACTION_COUNT);
+
 /// A repeating attack: how hard, what type, how far, how often.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct AttackProfile {
@@ -291,7 +351,9 @@ impl BuildingKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArmorType, BuildingKind, DamageType, UnitKind};
+    use super::{
+        ArmorType, BuildingKind, DamageType, Era, Faction, UnitKind, ERA_COUNT, FACTION_COUNT,
+    };
     use crate::fixed::Fixed;
 
     #[test]
@@ -331,5 +393,17 @@ mod tests {
     fn turret_attacks_but_command_center_does_not() {
         assert!(BuildingKind::GunTurret.stats().attack.is_some());
         assert!(BuildingKind::CommandCenter.stats().attack.is_none());
+    }
+
+    #[test]
+    fn era_and_faction_indices_are_dense_and_in_bounds() {
+        assert_eq!(ERA_COUNT, 4);
+        assert_eq!(FACTION_COUNT, 2);
+        assert_eq!(Era::Modern.index(), 0);
+        assert_eq!(Era::Interstellar.index(), 3);
+        assert_eq!(Faction::Human.index(), 0);
+        assert_eq!(Faction::Alien.index(), 1);
+        assert!(Era::Interstellar.index() < ERA_COUNT);
+        assert!(Faction::Alien.index() < FACTION_COUNT);
     }
 }
