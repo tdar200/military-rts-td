@@ -220,6 +220,16 @@ const fn unit_tag(u: UnitKind) -> u64 {
     }
 }
 
+/// Per-era attack-damage multiplier: (7/5)^era. Era 0 (Modern) is neutral.
+const fn era_damage_factor(era: u8) -> Fixed {
+    match era {
+        0 => Fixed::ONE,
+        1 => Fixed::from_ratio(7, 5),
+        2 => Fixed::from_ratio(49, 25),
+        _ => Fixed::from_ratio(343, 125),
+    }
+}
+
 const fn is_air_of(balance: &Balance, kind: Kind) -> bool {
     match kind {
         Kind::Unit(u) => balance.unit(u).is_air,
@@ -940,6 +950,8 @@ impl Sim {
             core::array::from_fn(|p| self.player_weapon_bonus(PlayerId(u8::try_from(p).unwrap())));
         let armor: [Fixed; PLAYER_COUNT] =
             core::array::from_fn(|p| self.player_armor_bonus(PlayerId(u8::try_from(p).unwrap())));
+        let era_dmg: [Fixed; PLAYER_COUNT] =
+            core::array::from_fn(|p| era_damage_factor(self.players[p].era));
 
         let mut damage: Vec<(usize, Fixed)> = Vec::new();
         let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
@@ -992,7 +1004,8 @@ impl Sim {
             }
             if let Some((j, _)) = best {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
-                damage.push((j, profile.damage * mult + weapon[usize::from(e.owner.0)]));
+                let base = profile.damage * mult * era_dmg[usize::from(e.owner.0)];
+                damage.push((j, base + weapon[usize::from(e.owner.0)]));
                 lines.push((e.pos, snap[j].2));
                 e.cooldown = profile.period;
             }
@@ -1806,6 +1819,14 @@ mod tests {
             s.step(&[]);
         }
         assert_eq!(s.player_era(P0), 1, "advanced to Orbital");
+    }
+
+    #[test]
+    fn era_damage_factor_scales_up() {
+        assert_eq!(super::era_damage_factor(0), Fixed::ONE);
+        assert!(super::era_damage_factor(1) > Fixed::ONE);
+        assert!(super::era_damage_factor(3) > super::era_damage_factor(2));
+        assert!(super::era_damage_factor(2) > super::era_damage_factor(1));
     }
 
     #[test]
