@@ -67,6 +67,9 @@ struct Entity {
     build_progress: u32,
 }
 
+/// Antimatter cost to train a Capital Ship.
+const CAPITAL_ANTIMATTER_COST: Fixed = Fixed::from_int(100);
+
 /// Per-player resources.
 #[derive(Clone, Copy, Debug)]
 struct Player {
@@ -77,6 +80,8 @@ struct Player {
     active_research: Option<(u32, u32)>,
     /// Current era index (0=Modern..3=Interstellar).
     era: u8,
+    /// Accumulated antimatter (third resource).
+    antimatter: Fixed,
 }
 
 /// A player or AI input, applied at a tick boundary.
@@ -282,6 +287,7 @@ impl Sim {
                 researched_techs: 0,
                 active_research: None,
                 era: 0,
+                antimatter: Fixed::ZERO,
             }; PLAYER_COUNT],
             entities: Vec::new(),
             free: Vec::new(),
@@ -341,6 +347,12 @@ impl Sim {
     #[must_use]
     pub fn credits(&self, player: PlayerId) -> Fixed {
         self.players[usize::from(player.0)].credits
+    }
+
+    /// A player's current antimatter balance.
+    #[must_use]
+    pub fn antimatter(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].antimatter
     }
 
     /// Credit cost to construct a building (for UI affordability hints).
@@ -506,6 +518,7 @@ impl Sim {
                 None => h.write_u64(0),
             }
             h.write_u64(u64::from(p.era));
+            h.write_i64(p.antimatter.to_bits());
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -742,14 +755,20 @@ impl Sim {
                     return;
                 }
                 let cost = self.balance.unit(kind).cost;
+                let am_cost = if matches!(kind, UnitKind::Capital) {
+                    CAPITAL_ANTIMATTER_COST
+                } else {
+                    Fixed::ZERO
+                };
                 let p = usize::from(owner.0);
                 let ok = self.entity(barracks).is_some_and(|e| {
                     e.alive
                         && e.owner == owner
                         && matches!(e.kind, Kind::Building(BuildingKind::Barracks))
                 });
-                if ok && self.players[p].credits >= cost {
+                if ok && self.players[p].credits >= cost && self.players[p].antimatter >= am_cost {
                     self.players[p].credits = self.players[p].credits - cost;
+                    self.players[p].antimatter = self.players[p].antimatter - am_cost;
                     if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
                         e.build_queue.push(kind);
                     }
@@ -861,6 +880,7 @@ impl Sim {
         let mut produced = [0i32; PLAYER_COUNT];
         let mut consumed = [0i32; PLAYER_COUNT];
         let mut income = [Fixed::ZERO; PLAYER_COUNT];
+        let mut am_income = [Fixed::ZERO; PLAYER_COUNT];
         for e in &self.entities {
             if !e.alive {
                 continue;
@@ -871,6 +891,7 @@ impl Sim {
                 produced[p] += st.power_produced;
                 consumed[p] += st.power_consumed;
                 income[p] = income[p] + st.credit_income;
+                am_income[p] = am_income[p] + st.antimatter_income;
             }
         }
         let mut powered = [false; PLAYER_COUNT];
@@ -883,6 +904,7 @@ impl Sim {
             };
             let econ = self.player_economy_bonus(PlayerId(u8::try_from(p).unwrap()));
             self.players[p].credits = self.players[p].credits + (income[p] + econ) * factor;
+            self.players[p].antimatter = self.players[p].antimatter + am_income[p] * factor;
         }
         powered
     }
@@ -1640,7 +1662,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 14_227_407_528_270_883_136);
+        assert_eq!(s.state_hash(), 13_355_596_211_711_344_768);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1998,6 +2020,22 @@ mod tests {
         assert!(
             s.player_shield_max(P0) > crate::fixed::Fixed::ZERO,
             "AI (P0) should have researched a Shield tech after 8000 ticks"
+        );
+    }
+
+    #[test]
+    fn antimatter_accrues_and_gates_capital() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(20_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
+        s.add_building(P0, BuildingKind::AntimatterPlant, 4, 2);
+        assert_eq!(s.antimatter(P0), crate::fixed::Fixed::ZERO);
+        for _ in 0..50 {
+            s.step(&[]);
+        }
+        assert!(
+            s.antimatter(P0) > crate::fixed::Fixed::ZERO,
+            "antimatter accrues from a powered plant"
         );
     }
 }
