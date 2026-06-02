@@ -6,27 +6,36 @@
 //! data (see the `rts-data` crate, which loads one from RON) so balancing is
 //! editing a table, not recompiling.
 
-use crate::game::stats::{BuildingKind, BuildingStats, UnitKind, UnitStats};
+use crate::game::stats::{
+    BuildingKind, BuildingStats, Era, Faction, UnitKind, UnitStats, ERA_COUNT, FACTION_COUNT,
+};
 
-/// A complete set of unit and building stats.
+/// A complete set of unit and building stats, keyed by `[era][faction]`.
+///
+/// Every era/faction tier is currently a copy of the canonical Modern/Human
+/// numbers in [`stats`](crate::game::stats); per-era and per-faction divergence
+/// is introduced in a later phase. The plain [`unit`](Balance::unit) /
+/// [`building`](Balance::building) accessors read the Modern/Human tier so the
+/// `Sim`'s existing call sites are unaffected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
-    units: [UnitStats; 4],
-    buildings: [BuildingStats; 7],
+    units: [[[UnitStats; 4]; FACTION_COUNT]; ERA_COUNT],
+    buildings: [[[BuildingStats; 7]; FACTION_COUNT]; ERA_COUNT],
 }
 
 impl Balance {
-    /// The default balance — the canonical numbers from [`stats`](crate::game::stats).
+    /// The default balance — the canonical numbers from [`stats`](crate::game::stats),
+    /// replicated across every era and faction.
     #[must_use]
     pub const fn const_default() -> Self {
-        Self {
-            units: [
+        Self::from_tables(
+            [
                 UnitKind::Infantry.stats(),
                 UnitKind::Tank.stats(),
                 UnitKind::AntiArmor.stats(),
                 UnitKind::Helicopter.stats(),
             ],
-            buildings: [
+            [
                 BuildingKind::CommandCenter.stats(),
                 BuildingKind::PowerPlant.stats(),
                 BuildingKind::Refinery.stats(),
@@ -35,38 +44,62 @@ impl Balance {
                 BuildingKind::AaTurret.stats(),
                 BuildingKind::Wall.stats(),
             ],
-        }
+        )
     }
 
-    /// Builds a balance from explicit tables (used by data loaders).
+    /// Builds a balance from one canonical (Modern/Human) tier, replicated across
+    /// every era and faction. Used by data loaders; per-era/faction divergence is
+    /// introduced in a later phase.
     #[must_use]
     pub const fn from_tables(units: [UnitStats; 4], buildings: [BuildingStats; 7]) -> Self {
-        Self { units, buildings }
+        Self {
+            units: [[units; FACTION_COUNT]; ERA_COUNT],
+            buildings: [[buildings; FACTION_COUNT]; ERA_COUNT],
+        }
     }
 
-    /// Stats for a unit kind.
+    /// Stats for a unit kind in a given era and faction.
+    #[must_use]
+    pub const fn unit_in(&self, era: Era, faction: Faction, kind: UnitKind) -> UnitStats {
+        let tier = self.units[era.index()][faction.index()];
+        match kind {
+            UnitKind::Infantry => tier[0],
+            UnitKind::Tank => tier[1],
+            UnitKind::AntiArmor => tier[2],
+            UnitKind::Helicopter => tier[3],
+        }
+    }
+
+    /// Stats for a building kind in a given era and faction.
+    #[must_use]
+    pub const fn building_in(
+        &self,
+        era: Era,
+        faction: Faction,
+        kind: BuildingKind,
+    ) -> BuildingStats {
+        let tier = self.buildings[era.index()][faction.index()];
+        match kind {
+            BuildingKind::CommandCenter => tier[0],
+            BuildingKind::PowerPlant => tier[1],
+            BuildingKind::Refinery => tier[2],
+            BuildingKind::Barracks => tier[3],
+            BuildingKind::GunTurret => tier[4],
+            BuildingKind::AaTurret => tier[5],
+            BuildingKind::Wall => tier[6],
+        }
+    }
+
+    /// Stats for a unit kind in the default (Modern era, Human faction) tier.
     #[must_use]
     pub const fn unit(&self, kind: UnitKind) -> UnitStats {
-        match kind {
-            UnitKind::Infantry => self.units[0],
-            UnitKind::Tank => self.units[1],
-            UnitKind::AntiArmor => self.units[2],
-            UnitKind::Helicopter => self.units[3],
-        }
+        self.unit_in(Era::Modern, Faction::Human, kind)
     }
 
-    /// Stats for a building kind.
+    /// Stats for a building kind in the default (Modern era, Human faction) tier.
     #[must_use]
     pub const fn building(&self, kind: BuildingKind) -> BuildingStats {
-        match kind {
-            BuildingKind::CommandCenter => self.buildings[0],
-            BuildingKind::PowerPlant => self.buildings[1],
-            BuildingKind::Refinery => self.buildings[2],
-            BuildingKind::Barracks => self.buildings[3],
-            BuildingKind::GunTurret => self.buildings[4],
-            BuildingKind::AaTurret => self.buildings[5],
-            BuildingKind::Wall => self.buildings[6],
-        }
+        self.building_in(Era::Modern, Faction::Human, kind)
     }
 }
 
@@ -79,7 +112,30 @@ impl Default for Balance {
 #[cfg(test)]
 mod tests {
     use super::Balance;
-    use crate::game::stats::{BuildingKind, UnitKind};
+    use crate::game::stats::{BuildingKind, Era, Faction, UnitKind};
+
+    const ERAS: [Era; 4] = [
+        Era::Modern,
+        Era::Orbital,
+        Era::Interplanetary,
+        Era::Interstellar,
+    ];
+    const FACTIONS: [Faction; 2] = [Faction::Human, Faction::Alien];
+    const UNIT_KINDS: [UnitKind; 4] = [
+        UnitKind::Infantry,
+        UnitKind::Tank,
+        UnitKind::AntiArmor,
+        UnitKind::Helicopter,
+    ];
+    const BUILDING_KINDS: [BuildingKind; 7] = [
+        BuildingKind::CommandCenter,
+        BuildingKind::PowerPlant,
+        BuildingKind::Refinery,
+        BuildingKind::Barracks,
+        BuildingKind::GunTurret,
+        BuildingKind::AaTurret,
+        BuildingKind::Wall,
+    ];
 
     #[test]
     fn default_balance_matches_canonical_stats() {
@@ -89,5 +145,40 @@ mod tests {
             b.building(BuildingKind::Refinery),
             BuildingKind::Refinery.stats()
         );
+    }
+
+    #[test]
+    fn every_era_and_faction_returns_canonical_stats_for_now() {
+        let b = Balance::default();
+        for era in ERAS {
+            for faction in FACTIONS {
+                for kind in UNIT_KINDS {
+                    assert_eq!(b.unit_in(era, faction, kind), kind.stats());
+                }
+                for kind in BUILDING_KINDS {
+                    assert_eq!(b.building_in(era, faction, kind), kind.stats());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alien_mirrors_human_in_every_era() {
+        // v1 invariant: aliens are a cosmetic mirror — identical stats to humans.
+        let b = Balance::default();
+        for era in ERAS {
+            for kind in UNIT_KINDS {
+                assert_eq!(
+                    b.unit_in(era, Faction::Human, kind),
+                    b.unit_in(era, Faction::Alien, kind)
+                );
+            }
+            for kind in BUILDING_KINDS {
+                assert_eq!(
+                    b.building_in(era, Faction::Human, kind),
+                    b.building_in(era, Faction::Alien, kind)
+                );
+            }
+        }
     }
 }
