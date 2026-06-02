@@ -171,6 +171,8 @@ pub struct BuildingStats {
     pub power_consumed: i32,
     /// Credits generated per tick while powered (refineries).
     pub credit_income: Fixed,
+    /// Antimatter generated per tick while powered (Antimatter Plant only).
+    pub antimatter_income: Fixed,
     /// Whether this building can train units (barracks).
     pub produces_units: bool,
     /// Attack profile, if this building is a defensive tower.
@@ -213,6 +215,8 @@ pub enum BuildingKind {
     Wall,
     /// Enables research (consumes power; no attack, no production).
     ResearchLab,
+    /// Produces antimatter while powered (the third resource).
+    AntimatterPlant,
 }
 
 /// The rock-paper-scissors damage matrix: how `damage_type` fares against
@@ -321,6 +325,7 @@ impl BuildingKind {
                 power_produced: 0,
                 power_consumed: 0,
                 credit_income: Fixed::ZERO,
+                antimatter_income: Fixed::ZERO,
                 produces_units: false,
                 attack: None,
                 cost: Fixed::from_int(cost),
@@ -366,6 +371,11 @@ impl BuildingKind {
             Self::ResearchLab => BuildingStats {
                 power_consumed: 25,
                 ..base(300, 250)
+            },
+            Self::AntimatterPlant => BuildingStats {
+                power_consumed: 20,
+                antimatter_income: Fixed::from_int(5),
+                ..base(300, 200)
             },
         }
     }

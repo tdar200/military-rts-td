@@ -62,6 +62,8 @@ struct BuildingData {
     power_produced: i32,
     power_consumed: i32,
     credit_income: i32,
+    #[serde(default)]
+    antimatter_income: i32,
     produces_units: bool,
     attack: Option<AttackData>,
     cost: i32,
@@ -82,6 +84,7 @@ struct BalanceData {
     aa_turret: BuildingData,
     wall: BuildingData,
     research_lab: BuildingData,
+    antimatter_plant: BuildingData,
 }
 
 const fn to_armor(a: ArmorKind) -> ArmorType {
@@ -130,6 +133,7 @@ fn to_building(b: &BuildingData) -> BuildingStats {
         power_produced: b.power_produced,
         power_consumed: b.power_consumed,
         credit_income: Fixed::from_int(b.credit_income),
+        antimatter_income: Fixed::from_int(b.antimatter_income),
         produces_units: b.produces_units,
         attack: b.attack.as_ref().map(to_attack),
         cost: Fixed::from_int(b.cost),
@@ -159,6 +163,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_building(&data.aa_turret),
             to_building(&data.wall),
             to_building(&data.research_lab),
+            to_building(&data.antimatter_plant),
         ],
     ))
 }

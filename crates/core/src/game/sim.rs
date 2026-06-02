@@ -261,6 +261,7 @@ const fn kind_tag(kind: Kind) -> u64 {
                 BuildingKind::AaTurret => 7,
                 BuildingKind::Wall => 6,
                 BuildingKind::ResearchLab => 8,
+                BuildingKind::AntimatterPlant => 9,
             };
             0x200 | t
         }

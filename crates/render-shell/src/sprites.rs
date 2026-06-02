@@ -37,7 +37,9 @@ const fn building_name(kind: BuildingKind) -> &'static str {
     match kind {
         BuildingKind::CommandCenter => "command_center",
         BuildingKind::PowerPlant => "power_plant",
-        BuildingKind::Refinery => "refinery",
+        // AntimatterPlant reuses the refinery sprite as a placeholder; update when
+        // a real antimatter_plant asset is added.
+        BuildingKind::Refinery | BuildingKind::AntimatterPlant => "refinery",
         // ResearchLab reuses the barracks sprite as a placeholder; when a real
         // research_lab asset is added, update this arm AND the `ALL` preload list.
         BuildingKind::Barracks | BuildingKind::ResearchLab => "barracks",

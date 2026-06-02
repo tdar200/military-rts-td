@@ -66,4 +66,8 @@
         max_hp: 300, power_produced: 0, power_consumed: 25, credit_income: 0,
         produces_units: false, attack: None, cost: 250,
     ),
+    antimatter_plant: (
+        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 0, antimatter_income: 5,
+        produces_units: false, attack: None, cost: 200,
+    ),
 )

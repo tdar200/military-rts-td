@@ -20,7 +20,7 @@ use crate::game::stats::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
     units: [[[UnitStats; 5]; FACTION_COUNT]; ERA_COUNT],
-    buildings: [[[BuildingStats; 8]; FACTION_COUNT]; ERA_COUNT],
+    buildings: [[[BuildingStats; 9]; FACTION_COUNT]; ERA_COUNT],
 }
 
 impl Balance {
@@ -45,6 +45,7 @@ impl Balance {
                 BuildingKind::AaTurret.stats(),
                 BuildingKind::Wall.stats(),
                 BuildingKind::ResearchLab.stats(),
+                BuildingKind::AntimatterPlant.stats(),
             ],
         )
     }
@@ -53,7 +54,7 @@ impl Balance {
     /// every era and faction. Used by data loaders; per-era/faction divergence is
     /// introduced in a later phase.
     #[must_use]
-    pub const fn from_tables(units: [UnitStats; 5], buildings: [BuildingStats; 8]) -> Self {
+    pub const fn from_tables(units: [UnitStats; 5], buildings: [BuildingStats; 9]) -> Self {
         Self {
             units: [[units; FACTION_COUNT]; ERA_COUNT],
             buildings: [[buildings; FACTION_COUNT]; ERA_COUNT],
@@ -91,6 +92,7 @@ impl Balance {
             BuildingKind::AaTurret => tier[5],
             BuildingKind::Wall => tier[6],
             BuildingKind::ResearchLab => tier[7],
+            BuildingKind::AntimatterPlant => tier[8],
         }
     }
 
@@ -132,7 +134,7 @@ mod tests {
         UnitKind::Helicopter,
         UnitKind::Capital,
     ];
-    const BUILDING_KINDS: [BuildingKind; 8] = [
+    const BUILDING_KINDS: [BuildingKind; 9] = [
         BuildingKind::CommandCenter,
         BuildingKind::PowerPlant,
         BuildingKind::Refinery,
@@ -141,6 +143,7 @@ mod tests {
         BuildingKind::AaTurret,
         BuildingKind::Wall,
         BuildingKind::ResearchLab,
+        BuildingKind::AntimatterPlant,
     ];
 
     #[test]
@@ -177,6 +180,20 @@ mod tests {
         assert!(!st.produces_units);
         assert!(st.attack.is_none());
         assert!(st.cost > crate::fixed::Fixed::ZERO);
+    }
+
+    #[test]
+    fn antimatter_plant_produces_antimatter_and_draws_power() {
+        use crate::game::stats::BuildingKind;
+        let st = BuildingKind::AntimatterPlant.stats();
+        assert!(st.antimatter_income > crate::fixed::Fixed::ZERO);
+        assert!(st.power_consumed > 0);
+        assert!(!st.produces_units && st.attack.is_none());
+        // Existing buildings produce no antimatter.
+        assert_eq!(
+            BuildingKind::Refinery.stats().antimatter_income,
+            crate::fixed::Fixed::ZERO
+        );
     }
 
     #[test]

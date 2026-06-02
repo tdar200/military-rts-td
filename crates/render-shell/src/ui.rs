@@ -294,6 +294,9 @@ const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         EntityKindView::Building(BuildingKind::ResearchLab) => {
             ("Research Lab", "Researches upgrades")
         }
+        EntityKindView::Building(BuildingKind::AntimatterPlant) => {
+            ("Antimatter Plant", "Produces antimatter")
+        }
     }
 }
 
@@ -319,6 +322,9 @@ const fn alien_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         EntityKindView::Building(BuildingKind::Wall) => ("Barrier", "Blocks movement"),
         EntityKindView::Building(BuildingKind::ResearchLab) => {
             ("Fabricator", "Researches alien upgrades")
+        }
+        EntityKindView::Building(BuildingKind::AntimatterPlant) => {
+            ("Singularity", "Produces antimatter")
         }
     }
 }
