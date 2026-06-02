@@ -12,7 +12,8 @@
     clippy::cast_possible_wrap,
     clippy::while_float,
     clippy::suboptimal_flops,
-    reason = "the render/input shell converts fixed-point sim values and grid sizes to/from f32 screen space and runs a float accumulator game loop; the determinism-critical math stays in rts_core"
+    clippy::too_many_lines,
+    reason = "the render/input shell converts fixed-point sim values and grid sizes to/from f32 screen space and runs a float accumulator game loop; draw functions and main() are inherently long; the determinism-critical math stays in rts_core"
 )]
 
 mod input;
@@ -24,8 +25,9 @@ use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
 use rts_core::game::hex;
 use rts_core::game::scenario::Scenario;
-use rts_core::game::sim::{EntityId, EntityKindView, PlayerId, Sim};
+use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
+use rts_core::game::tech::TECHS;
 use rts_core::vec::Vec2 as SimVec2;
 use sprites::Sprites;
 // Explicit theme imports (not a glob) so they take precedence over the
@@ -33,9 +35,9 @@ use sprites::Sprites;
 use theme::{
     hp_color, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOOD,
     GRID, GROUND, GROUND_MACRO, HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2,
-    MAP_PLAINS, PANEL, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW,
+    MAP_PLAINS, OLIVE, PANEL, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW,
     REGAL_BG, REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL, TEXT,
-    TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP,
+    TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
 };
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
@@ -192,6 +194,7 @@ async fn main() {
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
     let mut paused = false;
+    let mut research_open = false;
     let mut phase = Phase::Title;
 
     loop {
@@ -212,6 +215,7 @@ async fn main() {
                 build_mode = None;
                 pending.clear();
                 accumulator = 0.0;
+                research_open = false;
             }
             draw_title(&sprites, scenario);
             next_frame().await;
@@ -221,17 +225,56 @@ async fn main() {
         let cell = cell_size(&sim);
         let over = sim.winner().is_some();
 
-        // Input: UI command bar first, then map (suppressed while over the UI).
-        pending.extend(ui::handle_click(&sim, &mut build_mode));
-        pending.extend(input::gather_commands(
-            &sim,
-            &mut selected,
-            &mut build_mode,
-            ui::pointer_over_ui(),
-            cell,
-        ));
-        if is_key_pressed(KeyCode::Space) {
+        // Input: UI command bar first, then map (suppressed while over the UI or
+        // the research modal).
+        if !research_open {
+            pending.extend(ui::handle_click(&sim, &mut build_mode));
+            pending.extend(input::gather_commands(
+                &sim,
+                &mut selected,
+                &mut build_mode,
+                ui::pointer_over_ui(),
+                cell,
+            ));
+        }
+        if !research_open && is_key_pressed(KeyCode::Space) {
             paused = !paused;
+        }
+        // Toggle research modal with Y (only while playing, not paused, not on title/game-over).
+        if !over && !paused && is_key_pressed(KeyCode::Y) {
+            research_open = !research_open;
+        }
+        // While the research modal is open: number keys issue research commands;
+        // Escape closes without researching.
+        if research_open {
+            let key_to_tech: [(KeyCode, u32); 10] = [
+                (KeyCode::Key1, 0),
+                (KeyCode::Key2, 1),
+                (KeyCode::Key3, 2),
+                (KeyCode::Key4, 3),
+                (KeyCode::Key5, 4),
+                (KeyCode::Key6, 5),
+                (KeyCode::Key7, 6),
+                (KeyCode::Key8, 7),
+                (KeyCode::Key9, 8),
+                (KeyCode::Key0, 9),
+            ];
+            for (key, tech_id) in key_to_tech {
+                if is_key_pressed(key) {
+                    // Core validates affordability, prereq, and lab presence.
+                    if sim.research_state(HUMAN).1.is_none() {
+                        pending.push(Command::Research {
+                            owner: HUMAN,
+                            tech_id,
+                        });
+                    }
+                    research_open = false;
+                    break;
+                }
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                research_open = false;
+            }
         }
         if over && is_key_pressed(KeyCode::R) {
             sim = new_match(scenario);
@@ -239,6 +282,7 @@ async fn main() {
             build_mode = None;
             pending.clear();
             accumulator = 0.0;
+            research_open = false;
         }
         // Return to the map-select screen.
         if over && is_key_pressed(KeyCode::M) {
@@ -247,13 +291,15 @@ async fn main() {
             build_mode = None;
             pending.clear();
             accumulator = 0.0;
+            research_open = false;
         }
 
-        // Advance the fixed-timestep sim unless paused or the match is over.
+        // Advance the fixed-timestep sim unless paused, the match is over, or the
+        // research modal is open (the modal freezes time so the player can read it).
         // Clamp frame time so a stall / slow frame can't dump hundreds of ticks at
         // once (the "spiral of death") and fast-forward past wave spawns.
         accumulator += get_frame_time().min(0.1);
-        if paused || over {
+        if paused || over || research_open {
             accumulator = 0.0;
             pending.clear();
         }
@@ -266,6 +312,9 @@ async fn main() {
 
         draw(&sim, selected, build_mode, cell, &sprites);
         ui::draw(&sim, build_mode, paused, selected, &sprites);
+        if research_open {
+            draw_research_modal(&sim, &sprites);
+        }
         if let Some(winner) = sim.winner() {
             draw_game_over(winner, &sprites);
         }
@@ -569,6 +618,189 @@ fn draw_game_over(winner: PlayerId, sprites: &Sprites) {
         22.0,
         TEXT,
         sprites.font(),
+    );
+}
+
+/// Classifies the visible status of a single tech for the research modal.
+#[derive(Clone, Copy)]
+enum TechStatus {
+    Researched,
+    /// Ticks remaining and the tech's duration, for a progress %.
+    InProgress {
+        ticks_remaining: u32,
+        duration: u32,
+    },
+    Locked,
+    NoLab,
+    Available,
+}
+
+/// Returns the display status of tech `t` given the player's current research
+/// state, active research slot, and whether a research lab exists.
+fn tech_status(
+    tech_id: u32,
+    prereq: Option<u32>,
+    duration: u32,
+    mask: u32,
+    active: Option<(u32, u32)>,
+    has_lab: bool,
+) -> TechStatus {
+    if mask & (1 << tech_id) != 0 {
+        return TechStatus::Researched;
+    }
+    if let Some((active_id, ticks_remaining)) = active {
+        if active_id == tech_id {
+            return TechStatus::InProgress {
+                ticks_remaining,
+                duration,
+            };
+        }
+    }
+    if prereq.is_some_and(|p| mask & (1 << p) == 0) {
+        return TechStatus::Locked;
+    }
+    if !has_lab {
+        return TechStatus::NoLab;
+    }
+    TechStatus::Available
+}
+
+/// Full-screen overlay listing all 10 techs with their status + progress.
+/// Number keys 1-0 start research; Escape closes.
+fn draw_research_modal(sim: &Sim, sprites: &Sprites) {
+    let (w, h) = (screen_width(), screen_height());
+    // Dark full-screen overlay — time is frozen while this is up.
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 200));
+
+    let pw = 560.0_f32.min(w - 40.0);
+    // 10 rows + title bar + footer
+    let row_h = 34.0;
+    let head_h = 48.0;
+    let foot_h = 36.0;
+    let n = TECHS.len() as f32;
+    let ph = head_h + n * row_h + foot_h + 16.0;
+    let px = (w - pw) / 2.0;
+    let py = (h - ph) / 2.0;
+
+    // Panel background + gold top bar + border.
+    draw_rectangle(px, py, pw, ph, PANEL);
+    draw_rectangle(px, py, pw, 4.0, GOLD);
+    draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
+
+    // Title.
+    let fb = sprites.font_bold();
+    let f = sprites.font();
+    centered("RESEARCH", py + 32.0, 26.0, GOLD, sprites.font_bold());
+    // Thin olive separator below the title.
+    draw_rectangle(px + 12.0, py + head_h - 4.0, pw - 24.0, 1.0, OLIVE);
+
+    let (mask, active) = sim.research_state(HUMAN);
+    let has_lab = sim.has_research_lab(HUMAN);
+
+    for (i, t) in TECHS.iter().enumerate() {
+        let ry = py + head_h + i as f32 * row_h + 8.0;
+        // Alternating subtle row tint for readability.
+        if i % 2 == 0 {
+            draw_rectangle(px + 8.0, ry - 4.0, pw - 16.0, row_h - 2.0, WELL);
+        }
+
+        // Number key chip (1-9, then 0 for the 10th).
+        let key_char = if i < 9 {
+            char::from_digit(u32::try_from(i + 1).unwrap_or(0), 10).unwrap_or('?')
+        } else {
+            '0'
+        };
+        let key_s = key_char.to_string();
+        draw_rectangle(px + 14.0, ry - 2.0, 18.0, 18.0, PANEL);
+        draw_rectangle_lines(px + 14.0, ry - 2.0, 18.0, 18.0, 1.0, BORDER_NEUTRAL);
+        let kw = measure_text(&key_s, f, 14, 1.0).width;
+        draw_text_ex(
+            &key_s,
+            px + 23.0 - kw / 2.0,
+            ry + 12.0,
+            TextParams {
+                font: f,
+                font_size: 14,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+
+        // Tech name.
+        draw_text_ex(
+            t.name,
+            px + 40.0,
+            ry + 14.0,
+            TextParams {
+                font: fb,
+                font_size: 16,
+                color: TEXT,
+                ..Default::default()
+            },
+        );
+
+        // Cost.
+        let cost_val = t.cost.to_bits() / 65536;
+        let cost_s = format!("${cost_val}");
+        let cost_w = measure_text(&cost_s, f, 14, 1.0).width;
+        draw_text_ex(
+            &cost_s,
+            px + pw / 2.0 - cost_w / 2.0,
+            ry + 14.0,
+            TextParams {
+                font: f,
+                font_size: 14,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+
+        // Status (right-aligned).
+        let status = tech_status(t.id, t.prereq, t.duration, mask, active, has_lab);
+        let (status_s, status_col) = match status {
+            TechStatus::Researched => ("Researched".to_owned(), GOOD),
+            TechStatus::InProgress {
+                ticks_remaining,
+                duration,
+            } => {
+                // Compute percent safely using checked_div (duration could be 0).
+                let elapsed = duration.saturating_sub(ticks_remaining);
+                let pct = (elapsed * 100).checked_div(duration).unwrap_or(100);
+                (format!("In progress {pct}%"), WARN)
+            }
+            TechStatus::Locked => ("Locked".to_owned(), TEXT_DIM),
+            TechStatus::NoLab => ("No lab".to_owned(), BAD),
+            TechStatus::Available => ("Available".to_owned(), TEXT),
+        };
+        let sw = measure_text(&status_s, f, 14, 1.0).width;
+        draw_text_ex(
+            &status_s,
+            px + pw - sw - 20.0,
+            ry + 14.0,
+            TextParams {
+                font: f,
+                font_size: 14,
+                color: status_col,
+                ..Default::default()
+            },
+        );
+    }
+
+    // Footer hint.
+    let footer_y = py + head_h + n * row_h + foot_h;
+    draw_rectangle(
+        px + 12.0,
+        py + head_h + n * row_h + 4.0,
+        pw - 24.0,
+        1.0,
+        OLIVE,
+    );
+    centered(
+        "1-0 research  \u{2022}  Esc close",
+        footer_y,
+        15.0,
+        TEXT_DIM,
+        f,
     );
 }
 
@@ -887,4 +1119,53 @@ fn draw_health_bar(x: f32, y: f32, cell: f32, hp: Fixed, max_hp: Fixed) {
     draw_rectangle(left - 1.0, top - 1.0, width + 2.0, 6.0, WALL_EDGE); // frame plate
     draw_rectangle(left, top, width, 4.0, HP_TRACK);
     draw_rectangle(left, top, width * frac, 4.0, hp_color(frac));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tech_status;
+
+    #[test]
+    fn researched_bit_takes_priority() {
+        // Bit 0 set => Researched regardless of active slot.
+        let status = tech_status(0, None, 300, 0b0001, None, true);
+        assert!(matches!(status, super::TechStatus::Researched));
+    }
+
+    #[test]
+    fn in_progress_reports_correct_percent() {
+        // 150 ticks remaining out of 300 => 50 %.
+        let status = tech_status(0, None, 300, 0, Some((0, 150)), true);
+        if let super::TechStatus::InProgress {
+            ticks_remaining,
+            duration,
+        } = status
+        {
+            let elapsed = duration.saturating_sub(ticks_remaining);
+            let pct = (elapsed * 100) / duration;
+            assert_eq!(pct, 50);
+        } else {
+            panic!("expected InProgress");
+        }
+    }
+
+    #[test]
+    fn locked_when_prereq_not_researched() {
+        // tech 1 requires tech 0; mask = 0 (nothing researched).
+        let status = tech_status(1, Some(0), 450, 0, None, true);
+        assert!(matches!(status, super::TechStatus::Locked));
+    }
+
+    #[test]
+    fn no_lab_status_when_lab_absent() {
+        let status = tech_status(0, None, 300, 0, None, false);
+        assert!(matches!(status, super::TechStatus::NoLab));
+    }
+
+    #[test]
+    fn available_when_prereq_met_and_lab_present() {
+        // tech 1 requires tech 0; mask = 0b0001 (tech 0 done).
+        let status = tech_status(1, Some(0), 450, 0b0001, None, true);
+        assert!(matches!(status, super::TechStatus::Available));
+    }
 }

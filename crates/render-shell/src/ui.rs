@@ -60,13 +60,13 @@ struct Button {
     action: Action,
 }
 
-fn layout() -> [Button; 7] {
+fn layout() -> [Button; 8] {
     let w = 104.0;
     let h = CMD_BAR_H - 16.0;
     let pad = 6.0;
     let y = screen_height() - CMD_BAR_H + 8.0;
     let mk = |i: usize, label, key, action| {
-        let gap = if i >= 5 { GROUP_GAP } else { 0.0 };
+        let gap = if i >= 6 { GROUP_GAP } else { 0.0 };
         Button {
             rect: Rect::new(12.0 + i as f32 * (w + pad) + gap, y, w, h),
             label,
@@ -85,8 +85,9 @@ fn layout() -> [Button; 7] {
             Action::Build(BuildingKind::GunTurret),
         ),
         mk(4, "Flak Turret", 'A', Action::Build(BuildingKind::AaTurret)),
-        mk(5, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
-        mk(6, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
+        mk(5, "Lab", 'L', Action::Build(BuildingKind::ResearchLab)),
+        mk(6, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
+        mk(7, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
     ]
 }
 
@@ -565,7 +566,7 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
     draw_rectangle(0.0, top, screen_width(), 1.0, DECO_GOLD_HI);
     let buttons = layout();
     // Olive group divider between the build group and the unit group.
-    let divider_x = (buttons[4].rect.x + buttons[4].rect.w + buttons[5].rect.x) / 2.0;
+    let divider_x = (buttons[5].rect.x + buttons[5].rect.w + buttons[6].rect.x) / 2.0;
     draw_rectangle(divider_x - 0.5, top + 12.0, 1.0, CMD_BAR_H - 24.0, OLIVE);
     let pointer = {
         let (mx, my) = mouse_position();
