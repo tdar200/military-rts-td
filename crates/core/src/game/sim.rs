@@ -1113,14 +1113,21 @@ impl Sim {
             building_this_tick = true;
         }
 
-        // Economy is up: train infantry from an idle barracks.
+        // Economy is up: train from an idle barracks. At Era 4, prefer Capital Ships.
         if !building_this_tick {
             if let Some(barracks) = self.idle_barracks(player) {
-                if credits >= self.balance.unit(UnitKind::Infantry).cost {
+                let kind = if self.player_era(player) >= 3
+                    && credits >= self.balance.unit(UnitKind::Capital).cost
+                {
+                    UnitKind::Capital
+                } else {
+                    UnitKind::Infantry
+                };
+                if credits >= self.balance.unit(kind).cost {
                     cmds.push(Command::Train {
                         owner: player,
                         barracks,
-                        kind: UnitKind::Infantry,
+                        kind,
                     });
                 }
             }
@@ -1132,9 +1139,10 @@ impl Sim {
         let (researched_mask, active_research) = self.research_state(player);
         if self.has_research_lab(player) && active_research.is_none() {
             // Priority by tech id: Economy I(6) → Weapons I(0) → Armor I(3) →
-            // Economy II(7) → Weapons II(1) → Armor II(4) → Mobility I(8) →
-            // Weapons III(2) → Armor III(5) → Mobility II(9).
-            const RESEARCH_PRIORITY: [u32; 10] = [6, 0, 3, 7, 1, 4, 8, 2, 5, 9];
+            // Reach Orbital(10) → Economy II(7) → Weapons II(1) → Armor II(4) →
+            // Reach Interplanetary(11) → Mobility I(8) → Weapons III(2) →
+            // Armor III(5) → Reach Interstellar(12) → Mobility II(9).
+            const RESEARCH_PRIORITY: [u32; 13] = [6, 0, 3, 10, 7, 1, 4, 11, 8, 2, 5, 12, 9];
             for tech_id in RESEARCH_PRIORITY {
                 let def = crate::game::tech::TECHS[tech_id as usize];
                 let researched = researched_mask & (1u32 << tech_id) != 0;
@@ -1831,6 +1839,21 @@ mod tests {
         assert!(super::era_damage_factor(1) > Fixed::ONE);
         assert!(super::era_damage_factor(3) > super::era_damage_factor(2));
         assert!(super::era_damage_factor(2) > super::era_damage_factor(1));
+    }
+
+    #[test]
+    fn ai_advances_at_least_one_era() {
+        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        let mut max_era = 0u8;
+        for _ in 0..6000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            max_era = max_era.max(s.player_era(P0));
+        }
+        assert!(max_era >= 1, "AI advanced at least one era");
     }
 
     #[test]
