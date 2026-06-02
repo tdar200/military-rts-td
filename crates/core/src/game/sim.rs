@@ -898,7 +898,7 @@ impl Sim {
             BuildingKind::Barracks,
         ] {
             if !self.has_building(player, kind) {
-                if credits >= kind.stats().cost {
+                if credits >= self.building_cost(kind) {
                     if let Some((x, y)) = self.find_buildable_near(cc_tile) {
                         cmds.push(Command::Build {
                             owner: player,
@@ -913,10 +913,28 @@ impl Sim {
             }
         }
 
+        // Anti-air response: if the enemy fields aircraft and we have no AA yet,
+        // build a turret to counter it.
+        if !building_this_tick
+            && self.enemy_has_air(player)
+            && !self.has_building(player, BuildingKind::AaTurret)
+            && credits >= self.building_cost(BuildingKind::AaTurret)
+        {
+            if let Some((x, y)) = self.find_buildable_near(cc_tile) {
+                cmds.push(Command::Build {
+                    owner: player,
+                    kind: BuildingKind::AaTurret,
+                    x,
+                    y,
+                });
+            }
+            building_this_tick = true;
+        }
+
         // Economy is up: train infantry from an idle barracks.
         if !building_this_tick {
             if let Some(barracks) = self.idle_barracks(player) {
-                if credits >= UnitKind::Infantry.stats().cost {
+                if credits >= self.balance.unit(UnitKind::Infantry).cost {
                     cmds.push(Command::Train {
                         owner: player,
                         barracks,
@@ -963,6 +981,13 @@ impl Sim {
         self.entities
             .iter()
             .any(|e| e.alive && e.owner == player && e.kind == Kind::Building(kind))
+    }
+
+    fn enemy_has_air(&self, player: PlayerId) -> bool {
+        let enemy = PlayerId(1 - player.0);
+        self.entities
+            .iter()
+            .any(|e| e.alive && e.owner == enemy && is_air_of(&self.balance, e.kind))
     }
 
     #[allow(
@@ -1403,6 +1428,23 @@ mod tests {
         // The next spawn reuses the wall's freed slot rather than growing the list.
         let reused = s.add_unit(P0, UnitKind::Infantry, v(5, 5));
         assert_eq!(reused, wall);
+    }
+
+    #[test]
+    fn ai_builds_anti_air_when_threatened_by_aircraft() {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(3000));
+        s.add_building(P1, BuildingKind::CommandCenter, 30, 20);
+        s.add_building(P1, BuildingKind::PowerPlant, 32, 20);
+        // A player helicopter is on the field — the AI should counter with AA.
+        s.add_unit(P0, UnitKind::Helicopter, v(20, 20));
+        for _ in 0..2500 {
+            let cmds = s.ai_commands(P1);
+            s.step(&cmds);
+        }
+        let has_aa = s.views().into_iter().any(|v| {
+            v.owner == P1 && matches!(v.kind, EntityKindView::Building(BuildingKind::AaTurret))
+        });
+        assert!(has_aa);
     }
 
     #[test]
