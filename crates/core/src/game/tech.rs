@@ -8,7 +8,7 @@
 use crate::fixed::Fixed;
 
 /// Number of techs in the tree.
-pub const TECH_COUNT: usize = 10;
+pub const TECH_COUNT: usize = 13;
 
 /// Which global stat a tech improves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -21,6 +21,8 @@ pub enum TechBranch {
     Economy,
     /// Adds flat move speed (tiles/tick) to the player's units.
     Mobility,
+    /// Advances the player to the next era.
+    Era,
 }
 
 /// One research upgrade.
@@ -137,6 +139,33 @@ pub const TECHS: [TechDef; TECH_COUNT] = [
         prereq: Some(8),
         bonus: Fixed::from_ratio(2, 100), // 0.02 tiles/tick
     },
+    TechDef {
+        id: 10,
+        name: "Reach Orbital",
+        branch: TechBranch::Era,
+        cost: Fixed::from_int(500),
+        duration: 600,
+        prereq: None,
+        bonus: Fixed::ZERO,
+    },
+    TechDef {
+        id: 11,
+        name: "Reach Interplanetary",
+        branch: TechBranch::Era,
+        cost: Fixed::from_int(800),
+        duration: 800,
+        prereq: Some(10),
+        bonus: Fixed::ZERO,
+    },
+    TechDef {
+        id: 12,
+        name: "Reach Interstellar",
+        branch: TechBranch::Era,
+        cost: Fixed::from_int(1200),
+        duration: 1000,
+        prereq: Some(11),
+        bonus: Fixed::ZERO,
+    },
 ];
 
 // Keep TECH_COUNT in sync with the table: the last tech's id must be the last
@@ -153,9 +182,15 @@ pub const fn tech(id: u32) -> Option<&'static TechDef> {
     }
 }
 
+/// Whether a tech id is an era-key (researching it advances the player's era).
+#[must_use]
+pub const fn is_era_key(id: u32) -> bool {
+    matches!(tech(id), Some(t) if matches!(t.branch, TechBranch::Era))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{tech, TechBranch, TECHS, TECH_COUNT};
+    use super::{is_era_key, tech, TechBranch, TECHS, TECH_COUNT};
 
     #[test]
     fn tree_is_well_formed() {
@@ -173,5 +208,18 @@ mod tests {
         assert!(tech(0).is_some());
         assert!(tech(u32::try_from(TECH_COUNT).unwrap()).is_none());
         assert_eq!(tech(0).unwrap().branch, TechBranch::Weapons);
+    }
+
+    #[test]
+    fn is_era_key_identifies_era_techs() {
+        assert!(is_era_key(10) && is_era_key(12) && !is_era_key(0));
+        // Era techs chain by prereq: 11 requires 10, 12 requires 11.
+        assert_eq!(TECHS[11].prereq, Some(10));
+        assert_eq!(TECHS[12].prereq, Some(11));
+        // Non-era techs are not era keys.
+        assert!(!is_era_key(1));
+        assert!(!is_era_key(9));
+        // Out-of-range id is not an era key.
+        assert!(!is_era_key(100));
     }
 }

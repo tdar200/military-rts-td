@@ -69,6 +69,8 @@ struct Player {
     researched_techs: u32,
     /// In-progress research: (tech id, ticks remaining). One at a time.
     active_research: Option<(u32, u32)>,
+    /// Current era index (0=Modern..3=Interstellar).
+    era: u8,
 }
 
 /// A player or AI input, applied at a tick boundary.
@@ -257,6 +259,7 @@ impl Sim {
                 credits: starting_credits,
                 researched_techs: 0,
                 active_research: None,
+                era: 0,
             }; PLAYER_COUNT],
             entities: Vec::new(),
             free: Vec::new(),
@@ -335,6 +338,12 @@ impl Sim {
     pub fn research_state(&self, player: PlayerId) -> (u32, Option<(u32, u32)>) {
         let p = &self.players[usize::from(player.0)];
         (p.researched_techs, p.active_research)
+    }
+
+    /// Current era index for `player` (0 = Modern, 1 = Orbital, 2 = Interplanetary, 3 = Interstellar).
+    #[must_use]
+    pub fn player_era(&self, player: PlayerId) -> u8 {
+        self.players[usize::from(player.0)].era
     }
 
     /// Whether the player has at least one alive research lab.
@@ -472,6 +481,7 @@ impl Sim {
                 }
                 None => h.write_u64(0),
             }
+            h.write_u64(u64::from(p.era));
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -820,6 +830,9 @@ impl Sim {
                 if ticks <= 1 {
                     player.researched_techs |= 1u32 << id;
                     player.active_research = None;
+                    if crate::game::tech::is_era_key(id) {
+                        player.era = (player.era + 1).min(3);
+                    }
                 } else {
                     player.active_research = Some((id, ticks - 1));
                 }
@@ -1527,7 +1540,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 18_112_695_847_899_389_504);
+        assert_eq!(s.state_hash(), 9_987_500_447_761_259_648);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1775,6 +1788,24 @@ mod tests {
         }
         assert!(lab_seen, "AI builds a research lab");
         assert!(research_seen, "AI starts/finishes research");
+    }
+
+    #[test]
+    fn researching_an_era_key_tech_advances_the_era() {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
+        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
+        assert_eq!(s.player_era(P0), 0);
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 10,
+        }]);
+        let dur = crate::game::tech::tech(10).unwrap().duration;
+        for _ in 0..dur {
+            s.step(&[]);
+        }
+        assert_eq!(s.player_era(P0), 1, "advanced to Orbital");
     }
 
     #[test]
