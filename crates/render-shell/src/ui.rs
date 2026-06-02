@@ -10,8 +10,8 @@
 use crate::sprites::Sprites;
 use crate::theme::{
     hp_color, BAD, BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD,
-    GROUND_ALT, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, TEAM_ENEMY,
-    TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
+    GROUND_ALT, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD,
+    TEAM_ENEMY, TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
 };
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
@@ -63,13 +63,14 @@ struct Button {
     action: Action,
 }
 
-fn layout() -> [Button; 9] {
+fn layout() -> [Button; 10] {
     let w = 104.0;
     let h = CMD_BAR_H - 16.0;
     let pad = 6.0;
     let y = screen_height() - CMD_BAR_H + 8.0;
     let mk = |i: usize, label, key, action| {
-        let gap = if i >= 6 { GROUP_GAP } else { 0.0 };
+        // The unit group starts at index 7 (after 7 build buttons 0–6).
+        let gap = if i >= 7 { GROUP_GAP } else { 0.0 };
         Button {
             rect: Rect::new(12.0 + i as f32 * (w + pad) + gap, y, w, h),
             label,
@@ -89,9 +90,15 @@ fn layout() -> [Button; 9] {
         ),
         mk(4, "Flak Turret", 'A', Action::Build(BuildingKind::AaTurret)),
         mk(5, "Lab", 'L', Action::Build(BuildingKind::ResearchLab)),
-        mk(6, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
-        mk(7, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
-        mk(8, "Capital", 'C', Action::Train(UnitKind::Capital)),
+        mk(
+            6,
+            "Antimatter",
+            'N',
+            Action::Build(BuildingKind::AntimatterPlant),
+        ),
+        mk(7, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
+        mk(8, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
+        mk(9, "Capital", 'C', Action::Train(UnitKind::Capital)),
     ]
 }
 
@@ -546,6 +553,16 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
     // ERA indicator — shows the human player's current era name.
     let era = ERA_NAMES[(sim.player_era(HUMAN) as usize).min(3)];
     text(era, x, 25.0, 18.0, DECO_GOLD, fb);
+    x += text_width(era, 18.0, fb) + 18.0;
+    ribbon_divider(x - 9.0);
+
+    // ANTIMATTER — abbreviated "AM" to keep the ribbon compact; tinted in the
+    // shield-teal so it's visually distinct from credits (gold) and power (amber).
+    let am_label = "AM";
+    text(am_label, x, 25.0, 18.0, SHIELD, fb);
+    x += text_width(am_label, 18.0, fb) + 4.0;
+    let am_val = (sim.antimatter(HUMAN).to_bits() / 65536).to_string();
+    text(&am_val, x, 25.0, 18.0, SHIELD, fb);
 
     // Incoming-wave alert pill (right).
     if let Some(ticks) = sim.ticks_until_next_wave() {
@@ -584,7 +601,7 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
     draw_rectangle(0.0, top, screen_width(), 1.0, DECO_GOLD_HI);
     let buttons = layout();
     // Olive group divider between the build group and the unit group.
-    let divider_x = (buttons[5].rect.x + buttons[5].rect.w + buttons[6].rect.x) / 2.0;
+    let divider_x = (buttons[6].rect.x + buttons[6].rect.w + buttons[7].rect.x) / 2.0;
     draw_rectangle(divider_x - 0.5, top + 12.0, 1.0, CMD_BAR_H - 24.0, OLIVE);
     let pointer = {
         let (mx, my) = mouse_position();

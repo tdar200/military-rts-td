@@ -61,6 +61,9 @@ pub fn gather_commands(
     if is_key_pressed(KeyCode::L) {
         *build_mode = Some(BuildingKind::ResearchLab);
     }
+    if is_key_pressed(KeyCode::N) {
+        *build_mode = Some(BuildingKind::AntimatterPlant);
+    }
     if is_key_pressed(KeyCode::Escape) {
         *build_mode = None;
     }
