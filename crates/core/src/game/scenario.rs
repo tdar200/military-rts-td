@@ -138,9 +138,9 @@ impl Scenario {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::LaneDefense => "Lane Defense",
-            Self::OpenClash => "Open Clash",
-            Self::Crossroads => "Crossroads",
+            Self::LaneDefense => "Orbital Siege",
+            Self::OpenClash => "Open Front",
+            Self::Crossroads => "Crater Crossroads",
         }
     }
 
@@ -148,9 +148,9 @@ impl Scenario {
     #[must_use]
     pub const fn tagline(self) -> &'static str {
         match self {
-            Self::LaneDefense => "Hold two lanes against escalating waves",
-            Self::OpenClash => "Open-field skirmish — no walls, no waves",
-            Self::Crossroads => "Flank a central fortress under pressure",
+            Self::LaneDefense => "Hold the approach lanes against alien waves",
+            Self::OpenClash => "Open-field clash — no walls, no waves",
+            Self::Crossroads => "Flank a central wreck under pressure",
         }
     }
 
@@ -372,6 +372,25 @@ mod tests {
             }
         }
         assert_eq!(winner, Some(PlayerId(1)));
+    }
+
+    #[test]
+    fn scenarios_use_space_theme_names() {
+        assert_eq!(Scenario::LaneDefense.name(), "Orbital Siege");
+        assert_eq!(Scenario::OpenClash.name(), "Open Front");
+        assert_eq!(Scenario::Crossroads.name(), "Crater Crossroads");
+        assert_eq!(
+            Scenario::LaneDefense.tagline(),
+            "Hold the approach lanes against alien waves"
+        );
+        assert_eq!(
+            Scenario::OpenClash.tagline(),
+            "Open-field clash — no walls, no waves"
+        );
+        assert_eq!(
+            Scenario::Crossroads.tagline(),
+            "Flank a central wreck under pressure"
+        );
     }
 
     #[test]
