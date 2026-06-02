@@ -1278,9 +1278,9 @@ impl Sim {
             // Shield I(13) → Reach Orbital(10) → Economy II(7) → Weapons II(1) →
             // Armor II(4) → Shield II(14) → Reach Interplanetary(11) → Mobility I(8) →
             // Weapons III(2) → Armor III(5) → Shield III(15) → Reach Interstellar(12) →
-            // Mobility II(9).
-            const RESEARCH_PRIORITY: [u32; 16] =
-                [6, 0, 3, 13, 10, 7, 1, 4, 14, 11, 8, 2, 5, 15, 12, 9];
+            // Mobility II(9) → Anti-Grav Drives(16).
+            const RESEARCH_PRIORITY: [u32; 17] =
+                [6, 0, 3, 13, 10, 7, 1, 4, 14, 11, 8, 2, 5, 15, 12, 9, 16];
             for tech_id in RESEARCH_PRIORITY {
                 let def = crate::game::tech::TECHS[tech_id as usize];
                 let researched = researched_mask & (1u32 << tech_id) != 0;
@@ -2105,6 +2105,30 @@ mod tests {
         }
         assert!(s.has_antigrav(P0), "anti-grav researched");
         assert!(!s.has_antigrav(P1), "opponent unaffected");
+    }
+
+    #[test]
+    fn ai_researches_antigrav() {
+        // Over a long match (≈20_000 ticks, seed 7), the AI should eventually
+        // research Anti-Grav Drives (the last tech in priority, after all 16
+        // earlier techs are complete — sequential research takes ~9k+ ticks).
+        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        let mut antigrav_seen = false;
+        for _ in 0..20_000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            if s.has_antigrav(P0) {
+                antigrav_seen = true;
+                break;
+            }
+        }
+        assert!(
+            antigrav_seen,
+            "AI (P0) should eventually research Anti-Grav Drives"
+        );
     }
 
     #[test]
