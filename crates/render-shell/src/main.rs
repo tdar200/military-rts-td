@@ -16,6 +16,7 @@
 )]
 
 mod input;
+mod ui;
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
@@ -27,8 +28,8 @@ use rts_core::game::stats::{BuildingKind, UnitKind};
 const TICK_DT: f32 = 1.0 / 30.0;
 const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
-/// Pixels reserved at the bottom for the HUD.
-const HUD_HEIGHT: f32 = 40.0;
+/// The battlefield is drawn below the top bar.
+const WORLD_TOP: f32 = ui::TOP_BAR_H;
 
 fn window_conf() -> Conf {
     Conf {
@@ -44,11 +45,11 @@ fn new_match() -> Sim {
     lane_defense(2026)
 }
 
-/// Pixels per tile, sized to fit the window above the HUD.
+/// Pixels per tile, sized to fit the window between the top and command bars.
 fn cell_size(sim: &Sim) -> f32 {
     let w = f32::from(sim.map().width());
     let h = f32::from(sim.map().height());
-    (screen_width() / w).min((screen_height() - HUD_HEIGHT) / h)
+    (screen_width() / w).min((screen_height() - ui::TOP_BAR_H - ui::CMD_BAR_H) / h)
 }
 
 fn tile_to_px(v: Fixed, cell: f32) -> f32 {
@@ -62,17 +63,38 @@ async fn main() {
     let mut build_mode: Option<BuildingKind> = None;
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
+    let mut paused = false;
 
     loop {
         let cell = cell_size(&sim);
+        let over = sim.winner().is_some();
+
+        // Input: UI command bar first, then map (suppressed while over the UI).
+        pending.extend(ui::handle_click(&sim, &mut build_mode));
         pending.extend(input::gather_commands(
             &sim,
             &mut selected,
             &mut build_mode,
+            ui::pointer_over_ui(),
             cell,
         ));
+        if is_key_pressed(KeyCode::Space) {
+            paused = !paused;
+        }
+        if over && is_key_pressed(KeyCode::R) {
+            sim = new_match();
+            selected = None;
+            build_mode = None;
+            pending.clear();
+            accumulator = 0.0;
+        }
 
+        // Advance the fixed-timestep sim unless paused or the match is over.
         accumulator += get_frame_time();
+        if paused || over {
+            accumulator = 0.0;
+            pending.clear();
+        }
         while accumulator >= TICK_DT {
             let mut commands = std::mem::take(&mut pending);
             commands.extend(sim.ai_commands(ENEMY));
@@ -81,8 +103,29 @@ async fn main() {
         }
 
         draw(&sim, selected, build_mode, cell);
+        ui::draw(&sim, build_mode, paused);
+        if let Some(winner) = sim.winner() {
+            draw_game_over(winner);
+        }
         next_frame().await;
     }
+}
+
+fn draw_game_over(winner: PlayerId) {
+    let w = screen_width();
+    let h = screen_height();
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 150));
+    let (msg, color) = if winner == HUMAN {
+        ("VICTORY", GREEN)
+    } else {
+        ("DEFEAT", RED)
+    };
+    let size = 64.0;
+    let dims = measure_text(msg, None, size as u16, 1.0);
+    draw_text(msg, (w - dims.width) / 2.0, h / 2.0, size, color);
+    let hint = "press R to restart";
+    let hd = measure_text(hint, None, 24, 1.0);
+    draw_text(hint, (w - hd.width) / 2.0, h / 2.0 + 40.0, 24.0, WHITE);
 }
 
 fn draw(sim: &Sim, selected: Option<EntityId>, build_mode: Option<BuildingKind>, cell: f32) {
@@ -90,7 +133,7 @@ fn draw(sim: &Sim, selected: Option<EntityId>, build_mode: Option<BuildingKind>,
     draw_terrain(sim, cell);
     for v in sim.views() {
         let x = tile_to_px(v.pos.x, cell);
-        let y = tile_to_px(v.pos.y, cell);
+        let y = WORLD_TOP + tile_to_px(v.pos.y, cell);
         let color = if v.owner == HUMAN { SKYBLUE } else { RED };
         match v.kind {
             EntityKindView::Building(b) => {
@@ -119,7 +162,6 @@ fn draw(sim: &Sim, selected: Option<EntityId>, build_mode: Option<BuildingKind>,
     if let Some(kind) = build_mode {
         draw_build_ghost(sim, kind, cell);
     }
-    draw_hud(sim);
 }
 
 /// Draws shot tracers for the most recent combat tick (combat juice).
@@ -128,9 +170,9 @@ fn draw_tracers(sim: &Sim, cell: f32) {
     for &(from, to) in sim.recent_attacks() {
         draw_line(
             tile_to_px(from.x, cell),
-            tile_to_px(from.y, cell),
+            WORLD_TOP + tile_to_px(from.y, cell),
             tile_to_px(to.x, cell),
-            tile_to_px(to.y, cell),
+            WORLD_TOP + tile_to_px(to.y, cell),
             1.5,
             color,
         );
@@ -142,7 +184,7 @@ fn draw_tracers(sim: &Sim, cell: f32) {
 fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32) {
     let (mx, my) = mouse_position();
     let tx = (mx / cell) as i32;
-    let ty = (my / cell) as i32;
+    let ty = ((my - WORLD_TOP) / cell) as i32;
     let buildable = sim.map().tile(tx, ty).is_some_and(|t| t.buildable);
     let affordable = sim.credits(HUMAN) >= sim.building_cost(kind);
     let color = if buildable && affordable {
@@ -150,7 +192,13 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32) {
     } else {
         Color::from_rgba(200, 80, 80, 130)
     };
-    draw_rectangle(tx as f32 * cell, ty as f32 * cell, cell, cell, color);
+    draw_rectangle(
+        tx as f32 * cell,
+        WORLD_TOP + ty as f32 * cell,
+        cell,
+        cell,
+        color,
+    );
 }
 
 /// Draws impassable terrain (the wall band) so the lanes read clearly.
@@ -160,7 +208,13 @@ fn draw_terrain(sim: &Sim, cell: f32) {
     for ty in 0..map.height() {
         for tx in 0..map.width() {
             if !map.tile(i32::from(tx), i32::from(ty)).unwrap().passable {
-                draw_rectangle(f32::from(tx) * cell, f32::from(ty) * cell, cell, cell, wall);
+                draw_rectangle(
+                    f32::from(tx) * cell,
+                    WORLD_TOP + f32::from(ty) * cell,
+                    cell,
+                    cell,
+                    wall,
+                );
             }
         }
     }
@@ -173,30 +227,4 @@ fn draw_health_bar(x: f32, y: f32, cell: f32, hp: Fixed, max_hp: Fixed) {
     let top = y - cell;
     draw_rectangle(left, top, width, 3.0, DARKGRAY);
     draw_rectangle(left, top, width * frac, 3.0, GREEN);
-}
-
-fn draw_hud(sim: &Sim) {
-    let line = screen_height() - 22.0;
-    let status = match sim.winner() {
-        Some(PlayerId(0)) => "YOU WIN".to_owned(),
-        Some(PlayerId(p)) => format!("PLAYER {p} WINS"),
-        _ => {
-            let wave = sim
-                .ticks_until_next_wave()
-                .map_or_else(String::new, |t| format!("   next wave {}s", t / 30));
-            format!(
-                "credits {}   units {}{wave}",
-                sim.credits(HUMAN).to_bits() / 65536,
-                sim.unit_count(HUMAN),
-            )
-        }
-    };
-    draw_text(&status, 8.0, line, 24.0, WHITE);
-    draw_text(
-        "L-click select   R-click move   build B/P/R/G/A   train T:infantry H:heli",
-        8.0,
-        screen_height() - 4.0,
-        16.0,
-        LIGHTGRAY,
-    );
 }

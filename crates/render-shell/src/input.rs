@@ -32,11 +32,12 @@ pub fn gather_commands(
     sim: &Sim,
     selected: &mut Option<EntityId>,
     build_mode: &mut Option<BuildingKind>,
+    pointer_over_ui: bool,
     cell: f32,
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
     let (mx, my) = mouse_position();
-    let (wx, wy) = (mx / cell, my / cell);
+    let (wx, wy) = (mx / cell, (my - crate::ui::TOP_BAR_H) / cell);
 
     // Build hotkeys arm a placement; the shell shows a ghost until you click.
     if is_key_pressed(KeyCode::P) {
@@ -58,7 +59,7 @@ pub fn gather_commands(
         *build_mode = None;
     }
 
-    if is_mouse_button_pressed(MouseButton::Left) {
+    if is_mouse_button_pressed(MouseButton::Left) && !pointer_over_ui {
         if let Some(kind) = build_mode.take() {
             cmds.push(Command::Build {
                 owner: HUMAN,
@@ -70,7 +71,7 @@ pub fn gather_commands(
             *selected = nearest_friendly_unit(sim, wx, wy);
         }
     }
-    if is_mouse_button_pressed(MouseButton::Right) {
+    if is_mouse_button_pressed(MouseButton::Right) && !pointer_over_ui {
         *build_mode = None; // right-click cancels a pending placement
         if let Some(unit) = *selected {
             cmds.push(Command::Move {
@@ -106,7 +107,7 @@ pub fn gather_commands(
             continue;
         }
         let tx = touch.position.x / cell;
-        let ty = touch.position.y / cell;
+        let ty = (touch.position.y - crate::ui::TOP_BAR_H) / cell;
         if let Some(unit) = nearest_friendly_unit(sim, tx, ty) {
             *selected = Some(unit);
         } else if let Some(unit) = *selected {

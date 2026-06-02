@@ -312,6 +312,30 @@ impl Sim {
         self.balance.building(kind).cost
     }
 
+    /// Credit cost to train a unit (for UI affordability hints).
+    #[must_use]
+    pub const fn unit_cost(&self, kind: UnitKind) -> Fixed {
+        self.balance.unit(kind).cost
+    }
+
+    /// A player's `(produced, consumed)` power from living buildings. The player
+    /// is in deficit (slowed economy/production) when consumed exceeds produced.
+    #[must_use]
+    pub fn power_balance(&self, player: PlayerId) -> (i32, i32) {
+        let mut produced = 0;
+        let mut consumed = 0;
+        for e in &self.entities {
+            if e.alive && e.owner == player {
+                if let Kind::Building(b) = e.kind {
+                    let st = self.balance.building(b);
+                    produced += st.power_produced;
+                    consumed += st.power_consumed;
+                }
+            }
+        }
+        (produced, consumed)
+    }
+
     /// Ticks until the next enemy wave, or `None` if waves are disabled.
     #[must_use]
     pub fn ticks_until_next_wave(&self) -> Option<u64> {
@@ -1339,6 +1363,15 @@ mod tests {
             attacker: P1,
             defender: P0,
         }
+    }
+
+    #[test]
+    fn power_balance_sums_living_buildings() {
+        let mut s = Sim::new(Map::new(16, 16), 1, f(0));
+        s.add_building(P0, BuildingKind::PowerPlant, 1, 1);
+        s.add_building(P0, BuildingKind::Refinery, 3, 1);
+        assert_eq!(s.power_balance(P0), (100, 20));
+        assert_eq!(s.power_balance(P1), (0, 0));
     }
 
     #[test]
