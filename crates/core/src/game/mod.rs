@@ -5,6 +5,8 @@
 //! economy, buildings, units, combat, pathfinding, and AI.
 
 pub mod balance;
+pub mod hex;
+pub mod lockstep;
 pub mod map;
 pub mod path;
 pub mod scenario;

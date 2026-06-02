@@ -6,6 +6,7 @@
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
+use rts_core::game::hex;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2 as SimVec;
@@ -37,7 +38,9 @@ pub fn gather_commands(
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
     let (mx, my) = mouse_position();
-    let (wx, wy) = (mx / cell, (my - crate::ui::TOP_BAR_H) / cell);
+    // The board is centered horizontally; back out that offset to reach world x.
+    let ox = crate::board_origin_x(sim, cell);
+    let (wx, wy) = ((mx - ox) / cell, (my - crate::ui::TOP_BAR_H) / cell);
 
     // Build hotkeys arm a placement; the shell shows a ghost until you click.
     if is_key_pressed(KeyCode::P) {
@@ -61,11 +64,17 @@ pub fn gather_commands(
 
     if is_mouse_button_pressed(MouseButton::Left) && !pointer_over_ui {
         if let Some(kind) = build_mode.take() {
+            // Snap the click to the nearest hex cell.
+            let (col, row) = hex::from_world(
+                SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
+                sim.map().width(),
+                sim.map().height(),
+            );
             cmds.push(Command::Build {
                 owner: HUMAN,
                 kind,
-                x: wx as u16,
-                y: wy as u16,
+                x: col,
+                y: row,
             });
         } else {
             *selected = nearest_friendly_unit(sim, wx, wy);
@@ -106,7 +115,7 @@ pub fn gather_commands(
         if touch.phase != TouchPhase::Started {
             continue;
         }
-        let tx = touch.position.x / cell;
+        let tx = (touch.position.x - ox) / cell;
         let ty = (touch.position.y - crate::ui::TOP_BAR_H) / cell;
         if let Some(unit) = nearest_friendly_unit(sim, tx, ty) {
             *selected = Some(unit);

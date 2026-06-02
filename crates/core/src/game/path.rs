@@ -1,46 +1,31 @@
-//! Deterministic grid pathfinding (A*).
+//! Deterministic hex-grid pathfinding (A*).
 //!
-//! Movement around walls and buildings uses A* on the tile grid. To stay
-//! bit-identical across platforms it uses **integer** costs (cardinal `10`,
-//! diagonal `14`) and an open set ordered by `(f_score, tile_index)` — the tile
-//! index tie-breaker gives a total order, so the search expands nodes in the same
-//! sequence everywhere. No floats, no randomly-seeded maps.
+//! Movement around walls and buildings uses A* over the **hexagonal** tile grid
+//! (six neighbors per cell, see [`hex`](super::hex)). To stay bit-identical across
+//! platforms it uses an integer per-step cost and an open set ordered by
+//! `(f_score, tile_index)` — the tile index tie-breaker gives a total order, so the
+//! search expands nodes in the same sequence everywhere. No floats.
 
+use crate::game::hex;
 use crate::game::map::Map;
 use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
-const CARDINAL: i64 = 10;
-const DIAGONAL: i64 = 14;
+/// Uniform cost of stepping to any of the six hex neighbors.
+const STEP: i64 = 10;
 
-/// The eight movement directions, in a fixed order for deterministic expansion.
-const DIRS: [(i32, i32); 8] = [
-    (1, 0),
-    (-1, 0),
-    (0, 1),
-    (0, -1),
-    (1, 1),
-    (1, -1),
-    (-1, 1),
-    (-1, -1),
-];
-
-/// Octile-distance heuristic between two tiles, in the same integer units as the
-/// step costs (admissible, so A* stays optimal).
+/// Hex-distance heuristic, in the same integer units as the step cost
+/// (admissible, so A* stays optimal).
 fn heuristic(from: (u16, u16), to: (u16, u16)) -> i64 {
-    let dx = (i64::from(from.0) - i64::from(to.0)).abs();
-    let dy = (i64::from(from.1) - i64::from(to.1)).abs();
-    let (min, max) = if dx < dy { (dx, dy) } else { (dy, dx) };
-    DIAGONAL * min + CARDINAL * (max - min)
+    i64::from(hex::distance(from, to)) * STEP
 }
 
 fn passable(map: &Map, x: i32, y: i32) -> bool {
     map.tile(x, y).is_some_and(|t| t.passable)
 }
 
-/// Finds the shortest tile path from `start` to `goal` (8-directional, no
-/// corner-cutting).
+/// Finds the shortest hex path from `start` to `goal`.
 ///
 /// Returns the waypoints *after* `start` up to and including `goal`, an empty
 /// path if `start == goal`, or `None` if no route exists.
@@ -79,26 +64,15 @@ pub fn find_path(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<Vec<(
         let cx = (current % width) as u16;
         let cy = (current / width) as u16;
         let here = g_score[current];
-        for (dx, dy) in DIRS {
-            let nx = i32::from(cx) + dx;
-            let ny = i32::from(cy) + dy;
+        for (nx, ny) in hex::neighbors(cx, cy) {
             if nx < 0 || ny < 0 || nx >= i32::from(map.width()) || ny >= i32::from(map.height()) {
                 continue;
             }
             if !passable(map, nx, ny) {
                 continue;
             }
-            let diagonal = dx != 0 && dy != 0;
-            // No corner-cutting: a diagonal step needs both shared orthogonals open.
-            if diagonal
-                && (!passable(map, i32::from(cx) + dx, i32::from(cy))
-                    || !passable(map, i32::from(cx), i32::from(cy) + dy))
-            {
-                continue;
-            }
-            let step = if diagonal { DIAGONAL } else { CARDINAL };
             let neighbor = index(nx as u16, ny as u16);
-            let tentative = here + step;
+            let tentative = here + STEP;
             if tentative < g_score[neighbor] {
                 g_score[neighbor] = tentative;
                 came_from[neighbor] = current;

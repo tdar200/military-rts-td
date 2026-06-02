@@ -9,6 +9,7 @@
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
+use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
 use crate::game::stats::{damage_multiplier, ArmorType, AttackProfile, BuildingKind, UnitKind};
@@ -192,12 +193,9 @@ const fn max_hp(balance: &Balance, kind: Kind) -> Fixed {
     }
 }
 
-/// World-space center of tile `(x, y)`.
+/// World-space center of hex cell `(x, y)`.
 fn tile_center(x: u16, y: u16) -> Vec2 {
-    Vec2::new(
-        Fixed::from_int(i32::from(x)) + Fixed::from_ratio(1, 2),
-        Fixed::from_int(i32::from(y)) + Fixed::from_ratio(1, 2),
-    )
+    crate::game::hex::center(x, y)
 }
 
 const fn unit_tag(u: UnitKind) -> u64 {
@@ -481,10 +479,7 @@ impl Sim {
         x: u16,
         y: u16,
     ) -> EntityId {
-        let pos = Vec2::new(
-            Fixed::from_int(i32::from(x)) + Fixed::from_ratio(1, 2),
-            Fixed::from_int(i32::from(y)) + Fixed::from_ratio(1, 2),
-        );
+        let pos = tile_center(x, y);
         self.map.set_tile(x, y, Tile::BLOCKED);
         let hp = max_hp(&self.balance, Kind::Building(kind));
         self.alloc_slot(Entity {
@@ -604,20 +599,25 @@ impl Sim {
     fn nearest_passable_tile(&self, center: (u16, u16)) -> Option<(u16, u16)> {
         let cx = i32::from(center.0);
         let cy = i32::from(center.1);
-        for r in 1..=24i32 {
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    if dx.abs().max(dy.abs()) != r {
-                        continue;
-                    }
-                    let (x, y) = (cx + dx, cy + dy);
-                    if x >= 0 && y >= 0 && self.map.tile(x, y).is_some_and(|t| t.passable) {
-                        return Some((x as u16, y as u16));
-                    }
+        let mut best: Option<((u16, u16), i32, usize)> = None;
+        for dy in -24..=24i32 {
+            for dx in -24..=24i32 {
+                let (x, y) = (cx + dx, cy + dy);
+                if x < 0 || y < 0 || !self.map.tile(x, y).is_some_and(|t| t.passable) {
+                    continue;
+                }
+                let cell = (x as u16, y as u16);
+                let dist = hex::distance(center, cell);
+                if dist == 0 {
+                    continue;
+                }
+                let idx = y as usize * usize::from(self.map.width()) + x as usize;
+                if best.is_none_or(|(_, bd, bi)| dist < bd || (dist == bd && idx < bi)) {
+                    best = Some((cell, dist, idx));
                 }
             }
         }
-        None
+        best.map(|(cell, _, _)| cell)
     }
 
     fn command_center_pos(&self, player: PlayerId) -> Option<Vec2> {
@@ -684,17 +684,8 @@ impl Sim {
         }
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "value is clamped into the non-negative u16 grid before the cast"
-    )]
     fn world_to_tile(&self, p: Vec2) -> (u16, u16) {
-        let max_x = i64::from(self.map.width()) - 1;
-        let max_y = i64::from(self.map.height()) - 1;
-        let x = p.x.to_int_floor().clamp(0, max_x) as u16;
-        let y = p.y.to_int_floor().clamp(0, max_y) as u16;
-        (x, y)
+        crate::game::hex::from_world(p, self.map.width(), self.map.height())
     }
 
     fn run_economy(&mut self) -> [bool; PLAYER_COUNT] {
@@ -912,6 +903,7 @@ impl Sim {
             return cmds; // no base, no orders
         };
         let credits = self.credits(player);
+        let enemy_cc = self.command_center_tile(PlayerId(1 - player.0));
 
         // Build order: act on the first missing essential, then build no more
         // this tick (keeps spending paced and deterministic).
@@ -923,7 +915,7 @@ impl Sim {
         ] {
             if !self.has_building(player, kind) {
                 if credits >= self.building_cost(kind) {
-                    if let Some((x, y)) = self.find_buildable_near(cc_tile) {
+                    if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                         cmds.push(Command::Build {
                             owner: player,
                             kind,
@@ -944,7 +936,7 @@ impl Sim {
             && !self.has_building(player, BuildingKind::AaTurret)
             && credits >= self.building_cost(BuildingKind::AaTurret)
         {
-            if let Some((x, y)) = self.find_buildable_near(cc_tile) {
+            if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
                     owner: player,
                     kind: BuildingKind::AaTurret,
@@ -1054,24 +1046,49 @@ impl Sim {
         clippy::cast_sign_loss,
         reason = "scan stays within the bounds-checked, non-negative u16 grid"
     )]
-    fn find_buildable_near(&self, center: (u16, u16)) -> Option<(u16, u16)> {
+    /// Finds a buildable tile in the nearest ring around `center`. When `away_from`
+    /// is given (the enemy base), it prefers the tile in that ring *farthest* from
+    /// it — so each player expands defensively behind its own base. This keeps
+    /// expansion **side-relative** rather than biased toward a fixed world
+    /// direction, which a symmetric map needs to play fairly for both sides.
+    fn find_buildable_near(
+        &self,
+        center: (u16, u16),
+        away_from: Option<(u16, u16)>,
+    ) -> Option<(u16, u16)> {
         let cx = i32::from(center.0);
         let cy = i32::from(center.1);
-        for r in 1..=24i32 {
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    if dx.abs().max(dy.abs()) != r {
-                        continue;
-                    }
-                    let x = cx + dx;
-                    let y = cy + dy;
-                    if x >= 0 && y >= 0 && self.map.tile(x, y).is_some_and(|t| t.buildable) {
-                        return Some((x as u16, y as u16));
-                    }
+        // Nearest buildable cell by hex distance; among equidistant cells prefer
+        // the one farthest from `away_from` (defensive expansion), then lowest
+        // index for a deterministic tie-break.
+        let mut best: Option<((u16, u16), i32, i64, usize)> = None;
+        for dy in -24..=24i32 {
+            for dx in -24..=24i32 {
+                let x = cx + dx;
+                let y = cy + dy;
+                if x < 0 || y < 0 || !self.map.tile(x, y).is_some_and(|t| t.buildable) {
+                    continue;
+                }
+                let cell = (x as u16, y as u16);
+                let dist = hex::distance(center, cell);
+                if dist == 0 {
+                    continue;
+                }
+                let score = away_from.map_or(0, |(ex, ey)| {
+                    let ddx = i64::from(x) - i64::from(ex);
+                    let ddy = i64::from(y) - i64::from(ey);
+                    ddx * ddx + ddy * ddy
+                });
+                let idx = y as usize * usize::from(self.map.width()) + x as usize;
+                let better = best.is_none_or(|(_, bd, bs, bi)| {
+                    dist < bd || (dist == bd && (score > bs || (score == bs && idx < bi)))
+                });
+                if better {
+                    best = Some((cell, dist, score, idx));
                 }
             }
         }
-        None
+        best.map(|(cell, _, _, _)| cell)
     }
 }
 
@@ -1349,7 +1366,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 10_799_591_089_414_755_275);
+        assert_eq!(s.state_hash(), 3_409_360_777_067_811_056);
     }
 
     fn wave_cfg() -> WaveConfig {
