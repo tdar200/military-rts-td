@@ -19,14 +19,12 @@ mod input;
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
-use rts_core::game::map::Map;
+use rts_core::game::scenario::lane_defense;
 use rts_core::game::sim::{EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
 const TICK_DT: f32 = 1.0 / 30.0;
-/// Map size in tiles (square).
-const MAP_TILES: u16 = 40;
 const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
 /// Pixels reserved at the bottom for the HUD.
@@ -43,19 +41,14 @@ fn window_conf() -> Conf {
 }
 
 fn new_match() -> Sim {
-    let mut sim = Sim::new(Map::new(MAP_TILES, MAP_TILES), 2026, Fixed::from_int(2000));
-    sim.add_building(HUMAN, BuildingKind::CommandCenter, 4, 20);
-    sim.add_building(HUMAN, BuildingKind::PowerPlant, 6, 20);
-    sim.add_building(HUMAN, BuildingKind::Refinery, 6, 22);
-    sim.add_building(HUMAN, BuildingKind::Barracks, 6, 18);
-    sim.add_building(ENEMY, BuildingKind::CommandCenter, 35, 20);
-    sim
+    lane_defense(2026)
 }
 
 /// Pixels per tile, sized to fit the window above the HUD.
-fn cell_size() -> f32 {
-    let tiles = f32::from(MAP_TILES);
-    (screen_width() / tiles).min((screen_height() - HUD_HEIGHT) / tiles)
+fn cell_size(sim: &Sim) -> f32 {
+    let w = f32::from(sim.map().width());
+    let h = f32::from(sim.map().height());
+    (screen_width() / w).min((screen_height() - HUD_HEIGHT) / h)
 }
 
 fn tile_to_px(v: Fixed, cell: f32) -> f32 {
@@ -70,7 +63,7 @@ async fn main() {
     let mut accumulator = 0.0_f32;
 
     loop {
-        let cell = cell_size();
+        let cell = cell_size(&sim);
         pending.extend(input::gather_commands(&sim, &mut selected, cell));
 
         accumulator += get_frame_time();
@@ -88,6 +81,7 @@ async fn main() {
 
 fn draw(sim: &Sim, selected: Option<EntityId>, cell: f32) {
     clear_background(Color::from_rgba(18, 22, 18, 255));
+    draw_terrain(sim, cell);
     for v in sim.views() {
         let x = tile_to_px(v.pos.x, cell);
         let y = tile_to_px(v.pos.y, cell);
@@ -116,6 +110,19 @@ fn draw(sim: &Sim, selected: Option<EntityId>, cell: f32) {
         }
     }
     draw_hud(sim);
+}
+
+/// Draws impassable terrain (the wall band) so the lanes read clearly.
+fn draw_terrain(sim: &Sim, cell: f32) {
+    let map = sim.map();
+    let wall = Color::from_rgba(60, 60, 66, 255);
+    for ty in 0..map.height() {
+        for tx in 0..map.width() {
+            if !map.tile(i32::from(tx), i32::from(ty)).unwrap().passable {
+                draw_rectangle(f32::from(tx) * cell, f32::from(ty) * cell, cell, cell, wall);
+            }
+        }
+    }
 }
 
 fn draw_health_bar(x: f32, y: f32, cell: f32, hp: Fixed, max_hp: Fixed) {

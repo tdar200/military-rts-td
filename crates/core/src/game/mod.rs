@@ -6,5 +6,6 @@
 
 pub mod map;
 pub mod path;
+pub mod scenario;
 pub mod sim;
 pub mod stats;
