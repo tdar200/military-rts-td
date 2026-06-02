@@ -24,6 +24,10 @@ pub const PLAYER_COUNT: usize = 2;
 /// pathfinding work.
 const MOVE_REISSUE_PERIOD: u64 = 20;
 
+/// Combat spatial-grid cell size in tiles. Must be >= the largest attack range so
+/// a 3x3 cell query around an attacker contains every in-range enemy.
+const COMBAT_CELL: i32 = 8;
+
 /// Identifies a player (`0` or `1`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PlayerId(pub u8);
@@ -155,6 +159,9 @@ pub struct Sim {
     map: Map,
     players: [Player; PLAYER_COUNT],
     entities: Vec<Entity>,
+    /// Indices of dead entity slots available for reuse, so long matches don't
+    /// grow the entity list without bound.
+    free: Vec<u32>,
     waves: Option<WaveConfig>,
     wave_count: u32,
     balance: Balance,
@@ -227,9 +234,26 @@ impl Sim {
                 credits: starting_credits,
             }; PLAYER_COUNT],
             entities: Vec::new(),
+            free: Vec::new(),
             waves: None,
             wave_count: 0,
             balance: Balance::const_default(),
+        }
+    }
+
+    /// Stores an entity in a recycled dead slot if one is free, else appends.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
+    fn alloc_slot(&mut self, entity: Entity) -> EntityId {
+        if let Some(index) = self.free.pop() {
+            self.entities[index as usize] = entity;
+            EntityId(index)
+        } else {
+            let index = self.entities.len() as u32;
+            self.entities.push(entity);
+            EntityId(index)
         }
     }
 
@@ -376,6 +400,10 @@ impl Sim {
                 h.write_u64(u64::from(wy));
             }
         }
+        h.write_u64(self.free.len() as u64);
+        for &slot in &self.free {
+            h.write_u64(u64::from(slot));
+        }
         h.finish()
     }
 
@@ -397,8 +425,7 @@ impl Sim {
         );
         self.map.set_tile(x, y, Tile::BLOCKED);
         let hp = max_hp(&self.balance, Kind::Building(kind));
-        let id = EntityId(self.entities.len() as u32);
-        self.entities.push(Entity {
+        self.alloc_slot(Entity {
             owner,
             kind: Kind::Building(kind),
             alive: true,
@@ -410,8 +437,7 @@ impl Sim {
             tile: Some((x, y)),
             build_queue: Vec::new(),
             build_progress: 0,
-        });
-        id
+        })
     }
 
     /// Places a unit for free (scenario setup / production).
@@ -421,8 +447,7 @@ impl Sim {
     )]
     pub fn add_unit(&mut self, owner: PlayerId, kind: UnitKind, pos: Vec2) -> EntityId {
         let hp = max_hp(&self.balance, Kind::Unit(kind));
-        let id = EntityId(self.entities.len() as u32);
-        self.entities.push(Entity {
+        self.alloc_slot(Entity {
             owner,
             kind: Kind::Unit(kind),
             alive: true,
@@ -434,8 +459,7 @@ impl Sim {
             tile: None,
             build_queue: Vec::new(),
             build_progress: 0,
-        });
-        id
+        })
     }
 
     /// Advances the simulation one fixed tick.
@@ -688,13 +712,35 @@ impl Sim {
         }
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        reason = "grid cell coordinates are clamped into the map bounds before use"
+    )]
     fn run_combat(&mut self) {
         let snap: Vec<(bool, u8, Vec2, ArmorType)> = self
             .entities
             .iter()
             .map(|e| (e.alive, e.owner.0, e.pos, armor_of(&self.balance, e.kind)))
             .collect();
+
+        // Spatial grid over living entities so target lookup is ~O(neighbours)
+        // rather than O(n^2). The cell size is >= the largest attack range, so a
+        // 3x3 cell query around an attacker contains every in-range enemy.
+        let cols = (i32::from(self.map.width()) + COMBAT_CELL - 1) / COMBAT_CELL;
+        let rows = (i32::from(self.map.height()) + COMBAT_CELL - 1) / COMBAT_CELL;
+        let mut grid = alloc::vec![Vec::<usize>::new(); (cols * rows).max(1) as usize];
+        for (i, t) in snap.iter().enumerate() {
+            if t.0 {
+                let cx = (t.2.x.to_int_floor() as i32 / COMBAT_CELL).clamp(0, cols - 1);
+                let cy = (t.2.y.to_int_floor() as i32 / COMBAT_CELL).clamp(0, rows - 1);
+                grid[(cy * cols + cx) as usize].push(i);
+            }
+        }
+
         let mut damage: Vec<(usize, Fixed)> = Vec::new();
+        let mut candidates: Vec<usize> = Vec::new();
         for e in &mut self.entities {
             if !e.alive {
                 continue;
@@ -706,10 +752,26 @@ impl Sim {
                 e.cooldown -= 1;
                 continue;
             }
+            // Gather candidates from the 3x3 neighbourhood in ascending index
+            // order so distance ties resolve to the lowest index — identical to a
+            // full linear scan (keeps the simulation bit-for-bit deterministic).
+            candidates.clear();
+            let cx = (e.pos.x.to_int_floor() as i32 / COMBAT_CELL).clamp(0, cols - 1);
+            let cy = (e.pos.y.to_int_floor() as i32 / COMBAT_CELL).clamp(0, rows - 1);
+            for ny in (cy - 1)..=(cy + 1) {
+                for nx in (cx - 1)..=(cx + 1) {
+                    if nx >= 0 && ny >= 0 && nx < cols && ny < rows {
+                        candidates.extend_from_slice(&grid[(ny * cols + nx) as usize]);
+                    }
+                }
+            }
+            candidates.sort_unstable();
+
             let range_sq = profile.range * profile.range;
             let mut best: Option<(usize, Fixed)> = None;
-            for (j, t) in snap.iter().enumerate() {
-                if !t.0 || t.1 == e.owner.0 {
+            for &j in &candidates {
+                let t = snap[j];
+                if t.1 == e.owner.0 {
                     continue;
                 }
                 let dist_sq = (t.2 - e.pos).length_squared();
@@ -728,19 +790,26 @@ impl Sim {
         }
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
     fn clear_dead(&mut self) {
-        let mut freed: Vec<(u16, u16)> = Vec::new();
-        for e in &mut self.entities {
+        let mut freed_tiles: Vec<(u16, u16)> = Vec::new();
+        let mut freed_slots: Vec<u32> = Vec::new();
+        for (i, e) in self.entities.iter_mut().enumerate() {
             if e.alive && e.hp <= Fixed::ZERO {
                 e.alive = false;
                 if let Some(tile) = e.tile {
-                    freed.push(tile);
+                    freed_tiles.push(tile);
                 }
+                freed_slots.push(i as u32);
             }
         }
-        for (x, y) in freed {
+        for (x, y) in freed_tiles {
             self.map.set_tile(x, y, Tile::OPEN);
         }
+        self.free.extend(freed_slots);
     }
 }
 
@@ -1167,7 +1236,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 242_382_522_160_994_411);
+        assert_eq!(s.state_hash(), 10_799_591_089_414_755_275);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1226,5 +1295,39 @@ mod tests {
             hashes
         };
         assert_eq!(run(7), run(7));
+    }
+
+    #[test]
+    fn combat_scales_with_the_spatial_grid() {
+        // Two interleaved blobs of infantry, in range of each other.
+        let mut s = Sim::new(Map::new(48, 48), 1, f(0));
+        let n: i32 = 150;
+        for i in 0..n {
+            let row = i % 10;
+            let col = i / 10;
+            s.add_unit(P0, UnitKind::Infantry, v(10 + col, 5 + row));
+            s.add_unit(P1, UnitKind::Infantry, v(12 + col, 5 + row));
+        }
+        let start = s.entity_count();
+        assert_eq!(start, 300); // 150 per side
+        for _ in 0..120 {
+            s.step(&[]);
+        }
+        // They were within range and fought, so casualties occurred.
+        assert!(s.entity_count() < start);
+    }
+
+    #[test]
+    fn dead_slots_are_recycled() {
+        let mut s = Sim::new(Map::new(16, 16), 1, f(0));
+        let _tank = s.add_unit(P0, UnitKind::Tank, v(0, 0)); // slot 0
+        let wall = s.add_building(P1, BuildingKind::Wall, 1, 1); // slot 1
+        for _ in 0..200 {
+            s.step(&[]); // the tank destroys the wall
+        }
+        assert!(!s.is_alive(wall));
+        // The next spawn reuses the wall's freed slot rather than growing the list.
+        let reused = s.add_unit(P0, UnitKind::Infantry, v(5, 5));
+        assert_eq!(reused, wall);
     }
 }
