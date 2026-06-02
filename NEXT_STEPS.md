@@ -11,18 +11,17 @@ of work the engine already supports cleanly.
 
 ## Tier 3 — content
 
-### Air units + AA (completes the roster's rock-paper-scissors)
-The design calls for air (helicopters) countered by dedicated anti-air. Path:
-- `stats`: add `is_air: bool` to `UnitStats`; add `targets_ground: bool` +
-  `targets_air: bool` to `AttackProfile` (existing entries: ground-only, so
-  behaviour and the golden hash are unchanged).
-- Add `UnitKind::Helicopter` and `BuildingKind::AaTurret`; grow the `Balance`
-  arrays to `[UnitStats; 4]` / `[BuildingStats; 7]` and add the match arms in
-  `balance`, `stats`, and `kind_tag`.
-- `run_combat`: filter candidate targets by `is_air` vs the attacker's
-  `targets_air`/`targets_ground` — air is hittable only by AA (and other air).
-- `rts-data`: mirror the new fields; extend `balance.ron`.
-- Recompute the golden hash only if existing units change (they shouldn't).
+### Air units + AA — ✅ DONE
+Helicopter (flies straight over terrain, only killable by anti-air) + AA turret,
+with `is_air`/`targets_ground`/`targets_air` driving combat targeting. The AI
+builds AA when it detects enemy aircraft. Golden hash unchanged; covered by tests.
+Adversarial review confirmed it determinism-safe. Two low-priority polish notes
+from that review remain open:
+- Air units can overlap in flight (no separation) — cosmetic; add light
+  repulsion or document as intentional.
+- `balance.ron` has no schema version; hand-edited *old* files missing the new
+  per-attack flags would default to ground-only. New entries are required fields
+  (so they fail loudly), but a version tag / validation would be tidier.
 
 ### Fog of war
 Per-player visibility so you only see what your units/buildings reveal. Path:
