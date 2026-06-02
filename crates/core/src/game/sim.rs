@@ -165,6 +165,10 @@ pub struct Sim {
     waves: Option<WaveConfig>,
     wave_count: u32,
     balance: Balance,
+    /// Transient render hint: (attacker, target) world positions of shots fired
+    /// on the most recent combat tick. Deterministically derived, so it is not
+    /// part of the state hash.
+    attacks: Vec<(Vec2, Vec2)>,
 }
 
 const fn armor_of(balance: &Balance, kind: Kind) -> ArmorType {
@@ -238,7 +242,15 @@ impl Sim {
             waves: None,
             wave_count: 0,
             balance: Balance::const_default(),
+            attacks: Vec::new(),
         }
+    }
+
+    /// Shots fired on the most recent combat tick, as (attacker, target) world
+    /// positions — for drawing tracers. Transient; not part of the state.
+    #[must_use]
+    pub fn recent_attacks(&self) -> &[(Vec2, Vec2)] {
+        &self.attacks
     }
 
     /// Stores an entity in a recycled dead slot if one is free, else appends.
@@ -757,6 +769,7 @@ impl Sim {
         }
 
         let mut damage: Vec<(usize, Fixed)> = Vec::new();
+        let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
         let mut candidates: Vec<usize> = Vec::new();
         for e in &mut self.entities {
             if !e.alive {
@@ -799,12 +812,14 @@ impl Sim {
             if let Some((j, _)) = best {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
                 damage.push((j, profile.damage * mult));
+                lines.push((e.pos, snap[j].2));
                 e.cooldown = profile.period;
             }
         }
         for (j, dmg) in damage {
             self.entities[j].hp = self.entities[j].hp - dmg;
         }
+        self.attacks = lines;
     }
 
     #[allow(

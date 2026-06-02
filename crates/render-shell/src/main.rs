@@ -115,10 +115,26 @@ fn draw(sim: &Sim, selected: Option<EntityId>, build_mode: Option<BuildingKind>,
             draw_circle_lines(x, y, cell * 0.7, 2.0, YELLOW);
         }
     }
+    draw_tracers(sim, cell);
     if let Some(kind) = build_mode {
         draw_build_ghost(sim, kind, cell);
     }
     draw_hud(sim);
+}
+
+/// Draws shot tracers for the most recent combat tick (combat juice).
+fn draw_tracers(sim: &Sim, cell: f32) {
+    let color = Color::from_rgba(255, 240, 150, 200);
+    for &(from, to) in sim.recent_attacks() {
+        draw_line(
+            tile_to_px(from.x, cell),
+            tile_to_px(from.y, cell),
+            tile_to_px(to.x, cell),
+            tile_to_px(to.y, cell),
+            1.5,
+            color,
+        );
+    }
 }
 
 /// Draws a translucent placement ghost at the moused tile: green if the tile is
