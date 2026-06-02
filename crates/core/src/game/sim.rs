@@ -1047,6 +1047,7 @@ impl Sim {
             BuildingKind::PowerPlant,
             BuildingKind::Refinery,
             BuildingKind::Barracks,
+            BuildingKind::ResearchLab,
         ] {
             if !self.has_building(player, kind) {
                 if credits >= self.building_cost(kind) {
@@ -1091,6 +1092,31 @@ impl Sim {
                         barracks,
                         kind: UnitKind::Infantry,
                     });
+                }
+            }
+        }
+
+        // Research: with a lab and no active research, start the first eligible +
+        // affordable tech in a fixed priority order. Deterministic and symmetric
+        // for both players; skipping ineligible/unaffordable techs avoids stalls.
+        let (researched_mask, active_research) = self.research_state(player);
+        if self.has_research_lab(player) && active_research.is_none() {
+            // Priority by tech id: Economy I(6) → Weapons I(0) → Armor I(3) →
+            // Economy II(7) → Weapons II(1) → Armor II(4) → Mobility I(8) →
+            // Weapons III(2) → Armor III(5) → Mobility II(9).
+            const RESEARCH_PRIORITY: [u32; 10] = [6, 0, 3, 7, 1, 4, 8, 2, 5, 9];
+            for tech_id in RESEARCH_PRIORITY {
+                let def = crate::game::tech::TECHS[tech_id as usize];
+                let researched = researched_mask & (1u32 << tech_id) != 0;
+                let prereq_ok = def
+                    .prereq
+                    .is_none_or(|req| researched_mask & (1u32 << req) != 0);
+                if !researched && prereq_ok && credits >= def.cost {
+                    cmds.push(Command::Research {
+                        owner: player,
+                        tech_id,
+                    });
+                    break;
                 }
             }
         }
@@ -1501,7 +1527,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 4_096_103_218_700_100_208);
+        assert_eq!(s.state_hash(), 18_112_695_847_899_389_504);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1727,6 +1753,28 @@ mod tests {
             tech_id: 1,
         }]);
         assert!(s.research_state(P0).1.is_none());
+    }
+
+    #[test]
+    fn ai_builds_a_lab_and_researches() {
+        let mut s = Sim::new(Map::new(40, 40), 7, f(2000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        let mut lab_seen = false;
+        let mut research_seen = false;
+        for _ in 0..2000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            if s.has_research_lab(P0) {
+                lab_seen = true;
+            }
+            if s.research_state(P0).1.is_some() || s.research_state(P0).0 != 0 {
+                research_seen = true;
+            }
+        }
+        assert!(lab_seen, "AI builds a research lab");
+        assert!(research_seen, "AI starts/finishes research");
     }
 
     #[test]

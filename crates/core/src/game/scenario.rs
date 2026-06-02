@@ -313,11 +313,14 @@ mod tests {
         assert_eq!(s.winner(), None, "match resolved sooner than expected");
         let after = s.unit_count(PlayerId(0)) + s.unit_count(PlayerId(1));
         assert!(after > before, "no armies were ever trained");
-        // No air on this map, so the AI builds no AA — and the four essentials are
-        // pre-placed, so it builds no structures at all. The 8 starting buildings
-        // (4 per side) remain, and the rest of the entities are units.
+        // No air on this map, so the AI builds no AA. The four essentials
+        // (PowerPlant/Refinery/Barracks/CommandCenter) are pre-placed, so the AI
+        // only adds one ResearchLab per side — 8 starting + 2 labs = 10 total.
         let buildings = s.entity_count() - after;
-        assert_eq!(buildings, 8, "AI built unexpected structures on open_clash");
+        assert_eq!(
+            buildings, 10,
+            "AI built unexpected structures on open_clash"
+        );
     }
 
     #[test]
