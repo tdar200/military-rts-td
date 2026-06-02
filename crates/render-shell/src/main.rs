@@ -59,12 +59,18 @@ fn tile_to_px(v: Fixed, cell: f32) -> f32 {
 async fn main() {
     let mut sim = new_match();
     let mut selected: Option<EntityId> = None;
+    let mut build_mode: Option<BuildingKind> = None;
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
 
     loop {
         let cell = cell_size(&sim);
-        pending.extend(input::gather_commands(&sim, &mut selected, cell));
+        pending.extend(input::gather_commands(
+            &sim,
+            &mut selected,
+            &mut build_mode,
+            cell,
+        ));
 
         accumulator += get_frame_time();
         while accumulator >= TICK_DT {
@@ -74,12 +80,12 @@ async fn main() {
             accumulator -= TICK_DT;
         }
 
-        draw(&sim, selected, cell);
+        draw(&sim, selected, build_mode, cell);
         next_frame().await;
     }
 }
 
-fn draw(sim: &Sim, selected: Option<EntityId>, cell: f32) {
+fn draw(sim: &Sim, selected: Option<EntityId>, build_mode: Option<BuildingKind>, cell: f32) {
     clear_background(Color::from_rgba(18, 22, 18, 255));
     draw_terrain(sim, cell);
     for v in sim.views() {
@@ -109,7 +115,26 @@ fn draw(sim: &Sim, selected: Option<EntityId>, cell: f32) {
             draw_circle_lines(x, y, cell * 0.7, 2.0, YELLOW);
         }
     }
+    if let Some(kind) = build_mode {
+        draw_build_ghost(sim, kind, cell);
+    }
     draw_hud(sim);
+}
+
+/// Draws a translucent placement ghost at the moused tile: green if the tile is
+/// buildable and affordable, red otherwise.
+fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32) {
+    let (mx, my) = mouse_position();
+    let tx = (mx / cell) as i32;
+    let ty = (my / cell) as i32;
+    let buildable = sim.map().tile(tx, ty).is_some_and(|t| t.buildable);
+    let affordable = sim.credits(HUMAN) >= sim.building_cost(kind);
+    let color = if buildable && affordable {
+        Color::from_rgba(80, 200, 120, 130)
+    } else {
+        Color::from_rgba(200, 80, 80, 130)
+    };
+    draw_rectangle(tx as f32 * cell, ty as f32 * cell, cell, cell, color);
 }
 
 /// Draws impassable terrain (the wall band) so the lanes read clearly.
@@ -139,12 +164,16 @@ fn draw_hud(sim: &Sim) {
     let status = match sim.winner() {
         Some(PlayerId(0)) => "YOU WIN".to_owned(),
         Some(PlayerId(p)) => format!("PLAYER {p} WINS"),
-        _ => format!(
-            "credits {}   tick {}   units {}",
-            sim.credits(HUMAN).to_bits() / 65536,
-            sim.tick(),
-            sim.unit_count(HUMAN),
-        ),
+        _ => {
+            let wave = sim
+                .ticks_until_next_wave()
+                .map_or_else(String::new, |t| format!("   next wave {}s", t / 30));
+            format!(
+                "credits {}   units {}{wave}",
+                sim.credits(HUMAN).to_bits() / 65536,
+                sim.unit_count(HUMAN),
+            )
+        }
     };
     draw_text(&status, 8.0, line, 24.0, WHITE);
     draw_text(

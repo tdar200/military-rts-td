@@ -285,6 +285,23 @@ impl Sim {
         self.players[usize::from(player.0)].credits
     }
 
+    /// Credit cost to construct a building (for UI affordability hints).
+    #[must_use]
+    pub const fn building_cost(&self, kind: BuildingKind) -> Fixed {
+        self.balance.building(kind).cost
+    }
+
+    /// Ticks until the next enemy wave, or `None` if waves are disabled.
+    #[must_use]
+    pub fn ticks_until_next_wave(&self) -> Option<u64> {
+        let cfg = self.waves?;
+        if self.tick < cfg.first_delay {
+            return Some(cfg.first_delay - self.tick);
+        }
+        let into = (self.tick - cfg.first_delay) % cfg.interval;
+        Some(if into == 0 { 0 } else { cfg.interval - into })
+    }
+
     /// Number of living entities.
     #[must_use]
     pub fn entity_count(&self) -> usize {
@@ -1250,6 +1267,16 @@ mod tests {
             attacker: P1,
             defender: P0,
         }
+    }
+
+    #[test]
+    fn wave_countdown_reports_time_to_next_wave() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        assert_eq!(s.ticks_until_next_wave(), None);
+        s.set_waves(wave_cfg());
+        assert_eq!(s.ticks_until_next_wave(), Some(0)); // first_delay is 0
+        s.step(&[]);
+        assert_eq!(s.ticks_until_next_wave(), Some(49)); // interval 50, 1 tick in
     }
 
     #[test]

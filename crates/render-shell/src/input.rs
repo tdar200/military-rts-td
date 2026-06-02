@@ -1,6 +1,6 @@
 //! Input-abstraction layer.
 //!
-//! Maps raw device input (mouse + keyboard today; touch and gamepad later) into
+//! Maps raw device input (mouse + keyboard + touch; gamepad later) into
 //! platform-agnostic [`rts_core`] [`Command`]s for the human player. Keeping this
 //! layer separate is what lets the same simulation accept input from any device.
 
@@ -25,17 +25,50 @@ fn fixed_to_tiles(v: Fixed) -> f32 {
 }
 
 /// Reads this frame's input and returns commands for the human player.
-/// `selected` tracks the currently selected unit and is updated by clicks.
+/// `selected` tracks the selected unit; `build_mode` tracks a pending building
+/// placement (the shell draws a ghost for it until a click places or cancels it).
 #[must_use]
-pub fn gather_commands(sim: &Sim, selected: &mut Option<EntityId>, cell: f32) -> Vec<Command> {
+pub fn gather_commands(
+    sim: &Sim,
+    selected: &mut Option<EntityId>,
+    build_mode: &mut Option<BuildingKind>,
+    cell: f32,
+) -> Vec<Command> {
     let mut cmds = Vec::new();
     let (mx, my) = mouse_position();
     let (wx, wy) = (mx / cell, my / cell);
 
+    // Build hotkeys arm a placement; the shell shows a ghost until you click.
+    if is_key_pressed(KeyCode::P) {
+        *build_mode = Some(BuildingKind::PowerPlant);
+    }
+    if is_key_pressed(KeyCode::R) {
+        *build_mode = Some(BuildingKind::Refinery);
+    }
+    if is_key_pressed(KeyCode::B) {
+        *build_mode = Some(BuildingKind::Barracks);
+    }
+    if is_key_pressed(KeyCode::G) {
+        *build_mode = Some(BuildingKind::GunTurret);
+    }
+    if is_key_pressed(KeyCode::Escape) {
+        *build_mode = None;
+    }
+
     if is_mouse_button_pressed(MouseButton::Left) {
-        *selected = nearest_friendly_unit(sim, wx, wy);
+        if let Some(kind) = build_mode.take() {
+            cmds.push(Command::Build {
+                owner: HUMAN,
+                kind,
+                x: wx as u16,
+                y: wy as u16,
+            });
+        } else {
+            *selected = nearest_friendly_unit(sim, wx, wy);
+        }
     }
     if is_mouse_button_pressed(MouseButton::Right) {
+        *build_mode = None; // right-click cancels a pending placement
         if let Some(unit) = *selected {
             cmds.push(Command::Move {
                 owner: HUMAN,
@@ -44,10 +77,18 @@ pub fn gather_commands(sim: &Sim, selected: &mut Option<EntityId>, cell: f32) ->
             });
         }
     }
+    if is_key_pressed(KeyCode::T) {
+        if let Some(barracks) = first_friendly_barracks(sim) {
+            cmds.push(Command::Train {
+                owner: HUMAN,
+                barracks,
+                kind: UnitKind::Infantry,
+            });
+        }
+    }
 
     // Touch (mobile): a tap on a friendly unit selects it; a tap on empty ground
-    // moves the selected unit. Same command set as mouse/keyboard — the sim never
-    // knows which device produced the input.
+    // moves the selected unit. Same command set as mouse/keyboard.
     for touch in touches() {
         if touch.phase != TouchPhase::Started {
             continue;
@@ -64,40 +105,7 @@ pub fn gather_commands(sim: &Sim, selected: &mut Option<EntityId>, cell: f32) ->
             });
         }
     }
-
-    let tile = (wx as u16, wy as u16);
-    if is_key_pressed(KeyCode::P) {
-        cmds.push(build(BuildingKind::PowerPlant, tile));
-    }
-    if is_key_pressed(KeyCode::R) {
-        cmds.push(build(BuildingKind::Refinery, tile));
-    }
-    if is_key_pressed(KeyCode::B) {
-        cmds.push(build(BuildingKind::Barracks, tile));
-    }
-    if is_key_pressed(KeyCode::G) {
-        cmds.push(build(BuildingKind::GunTurret, tile));
-    }
-    if is_key_pressed(KeyCode::T) {
-        if let Some(barracks) = first_friendly_barracks(sim) {
-            cmds.push(Command::Train {
-                owner: HUMAN,
-                barracks,
-                kind: UnitKind::Infantry,
-            });
-        }
-    }
     cmds
-}
-
-#[must_use]
-const fn build(kind: BuildingKind, tile: (u16, u16)) -> Command {
-    Command::Build {
-        owner: HUMAN,
-        kind,
-        x: tile.0,
-        y: tile.1,
-    }
 }
 
 #[must_use]
