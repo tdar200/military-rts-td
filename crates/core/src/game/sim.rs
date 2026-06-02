@@ -12,7 +12,9 @@ use crate::game::balance::Balance;
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
-use crate::game::stats::{damage_multiplier, ArmorType, AttackProfile, BuildingKind, UnitKind};
+use crate::game::stats::{
+    damage_multiplier, ArmorType, AttackProfile, BuildingKind, DamageType, UnitKind,
+};
 use crate::hash::Fnv;
 use crate::rng::Rng;
 use crate::vec::Vec2;
@@ -52,6 +54,10 @@ struct Entity {
     alive: bool,
     pos: Vec2,
     hp: Fixed,
+    /// Current energy shield (absorbs damage before HP).
+    shield: Fixed,
+    /// Tick the entity was last hit (drives out-of-combat shield regen).
+    last_combat_tick: u32,
     cooldown: u32,
     move_target: Option<Vec2>,
     /// Remaining tile waypoints toward `move_target` (from A*), nearest first.
@@ -139,6 +145,10 @@ pub struct EntityView {
     pub hp: Fixed,
     /// Maximum health (for health bars).
     pub max_hp: Fixed,
+    /// Current energy shield.
+    pub shield: Fixed,
+    /// Maximum energy shield (owner's researched shield max).
+    pub max_shield: Fixed,
 }
 
 /// Configures periodic enemy waves — the attack/defend loop.
@@ -444,6 +454,8 @@ impl Sim {
                 pos: e.pos,
                 hp: e.hp,
                 max_hp: max_hp(&self.balance, e.kind),
+                shield: e.shield,
+                max_shield: self.player_shield_max(e.owner),
             })
             .collect()
     }
@@ -501,6 +513,8 @@ impl Sim {
             h.write_i64(e.pos.x.to_bits());
             h.write_i64(e.pos.y.to_bits());
             h.write_i64(e.hp.to_bits());
+            h.write_i64(e.shield.to_bits());
+            h.write_u64(u64::from(e.last_combat_tick));
             h.write_u64(u64::from(e.cooldown));
             match e.move_target {
                 Some(t) => {
@@ -543,12 +557,15 @@ impl Sim {
         let pos = tile_center(x, y);
         self.map.set_tile(x, y, Tile::BLOCKED);
         let hp = max_hp(&self.balance, Kind::Building(kind));
+        let shield = self.player_shield_max(owner);
         self.alloc_slot(Entity {
             owner,
             kind: Kind::Building(kind),
             alive: true,
             pos,
             hp,
+            shield,
+            last_combat_tick: 0,
             cooldown: 0,
             move_target: None,
             path: Vec::new(),
@@ -565,12 +582,15 @@ impl Sim {
     )]
     pub fn add_unit(&mut self, owner: PlayerId, kind: UnitKind, pos: Vec2) -> EntityId {
         let hp = max_hp(&self.balance, Kind::Unit(kind));
+        let shield = self.player_shield_max(owner);
         self.alloc_slot(Entity {
             owner,
             kind: Kind::Unit(kind),
             alive: true,
             pos,
             hp,
+            shield,
+            last_combat_tick: 0,
             cooldown: 0,
             move_target: None,
             path: Vec::new(),
@@ -590,6 +610,7 @@ impl Sim {
         self.run_production(powered);
         self.run_waves();
         self.run_movement();
+        self.run_shields();
         self.run_combat();
         self.clear_dead();
         self.tick += 1;
@@ -799,6 +820,41 @@ impl Sim {
     fn player_mobility_bonus(&self, p: PlayerId) -> Fixed {
         self.branch_bonus(p, crate::game::tech::TechBranch::Mobility)
     }
+    fn player_shield_max(&self, p: PlayerId) -> Fixed {
+        self.branch_bonus(p, crate::game::tech::TechBranch::Shields)
+    }
+    /// Public accessor for the UI and tests outside the module.
+    #[must_use]
+    pub fn shield_max(&self, player: PlayerId) -> Fixed {
+        self.player_shield_max(player)
+    }
+
+    /// Regenerates each entity's shield toward its owner's current max while out
+    /// of combat (no hit for `REGEN_DELAY` ticks). Also clamps to the current max.
+    fn run_shields(&mut self) {
+        const REGEN_DELAY: u32 = 90;
+        let regen = Fixed::ONE;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "tick fits u32 for any real game"
+        )]
+        let tick = self.tick as u32;
+        let max: [Fixed; PLAYER_COUNT] =
+            core::array::from_fn(|p| self.player_shield_max(PlayerId(u8::try_from(p).unwrap())));
+        for e in &mut self.entities {
+            if !e.alive {
+                continue;
+            }
+            let m = max[usize::from(e.owner.0)];
+            if e.shield > m {
+                e.shield = m;
+            }
+            if tick.saturating_sub(e.last_combat_tick) >= REGEN_DELAY && e.shield < m {
+                let r = e.shield + regen;
+                e.shield = if r > m { m } else { r };
+            }
+        }
+    }
 
     fn run_economy(&mut self) -> [bool; PLAYER_COUNT] {
         let mut produced = [0i32; PLAYER_COUNT];
@@ -916,7 +972,8 @@ impl Sim {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         clippy::cast_possible_wrap,
-        reason = "grid cell coordinates are clamped into the map bounds before use"
+        clippy::too_many_lines,
+        reason = "grid cell coordinates are clamped into the map bounds before use; combat loop is long by necessity"
     )]
     fn run_combat(&mut self) {
         let snap: Vec<(bool, u8, Vec2, ArmorType, bool)> = self
@@ -957,7 +1014,7 @@ impl Sim {
         let era_dmg: [Fixed; PLAYER_COUNT] =
             core::array::from_fn(|p| era_damage_factor(self.players[p].era));
 
-        let mut damage: Vec<(usize, Fixed)> = Vec::new();
+        let mut damage: Vec<(usize, Fixed, bool)> = Vec::new();
         let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
         let mut candidates: Vec<usize> = Vec::new();
         for e in &mut self.entities {
@@ -1009,13 +1066,20 @@ impl Sim {
             if let Some((j, _)) = best {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
                 let base = profile.damage * mult * era_dmg[usize::from(e.owner.0)];
-                damage.push((j, base + weapon[usize::from(e.owner.0)]));
+                let pierces = matches!(profile.damage_type, DamageType::AntiArmor);
+                damage.push((j, base + weapon[usize::from(e.owner.0)], pierces));
                 lines.push((e.pos, snap[j].2));
                 e.cooldown = profile.period;
             }
         }
-        for (j, dmg) in damage {
-            let mit = armor[usize::from(self.entities[j].owner.0)];
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "tick fits u32 for any real game"
+        )]
+        let tick = self.tick as u32;
+        for (j, dmg, pierces) in damage {
+            let owner = self.entities[j].owner;
+            let mit = armor[usize::from(owner.0)];
             // Armor research subtracts flat mitigation, but a mitigated hit still
             // deals at least 1 (no immunity). With no armor research (mit == 0),
             // damage is unchanged, keeping base combat identical.
@@ -1029,7 +1093,15 @@ impl Sim {
             } else {
                 dmg
             };
-            self.entities[j].hp = self.entities[j].hp - net;
+            let e = &mut self.entities[j];
+            e.last_combat_tick = tick;
+            if pierces {
+                e.hp = e.hp - net;
+            } else {
+                let absorbed = if e.shield < net { e.shield } else { net };
+                e.shield = e.shield - absorbed;
+                e.hp = e.hp - (net - absorbed);
+            }
         }
         self.attacks = lines;
     }
@@ -1565,7 +1637,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 9_987_500_447_761_259_648);
+        assert_eq!(s.state_hash(), 14_227_407_528_270_883_136);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1854,6 +1926,36 @@ mod tests {
             max_era = max_era.max(s.player_era(P0));
         }
         assert!(max_era >= 1, "AI advanced at least one era");
+    }
+
+    #[test]
+    fn shields_absorb_then_regen_and_antiarmor_pierces() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(20_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
+        s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
+        // Research Shield I (id 13) to completion.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 13,
+        }]);
+        let dur = crate::game::tech::tech(13).unwrap().duration;
+        for _ in 0..dur {
+            s.step(&[]);
+        }
+        assert!(s.player_shield_max(P0) > crate::fixed::Fixed::ZERO);
+        // A newly spawned P0 unit has shield == max.
+        let id = s.add_unit(
+            P0,
+            UnitKind::Infantry,
+            crate::vec::Vec2::new(
+                crate::fixed::Fixed::from_int(6),
+                crate::fixed::Fixed::from_int(6),
+            ),
+        );
+        let v = s.views().into_iter().find(|v| v.id == id).unwrap();
+        assert_eq!(v.shield, v.max_shield);
+        assert!(v.max_shield > crate::fixed::Fixed::ZERO);
     }
 
     #[test]
