@@ -658,8 +658,9 @@ impl Sim {
     /// passable tile beside it and then closes the last step directly — so
     /// "attack the base" actually routes there.
     fn order_unit_to(&mut self, idx: usize, target: Vec2) {
-        if is_air_of(&self.balance, self.entities[idx].kind) {
-            // Air units fly straight to the target, ignoring terrain.
+        let owner = self.entities[idx].owner;
+        if is_air_of(&self.balance, self.entities[idx].kind) || self.player_has_antigrav(owner) {
+            // Air units and anti-grav units fly straight to the target, ignoring terrain.
             let e = &mut self.entities[idx];
             e.move_target = Some(target);
             e.path = Vec::new();
@@ -847,6 +848,21 @@ impl Sim {
     #[must_use]
     pub fn shield_max(&self, player: PlayerId) -> Fixed {
         self.player_shield_max(player)
+    }
+    fn player_has_antigrav(&self, p: PlayerId) -> bool {
+        let mask = self.players[usize::from(p.0)].researched_techs;
+        (0..crate::game::tech::TECH_COUNT).any(|i| {
+            mask & (1u32 << i) != 0
+                && matches!(
+                    crate::game::tech::TECHS[i].branch,
+                    crate::game::tech::TechBranch::AntiGrav
+                )
+        })
+    }
+    /// Returns `true` if the player has researched an Anti-Grav Drives tech.
+    #[must_use]
+    pub fn has_antigrav(&self, p: PlayerId) -> bool {
+        self.player_has_antigrav(p)
     }
 
     /// Regenerates each entity's shield toward its owner's current max while out
@@ -2062,6 +2078,33 @@ mod tests {
             s.antimatter(P0) > crate::fixed::Fixed::ZERO,
             "antimatter accrues from a powered plant"
         );
+    }
+
+    #[test]
+    fn antigrav_research_makes_owner_units_ignore_terrain() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(50_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
+        s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
+        let agid = (0..crate::game::tech::TECH_COUNT)
+            .find(|&i| {
+                matches!(
+                    crate::game::tech::TECHS[i].branch,
+                    crate::game::tech::TechBranch::AntiGrav
+                )
+            })
+            .map(|i| u32::try_from(i).unwrap())
+            .unwrap();
+        assert!(!s.has_antigrav(P0));
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: agid,
+        }]);
+        for _ in 0..crate::game::tech::tech(agid).unwrap().duration {
+            s.step(&[]);
+        }
+        assert!(s.has_antigrav(P0), "anti-grav researched");
+        assert!(!s.has_antigrav(P1), "opponent unaffected");
     }
 
     #[test]

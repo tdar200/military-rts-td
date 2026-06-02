@@ -8,7 +8,7 @@
 use crate::fixed::Fixed;
 
 /// Number of techs in the tree.
-pub const TECH_COUNT: usize = 16;
+pub const TECH_COUNT: usize = 17;
 
 /// Which global stat a tech improves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -25,6 +25,8 @@ pub enum TechBranch {
     Era,
     /// Adds to the player's max energy shield.
     Shields,
+    /// Lets the player's units ignore terrain for movement.
+    AntiGrav,
 }
 
 /// One research upgrade.
@@ -195,6 +197,15 @@ pub const TECHS: [TechDef; TECH_COUNT] = [
         prereq: Some(14),
         bonus: Fixed::from_int(50),
     },
+    TechDef {
+        id: 16,
+        name: "Anti-Grav Drives",
+        branch: TechBranch::AntiGrav,
+        cost: Fixed::from_int(500),
+        duration: 600,
+        prereq: None,
+        bonus: Fixed::ZERO,
+    },
 ];
 
 // Keep TECH_COUNT in sync with the table: the last tech's id must be the last
@@ -229,7 +240,23 @@ mod tests {
         // Chain by prereq: 14→13, 15→14.
         assert_eq!(tech(14).unwrap().prereq, Some(13));
         assert_eq!(tech(15).unwrap().prereq, Some(14));
-        assert_eq!(TECH_COUNT, 16);
+        assert_eq!(TECH_COUNT, 17);
+    }
+
+    #[test]
+    fn antigrav_tech_exists_at_id_16() {
+        // There is exactly one AntiGrav tech, at index 16.
+        let count = TECHS
+            .iter()
+            .filter(|t| matches!(t.branch, TechBranch::AntiGrav))
+            .count();
+        assert_eq!(count, 1, "exactly one AntiGrav tech");
+        let t = tech(16).unwrap();
+        assert_eq!(t.id, 16);
+        assert_eq!(t.name, "Anti-Grav Drives");
+        assert!(matches!(t.branch, TechBranch::AntiGrav));
+        assert_eq!(t.prereq, None);
+        assert_eq!(TECH_COUNT, 17);
     }
 
     #[test]
