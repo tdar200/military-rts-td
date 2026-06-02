@@ -33,6 +33,13 @@ const ENEMY: PlayerId = PlayerId(1);
 /// The battlefield is drawn below the top bar.
 const WORLD_TOP: f32 = ui::TOP_BAR_H;
 
+/// Top-level screen state.
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Title,
+    Playing,
+}
+
 fn window_conf() -> Conf {
     Conf {
         window_title: "Military RTS".to_owned(),
@@ -67,8 +74,23 @@ async fn main() {
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
     let mut paused = false;
+    let mut phase = Phase::Title;
 
     loop {
+        if phase == Phase::Title {
+            if is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) {
+                phase = Phase::Playing;
+                sim = new_match();
+                selected = None;
+                build_mode = None;
+                pending.clear();
+                accumulator = 0.0;
+            }
+            draw_title(&sprites);
+            next_frame().await;
+            continue;
+        }
+
         let cell = cell_size(&sim);
         let over = sim.winner().is_some();
 
@@ -108,27 +130,75 @@ async fn main() {
         draw(&sim, selected, build_mode, cell, &sprites);
         ui::draw(&sim, build_mode, paused, &sprites);
         if let Some(winner) = sim.winner() {
-            draw_game_over(winner);
+            draw_game_over(winner, &sprites);
         }
         next_frame().await;
     }
 }
 
-fn draw_game_over(winner: PlayerId) {
-    let w = screen_width();
-    let h = screen_height();
-    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 150));
+/// Centered text in the bold font; returns nothing.
+fn centered(s: &str, y: f32, size: f32, color: Color, font: Option<&Font>) {
+    let w = measure_text(s, font, size as u16, 1.0).width;
+    draw_text_ex(
+        s,
+        (screen_width() - w) / 2.0,
+        y,
+        TextParams {
+            font,
+            font_size: size as u16,
+            color,
+            ..Default::default()
+        },
+    );
+}
+
+fn draw_title(sprites: &Sprites) {
+    clear_background(Color::from_rgba(14, 17, 22, 255));
+    let cy = screen_height() / 2.0;
+    centered(
+        "MILITARY RTS",
+        cy - 56.0,
+        78.0,
+        SKYBLUE,
+        sprites.font_bold(),
+    );
+    centered(
+        "Tower-defense RTS — hold the lanes, crush the enemy base",
+        cy - 14.0,
+        24.0,
+        Color::from_rgba(176, 188, 200, 255),
+        sprites.font(),
+    );
+    centered(
+        "CLICK or press ENTER to deploy",
+        cy + 48.0,
+        28.0,
+        WHITE,
+        sprites.font_bold(),
+    );
+}
+
+fn draw_game_over(winner: PlayerId, sprites: &Sprites) {
+    let (w, h) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 175));
+    let (pw, ph) = (440.0, 184.0);
+    let (px, py) = ((w - pw) / 2.0, (h - ph) / 2.0);
+    draw_rectangle(px, py, pw, ph, Color::from_rgba(20, 24, 30, 250));
+    draw_rectangle(px, py, pw, 4.0, SKYBLUE);
+    draw_rectangle_lines(px, py, pw, ph, 1.0, Color::from_rgba(60, 70, 82, 255));
     let (msg, color) = if winner == HUMAN {
         ("VICTORY", GREEN)
     } else {
         ("DEFEAT", RED)
     };
-    let size = 64.0;
-    let dims = measure_text(msg, None, size as u16, 1.0);
-    draw_text(msg, (w - dims.width) / 2.0, h / 2.0, size, color);
-    let hint = "press R to restart";
-    let hd = measure_text(hint, None, 24, 1.0);
-    draw_text(hint, (w - hd.width) / 2.0, h / 2.0 + 40.0, 24.0, WHITE);
+    centered(msg, py + 92.0, 58.0, color, sprites.font_bold());
+    centered(
+        "press R to restart",
+        py + 136.0,
+        24.0,
+        Color::from_rgba(200, 208, 216, 255),
+        sprites.font(),
+    );
 }
 
 fn draw(

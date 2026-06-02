@@ -22,3 +22,9 @@ rendered to a 128×128 white silhouette PNG (tinted per team in-game).
 
 Icons by Delapouite, Quoting, Sbed, and Pierre Leducq, available at
 https://game-icons.net under CC BY 3.0.
+
+## Font
+
+**Rajdhani** (SemiBold + Bold), by Indian Type Foundry, used under the
+**SIL Open Font License 1.1** — full license in `assets/fonts/Rajdhani-OFL.txt`.
+Source: https://fonts.google.com/specimen/Rajdhani
