@@ -1480,6 +1480,47 @@ mod tests {
         assert!(has_aa);
     }
 
+    /// Stands two armies a few tiles apart (in weapon range) and fights to the
+    /// finish, returning `(surviving P0 units, surviving P1 units)`.
+    fn duel(a: &[UnitKind], b: &[UnitKind]) -> (usize, usize) {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(0));
+        for (i, &k) in a.iter().enumerate() {
+            s.add_unit(P0, k, v(15, 16 + i32::try_from(i).unwrap()));
+        }
+        for (i, &k) in b.iter().enumerate() {
+            s.add_unit(P1, k, v(18, 16 + i32::try_from(i).unwrap()));
+        }
+        for _ in 0..800 {
+            s.step(&[]);
+        }
+        (s.unit_count(P0), s.unit_count(P1))
+    }
+
+    #[test]
+    fn anti_armor_hard_counters_tanks_at_equal_cost() {
+        // 4 anti-armor (440cr) vs 2 tanks (400cr): the anti-armour role wins.
+        let (aa, tanks) = duel(
+            &[
+                UnitKind::AntiArmor,
+                UnitKind::AntiArmor,
+                UnitKind::AntiArmor,
+                UnitKind::AntiArmor,
+            ],
+            &[UnitKind::Tank, UnitKind::Tank],
+        );
+        assert!(aa > 0 && tanks == 0, "anti-armor {aa} vs tanks {tanks}");
+    }
+
+    #[test]
+    fn helicopters_beat_ground_without_anti_air() {
+        // 1 helicopter (160cr) vs 3 infantry (150cr): ground can't touch air.
+        let (heli, inf) = duel(
+            &[UnitKind::Helicopter],
+            &[UnitKind::Infantry, UnitKind::Infantry, UnitKind::Infantry],
+        );
+        assert!(heli > 0 && inf == 0, "heli {heli} vs infantry {inf}");
+    }
+
     #[test]
     fn air_is_immune_to_ground_fire_but_dies_to_anti_air() {
         // A helicopter shreds adjacent infantry, which cannot hit air at all.

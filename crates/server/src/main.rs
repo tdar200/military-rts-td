@@ -10,7 +10,8 @@
 use rts_core::fixed::Fixed;
 use rts_core::game::map::Map;
 use rts_core::game::sim::{Command, PlayerId, Sim};
-use rts_core::game::stats::BuildingKind;
+use rts_core::game::stats::{BuildingKind, UnitKind};
+use rts_core::vec::Vec2;
 
 /// The outcome of a simulated match: who won (if anyone), how long it ran, the
 /// final state hash, and the full ordered input log that produced it.
@@ -77,7 +78,79 @@ fn replay(seed: u64, log: &[Vec<Command>]) -> u64 {
     sim.state_hash()
 }
 
+/// An army of `kind` units fitting roughly within `budget` credits.
+#[must_use]
+fn balance_army(kind: UnitKind, budget: i64) -> Vec<UnitKind> {
+    let cost = (kind.stats().cost.to_bits() / 65536).max(1);
+    let n = (budget / cost).max(1);
+    (0..n).map(|_| kind).collect()
+}
+
+/// Fights two small armies placed in mutual weapon range (no movement, so they
+/// resolve cleanly), returning `(surviving P0, surviving P1)`.
+#[must_use]
+fn balance_duel(a: &[UnitKind], b: &[UnitKind]) -> (usize, usize) {
+    let mut s = Sim::new(Map::new(40, 40), 1, Fixed::from_int(0));
+    for (i, &k) in a.iter().enumerate() {
+        let y = 18 + i32::try_from(i).unwrap_or(0);
+        s.add_unit(
+            PlayerId(0),
+            k,
+            Vec2::new(Fixed::from_int(18), Fixed::from_int(y)),
+        );
+    }
+    for (i, &k) in b.iter().enumerate() {
+        let y = 18 + i32::try_from(i).unwrap_or(0);
+        s.add_unit(
+            PlayerId(1),
+            k,
+            Vec2::new(Fixed::from_int(20), Fixed::from_int(y)),
+        );
+    }
+    for _ in 0..1200 {
+        s.step(&[]);
+    }
+    (s.unit_count(PlayerId(0)), s.unit_count(PlayerId(1)))
+}
+
+/// Prints an equal-cost duel matrix to eyeball unit balance.
+fn run_balance_report() {
+    let kinds = [
+        UnitKind::Infantry,
+        UnitKind::Tank,
+        UnitKind::AntiArmor,
+        UnitKind::Helicopter,
+    ];
+    let budget = 240;
+    println!("== Equal-cost duel matrix (~{budget} cr/side; row = P0 vs col = P1) ==");
+    print!("{:>11}", "");
+    for k in kinds {
+        print!("{:>14}", format!("{k:?}"));
+    }
+    println!();
+    for &a in &kinds {
+        print!("{:>11}", format!("{a:?}"));
+        for &b in &kinds {
+            let (pa, pb) = balance_duel(&balance_army(a, budget), &balance_army(b, budget));
+            let tag = if pa > 0 && pb == 0 {
+                "WIN"
+            } else if pb > 0 && pa == 0 {
+                "lose"
+            } else {
+                "draw"
+            };
+            print!("{:>14}", format!("{tag} {pa}/{pb}"));
+        }
+        println!();
+    }
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("balance") {
+        run_balance_report();
+        return;
+    }
+
     let seed = 2026;
     let outcome = simulate(seed, 8_000);
 
