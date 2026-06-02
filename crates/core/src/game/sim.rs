@@ -65,6 +65,10 @@ struct Entity {
 #[derive(Clone, Copy, Debug)]
 struct Player {
     credits: Fixed,
+    /// Bitmask of researched tech ids (bit i = tech i complete).
+    researched_techs: u32,
+    /// In-progress research: (tech id, ticks remaining). One at a time.
+    active_research: Option<(u32, u32)>,
 }
 
 /// A player or AI input, applied at a tick boundary.
@@ -98,6 +102,13 @@ pub enum Command {
         unit: EntityId,
         /// Destination.
         target: Vec2,
+    },
+    /// Begin researching a tech (costs credits; needs a research lab; powered to progress).
+    Research {
+        /// Owning player.
+        owner: PlayerId,
+        /// Tech id to research.
+        tech_id: u32,
     },
 }
 
@@ -244,6 +255,8 @@ impl Sim {
             map,
             players: [Player {
                 credits: starting_credits,
+                researched_techs: 0,
+                active_research: None,
             }; PLAYER_COUNT],
             entities: Vec::new(),
             free: Vec::new(),
@@ -315,6 +328,23 @@ impl Sim {
     #[must_use]
     pub const fn unit_cost(&self, kind: UnitKind) -> Fixed {
         self.balance.unit(kind).cost
+    }
+
+    /// Per-player research state: (researched bitmask, optional (tech id, ticks left)).
+    #[must_use]
+    pub fn research_state(&self, player: PlayerId) -> (u32, Option<(u32, u32)>) {
+        let p = &self.players[usize::from(player.0)];
+        (p.researched_techs, p.active_research)
+    }
+
+    /// Whether the player has at least one alive research lab.
+    #[must_use]
+    pub fn has_research_lab(&self, player: PlayerId) -> bool {
+        self.entities.iter().any(|e| {
+            e.alive
+                && e.owner == player
+                && matches!(e.kind, Kind::Building(BuildingKind::ResearchLab))
+        })
     }
 
     /// A player's `(produced, consumed)` power from living buildings. The player
@@ -433,6 +463,15 @@ impl Sim {
         h.write_u64(u64::from(self.wave_count));
         for p in &self.players {
             h.write_i64(p.credits.to_bits());
+            h.write_u64(u64::from(p.researched_techs));
+            match p.active_research {
+                Some((id, ticks)) => {
+                    h.write_u64(1);
+                    h.write_u64(u64::from(id));
+                    h.write_u64(u64::from(ticks));
+                }
+                None => h.write_u64(0),
+            }
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -526,6 +565,7 @@ impl Sim {
             self.apply_command(command);
         }
         let powered = self.run_economy();
+        self.run_research(powered);
         self.run_production(powered);
         self.run_waves();
         self.run_movement();
@@ -682,6 +722,24 @@ impl Sim {
                     self.order_unit_to(idx, target);
                 }
             }
+            Command::Research { owner, tech_id } => {
+                let p = usize::from(owner.0);
+                let Some(def) = crate::game::tech::tech(tech_id) else {
+                    return;
+                };
+                let already = self.players[p].researched_techs & (1u32 << tech_id) != 0;
+                let busy = self.players[p].active_research.is_some();
+                let prereq_ok = match def.prereq {
+                    Some(req) => self.players[p].researched_techs & (1u32 << req) != 0,
+                    None => true,
+                };
+                let has_lab = self.has_research_lab(owner);
+                if !already && !busy && prereq_ok && has_lab && self.players[p].credits >= def.cost
+                {
+                    self.players[p].credits = self.players[p].credits - def.cost;
+                    self.players[p].active_research = Some((tech_id, def.duration));
+                }
+            }
         }
     }
 
@@ -716,6 +774,27 @@ impl Sim {
             self.players[p].credits = self.players[p].credits + income[p] * factor;
         }
         powered
+    }
+
+    /// Advances each player's in-progress research, but only while powered.
+    ///
+    /// Runs every tick after `run_economy`, so the tick on which a research is
+    /// started also counts as its first tick of progress: a `duration`-tick tech
+    /// completes after `duration` powered ticks counting the start tick.
+    fn run_research(&mut self, powered: [bool; PLAYER_COUNT]) {
+        for (player, &is_powered) in self.players.iter_mut().zip(powered.iter()) {
+            if !is_powered {
+                continue;
+            }
+            if let Some((id, ticks)) = player.active_research {
+                if ticks <= 1 {
+                    player.researched_techs |= 1u32 << id;
+                    player.active_research = None;
+                } else {
+                    player.active_research = Some((id, ticks - 1));
+                }
+            }
+        }
     }
 
     fn run_production(&mut self, powered: [bool; PLAYER_COUNT]) {
@@ -1367,7 +1446,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 3_409_360_777_067_811_056);
+        assert_eq!(s.state_hash(), 4_096_103_218_700_100_208);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1537,6 +1616,49 @@ mod tests {
             &[UnitKind::Infantry, UnitKind::Infantry, UnitKind::Infantry],
         );
         assert!(heli > 0 && inf == 0, "heli {heli} vs infantry {inf}");
+    }
+
+    #[test]
+    fn research_completes_after_its_duration_and_sets_the_bit() {
+        use crate::game::tech::tech;
+        let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P0, BuildingKind::PowerPlant, 6, 20); // power so research advances
+        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 0,
+        }]);
+        let (mask, active) = s.research_state(P0);
+        assert_eq!(mask & 1, 0);
+        assert!(active.is_some());
+        let dur = tech(0).unwrap().duration;
+        for _ in 0..dur {
+            s.step(&[]);
+        }
+        let (mask, active) = s.research_state(P0);
+        assert_eq!(mask & 1, 1, "Weapons I bit set after duration");
+        assert!(active.is_none());
+    }
+
+    #[test]
+    fn research_is_rejected_without_a_lab_or_prereq() {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
+        // No ResearchLab yet → rejected.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 0,
+        }]);
+        assert!(s.research_state(P0).1.is_none());
+        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
+        // Weapons II (id 1) needs Weapons I (id 0) → rejected.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 1,
+        }]);
+        assert!(s.research_state(P0).1.is_none());
     }
 
     #[test]
