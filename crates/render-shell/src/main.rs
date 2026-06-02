@@ -128,7 +128,7 @@ async fn main() {
         }
 
         draw(&sim, selected, build_mode, cell, &sprites);
-        ui::draw(&sim, build_mode, paused, &sprites);
+        ui::draw(&sim, build_mode, paused, selected, &sprites);
         if let Some(winner) = sim.winner() {
             draw_game_over(winner, &sprites);
         }
@@ -255,7 +255,25 @@ fn draw(
     }
     draw_tracers(sim, cell);
     if let Some(kind) = build_mode {
+        draw_build_grid(sim, cell);
         draw_build_ghost(sim, kind, cell);
+    }
+}
+
+/// A faint tile grid over the battlefield, shown while placing a building.
+fn draw_build_grid(sim: &Sim, cell: f32) {
+    let cols = sim.map().width();
+    let rows = sim.map().height();
+    let col = Color::from_rgba(255, 255, 255, 16);
+    let bottom = WORLD_TOP + f32::from(rows) * cell;
+    let right = f32::from(cols) * cell;
+    for tx in 0..=cols {
+        let x = f32::from(tx) * cell;
+        draw_line(x, WORLD_TOP, x, bottom, 1.0, col);
+    }
+    for ty in 0..=rows {
+        let y = WORLD_TOP + f32::from(ty) * cell;
+        draw_line(0.0, y, right, y, 1.0, col);
     }
 }
 

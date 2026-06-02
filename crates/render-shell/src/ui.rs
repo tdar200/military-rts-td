@@ -147,10 +147,138 @@ pub fn handle_click(sim: &Sim, build_mode: &mut Option<BuildingKind>) -> Vec<Com
     cmds
 }
 
-/// Draws the resource bar and the command bar.
-pub fn draw(sim: &Sim, build_mode: Option<BuildingKind>, paused: bool, sprites: &Sprites) {
+/// Draws all HUD layers: minimap, resource bar, selection panel, command bar.
+pub fn draw(
+    sim: &Sim,
+    build_mode: Option<BuildingKind>,
+    paused: bool,
+    selected: Option<EntityId>,
+    sprites: &Sprites,
+) {
+    draw_minimap(sim);
     draw_top_bar(sim, paused, sprites);
+    draw_selection_panel(sim, selected, sprites);
     draw_command_bar(sim, build_mode, sprites);
+}
+
+fn fill_panel(x: f32, y: f32, w: f32, h: f32) {
+    draw_rectangle(x, y, w, h, PANEL);
+    draw_rectangle(x, y, w, 2.0, ACCENT);
+    draw_rectangle_lines(x, y, w, h, 1.0, BORDER);
+}
+
+const fn kind_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
+    match kind {
+        EntityKindView::Unit(UnitKind::Infantry) => ("Infantry", "Cheap anti-infantry"),
+        EntityKindView::Unit(UnitKind::Tank) => ("Tank", "Heavy armour, anti-ground"),
+        EntityKindView::Unit(UnitKind::AntiArmor) => {
+            ("Anti-Armor", "Beats tanks, weak vs infantry")
+        }
+        EntityKindView::Unit(UnitKind::Helicopter) => ("Helicopter", "Air — only AA can hit it"),
+        EntityKindView::Building(BuildingKind::CommandCenter) => {
+            ("Command Center", "Your base — protect it")
+        }
+        EntityKindView::Building(BuildingKind::PowerPlant) => ("Power Plant", "Supplies power"),
+        EntityKindView::Building(BuildingKind::Refinery) => ("Refinery", "+credits while powered"),
+        EntityKindView::Building(BuildingKind::Barracks) => ("Barracks", "Trains units"),
+        EntityKindView::Building(BuildingKind::GunTurret) => ("Gun Turret", "Anti-ground defence"),
+        EntityKindView::Building(BuildingKind::AaTurret) => ("AA Turret", "Anti-air defence"),
+        EntityKindView::Building(BuildingKind::Wall) => ("Wall", "Blocks movement"),
+    }
+}
+
+const fn action_kind(action: Action) -> EntityKindView {
+    match action {
+        Action::Build(k) => EntityKindView::Building(k),
+        Action::Train(k) => EntityKindView::Unit(k),
+    }
+}
+
+fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites) {
+    let Some(id) = selected else { return };
+    let Some(view) = sim.views().into_iter().find(|v| v.id == id) else {
+        return;
+    };
+    let (name, role) = kind_name_role(view.kind);
+    let panel_w = 252.0;
+    let panel_h = 66.0;
+    let px = 12.0;
+    let py = screen_height() - CMD_BAR_H - panel_h - 10.0;
+    fill_panel(px, py, panel_w, panel_h);
+    let texture = match view.kind {
+        EntityKindView::Building(k) => sprites.building(k),
+        EntityKindView::Unit(k) => sprites.unit(k),
+    };
+    if let Some(tex) = texture {
+        draw_texture_ex(
+            tex,
+            px + 10.0,
+            py + 16.0,
+            ACCENT,
+            DrawTextureParams {
+                dest_size: Some(vec2(40.0, 40.0)),
+                ..Default::default()
+            },
+        );
+    }
+    let text_x = px + 60.0;
+    text(name, text_x, py + 24.0, 20.0, TEXT, sprites.font_bold());
+    text(role, text_x, py + 41.0, 14.0, TEXT_DIM, sprites.font());
+    let frac = (view.hp.to_bits() as f32 / view.max_hp.to_bits() as f32).clamp(0.0, 1.0);
+    let bar_w = panel_w - 72.0;
+    let bar_y = py + 50.0;
+    draw_rectangle(text_x, bar_y, bar_w, 7.0, color_u8!(40, 46, 54, 255));
+    draw_rectangle(text_x, bar_y, bar_w * frac, 7.0, GOOD);
+}
+
+fn draw_minimap(sim: &Sim) {
+    let map_w = f32::from(sim.map().width());
+    let map_h = f32::from(sim.map().height());
+    let mm_w = 188.0;
+    let mm_h = mm_w * map_h / map_w;
+    let origin_x = screen_width() - mm_w - 12.0;
+    let origin_y = TOP_BAR_H + 10.0;
+    fill_panel(origin_x, origin_y, mm_w, mm_h);
+    let scale_x = mm_w / map_w;
+    let scale_y = mm_h / map_h;
+    for ty in 0..sim.map().height() {
+        for tx in 0..sim.map().width() {
+            if !sim
+                .map()
+                .tile(i32::from(tx), i32::from(ty))
+                .unwrap()
+                .passable
+            {
+                draw_rectangle(
+                    origin_x + f32::from(tx) * scale_x,
+                    origin_y + f32::from(ty) * scale_y,
+                    scale_x + 1.0,
+                    scale_y + 1.0,
+                    color_u8!(52, 60, 70, 255),
+                );
+            }
+        }
+    }
+    for v in sim.views() {
+        let col = if v.owner == HUMAN { ACCENT } else { BAD };
+        let dot_x = origin_x + (v.pos.x.to_bits() as f32 / 65536.0) * scale_x;
+        let dot_y = origin_y + (v.pos.y.to_bits() as f32 / 65536.0) * scale_y;
+        draw_rectangle(dot_x - 1.5, dot_y - 1.5, 3.0, 3.0, col);
+    }
+}
+
+fn draw_tooltip(button: Rect, action: Action, sprites: &Sprites) {
+    let (name, role) = kind_name_role(action_kind(action));
+    let font = sprites.font();
+    let font_bold = sprites.font_bold();
+    let tip_w = text_width(name, 17.0, font_bold).max(text_width(role, 14.0, font)) + 16.0;
+    let tip_h = 44.0;
+    let tip_x = button.x;
+    let tip_y = button.y - tip_h - 6.0;
+    draw_rectangle(tip_x, tip_y, tip_w, tip_h, color_u8!(10, 13, 17, 252));
+    draw_rectangle_lines(tip_x, tip_y, tip_w, tip_h, 1.0, ACCENT);
+    text(name, tip_x + 8.0, tip_y + 19.0, 17.0, TEXT, font_bold);
+    text(role, tip_x + 8.0, tip_y + 36.0, 14.0, TEXT_DIM, font);
 }
 
 fn segment(x: f32, label: &str, value: &str, vcolor: Color, sprites: &Sprites) -> f32 {
@@ -245,6 +373,9 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
             hover,
             price.to_bits() / 65536,
         );
+        if hover {
+            draw_tooltip(b.rect, b.action, sprites);
+        }
     }
 }
 
