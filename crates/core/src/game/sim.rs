@@ -1157,6 +1157,10 @@ impl Sim {
     /// infantry from an idle barracks, and attack-move idle units toward the
     /// enemy base. Pure function of state (no RNG), so AI-vs-AI replays bit-for-bit.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "AI command function covers build, train, research, and move logic; splitting adds indirection without clarity gain"
+    )]
     pub fn ai_commands(&self, player: PlayerId) -> Vec<Command> {
         let mut cmds = Vec::new();
         let Some(cc_tile) = self.command_center_tile(player) else {
@@ -1208,11 +1212,32 @@ impl Sim {
             building_this_tick = true;
         }
 
-        // Economy is up: train from an idle barracks. At Era 4, prefer Capital Ships.
+        // Antimatter infrastructure: once Era 1 is reached, build an Antimatter
+        // Plant if we don't have one yet. Era ≥ 1 gating keeps the 120-tick golden
+        // run (AI stays Era 0) unaffected.
+        if !building_this_tick
+            && self.player_era(player) >= 1
+            && !self.has_building(player, BuildingKind::AntimatterPlant)
+            && credits >= self.building_cost(BuildingKind::AntimatterPlant)
+        {
+            if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
+                cmds.push(Command::Build {
+                    owner: player,
+                    kind: BuildingKind::AntimatterPlant,
+                    x,
+                    y,
+                });
+            }
+            building_this_tick = true;
+        }
+
+        // Economy is up: train from an idle barracks. At Era 3+, prefer Capital Ships
+        // (also needs sufficient antimatter).
         if !building_this_tick {
             if let Some(barracks) = self.idle_barracks(player) {
                 let kind = if self.player_era(player) >= 3
                     && credits >= self.balance.unit(UnitKind::Capital).cost
+                    && self.antimatter(player) >= CAPITAL_ANTIMATTER_COST
                 {
                     UnitKind::Capital
                 } else {
@@ -2036,6 +2061,29 @@ mod tests {
         assert!(
             s.antimatter(P0) > crate::fixed::Fixed::ZERO,
             "antimatter accrues from a powered plant"
+        );
+    }
+
+    #[test]
+    fn ai_builds_antimatter_plant_by_era_1() {
+        // Over a long match (≈8000 ticks, seed 7) the AI should eventually build
+        // an Antimatter Plant once it reaches Era 1.
+        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        let mut plant_seen = false;
+        for _ in 0..8000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            if s.has_building(P0, BuildingKind::AntimatterPlant) {
+                plant_seen = true;
+                break;
+            }
+        }
+        assert!(
+            plant_seen,
+            "AI (P0) should build an Antimatter Plant after reaching Era 1"
         );
     }
 }
