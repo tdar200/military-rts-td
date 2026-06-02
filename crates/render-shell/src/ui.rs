@@ -275,6 +275,7 @@ const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
             ("Anti-Armor", "Beats tanks, weak vs infantry")
         }
         EntityKindView::Unit(UnitKind::Helicopter) => ("Gunship", "Air — only flak can hit it"),
+        EntityKindView::Unit(UnitKind::Capital) => ("Capital Ship", "Era-4 heavy warship"),
         EntityKindView::Building(BuildingKind::CommandCenter) => {
             ("Command Nexus", "Your base — protect it")
         }
@@ -298,6 +299,7 @@ const fn alien_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         EntityKindView::Unit(UnitKind::Tank) => ("Crawler", "Heavy armour, anti-ground"),
         EntityKindView::Unit(UnitKind::AntiArmor) => ("Lancer", "Beats armour, weak vs swarm"),
         EntityKindView::Unit(UnitKind::Helicopter) => ("Wasp", "Flyer — only flak can hit it"),
+        EntityKindView::Unit(UnitKind::Capital) => ("Leviathan", "Era-4 alien warship"),
         EntityKindView::Building(BuildingKind::CommandCenter) => {
             ("Core Node", "Alien core — destroy it")
         }

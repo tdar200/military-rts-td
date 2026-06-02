@@ -19,7 +19,7 @@ use crate::game::stats::{
 /// `Sim`'s existing call sites are unaffected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
-    units: [[[UnitStats; 4]; FACTION_COUNT]; ERA_COUNT],
+    units: [[[UnitStats; 5]; FACTION_COUNT]; ERA_COUNT],
     buildings: [[[BuildingStats; 8]; FACTION_COUNT]; ERA_COUNT],
 }
 
@@ -34,6 +34,7 @@ impl Balance {
                 UnitKind::Tank.stats(),
                 UnitKind::AntiArmor.stats(),
                 UnitKind::Helicopter.stats(),
+                UnitKind::Capital.stats(),
             ],
             [
                 BuildingKind::CommandCenter.stats(),
@@ -52,7 +53,7 @@ impl Balance {
     /// every era and faction. Used by data loaders; per-era/faction divergence is
     /// introduced in a later phase.
     #[must_use]
-    pub const fn from_tables(units: [UnitStats; 4], buildings: [BuildingStats; 8]) -> Self {
+    pub const fn from_tables(units: [UnitStats; 5], buildings: [BuildingStats; 8]) -> Self {
         Self {
             units: [[units; FACTION_COUNT]; ERA_COUNT],
             buildings: [[buildings; FACTION_COUNT]; ERA_COUNT],
@@ -68,6 +69,7 @@ impl Balance {
             UnitKind::Tank => tier[1],
             UnitKind::AntiArmor => tier[2],
             UnitKind::Helicopter => tier[3],
+            UnitKind::Capital => tier[4],
         }
     }
 
@@ -123,11 +125,12 @@ mod tests {
         Era::Interstellar,
     ];
     const FACTIONS: [Faction; 2] = [Faction::Human, Faction::Alien];
-    const UNIT_KINDS: [UnitKind; 4] = [
+    const UNIT_KINDS: [UnitKind; 5] = [
         UnitKind::Infantry,
         UnitKind::Tank,
         UnitKind::AntiArmor,
         UnitKind::Helicopter,
+        UnitKind::Capital,
     ];
     const BUILDING_KINDS: [BuildingKind; 8] = [
         BuildingKind::CommandCenter,
@@ -174,6 +177,15 @@ mod tests {
         assert!(!st.produces_units);
         assert!(st.attack.is_none());
         assert!(st.cost > crate::fixed::Fixed::ZERO);
+    }
+
+    #[test]
+    fn capital_ship_is_a_heavy_unit() {
+        use crate::game::stats::UnitKind;
+        let cap = UnitKind::Capital.stats();
+        let tank = UnitKind::Tank.stats();
+        assert!(cap.max_hp > tank.max_hp);
+        assert!(cap.attack.damage > tank.attack.damage);
     }
 
     #[test]

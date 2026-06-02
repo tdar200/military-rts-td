@@ -190,6 +190,8 @@ pub enum UnitKind {
     AntiArmor,
     /// Flying gunship: strong vs ground, only killable by anti-air.
     Helicopter,
+    /// Era-4 capital ship: massive HP and damage.
+    Capital,
 }
 
 /// The kinds of building.
@@ -288,6 +290,20 @@ impl UnitKind {
                 cost: Fixed::from_int(160),
                 build_time: 70,
                 is_air: true,
+            },
+            Self::Capital => UnitStats {
+                max_hp: Fixed::from_int(600),
+                armor: ArmorType::Plated,
+                attack: AttackProfile::ground(
+                    Fixed::from_int(40),
+                    DamageType::Explosive,
+                    Fixed::from_int(6),
+                    18,
+                ),
+                speed: Fixed::from_ratio(8, 100),
+                cost: Fixed::from_int(500),
+                build_time: 200,
+                is_air: false,
             },
         }
     }

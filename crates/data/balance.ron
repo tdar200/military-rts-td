@@ -25,6 +25,11 @@
         attack: (damage: 16, damage_type: Ballistic, range: 4, period: 9),
         speed_milli: 200, cost: 160, build_time: 70, is_air: true,
     ),
+    capital: (
+        max_hp: 600, armor: Plated,
+        attack: (damage: 40, damage_type: Explosive, range: 6, period: 18),
+        speed_milli: 80, cost: 500, build_time: 200,
+    ),
     command_center: (
         max_hp: 1000, power_produced: 0, power_consumed: 0, credit_income: 0,
         produces_units: false, attack: None, cost: 0,

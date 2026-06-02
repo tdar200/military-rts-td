@@ -217,6 +217,7 @@ const fn unit_tag(u: UnitKind) -> u64 {
         UnitKind::Tank => 2,
         UnitKind::AntiArmor => 3,
         UnitKind::Helicopter => 4,
+        UnitKind::Capital => 5,
     }
 }
 
@@ -715,6 +716,9 @@ impl Sim {
                 barracks,
                 kind,
             } => {
+                if matches!(kind, UnitKind::Capital) && self.players[usize::from(owner.0)].era < 3 {
+                    return;
+                }
                 let cost = self.balance.unit(kind).cost;
                 let p = usize::from(owner.0);
                 let ok = self.entity(barracks).is_some_and(|e| {

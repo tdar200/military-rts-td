@@ -25,7 +25,9 @@ const ALL: [&str; 11] = [
 const fn unit_name(kind: UnitKind) -> &'static str {
     match kind {
         UnitKind::Infantry => "infantry",
-        UnitKind::Tank => "tank",
+        // Capital reuses the tank sprite as a placeholder; update when a real
+        // capital asset is available.
+        UnitKind::Tank | UnitKind::Capital => "tank",
         UnitKind::AntiArmor => "anti_armor",
         UnitKind::Helicopter => "helicopter",
     }

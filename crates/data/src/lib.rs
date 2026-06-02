@@ -73,6 +73,7 @@ struct BalanceData {
     tank: UnitData,
     anti_armor: UnitData,
     helicopter: UnitData,
+    capital: UnitData,
     command_center: BuildingData,
     power_plant: BuildingData,
     refinery: BuildingData,
@@ -147,6 +148,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_unit(&data.tank),
             to_unit(&data.anti_armor),
             to_unit(&data.helicopter),
+            to_unit(&data.capital),
         ],
         [
             to_building(&data.command_center),
