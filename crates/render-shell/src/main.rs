@@ -54,7 +54,7 @@ enum Phase {
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Military RTS".to_owned(),
+        window_title: "Stellar Front".to_owned(),
         window_width: 1024,
         window_height: 768,
         high_dpi: true,
@@ -427,14 +427,14 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
     let c = cartouche();
     // --- regal wordmark hero (Cinzel, engraved gold) ---
     centered(
-        "FIELD COMMAND",
+        "EARTH COMMAND",
         c.y - 118.0,
         17.0,
         DECO_GOLD,
         sprites.font_regal(),
     );
     centered_shadow(
-        "MILITARY RTS",
+        "STELLAR FRONT",
         c.y - 80.0,
         62.0,
         DECO_GOLD_HI,
@@ -445,14 +445,14 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
     // --- parchment cartouche ---
     draw_cartouche(c);
     centered(
-        "CHOOSE YOUR BATTLEFIELD",
+        "CHOOSE YOUR FRONT",
         c.y + 28.0,
         21.0,
         INK,
         sprites.font_regal(),
     );
     centered(
-        "THREE THEATRES · ONE COMMAND",
+        "THREE FRONTS · ONE WAR",
         c.y + 46.0,
         13.0,
         INK_DIM,
@@ -558,9 +558,9 @@ fn draw_game_over(winner: PlayerId, sprites: &Sprites) {
     draw_rectangle(px, py, pw, 4.0, GOLD);
     draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
     let (msg, color) = if winner == HUMAN {
-        ("VICTORY", GOOD)
+        ("REPELLED", GOOD)
     } else {
-        ("DEFEAT", BAD)
+        ("OVERRUN", BAD)
     };
     centered(msg, py + 92.0, 56.0, color, sprites.font_display());
     centered(

@@ -1,9 +1,10 @@
-# Military RTS + Tower Defense
+# Stellar Front — Space RTS + Tower Defense
 
-A military real-time strategy game fused with tower defense and DOTA-style lane
-pressure: build a base and economy, defend with units and static towers, and push
-the lanes to destroy the enemy base. Single-player vs AI, architected so PvP can be
-added later.
+A space real-time strategy game fused with tower defense and DOTA-style lane
+pressure: defend Earth against an alien invasion — build a base and economy,
+hold the lanes with units and static towers, and push to destroy the alien base
+(its Core Node). Single-player vs AI, architected so PvP can be added later. (The campaign
+techs up across four eras; this is the Era-1 / modern slice.)
 
 The defining property: a **single deterministic Rust core** is shared by every
 client *and* the server, so they can never disagree.
@@ -39,7 +40,7 @@ cargo run --release -p rts            # bin name is `rts`
 ```
 
 Controls: left-click select unit, right-click move, `B/P/R/G` build
-(Barracks/Power/Refinery/Gun turret), `T` train infantry; tap-to-select / tap-to-move
+(Hangar/Reactor/Extractor/Laser Turret), `T` train infantry; tap-to-select / tap-to-move
 on touch screens.
 
 ## Develop

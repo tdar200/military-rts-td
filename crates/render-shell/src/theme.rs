@@ -86,9 +86,10 @@ pub const BAD: Color = color_u8!(226, 72, 61, 255);
 /// Player faction tint — a desaturated steel-teal that sits in the olive/gold
 /// palette instead of reading like a bright debug cyan.
 pub const TEAM_PLAYER: Color = color_u8!(90, 147, 168, 255);
-/// Enemy faction tint — a warm brick-red, kept less chromatic than the gold so it
-/// doesn't out-saturate the HUD accent.
-pub const TEAM_ENEMY: Color = color_u8!(200, 66, 58, 255);
+/// Alien (enemy) faction tint — an acidic chartreuse that reads as toxic and
+/// synthetic, kept hue-distinct from the green full-HP bars (`GOOD`) and bright
+/// against the darker terrain so enemy silhouettes stay legible.
+pub const TEAM_ENEMY: Color = color_u8!(140, 210, 30, 255);
 /// On-map selection ring — shares the active-gold language.
 pub const SELECT_RING: Color = GOLD_HI;
 /// Combat tracer line (warmed toward the gold family, translucent).
