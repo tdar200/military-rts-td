@@ -111,6 +111,15 @@ pub fn gather_commands(
             });
         }
     }
+    if is_key_pressed(KeyCode::C) {
+        if let Some(barracks) = first_friendly_barracks(sim) {
+            cmds.push(Command::Train {
+                owner: HUMAN,
+                barracks,
+                kind: UnitKind::Capital,
+            });
+        }
+    }
 
     // Touch (mobile): a tap on a friendly unit selects it; a tap on empty ground
     // moves the selected unit. Same command set as mouse/keyboard.

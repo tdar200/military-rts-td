@@ -29,6 +29,9 @@ const GROUP_GAP: f32 = 22.0;
 /// Desaturated tint for an unaffordable build icon.
 const ICON_DISABLED: Color = color_u8!(106, 101, 90, 255);
 
+/// Era name labels for the HUD indicator, indexed by era number (0–3).
+const ERA_NAMES: [&str; 4] = ["Modern", "Orbital", "Interplanetary", "Interstellar"];
+
 fn text(s: &str, x: f32, y: f32, size: f32, color: Color, font: Option<&Font>) {
     draw_text_ex(
         s,
@@ -60,7 +63,7 @@ struct Button {
     action: Action,
 }
 
-fn layout() -> [Button; 8] {
+fn layout() -> [Button; 9] {
     let w = 104.0;
     let h = CMD_BAR_H - 16.0;
     let pad = 6.0;
@@ -88,6 +91,7 @@ fn layout() -> [Button; 8] {
         mk(5, "Lab", 'L', Action::Build(BuildingKind::ResearchLab)),
         mk(6, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
         mk(7, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
+        mk(8, "Capital", 'C', Action::Train(UnitKind::Capital)),
     ]
 }
 
@@ -530,6 +534,12 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
     x += 20.0;
     let units = sim.unit_count(HUMAN).to_string();
     text(&units, x, 25.0, 18.0, TEXT, fb);
+    x += text_width(&units, 18.0, fb) + 18.0;
+    ribbon_divider(x - 9.0);
+
+    // ERA indicator — shows the human player's current era name.
+    let era = ERA_NAMES[(sim.player_era(HUMAN) as usize).min(3)];
+    text(era, x, 25.0, 18.0, DECO_GOLD, fb);
 
     // Incoming-wave alert pill (right).
     if let Some(ticks) = sim.ticks_until_next_wave() {
