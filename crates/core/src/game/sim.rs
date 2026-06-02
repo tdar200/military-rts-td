@@ -122,6 +122,30 @@ pub struct EntityView {
     pub max_hp: Fixed,
 }
 
+/// Configures periodic enemy waves — the attack/defend loop.
+///
+/// Every `interval` ticks (after `first_delay`) a growing group of `unit`s
+/// spawns at `spawn` for `attacker` and attack-moves toward `defender`'s base.
+#[derive(Clone, Copy, Debug)]
+pub struct WaveConfig {
+    /// Ticks before the first wave.
+    pub first_delay: u64,
+    /// Ticks between waves.
+    pub interval: u64,
+    /// Units in the first wave.
+    pub base_size: u32,
+    /// Extra units added per subsequent wave.
+    pub growth: u32,
+    /// World position units spawn at.
+    pub spawn: Vec2,
+    /// What to spawn.
+    pub unit: UnitKind,
+    /// Player the wave belongs to.
+    pub attacker: PlayerId,
+    /// Player the wave marches against.
+    pub defender: PlayerId,
+}
+
 /// The deterministic RTS world.
 #[derive(Clone, Debug)]
 pub struct Sim {
@@ -130,6 +154,8 @@ pub struct Sim {
     map: Map,
     players: [Player; PLAYER_COUNT],
     entities: Vec<Entity>,
+    waves: Option<WaveConfig>,
+    wave_count: u32,
 }
 
 const fn armor_of(kind: Kind) -> ArmorType {
@@ -199,7 +225,14 @@ impl Sim {
                 credits: starting_credits,
             }; PLAYER_COUNT],
             entities: Vec::new(),
+            waves: None,
+            wave_count: 0,
         }
+    }
+
+    /// Enables periodic enemy waves (the attack/defend loop).
+    pub const fn set_waves(&mut self, config: WaveConfig) {
+        self.waves = Some(config);
     }
 
     /// The current tick count.
@@ -304,6 +337,7 @@ impl Sim {
         let mut h = Fnv::new();
         h.write_u64(self.tick);
         h.write_u64(self.rng.current_state());
+        h.write_u64(u64::from(self.wave_count));
         for p in &self.players {
             h.write_i64(p.credits.to_bits());
         }
@@ -401,10 +435,97 @@ impl Sim {
         }
         let powered = self.run_economy();
         self.run_production(powered);
+        self.run_waves();
         self.run_movement();
         self.run_combat();
         self.clear_dead();
         self.tick += 1;
+    }
+
+    /// Spawns a scheduled enemy wave, if one is due this tick, and points it at
+    /// the defender's base.
+    fn run_waves(&mut self) {
+        let Some(cfg) = self.waves else { return };
+        if self.tick < cfg.first_delay {
+            return;
+        }
+        if !(self.tick - cfg.first_delay).is_multiple_of(cfg.interval) {
+            return;
+        }
+        let size = cfg.base_size + cfg.growth * self.wave_count;
+        let target = self.command_center_pos(cfg.defender);
+        for i in 0..size {
+            let offset = Vec2::new(Fixed::ZERO, Fixed::from_ratio(i64::from(i), 3));
+            let spawned = self.add_unit(cfg.attacker, cfg.unit, cfg.spawn + offset);
+            if let Some(t) = target {
+                self.order_unit_to(spawned.0 as usize, t);
+            }
+        }
+        self.wave_count += 1;
+    }
+
+    /// Sets a unit's move target and computes its A* path. Shared by the Move
+    /// command and wave spawning. If the target tile is blocked (e.g. it *is* a
+    /// building like the enemy Command Center), the unit paths to the nearest
+    /// passable tile beside it and then closes the last step directly — so
+    /// "attack the base" actually routes there.
+    fn order_unit_to(&mut self, idx: usize, target: Vec2) {
+        let start = self.world_to_tile(self.entities[idx].pos);
+        let goal_tile = self.world_to_tile(target);
+        let goal = if self.is_passable_tile(goal_tile) {
+            goal_tile
+        } else {
+            match self.nearest_passable_tile(goal_tile) {
+                Some(tile) => tile,
+                None => return,
+            }
+        };
+        if let Some(path) = find_path(&self.map, start, goal) {
+            let e = &mut self.entities[idx];
+            e.move_target = Some(target);
+            e.path = path;
+        }
+    }
+
+    fn is_passable_tile(&self, tile: (u16, u16)) -> bool {
+        self.map
+            .tile(i32::from(tile.0), i32::from(tile.1))
+            .is_some_and(|t| t.passable)
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "ring scan stays within the bounds-checked, non-negative u16 grid"
+    )]
+    fn nearest_passable_tile(&self, center: (u16, u16)) -> Option<(u16, u16)> {
+        let cx = i32::from(center.0);
+        let cy = i32::from(center.1);
+        for r in 1..=24i32 {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()) != r {
+                        continue;
+                    }
+                    let (x, y) = (cx + dx, cy + dy);
+                    if x >= 0 && y >= 0 && self.map.tile(x, y).is_some_and(|t| t.passable) {
+                        return Some((x as u16, y as u16));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn command_center_pos(&self, player: PlayerId) -> Option<Vec2> {
+        self.entities
+            .iter()
+            .find(|e| {
+                e.alive
+                    && e.owner == player
+                    && e.kind == Kind::Building(BuildingKind::CommandCenter)
+            })
+            .map(|e| e.pos)
     }
 
     fn entity(&self, id: EntityId) -> Option<&Entity> {
@@ -454,13 +575,7 @@ impl Sim {
                     e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_))
                 });
                 if valid {
-                    let start = self.world_to_tile(self.entities[idx].pos);
-                    let goal = self.world_to_tile(target);
-                    if let Some(path) = find_path(&self.map, start, goal) {
-                        let e = &mut self.entities[idx];
-                        e.move_target = Some(target);
-                        e.path = path;
-                    }
+                    self.order_unit_to(idx, target);
                 }
             }
         }
@@ -698,13 +813,7 @@ impl Sim {
     }
 
     fn enemy_command_center_pos(&self, player: PlayerId) -> Option<Vec2> {
-        let enemy = PlayerId(1 - player.0);
-        self.entities
-            .iter()
-            .find(|e| {
-                e.alive && e.owner == enemy && e.kind == Kind::Building(BuildingKind::CommandCenter)
-            })
-            .map(|e| e.pos)
+        self.command_center_pos(PlayerId(1 - player.0))
     }
 
     fn has_building(&self, player: PlayerId, kind: BuildingKind) -> bool {
@@ -776,7 +885,9 @@ impl Sim {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim, UnitKind};
+    use super::{
+        BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim, UnitKind, WaveConfig,
+    };
     use crate::fixed::Fixed;
     use crate::game::map::Map;
     use crate::vec::Vec2;
@@ -1046,6 +1157,64 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 550_683_050_117_153_338);
+        assert_eq!(s.state_hash(), 242_382_522_160_994_411);
+    }
+
+    fn wave_cfg() -> WaveConfig {
+        WaveConfig {
+            first_delay: 0,
+            interval: 50,
+            base_size: 2,
+            growth: 1,
+            spawn: v(36, 20),
+            unit: UnitKind::Infantry,
+            attacker: P1,
+            defender: P0,
+        }
+    }
+
+    #[test]
+    fn waves_spawn_on_schedule_and_grow() {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 3, 20);
+        s.set_waves(wave_cfg());
+        s.step(&[]); // tick 0 -> wave 0 (base_size = 2)
+        assert_eq!(s.unit_count(P1), 2);
+        for _ in 0..50 {
+            s.step(&[]);
+        }
+        // 51 steps total -> tick 50 fired wave 1 (size 3); none have died yet.
+        assert_eq!(s.unit_count(P1), 5);
+    }
+
+    #[test]
+    fn wave_units_march_toward_the_defender() {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 3, 20);
+        s.set_waves(wave_cfg());
+        s.step(&[]);
+        let uid = s.views().into_iter().find(|w| w.owner == P1).unwrap().id;
+        let x0 = s.position(uid).unwrap().x;
+        for _ in 0..20 {
+            s.step(&[]);
+        }
+        // Spawned at x=36, base at x=3, so it should be moving left.
+        assert!(s.position(uid).unwrap().x < x0);
+    }
+
+    #[test]
+    fn waves_are_deterministic() {
+        let run = |seed: u64| {
+            let mut s = Sim::new(Map::new(40, 40), seed, f(0));
+            s.add_building(P0, BuildingKind::CommandCenter, 3, 20);
+            s.set_waves(wave_cfg());
+            let mut hashes = Vec::new();
+            for _ in 0..120 {
+                s.step(&[]);
+                hashes.push(s.state_hash());
+            }
+            hashes
+        };
+        assert_eq!(run(7), run(7));
     }
 }
