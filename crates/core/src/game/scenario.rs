@@ -43,6 +43,9 @@ pub fn lane_defense(seed: u64) -> Sim {
     map.set_deposit(40, 15, ore);
     map.set_deposit(24, 3, alloy);
     map.set_deposit(24, 18, alloy);
+    // Home ore under the player's starting Extractor so the opening economy flows.
+    // (The enemy AI claims the ore scattered near its base.)
+    map.set_deposit(2, 12, ore);
 
     let mut sim = Sim::new(map, seed, Fixed::from_int(1500));
 
@@ -94,6 +97,9 @@ pub fn open_clash(seed: u64) -> Sim {
     map.set_deposit(31, 4, ore);
     map.set_deposit(31, 8, ore);
     map.set_deposit(20, 12, alloy);
+    // Home ore under each side's pre-placed Extractor (both have one here).
+    map.set_deposit(2, 21, ore); // player Refinery tile
+    map.set_deposit(37, 6, ore); // enemy Refinery tile
 
     let mut sim = Sim::new(map, seed, Fixed::from_int(2000));
 
@@ -140,6 +146,8 @@ pub fn crossroads(seed: u64) -> Sim {
     map.set_deposit(26, 23, ore);
     map.set_deposit(2, 15, alloy);
     map.set_deposit(27, 15, alloy);
+    // Home ore under the player's starting Extractor so the opening economy flows.
+    map.set_deposit(1, 5, ore);
 
     let mut sim = Sim::new(map, seed, Fixed::from_int(1500));
 
@@ -180,9 +188,19 @@ pub fn crossroads(seed: u64) -> Sim {
 /// so no two runs are alike.
 #[must_use]
 pub fn survival(seed: u64) -> Sim {
-    let map = procgen::generate(seed);
+    let mut map = procgen::generate(seed);
     let w = map.width();
     let mid = map.height() / 2;
+    // A rich HOME ore deposit under the starting Extractor, so the base mines from
+    // the first tick; the player expands to the procgen deposits as it depletes.
+    map.set_deposit(
+        2,
+        mid + 2,
+        Deposit {
+            kind: DepositKind::Ore,
+            remaining: 14_000,
+        },
+    );
     let mut sim = Sim::new(map, seed, Fixed::from_int(1800));
 
     // Player base (left margin, kept clear by procgen).
@@ -589,6 +607,27 @@ mod tests {
         assert!(
             s.unit_count(PlayerId(1)) > 0,
             "waves should begin after the grace period"
+        );
+    }
+
+    #[test]
+    fn survival_opening_economy_flows_during_the_peaceful_grace() {
+        // The player's pre-placed Extractor now sits on a home ore deposit, so the
+        // economy mines from the first tick — even with no player input.
+        let mut s = survival(3);
+        let start = s.minerals(PlayerId(0)).to_bits();
+        for _ in 0..2000 {
+            s.step(&[]);
+        }
+        assert!(
+            s.minerals(PlayerId(0)).to_bits() > start,
+            "opening economy should mine minerals from the home deposit"
+        );
+        // ...and the build-up stays peaceful (first wave is at tick 5400).
+        assert_eq!(
+            s.unit_count(PlayerId(1)),
+            0,
+            "no enemy units during the grace period"
         );
     }
 
