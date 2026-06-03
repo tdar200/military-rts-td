@@ -684,6 +684,15 @@ impl Sim {
         for &slot in &self.free {
             h.write_u64(u64::from(slot));
         }
+        for (x, y, dep) in self.map.deposits() {
+            h.write_u64(u64::from(x));
+            h.write_u64(u64::from(y));
+            h.write_u64(match dep.kind {
+                crate::game::map::DepositKind::Ore => 0,
+                crate::game::map::DepositKind::Alloy => 1,
+            });
+            h.write_u64(u64::from(dep.remaining));
+        }
         h.finish()
     }
 

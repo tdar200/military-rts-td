@@ -32,7 +32,7 @@ impl Tile {
 }
 
 /// The type of a resource deposit.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum DepositKind {
     /// Standard ore used for credit income.
     Ore,
@@ -41,7 +41,7 @@ pub enum DepositKind {
 }
 
 /// A finite resource deposit on a map tile.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct Deposit {
     /// What kind of resource this deposit contains.
     pub kind: DepositKind,
@@ -133,6 +133,20 @@ impl Map {
         }
     }
 
+    /// Iterates over all placed deposits as `(x, y, deposit)` in row-major order.
+    pub fn deposits(&self) -> impl Iterator<Item = (u16, u16, Deposit)> + '_ {
+        let width = usize::from(self.width);
+        self.deposits
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, slot)| {
+                let dep = (*slot)?;
+                let x = u16::try_from(i % width).unwrap_or(0);
+                let y = u16::try_from(i / width).unwrap_or(0);
+                Some((x, y, dep))
+            })
+    }
+
     /// Mines up to `amount` units from the deposit at `(x, y)`.
     ///
     /// Returns the actual amount mined (clamped to what remains). Clears the
@@ -195,15 +209,61 @@ mod tests {
     }
 
     #[test]
+    fn deposits_iter_lists_placed_deposits() {
+        let mut m = Map::new(4, 4);
+        m.set_deposit(
+            1,
+            1,
+            Deposit {
+                kind: DepositKind::Ore,
+                remaining: 100,
+            },
+        );
+        m.set_deposit(
+            3,
+            0,
+            Deposit {
+                kind: DepositKind::Alloy,
+                remaining: 50,
+            },
+        );
+        let mut got: alloc::vec::Vec<(u16, u16, DepositKind, u32)> = m
+            .deposits()
+            .map(|(x, y, d)| (x, y, d.kind, d.remaining))
+            .collect();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            alloc::vec![
+                (1, 1, DepositKind::Ore, 100),
+                (3, 0, DepositKind::Alloy, 50)
+            ]
+        );
+    }
+
+    #[test]
     fn deposits_default_empty_and_round_trip() {
         let mut m = Map::new(6, 4);
         assert_eq!(m.deposit(2, 1), None);
-        m.set_deposit(2, 1, Deposit { kind: DepositKind::Ore, remaining: 500 });
-        assert_eq!(m.deposit(2, 1), Some(Deposit { kind: DepositKind::Ore, remaining: 500 }));
+        m.set_deposit(
+            2,
+            1,
+            Deposit {
+                kind: DepositKind::Ore,
+                remaining: 500,
+            },
+        );
+        assert_eq!(
+            m.deposit(2, 1),
+            Some(Deposit {
+                kind: DepositKind::Ore,
+                remaining: 500
+            })
+        );
         assert_eq!(m.mine(2, 1, 200), 200);
         assert_eq!(m.deposit(2, 1).unwrap().remaining, 300);
         assert_eq!(m.mine(2, 1, 999), 300); // clamps to remaining
-        assert_eq!(m.deposit(2, 1), None);  // exhausted -> cleared
-        assert_eq!(m.mine(5, 5, 10), 0);    // out of bounds / no deposit
+        assert_eq!(m.deposit(2, 1), None); // exhausted -> cleared
+        assert_eq!(m.mine(5, 5, 10), 0); // out of bounds / no deposit
     }
 }
