@@ -31,11 +31,11 @@ pub fn lane_defense(seed: u64) -> Sim {
     // wall band rows 9..=11 and the building tiles).
     let ore = Deposit {
         kind: DepositKind::Ore,
-        remaining: 500,
+        remaining: 11_000,
     };
     let alloy = Deposit {
         kind: DepositKind::Alloy,
-        remaining: 300,
+        remaining: 6_000,
     };
     map.set_deposit(8, 5, ore);
     map.set_deposit(8, 15, ore);
@@ -83,11 +83,11 @@ pub fn open_clash(seed: u64) -> Sim {
     // Ore near each base corner; alloy in the contested centre.
     let ore = Deposit {
         kind: DepositKind::Ore,
-        remaining: 500,
+        remaining: 11_000,
     };
     let alloy = Deposit {
         kind: DepositKind::Alloy,
-        remaining: 300,
+        remaining: 6_000,
     };
     map.set_deposit(8, 17, ore);
     map.set_deposit(8, 21, ore);
@@ -128,11 +128,11 @@ pub fn crossroads(seed: u64) -> Sim {
     // Ore near each base corner; alloy on the open flanks beside the fortress.
     let ore = Deposit {
         kind: DepositKind::Ore,
-        remaining: 500,
+        remaining: 11_000,
     };
     let alloy = Deposit {
         kind: DepositKind::Alloy,
-        remaining: 300,
+        remaining: 6_000,
     };
     map.set_deposit(7, 3, ore);
     map.set_deposit(3, 7, ore);

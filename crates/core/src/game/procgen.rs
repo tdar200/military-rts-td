@@ -90,7 +90,9 @@ pub fn generate(seed: u64) -> Map {
         mid,
         Deposit {
             kind: DepositKind::Ore,
-            remaining: 600,
+            // ~1.5 min of mining at 5/tick (30 Hz) — a deposit you settle and hold,
+            // not one that vanishes in seconds. Finite, so you still expand later.
+            remaining: 14_000,
         },
     );
     let extra_ore = 4 + (rng.next() % 4) as u16; // 4..=7
@@ -111,9 +113,9 @@ pub fn generate(seed: u64) -> Map {
                 DepositKind::Alloy
             };
             let remaining = if matches!(kind, DepositKind::Ore) {
-                500
+                11_000
             } else {
-                300
+                6_000
             };
             map.set_deposit(x, y, Deposit { kind, remaining });
             placed += 1;
