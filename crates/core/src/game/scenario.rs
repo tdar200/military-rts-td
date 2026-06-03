@@ -631,7 +631,13 @@ mod tests {
         let mut last_waves = 0;
         let mut winner = None;
         for t in 0..30_000u64 {
-            let cmds = s.ai_commands(PlayerId(0)); // player-AI builds + fights
+            let mut cmds = s.ai_commands(PlayerId(0)); // player-AI builds + fights
+                                                       // Mirror the shell exactly: the beachhead AI acts once the first wave
+                                                       // has spawned (render-shell main.rs gates it the same way), so enemy
+                                                       // Tanks/Helis cast their abilities and the beachhead expands.
+            if s.waves_survived() > 0 {
+                cmds.extend(s.ai_commands(PlayerId(1)));
+            }
             s.step(&cmds);
             let w = s.waves_survived();
             if w != last_waves {

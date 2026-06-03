@@ -4,6 +4,7 @@
 //! Submodules are added as the gameplay grows: the battlefield [`map`], the
 //! economy, buildings, units, combat, pathfinding, and AI.
 
+pub mod ability;
 pub mod balance;
 pub mod hex;
 pub mod lockstep;

@@ -69,6 +69,10 @@ struct Entity {
     kills: u32,
     /// Veterancy rank (0..=3), derived from `kills`; boosts outgoing damage.
     rank: u8,
+    /// Ticks until this unit's ability is ready again (0 = ready).
+    ability_cd: u32,
+    /// Remaining EMP-stun ticks: while > 0 the entity neither moves nor fires.
+    stun_ticks: u32,
 }
 
 /// Veterancy rank for a given kill count (0 → 3, capped).
@@ -241,6 +245,16 @@ pub enum Command {
         /// Track index (0..`DOCTRINE_TRACKS`).
         track: u8,
     },
+    /// Cast a unit's active ability at a world position (see [`crate::game::ability`]).
+    /// Validated and resolved instantly; the per-unit cooldown is the rate limiter.
+    UseAbility {
+        /// Owning player.
+        owner: PlayerId,
+        /// The casting unit.
+        unit: EntityId,
+        /// Target point — must be within the ability's range of the caster.
+        target: Vec2,
+    },
 }
 
 /// Building or unit, for the render/UI layer (public projection of the internal
@@ -272,6 +286,10 @@ pub struct EntityView {
     pub shield: Fixed,
     /// Maximum energy shield (owner's researched shield max).
     pub max_shield: Fixed,
+    /// Ticks until this unit's ability is ready (0 = ready; see [`crate::game::ability`]).
+    pub ability_cd: u32,
+    /// Remaining EMP-stun ticks (> 0 ⇒ the entity can't move or fire).
+    pub stun_ticks: u32,
 }
 
 /// Configures periodic enemy waves — the attack/defend loop.
@@ -771,6 +789,8 @@ impl Sim {
                 max_hp: max_hp(&self.balance, e.kind),
                 shield: e.shield,
                 max_shield: self.player_shield_max(e.owner),
+                ability_cd: e.ability_cd,
+                stun_ticks: e.stun_ticks,
             })
             .collect()
     }
@@ -847,6 +867,8 @@ impl Sim {
             h.write_u64(u64::from(e.cooldown));
             h.write_u64(u64::from(e.kills));
             h.write_u64(u64::from(e.rank));
+            h.write_u64(u64::from(e.ability_cd));
+            h.write_u64(u64::from(e.stun_ticks));
             match e.move_target {
                 Some(t) => {
                     h.write_u64(1);
@@ -914,6 +936,8 @@ impl Sim {
             build_progress: 0,
             kills: 0,
             rank: 0,
+            ability_cd: 0,
+            stun_ticks: 0,
         })
     }
 
@@ -941,6 +965,8 @@ impl Sim {
             build_progress: 0,
             kills: 0,
             rank: 0,
+            ability_cd: 0,
+            stun_ticks: 0,
         })
     }
 
@@ -956,8 +982,22 @@ impl Sim {
         self.run_movement();
         self.run_shields();
         self.run_combat();
+        self.run_status();
         self.clear_dead();
         self.tick += 1;
+    }
+
+    /// Ticks down per-entity ability cooldowns and EMP stuns. Runs at the end of
+    /// the tick, so an effect applied this tick is felt this tick and a
+    /// `duration`-tick stun suppresses exactly `duration` ticks of action.
+    fn run_status(&mut self) {
+        for e in &mut self.entities {
+            if !e.alive {
+                continue;
+            }
+            e.ability_cd = e.ability_cd.saturating_sub(1);
+            e.stun_ticks = e.stun_ticks.saturating_sub(1);
+        }
     }
 
     /// Spawns a scheduled enemy wave, if one is due this tick, and points it at
@@ -1170,7 +1210,99 @@ impl Sim {
                 }
             }
             Command::Ascend { owner, track } => self.apply_ascend(owner, track),
+            Command::UseAbility {
+                owner,
+                unit,
+                target,
+            } => self.apply_use_ability(owner, unit, target),
         }
+    }
+
+    /// Casts `unit`'s ability at `target`: validate (alive, owned, carries an
+    /// ability, off cooldown, not stunned, target in range), resolve the effect
+    /// instantly over the entity list in index order, then start the cooldown.
+    /// Deterministic — fixed magnitudes, no RNG, order-independent per cast.
+    fn apply_use_ability(&mut self, owner: PlayerId, unit: EntityId, target: Vec2) {
+        use crate::game::ability::{ability_for, def, AbilityKind};
+        let idx = unit.0 as usize;
+        let Some(caster) = self.entities.get(idx) else {
+            return;
+        };
+        if !caster.alive || caster.owner != owner || caster.ability_cd > 0 || caster.stun_ticks > 0
+        {
+            return;
+        }
+        let Kind::Unit(uk) = caster.kind else { return };
+        let Some(kind) = ability_for(uk) else { return };
+        let d = def(kind);
+        if (target - caster.pos).length_squared() > d.range * d.range {
+            return;
+        }
+        let radius_sq = d.radius * d.radius;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "tick fits u32 for any real game"
+        )]
+        let tick = self.tick as u32;
+        match kind {
+            AbilityKind::Barrage => {
+                // Shell volley: shield-absorbing damage to every enemy in the
+                // blast (buildings included — it is a siege tool). Kills credit
+                // the caster's veterancy, mirroring run_combat.
+                let mut kills = 0u32;
+                for e in &mut self.entities {
+                    if !e.alive || e.owner == owner {
+                        continue;
+                    }
+                    if (e.pos - target).length_squared() > radius_sq {
+                        continue;
+                    }
+                    e.last_combat_tick = tick;
+                    let was_alive = e.hp > Fixed::ZERO;
+                    let absorbed = if e.shield < d.magnitude {
+                        e.shield
+                    } else {
+                        d.magnitude
+                    };
+                    e.shield = e.shield - absorbed;
+                    e.hp = e.hp - (d.magnitude - absorbed);
+                    if was_alive && e.hp <= Fixed::ZERO {
+                        kills += 1;
+                    }
+                }
+                let caster = &mut self.entities[idx];
+                caster.kills += kills;
+                caster.rank = rank_for_kills(caster.kills);
+            }
+            AbilityKind::EmpBurst => {
+                // Stun enemy UNITS in the blast (structures shrug it off). A fresh
+                // stun never shortens one already in effect.
+                for e in &mut self.entities {
+                    if !e.alive || e.owner == owner || !matches!(e.kind, Kind::Unit(_)) {
+                        continue;
+                    }
+                    if (e.pos - target).length_squared() > radius_sq {
+                        continue;
+                    }
+                    e.stun_ticks = e.stun_ticks.max(d.duration);
+                }
+            }
+            AbilityKind::NaniteField => {
+                // Heal friendly UNITS in the field, capped at their max HP.
+                for e in &mut self.entities {
+                    if !e.alive || e.owner != owner || !matches!(e.kind, Kind::Unit(_)) {
+                        continue;
+                    }
+                    if (e.pos - target).length_squared() > radius_sq {
+                        continue;
+                    }
+                    let cap = max_hp(&self.balance, e.kind);
+                    let healed = e.hp + d.magnitude;
+                    e.hp = if healed > cap { cap } else { healed };
+                }
+            }
+        }
+        self.entities[idx].ability_cd = d.cooldown;
     }
 
     /// Buys the next level of doctrine `track` for `owner`, if unlocked and
@@ -1434,6 +1566,10 @@ impl Sim {
             if !e.alive {
                 continue;
             }
+            // EMP-stunned units hold position.
+            if e.stun_ticks > 0 {
+                continue;
+            }
             let Kind::Unit(uk) = e.kind else { continue };
             let Some(target) = e.move_target else {
                 continue;
@@ -1532,6 +1668,10 @@ impl Sim {
         let mut candidates: Vec<usize> = Vec::new();
         for (i, e) in self.entities.iter_mut().enumerate() {
             if !e.alive {
+                continue;
+            }
+            // EMP-stunned entities can't fire (their weapon stays frozen too).
+            if e.stun_ticks > 0 {
                 continue;
             }
             let Some(profile) = attack_of(&self.balance, e.kind) else {
@@ -1678,8 +1818,81 @@ impl Sim {
     )]
     pub fn ai_commands(&self, player: PlayerId) -> Vec<Command> {
         let mut cmds = Vec::new();
+
+        // Abilities: cast the first ready tactical ability with a worthwhile
+        // target — Barrage/EMP at the first enemy with ≥ 3 foes packed inside the
+        // blast, Nanite Field when ≥ 2 nearby allies run below half HP. Index
+        // order, fixed thresholds, no RNG; at most one cast per tick keeps the
+        // command volume flat. Costs nothing, so it never fights the build budget.
+        'ability: for (i, e) in self.entities.iter().enumerate() {
+            if !e.alive || e.owner != player || e.ability_cd > 0 || e.stun_ticks > 0 {
+                continue;
+            }
+            let Kind::Unit(uk) = e.kind else { continue };
+            let Some(kind) = crate::game::ability::ability_for(uk) else {
+                continue;
+            };
+            let d = crate::game::ability::def(kind);
+            let radius_sq = d.radius * d.radius;
+            let range_sq = d.range * d.range;
+            let unit_id = EntityId(u32::try_from(i).unwrap_or(u32::MAX));
+            match kind {
+                crate::game::ability::AbilityKind::Barrage
+                | crate::game::ability::AbilityKind::EmpBurst => {
+                    for t in &self.entities {
+                        if !t.alive || t.owner == player {
+                            continue;
+                        }
+                        if (t.pos - e.pos).length_squared() > range_sq {
+                            continue;
+                        }
+                        let packed = self
+                            .entities
+                            .iter()
+                            .filter(|o| {
+                                o.alive
+                                    && o.owner != player
+                                    && (o.pos - t.pos).length_squared() <= radius_sq
+                            })
+                            .count();
+                        if packed >= 3 {
+                            cmds.push(Command::UseAbility {
+                                owner: player,
+                                unit: unit_id,
+                                target: t.pos,
+                            });
+                            break 'ability;
+                        }
+                    }
+                }
+                crate::game::ability::AbilityKind::NaniteField => {
+                    let wounded = self
+                        .entities
+                        .iter()
+                        .filter(|o| {
+                            o.alive
+                                && o.owner == player
+                                && matches!(o.kind, Kind::Unit(_))
+                                && (o.pos - e.pos).length_squared() <= radius_sq
+                                && o.hp + o.hp < max_hp(&self.balance, o.kind)
+                        })
+                        .count();
+                    if wounded >= 2 {
+                        cmds.push(Command::UseAbility {
+                            owner: player,
+                            unit: unit_id,
+                            target: e.pos,
+                        });
+                        break 'ability;
+                    }
+                }
+            }
+        }
+
         let Some(cc_tile) = self.command_center_tile(player) else {
-            return cmds; // no base, no orders
+            // No base left: no building/training — but the army above still casts
+            // its abilities, so a razed-beachhead wave keeps fighting smart.
+            return cmds;
         };
         let minerals = self.minerals(player);
         let enemy_cc = self.command_center_tile(PlayerId(1 - player.0));
@@ -2364,7 +2577,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 10_209_446_185_356_297_769);
+        assert_eq!(s.state_hash(), 2_298_403_954_213_102_825);
     }
 
     #[test]
@@ -2754,6 +2967,191 @@ mod tests {
         assert!(
             saw_capital,
             "AI should mine alloy and field a Capital ship by era 3"
+        );
+    }
+
+    #[test]
+    fn barrage_damages_clustered_enemies_and_starts_cooldown() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        // Tank at gun-safe distance (5 > gun range 4) but inside Barrage range (6).
+        let tank = s.add_unit(P0, UnitKind::Tank, v(2, 3));
+        let foes = [
+            s.add_unit(P1, UnitKind::Infantry, v(7, 3)),
+            s.add_unit(P1, UnitKind::Infantry, v(7, 4)),
+            s.add_unit(P1, UnitKind::Infantry, v(8, 3)),
+        ];
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: tank,
+            target: v(7, 3),
+        }]);
+        // 16 blast damage each (no shields researched): 50 → 34.
+        for id in foes {
+            assert_eq!(
+                s.entities[id.0 as usize].hp.to_bits(),
+                f(34).to_bits(),
+                "every unit in the blast takes the full volley"
+            );
+        }
+        assert!(
+            s.entities[tank.0 as usize].ability_cd > 0,
+            "the cast must start the cooldown"
+        );
+        // An immediate recast is rejected: the clump takes no further damage.
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: tank,
+            target: v(7, 3),
+        }]);
+        assert_eq!(
+            s.entities[foes[0].0 as usize].hp.to_bits(),
+            f(34).to_bits(),
+            "cooldown must block a recast"
+        );
+    }
+
+    #[test]
+    fn emp_stuns_units_for_its_duration_then_releases() {
+        let mut s = Sim::new(Map::new(30, 20), 1, f(0));
+        // Distance 5: inside EMP range (5) but outside the heli's gun (4), so the
+        // target is stunned, not shot.
+        let heli = s.add_unit(P0, UnitKind::Helicopter, v(3, 3));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(8, 3));
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: heli,
+            target: v(8, 3),
+        }]);
+        assert!(s.entities[foe.0 as usize].stun_ticks > 0, "EMP must stun");
+        let start_x = s.entities[foe.0 as usize].pos.x.to_bits();
+        // Orders are accepted but held while stunned.
+        s.step(&[Command::Move {
+            owner: P1,
+            unit: foe,
+            target: v(14, 3),
+        }]);
+        assert_eq!(
+            s.entities[foe.0 as usize].pos.x.to_bits(),
+            start_x,
+            "stunned units hold position"
+        );
+        // Once the stun expires the held order resumes.
+        for _ in 0..120 {
+            s.step(&[]);
+        }
+        assert_eq!(s.entities[foe.0 as usize].stun_ticks, 0);
+        assert_ne!(
+            s.entities[foe.0 as usize].pos.x.to_bits(),
+            start_x,
+            "the unit must resume moving after the stun"
+        );
+    }
+
+    #[test]
+    fn nanite_field_heals_wounded_allies_capped_at_max() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        let capital = s.add_unit(P0, UnitKind::Capital, v(5, 5));
+        let infantry = s.add_unit(P0, UnitKind::Infantry, v(6, 5));
+        let tank = s.add_unit(P0, UnitKind::Tank, v(5, 6));
+        s.entities[infantry.0 as usize].hp = f(10); // max 50: 10 + 60 caps at 50
+        s.entities[tank.0 as usize].hp = f(200); // max 220: 200 + 60 caps at 220
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: capital,
+            target: v(5, 5),
+        }]);
+        assert_eq!(
+            s.entities[infantry.0 as usize].hp.to_bits(),
+            f(50).to_bits(),
+            "healing must cap at max HP"
+        );
+        assert_eq!(
+            s.entities[tank.0 as usize].hp.to_bits(),
+            f(220).to_bits(),
+            "partial heal also caps at max HP"
+        );
+    }
+
+    #[test]
+    fn use_ability_is_validated() {
+        let mut s = Sim::new(Map::new(30, 20), 1, f(0));
+        let tank = s.add_unit(P0, UnitKind::Tank, v(2, 3));
+        let grunt = s.add_unit(P0, UnitKind::Infantry, v(2, 5));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(8, 3));
+        // Wrong owner: P1 cannot cast P0's tank.
+        s.step(&[Command::UseAbility {
+            owner: P1,
+            unit: tank,
+            target: v(8, 3),
+        }]);
+        // Out of range: Barrage range is 6, target at distance 12.
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: tank,
+            target: v(14, 3),
+        }]);
+        // No ability: infantry carries none.
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: grunt,
+            target: v(8, 3),
+        }]);
+        assert_eq!(
+            s.entities[foe.0 as usize].hp.to_bits(),
+            f(50).to_bits(),
+            "no invalid cast may deal damage"
+        );
+        assert_eq!(
+            s.entities[tank.0 as usize].ability_cd, 0,
+            "rejected casts must not start the cooldown"
+        );
+    }
+
+    #[test]
+    fn ai_casts_an_ability_at_a_packed_clump() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 8);
+        s.add_unit(P0, UnitKind::Tank, v(2, 3));
+        for i in 0..3i32 {
+            s.add_unit(P1, UnitKind::Infantry, v(7, 3 + i));
+        }
+        let cmds = s.ai_commands(P0);
+        assert!(
+            cmds.iter().any(|c| matches!(c, Command::UseAbility { .. })),
+            "the AI should barrage a packed enemy clump"
+        );
+    }
+
+    #[test]
+    fn abilities_are_deterministic() {
+        let build = || {
+            let mut s = Sim::new(Map::new(20, 20), 9, f(0));
+            let t = s.add_unit(P0, UnitKind::Tank, v(2, 3));
+            for i in 0..3i32 {
+                s.add_unit(P1, UnitKind::Infantry, v(7, 3 + i));
+            }
+            (s, t)
+        };
+        let (mut a, ta) = build();
+        let (mut b, tb) = build();
+        for _ in 0..200 {
+            let cmd_a = [Command::UseAbility {
+                owner: P0,
+                unit: ta,
+                target: v(7, 3),
+            }];
+            let cmd_b = [Command::UseAbility {
+                owner: P0,
+                unit: tb,
+                target: v(7, 3),
+            }];
+            a.step(&cmd_a);
+            b.step(&cmd_b);
+        }
+        assert_eq!(
+            a.state_hash(),
+            b.state_hash(),
+            "identical ability usage must stay bit-identical"
         );
     }
 
