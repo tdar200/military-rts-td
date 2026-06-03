@@ -30,6 +30,7 @@ mod view;
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
 use rts_core::game::hex;
+use rts_core::game::map::DepositKind;
 use rts_core::game::perk;
 use rts_core::game::scenario::Scenario;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
@@ -1212,6 +1213,8 @@ fn draw(
     let ox = board_origin_x(sim, cell) + sx;
     let wtop = WORLD_TOP + sy;
     draw_ground(sim, cell, ox, wtop);
+    // Resource deposits sit on the ground, above the terrain but under pieces/fog.
+    draw_deposits(sim, cell, ox, wtop);
     // Scorch decals sit on the ground, under terrain and pieces.
     particles.draw_scorches(ox, wtop, cell);
     draw_terrain(sim, cell, ox, wtop);
@@ -1534,6 +1537,26 @@ fn mouse_hex(sim: &Sim, cell: f32) -> (u16, u16) {
     hex::from_world(SimVec2::new(wx, wy), sim.map().width(), sim.map().height())
 }
 
+/// Draws a small cluster of diamonds on each deposit tile so resource nodes read
+/// as distinct map features: cyan (`GOLD`) for Ore, amber (`WARN`) for Alloy.
+/// Placed after `draw_ground` so deposits sit on the ground under pieces and fog.
+fn draw_deposits(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+    let r = cell * 0.16;
+    for (x, y, dep) in sim.map().deposits() {
+        let (cx, cy) = hex_center_px(x, y, cell, ox, wtop);
+        let (fill, rim) = match dep.kind {
+            DepositKind::Ore => (GOLD, with_alpha(GOLD_HI, 0.55)),
+            DepositKind::Alloy => (WARN, with_alpha(WARN, 0.55)),
+        };
+        // Faint ring so the cluster reads as a resource node.
+        draw_circle_lines(cx, cy, r * 2.6, 1.0, rim);
+        // Cluster of 4 small diamonds offset from the center.
+        for (dx, dy) in [(-r, 0.0_f32), (r, 0.0), (0.0, -r), (0.0, r)] {
+            draw_poly(cx + dx, cy + dy, 4, r, 45.0, fill);
+        }
+    }
+}
+
 /// Faint hex outlines over buildable cells, shown while placing a building.
 fn draw_build_grid(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     let col = Color::from_rgba(255, 255, 255, 24);
@@ -1566,7 +1589,9 @@ fn draw_tracers(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
 }
 
 /// Draws a translucent placement ghost on the moused hex: green if buildable and
-/// affordable, red otherwise.
+/// affordable (and on a deposit for extractors), red otherwise.
+/// For `Refinery` and `AntimatterPlant` (extractors), also outlines every deposit
+/// tile in cyan so the player can see where extractors belong.
 fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32) {
     let (col, row) = mouse_hex(sim, cell);
     let buildable = sim
@@ -1574,20 +1599,28 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32
         .tile(i32::from(col), i32::from(row))
         .is_some_and(|t| t.buildable);
     let affordable = sim.minerals(HUMAN) >= sim.building_cost(kind);
-    let fill = if buildable && affordable {
+    let is_extractor = matches!(kind, BuildingKind::Refinery | BuildingKind::AntimatterPlant);
+
+    // For extractors: outline all deposit tiles in cyan so the player sees where to place.
+    if is_extractor {
+        for (dx, dy, _dep) in sim.map().deposits() {
+            let (dcx, dcy) = hex_center_px(dx, dy, cell, ox, wtop);
+            draw_hex_outline(dcx, dcy, cell, 2.0, GOLD);
+        }
+    }
+
+    let on_deposit = is_extractor && sim.map().deposit(col, row).is_some();
+    // Ghost is green when both buildable+affordable, and — for extractors — when
+    // the moused tile has a deposit (so the player gets confirmation they're on-site).
+    let good = buildable && affordable && (!is_extractor || on_deposit);
+    let fill = if good {
         Color::from_rgba(80, 200, 120, 120)
     } else {
         Color::from_rgba(200, 80, 80, 120)
     };
     let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
     draw_hex(cx, cy, cell, fill);
-    draw_hex_outline(
-        cx,
-        cy,
-        cell,
-        2.0,
-        if buildable && affordable { GOOD } else { BAD },
-    );
+    draw_hex_outline(cx, cy, cell, 2.0, if good { GOOD } else { BAD });
 }
 
 /// Draws impassable terrain as **mountain hexes** (ramparts): a dark rampart body
