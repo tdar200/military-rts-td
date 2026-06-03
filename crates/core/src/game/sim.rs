@@ -1125,6 +1125,39 @@ impl Sim {
             self.players[p].minerals = self.players[p].minerals + credit_income * factor;
             self.players[p].alloys = self.players[p].alloys + am_income[p] * factor;
         }
+        // Extractors mine the deposit they stand on (throttled by power like income).
+        let mut to_mine: alloc::vec::Vec<(u16, u16, u8, i32)> = alloc::vec::Vec::new();
+        for e in &self.entities {
+            if !e.alive {
+                continue;
+            }
+            if let Kind::Building(b) = e.kind {
+                let rate = self.balance.building(b).mine_rate;
+                if rate > 0 {
+                    if let Some((tx, ty)) = e.tile {
+                        to_mine.push((tx, ty, e.owner.0, rate));
+                    }
+                }
+            }
+        }
+        for (tx, ty, owner, rate) in to_mine {
+            let Some(dep) = self.map.deposit(tx, ty) else {
+                continue;
+            };
+            let p = usize::from(owner);
+            let throttle = if powered[p] { rate } else { rate / 2 };
+            let want = u32::try_from(throttle.max(0)).unwrap_or(0);
+            let mined = self.map.mine(tx, ty, want);
+            let amount = Fixed::from_int(i32::try_from(mined).unwrap_or(0));
+            match dep.kind {
+                crate::game::map::DepositKind::Ore => {
+                    self.players[p].minerals = self.players[p].minerals + amount;
+                }
+                crate::game::map::DepositKind::Alloy => {
+                    self.players[p].alloys = self.players[p].alloys + amount;
+                }
+            }
+        }
         powered
     }
 
@@ -1706,23 +1739,46 @@ mod tests {
     }
 
     #[test]
-    fn income_accrues_when_powered() {
-        let mut s = Sim::new(Map::new(16, 16), 1, f(0));
+    fn refinery_on_deposit_mines_minerals_when_powered() {
+        let mut map = Map::new(16, 16);
+        map.set_deposit(
+            5,
+            1,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Ore,
+                remaining: 100,
+            },
+        );
+        let mut s = Sim::new(map, 1, f(0));
         s.add_building(P0, BuildingKind::CommandCenter, 1, 1);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 1);
-        s.add_building(P0, BuildingKind::Refinery, 5, 1);
+        s.add_building(P0, BuildingKind::Refinery, 5, 1); // ON the ore deposit
+        let before = s.minerals(P0).to_bits();
         s.step(&[]);
-        // Refinery income is 5/tick while powered.
-        assert_eq!(s.minerals(P0), f(5));
+        // Refinery mine_rate is 5/tick while powered.
+        assert!(
+            s.minerals(P0).to_bits() > before,
+            "refinery should mine minerals from ore deposit"
+        );
     }
 
     #[test]
-    fn power_deficit_halves_income() {
-        let mut s = Sim::new(Map::new(16, 16), 1, f(0));
-        // Refinery consumes 20 but there is no power plant -> deficit.
+    fn power_deficit_halves_mining() {
+        let mut map = Map::new(16, 16);
+        map.set_deposit(
+            5,
+            1,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Ore,
+                remaining: 100,
+            },
+        );
+        let mut s = Sim::new(map, 1, f(0));
+        // Refinery consumes 20 but there is no power plant -> deficit -> mine_rate halved.
         s.add_building(P0, BuildingKind::Refinery, 5, 1);
         s.step(&[]);
-        assert_eq!(s.minerals(P0), Fixed::from_ratio(5, 2)); // 2.5
+        // mine_rate 5, throttled to 5/2 = 2 (integer division) when unpowered.
+        assert_eq!(s.minerals(P0), f(2));
     }
 
     #[test]
@@ -1952,7 +2008,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 17_072_287_564_067_226_816);
+        assert_eq!(s.state_hash(), 8_407_706_390_701_679_104);
     }
 
     #[test]
@@ -2304,7 +2360,22 @@ mod tests {
 
     #[test]
     fn ai_advances_at_least_one_era() {
-        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        let mut map = Map::new(40, 40);
+        // Scatter ore deposits across the whole map so the AI's Refineries earn income
+        // regardless of which buildable tile they land on.
+        for x in 0..40u16 {
+            for y in 0..40u16 {
+                map.set_deposit(
+                    x,
+                    y,
+                    crate::game::map::Deposit {
+                        kind: crate::game::map::DepositKind::Ore,
+                        remaining: 10_000_000,
+                    },
+                );
+            }
+        }
+        let mut s = Sim::new(map, 7, f(3000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut max_era = 0u8;
@@ -2389,17 +2460,26 @@ mod tests {
 
     #[test]
     fn antimatter_accrues_and_gates_capital() {
-        let mut s = Sim::new(Map::new(20, 20), 1, f(20_000));
+        let mut map = Map::new(20, 20);
+        map.set_deposit(
+            4,
+            2,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Alloy,
+                remaining: 1000,
+            },
+        );
+        let mut s = Sim::new(map, 1, f(20_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
-        s.add_building(P0, BuildingKind::AntimatterPlant, 4, 2);
+        s.add_building(P0, BuildingKind::AntimatterPlant, 4, 2); // ON the alloy deposit
         assert_eq!(s.alloys(P0), crate::fixed::Fixed::ZERO);
         for _ in 0..50 {
             s.step(&[]);
         }
         assert!(
             s.alloys(P0) > crate::fixed::Fixed::ZERO,
-            "alloys accrue from a powered antimatter plant"
+            "alloys accrue from a powered antimatter plant on an alloy deposit"
         );
     }
 
@@ -2435,7 +2515,22 @@ mod tests {
         // Over a long match (≈20_000 ticks, seed 7), the AI should eventually
         // research Anti-Grav Drives (the last tech in priority, after all 16
         // earlier techs are complete — sequential research takes ~9k+ ticks).
-        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        let mut map = Map::new(40, 40);
+        // Scatter ore deposits across the whole map so the AI's Refineries earn income
+        // regardless of which buildable tile they land on.
+        for x in 0..40u16 {
+            for y in 0..40u16 {
+                map.set_deposit(
+                    x,
+                    y,
+                    crate::game::map::Deposit {
+                        kind: crate::game::map::DepositKind::Ore,
+                        remaining: 10_000_000,
+                    },
+                );
+            }
+        }
+        let mut s = Sim::new(map, 7, f(3000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut antigrav_seen = false;
@@ -2458,7 +2553,22 @@ mod tests {
     fn ai_builds_antimatter_plant_by_era_1() {
         // Over a long match (≈8000 ticks, seed 7) the AI should eventually build
         // an Antimatter Plant once it reaches Era 1.
-        let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
+        let mut map = Map::new(40, 40);
+        // Scatter ore deposits across the whole map so the AI's Refineries earn income
+        // regardless of which buildable tile they land on.
+        for x in 0..40u16 {
+            for y in 0..40u16 {
+                map.set_deposit(
+                    x,
+                    y,
+                    crate::game::map::Deposit {
+                        kind: crate::game::map::DepositKind::Ore,
+                        remaining: 10_000_000,
+                    },
+                );
+            }
+        }
+        let mut s = Sim::new(map, 7, f(3000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut plant_seen = false;
@@ -2475,5 +2585,32 @@ mod tests {
             plant_seen,
             "AI (P0) should build an Antimatter Plant after reaching Era 1"
         );
+    }
+
+    #[test]
+    fn extractor_on_ore_mines_minerals_and_depletes() {
+        let mut map = Map::new(20, 20);
+        map.set_deposit(
+            6,
+            2,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Ore,
+                remaining: 12,
+            },
+        );
+        let mut s = Sim::new(map, 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
+        s.add_building(P0, BuildingKind::Refinery, 6, 2); // ON the ore deposit
+        let before = s.minerals(P0).to_bits();
+        s.step(&[]);
+        assert!(
+            s.minerals(P0).to_bits() > before,
+            "extractor should mine minerals"
+        );
+        for _ in 0..10 {
+            s.step(&[]);
+        }
+        assert_eq!(s.map().deposit(6, 2), None, "deposit should be exhausted");
     }
 }
