@@ -1598,6 +1598,12 @@ fn draw(
                 with_alpha(SELECT_RING, 0.35 + pulse * 0.4),
             );
         }
+        if v.stun_ticks > 0 {
+            // EMP crackle: a flickering amber ring marks a stunned, silenced unit.
+            let jitter = (get_time() as f32 * 17.0).sin() * 0.08;
+            draw_circle_lines(x, y, base_size * (0.5 + jitter), 2.0, with_alpha(WARN, 0.8));
+            draw_circle_lines(x, y, base_size * 0.34, 1.0, with_alpha(WARN, 0.5));
+        }
     }
     draw_tracers(sim, cell, ox, wtop);
     // Particles (muzzle flashes, explosions, debris, warp-ins) over the pieces.

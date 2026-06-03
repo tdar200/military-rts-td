@@ -105,6 +105,24 @@ pub fn gather_commands(
             });
         }
     }
+    if is_key_pressed(KeyCode::V) {
+        if let Some(barracks) = first_friendly_barracks(sim) {
+            cmds.push(Command::Train {
+                owner: HUMAN,
+                barracks,
+                kind: UnitKind::AntiArmor,
+            });
+        }
+    }
+    if is_key_pressed(KeyCode::K) {
+        if let Some(barracks) = first_friendly_barracks(sim) {
+            cmds.push(Command::Train {
+                owner: HUMAN,
+                barracks,
+                kind: UnitKind::Tank,
+            });
+        }
+    }
     if is_key_pressed(KeyCode::H) {
         if let Some(barracks) = first_friendly_barracks(sim) {
             cmds.push(Command::Train {
@@ -120,6 +138,17 @@ pub fn gather_commands(
                 owner: HUMAN,
                 barracks,
                 kind: UnitKind::Capital,
+            });
+        }
+    }
+    // Q casts the selected unit's ability at the cursor. The core validates
+    // ownership, cooldown, and range, so a bad cast is simply a no-op.
+    if is_key_pressed(KeyCode::Q) {
+        if let Some(unit) = *selected {
+            cmds.push(Command::UseAbility {
+                owner: HUMAN,
+                unit,
+                target: SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
             });
         }
     }

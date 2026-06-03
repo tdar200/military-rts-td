@@ -64,8 +64,8 @@ struct Button {
     action: Action,
 }
 
-fn layout() -> [Button; 10] {
-    let w = 104.0;
+fn layout() -> [Button; 12] {
+    let w = 92.0;
     let h = CMD_BAR_H - 16.0;
     let pad = 6.0;
     let y = screen_height() - CMD_BAR_H + 8.0;
@@ -98,8 +98,10 @@ fn layout() -> [Button; 10] {
             Action::Build(BuildingKind::AntimatterPlant),
         ),
         mk(7, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
-        mk(8, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
-        mk(9, "Capital", 'C', Action::Train(UnitKind::Capital)),
+        mk(8, "Lancer", 'V', Action::Train(UnitKind::AntiArmor)),
+        mk(9, "Crawler", 'K', Action::Train(UnitKind::Tank)),
+        mk(10, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
+        mk(11, "Capital", 'C', Action::Train(UnitKind::Capital)),
     ]
 }
 
@@ -356,14 +358,19 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
         return;
     };
     let (name, role) = kind_name_role(view.kind, view.owner);
+    let owned = view.owner == HUMAN;
+    // Owned units with an active ability get an extra status row (Q to cast).
+    let ability = match view.kind {
+        EntityKindView::Unit(k) if owned => rts_core::game::ability::ability_for(k),
+        _ => None,
+    };
     let panel_w = 252.0;
-    let panel_h = 66.0;
+    let panel_h = if ability.is_some() { 82.0 } else { 66.0 };
     let px = 12.0;
     let py = screen_height() - CMD_BAR_H - panel_h - 10.0;
     fill_panel(px, py, panel_w, panel_h);
     // Olive dossier gutter behind the medallion (military register).
     draw_rectangle(px + 5.0, py + 5.0, 3.0, panel_h - 10.0, OLIVE);
-    let owned = view.owner == HUMAN;
     let team = if owned { TEAM_PLAYER } else { TEAM_ENEMY };
     let texture = match view.kind {
         EntityKindView::Building(k) => sprites.building(k),
@@ -384,12 +391,35 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     text(role, text_x, py + 41.0, 14.0, TEXT_DIM, sprites.font());
     let frac = (view.hp.to_bits() as f32 / view.max_hp.to_bits() as f32).clamp(0.0, 1.0);
     let bar_w = panel_w - 84.0;
-    let bar_y = py + 50.0;
+    let fb = sprites.font();
+    if let Some(kind) = ability {
+        let label = match kind {
+            rts_core::game::ability::AbilityKind::Barrage => "Q  BARRAGE",
+            rts_core::game::ability::AbilityKind::EmpBurst => "Q  EMP BURST",
+            rts_core::game::ability::AbilityKind::NaniteField => "Q  NANITE FIELD",
+        };
+        let (status, col) = if view.stun_ticks > 0 {
+            ("STUNNED".to_owned(), WARN)
+        } else if view.ability_cd == 0 {
+            ("READY".to_owned(), GOOD)
+        } else {
+            (format!("{}s", view.ability_cd.div_ceil(30)), TEXT_DIM)
+        };
+        text(label, text_x, py + 56.0, 13.0, SHIELD, fb);
+        text(
+            &status,
+            text_x + bar_w - text_width(&status, 13.0, fb),
+            py + 56.0,
+            13.0,
+            col,
+            fb,
+        );
+    }
+    let bar_y = py + panel_h - 16.0;
     // Numeric HP readout, right-justified above the bar.
     let hp = view.hp.to_bits() / 65536;
     let max_hp = view.max_hp.to_bits() / 65536;
     let hp_s = format!("{hp}/{max_hp}");
-    let fb = sprites.font();
     text(
         &hp_s,
         text_x + bar_w - text_width(&hp_s, 14.0, fb),
