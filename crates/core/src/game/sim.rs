@@ -133,7 +133,7 @@ const DOC_WEAPONS: usize = 0;
 const DOC_ARMOR: usize = 1;
 /// Track index: army-wide shield-max (research-heavy survivability).
 const DOC_VITALITY: usize = 2;
-/// Track index: the minerals-only bank-drainer (lump cost + per-tick upkeep).
+/// Track index: the minerals-only bank-drainer (steep escalating lump cost).
 const DOC_FORGE: usize = 3;
 /// Per-track cost ramp: cost(level L→L+1) = base + step * L. Minerals component.
 const DOCTRINE_MIN_BASE: [i32; DOCTRINE_TRACKS] = [300, 300, 300, 2000];
@@ -141,7 +141,10 @@ const DOCTRINE_MIN_STEP: [i32; DOCTRINE_TRACKS] = [120, 120, 120, 900];
 /// Research component of the cost ramp (FORGE is minerals-only ⇒ 0).
 const DOCTRINE_RES_BASE: [i32; DOCTRINE_TRACKS] = [500, 500, 400, 0];
 const DOCTRINE_RES_STEP: [i32; DOCTRINE_TRACKS] = [180, 180, 150, 0];
-/// Per-level effect of the WEAPONS track: +1 flat damage.
+/// Per-level effect of the WEAPONS track: +1 flat damage. The effect is endless
+/// by design (capped only at `DOCTRINE_LEVEL_CAP`); the steeply escalating
+/// per-level research+minerals cost (see `ascend_cost`) is the sole brake — by the
+/// time a level is cheap relative to income, the wave curve has long outgrown it.
 const WEAPON_STEP: Fixed = Fixed::from_int(1);
 /// Per-level effect of the ARMOR track: +0.5 flat mitigation (half-steps blunt
 /// swarms without granting immunity — the ≥1-damage clamp still applies).
@@ -1847,9 +1850,18 @@ impl Sim {
         // costed quality tracks only run once the finite tech tree is exhausted —
         // era keys and Anti-Grav are worth more than incremental doctrine levels,
         // so research is reserved for them while any finite tech is still pending.
-        // At most one per tick; the era ≥ 1 gate keeps the era-0 golden run from
-        // ever emitting an Ascend. Pure, row-major, no RNG.
-        if self.player_era(player) >= 1 && minerals >= ASCEND_MIN_RESERVE {
+        // The AI may also Build/Train this tick, so gate on the minerals that would
+        // be LEFT after those commits (`avail`) — never queueing an Ascend the
+        // apply step would drop, while still ascending every tick the surplus
+        // allows. The era ≥ 1 gate keeps the era-0 golden run from ever emitting an
+        // Ascend. Pure, row-major, no RNG.
+        let spent_this_tick = cmds.iter().fold(Fixed::ZERO, |acc, c| match *c {
+            Command::Build { kind, .. } => acc + self.building_cost(kind),
+            Command::Train { kind, .. } => acc + self.balance.unit(kind).cost,
+            _ => acc,
+        });
+        let avail = minerals - spent_this_tick;
+        if self.player_era(player) >= 1 && avail >= ASCEND_MIN_RESERVE {
             let (rmask, active) = self.research_state(player);
             // The AI pursues only the 17 finite techs (ids 0..=16), never the
             // forks, so the tree is "open" while any of those is eligible+unbought.
@@ -1871,7 +1883,7 @@ impl Sim {
                 let is_forge = usize::from(track_id) == DOC_FORGE;
                 let lab_ok = is_forge || self.has_research_lab(player);
                 let res_ok = is_forge || self.research(player) >= res_cost;
-                if lab_ok && minerals >= min_cost && res_ok {
+                if lab_ok && avail >= min_cost && res_ok {
                     cmds.push(Command::Ascend {
                         owner: player,
                         track: track_id,
@@ -2644,6 +2656,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ai_queues_no_unaffordable_minerals_spend() {
+        // Across a full survival run (where the AI reaches era ≥ 1 and ascends), the
+        // AI may queue a Build/Train AND an Ascend in one tick, but their combined
+        // minerals cost must never exceed the balance — otherwise the apply step
+        // silently drops the later command. The post-build `avail` gate enforces it.
+        let mut s = crate::game::scenario::survival(3);
+        let mut saw_ascend = false;
+        for _ in 0..12_000u32 {
+            let cmds = s.ai_commands(P0);
+            let total: i64 = cmds
+                .iter()
+                .map(|c| match *c {
+                    Command::Build { kind, .. } => s.building_cost(kind).to_bits(),
+                    Command::Train { kind, .. } => s.unit_cost(kind).to_bits(),
+                    Command::Ascend { track, .. } => s.doctrine_cost(P0, track).0.to_bits(),
+                    _ => 0,
+                })
+                .sum();
+            assert!(
+                total <= s.minerals(P0).to_bits(),
+                "AI queued minerals-spends ({total} bits) exceeding its balance"
+            );
+            saw_ascend |= cmds.iter().any(|c| matches!(c, Command::Ascend { .. }));
+            s.step(&cmds);
+            if s.winner().is_some() {
+                break;
+            }
+        }
+        assert!(
+            saw_ascend,
+            "the AI should ascend at least once over a survival run"
+        );
     }
 
     #[test]
