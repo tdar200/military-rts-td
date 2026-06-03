@@ -7,6 +7,7 @@
 
 use crate::fixed::Fixed;
 use crate::game::map::{Map, Tile};
+use crate::game::procgen;
 use crate::game::sim::{PlayerId, Sim, WaveConfig};
 use crate::game::stats::{BuildingKind, UnitKind};
 use crate::vec::Vec2;
@@ -49,6 +50,7 @@ pub fn lane_defense(seed: u64) -> Sim {
         unit: UnitKind::Infantry,
         attacker: ENEMY,
         defender: HUMAN,
+        escalate: false,
     });
 
     sim
@@ -114,6 +116,51 @@ pub fn crossroads(seed: u64) -> Sim {
         unit: UnitKind::Infantry,
         attacker: ENEMY,
         defender: HUMAN,
+        escalate: false,
+    });
+
+    sim
+}
+
+/// The survival "Beachhead" run.
+///
+/// A **procedurally generated** battlefield with the player base on the left and a
+/// fixed alien beachhead on the right that pours out **escalating** waves
+/// (broadening composition + a Capital boss every 5th wave). Hold out as long as
+/// you can; destroy the beachhead Core Node to win. Each seed is a different map,
+/// so no two runs are alike.
+#[must_use]
+pub fn survival(seed: u64) -> Sim {
+    let map = procgen::generate(seed);
+    let w = map.width();
+    let mid = map.height() / 2;
+    let mut sim = Sim::new(map, seed, Fixed::from_int(1800));
+
+    // Player base (left margin, kept clear by procgen).
+    sim.add_building(HUMAN, BuildingKind::CommandCenter, 3, mid);
+    sim.add_building(HUMAN, BuildingKind::PowerPlant, 2, mid - 2);
+    sim.add_building(HUMAN, BuildingKind::Refinery, 2, mid + 2);
+    sim.add_building(HUMAN, BuildingKind::Barracks, 5, mid);
+
+    // Alien beachhead (right margin): a Core Node + power so `winner()` works and
+    // there is a goal to push toward.
+    sim.add_building(ENEMY, BuildingKind::CommandCenter, w - 4, mid);
+    sim.add_building(ENEMY, BuildingKind::PowerPlant, w - 3, mid - 2);
+
+    // Escalating waves from the beachhead toward the player.
+    sim.set_waves(WaveConfig {
+        first_delay: 240,
+        interval: 420,
+        base_size: 4,
+        growth: 1,
+        spawn: Vec2::new(
+            Fixed::from_int(i32::from(w) - 5),
+            Fixed::from_int(i32::from(mid)),
+        ),
+        unit: UnitKind::Infantry,
+        attacker: ENEMY,
+        defender: HUMAN,
+        escalate: true,
     });
 
     sim
@@ -128,10 +175,14 @@ pub enum Scenario {
     OpenClash,
     /// [`crossroads`] — a central fortress forcing flank pushes, with waves.
     Crossroads,
+    /// [`survival`] — procedural map, endless escalating waves (the solo run).
+    /// Deliberately excluded from [`Scenario::ALL`] (the skirmish roster): it is
+    /// its own mode with its own tests, launched separately by the shell.
+    Survival,
 }
 
 impl Scenario {
-    /// Every scenario, in menu order.
+    /// Every skirmish scenario, in menu order. (Survival is a separate mode.)
     pub const ALL: [Self; 3] = [Self::LaneDefense, Self::OpenClash, Self::Crossroads];
 
     /// The scenario's display name.
@@ -141,6 +192,7 @@ impl Scenario {
             Self::LaneDefense => "Orbital Siege",
             Self::OpenClash => "Open Front",
             Self::Crossroads => "Crater Crossroads",
+            Self::Survival => "Beachhead",
         }
     }
 
@@ -151,6 +203,7 @@ impl Scenario {
             Self::LaneDefense => "Hold the approach lanes against alien waves",
             Self::OpenClash => "Open-field clash — no walls, no waves",
             Self::Crossroads => "Flank a central wreck under pressure",
+            Self::Survival => "Endless escalating waves on a procedural front",
         }
     }
 
@@ -161,13 +214,14 @@ impl Scenario {
             Self::LaneDefense => lane_defense(seed),
             Self::OpenClash => open_clash(seed),
             Self::Crossroads => crossroads(seed),
+            Self::Survival => survival(seed),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{crossroads, lane_defense, open_clash, Scenario};
+    use super::{crossroads, lane_defense, open_clash, survival, Scenario};
     use crate::game::map::Map;
     use crate::game::path::find_path;
     use crate::game::sim::PlayerId;
@@ -394,6 +448,60 @@ mod tests {
             Scenario::Crossroads.tagline(),
             "Flank a central wreck under pressure"
         );
+    }
+
+    #[test]
+    fn survival_sets_up_both_bases_and_stays_connected() {
+        let s = survival(7);
+        assert_eq!(s.winner(), None, "a base is already dead");
+        // 4 player buildings + 2 beachhead buildings.
+        assert!(s.entity_count() >= 6, "too few starting buildings");
+        let start = corner_passable(s.map(), false);
+        let goal = corner_passable(s.map(), true);
+        assert!(
+            find_path(s.map(), start, goal).is_some(),
+            "survival battlefield is bisected"
+        );
+        assert_eq!(s.waves_survived(), 0);
+    }
+
+    #[test]
+    fn survival_is_deterministic() {
+        let mut a = survival(11);
+        let mut log = Vec::new();
+        for _ in 0..500 {
+            let enemy = a.ai_commands(PlayerId(1));
+            a.step(&enemy);
+            log.push(enemy);
+        }
+        let expected = a.state_hash();
+        let mut b = survival(11);
+        for batch in &log {
+            b.step(batch);
+        }
+        assert_eq!(b.state_hash(), expected, "survival not deterministic");
+    }
+
+    #[test]
+    fn survival_overruns_an_undefended_base() {
+        // Player does nothing; escalating waves must eventually take the base, so
+        // the run resolves (no soft-lock) and waves actually spawned.
+        let mut s = survival(3);
+        let mut winner = None;
+        for _ in 0..8000 {
+            let enemy = s.ai_commands(PlayerId(1));
+            s.step(&enemy);
+            if let Some(w) = s.winner() {
+                winner = Some(w);
+                break;
+            }
+        }
+        assert_eq!(
+            winner,
+            Some(PlayerId(1)),
+            "undefended survival never resolved"
+        );
+        assert!(s.waves_survived() > 0, "no waves spawned");
     }
 
     #[test]

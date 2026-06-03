@@ -16,14 +16,21 @@
     reason = "the render/input shell converts fixed-point sim values and grid sizes to/from f32 screen space and runs a float accumulator game loop; draw functions and main() are inherently long; the determinism-critical math stays in rts_core"
 )]
 
+mod anim;
+mod audio;
+mod fog;
 mod input;
+mod meta;
+mod particles;
 mod sprites;
 mod theme;
 mod ui;
+mod view;
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
 use rts_core::game::hex;
+use rts_core::game::perk;
 use rts_core::game::scenario::Scenario;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
@@ -33,11 +40,12 @@ use sprites::Sprites;
 // Explicit theme imports (not a glob) so they take precedence over the
 // like-named macroquad prelude color constants (e.g. GOLD).
 use theme::{
-    hp_color, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOOD,
-    GRID, GROUND, GROUND_MACRO, HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2,
-    MAP_PLAINS, OLIVE, PANEL, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW,
-    REGAL_BG, REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL,
-    TEXT, TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
+    glow_rect, holo_flicker, hp_color, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE, DECO_GOLD,
+    DECO_GOLD_HI, GOLD, GOLD_HI, GOOD, GRID, GRID_HOT, GROUND, GROUND_MACRO, HOLO_GLOW, HP_TRACK,
+    INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2, MAP_PLAINS, OLIVE, PANEL, PANEL_RAISED,
+    PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW, REGAL_BG, REGAL_BG_HI,
+    REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL, TEXT, TEXT_DIM,
+    TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
 };
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
@@ -70,6 +78,22 @@ const MATCH_SEED: u64 = 2026;
 
 fn new_match(scenario: Scenario) -> Sim {
     scenario.build(MATCH_SEED)
+}
+
+/// A fresh, run-varying seed for a Survival match (derived from the wall clock).
+/// Survival runs aren't replayed or networked, so a non-deterministic seed is
+/// fine — each run stays fully deterministic *given* its seed, and every run gets
+/// a different procedural map.
+fn survival_seed() -> u64 {
+    (get_time() * 1000.0) as u64 ^ 0xA5A5_5A5A_C3C3_3C3C
+}
+
+/// Clickable band for the "press S for Survival" banner on the title screen,
+/// shared by the renderer and the hit-test so they can't drift.
+fn survival_button_rect() -> Rect {
+    let c = cartouche();
+    let w = 520.0_f32.min(screen_width() - 40.0);
+    Rect::new((screen_width() - w) / 2.0, c.y + c.h + 44.0, w, 30.0)
 }
 
 /// Centered vertical list of selectable maps on the title screen, paired with the
@@ -129,6 +153,13 @@ fn tile_to_px(v: Fixed, cell: f32) -> f32 {
     v.to_bits() as f32 / 65536.0 * cell
 }
 
+/// The map tile a world position sits on (rounded, clamped non-negative).
+fn pos_tile(p: SimVec2) -> (u16, u16) {
+    let c = (p.x.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
+    let r = (p.y.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
+    (c, r)
+}
+
 /// Horizontal offset that centers the hex board in the window.
 fn board_origin_x(sim: &Sim, cell: f32) -> f32 {
     ((screen_width() - board_size(sim, cell).0) / 2.0).max(0.0)
@@ -136,12 +167,9 @@ fn board_origin_x(sim: &Sim, cell: f32) -> f32 {
 
 /// World-space center of hex cell `(col, row)` in pixels, with the board centered
 /// by `ox` (from [`board_origin_x`]).
-fn hex_center_px(col: u16, row: u16, cell: f32, ox: f32) -> (f32, f32) {
+fn hex_center_px(col: u16, row: u16, cell: f32, ox: f32, wtop: f32) -> (f32, f32) {
     let c = hex::center(col, row);
-    (
-        ox + tile_to_px(c.x, cell),
-        WORLD_TOP + tile_to_px(c.y, cell),
-    )
+    (ox + tile_to_px(c.x, cell), wtop + tile_to_px(c.y, cell))
 }
 
 /// Fills a flat-top hexagon (width = height = `cell`, so cells tile cleanly at the
@@ -187,6 +215,7 @@ fn draw_hex_outline(cx: f32, cy: f32, cell: f32, thick: f32, col: Color) {
 #[macroquad::main(window_conf)]
 async fn main() {
     let sprites = Sprites::load().await;
+    let mut audio = audio::AudioMgr::load().await;
     let mut scenario = Scenario::LaneDefense;
     let mut sim = new_match(scenario);
     let mut selected: Option<EntityId> = None;
@@ -195,7 +224,25 @@ async fn main() {
     let mut accumulator = 0.0_f32;
     let mut paused = false;
     let mut research_open = false;
+    let mut research_cursor: usize = 0;
     let mut phase = Phase::Title;
+    // Shell-side animated view layer (interpolation, bars, FX events) + particle
+    // pool. Pure view state — never feeds back into the deterministic sim.
+    let mut view = view::ViewState::default();
+    let mut particles = particles::Particles::new();
+    let mut fog = fog::Fog::new(sim.map().width(), sim.map().height());
+    let mut camera = anim::Camera::default();
+    // Hit-stop: while > 0 the sim is frozen (in wall-clock) for impact emphasis.
+    let mut hitstop = 0.0_f32;
+    // Audio bookkeeping: one-shot game-over jingle + wave-incoming alarm edges.
+    let mut over_announced = false;
+    let mut prev_wave_secs: i64 = i64::MAX;
+    // Whether the current match is a survival run (drives the score HUD + summary).
+    let mut survival_run = false;
+    // Survival perk draft: a modal opens each new wave until all perks are taken.
+    let mut perk_open = false;
+    let mut prev_waves = 0_u32;
+    let mut best_waves = meta::best_waves();
 
     loop {
         if phase == Phase::Title {
@@ -204,13 +251,35 @@ async fn main() {
                 scenario = hovered;
             }
             let clicked = is_mouse_button_pressed(MouseButton::Left);
-            let chosen = scenario_hotkey()
-                .or_else(|| clicked.then_some(scenario))
-                .or_else(|| is_key_pressed(KeyCode::Enter).then_some(scenario));
-            if let Some(sc) = chosen {
+            let (mx, my) = mouse_position();
+            let on_survival = survival_button_rect().contains(vec2(mx, my));
+            // 'S' or the Survival banner launches a Survival run on a fresh
+            // procedural map; a map row / number key / Enter launches the picked
+            // skirmish scenario.
+            let start = if is_key_pressed(KeyCode::S) || (clicked && on_survival) {
+                Some((Scenario::Survival, survival_seed()))
+            } else {
+                scenario_hotkey()
+                    .or_else(|| (clicked && !on_survival).then_some(scenario))
+                    .or_else(|| is_key_pressed(KeyCode::Enter).then_some(scenario))
+                    .map(|sc| (sc, MATCH_SEED))
+            };
+            if let Some((sc, seed)) = start {
                 scenario = sc;
+                survival_run = sc == Scenario::Survival;
                 phase = Phase::Playing;
-                sim = new_match(scenario);
+                sim = sc.build(seed);
+                view = view::ViewState::default();
+                view.on_tick(&sim);
+                fog = fog::Fog::new(sim.map().width(), sim.map().height());
+                particles.clear();
+                camera = anim::Camera::default();
+                hitstop = 0.0;
+                over_announced = false;
+                prev_wave_secs = i64::MAX;
+                perk_open = false;
+                prev_waves = 0;
+                audio.set_music(audio::Music::Combat);
                 selected = None;
                 build_mode = None;
                 pending.clear();
@@ -225,9 +294,42 @@ async fn main() {
         let cell = cell_size(&sim);
         let over = sim.winner().is_some();
 
+        // Survival perk draft: each newly-spawned wave grants a perk pick until
+        // all are taken, opening a (time-freezing) draft modal.
+        if survival_run && !over {
+            let w = sim.waves_survived();
+            if w > prev_waves {
+                prev_waves = w;
+                if sim.perks(HUMAN).count_ones() < perk::PERK_COUNT {
+                    perk_open = true;
+                }
+            }
+        }
+        // Perk-draft input: number keys 1..N choose an untaken perk; Esc defers.
+        if perk_open {
+            let owned = sim.perks(HUMAN);
+            let keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4];
+            for (i, key) in keys.into_iter().enumerate() {
+                let pid = u32::try_from(i).unwrap_or(0);
+                if pid < perk::PERK_COUNT && is_key_pressed(key) && owned & (1 << pid) == 0 {
+                    pending.push(Command::ChoosePerk {
+                        owner: HUMAN,
+                        perk: pid,
+                    });
+                    perk_open = false;
+                }
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                perk_open = false;
+            }
+        }
+
         // Input: UI command bar first, then map (suppressed while over the UI or
-        // the research modal).
-        if !research_open {
+        // a modal).
+        if !research_open && !perk_open {
+            if is_mouse_button_pressed(MouseButton::Left) && ui::pointer_over_ui() {
+                audio.play(audio::Sfx::UiClick);
+            }
             pending.extend(ui::handle_click(&sim, &mut build_mode));
             pending.extend(input::gather_commands(
                 &sim,
@@ -244,40 +346,70 @@ async fn main() {
         if !over && !paused && is_key_pressed(KeyCode::Y) {
             research_open = !research_open;
         }
-        // While the research modal is open: number keys issue research commands;
-        // Escape closes without researching.
+        // Research modal: ↑/↓ move the cursor over the full tree, Enter researches
+        // the highlighted tech; number keys 1-0 are quick shortcuts for the first
+        // ten; Escape closes. (Cursor navigation makes every tech reachable —
+        // eras, shields, anti-grav, and the doctrine fork, not just the first 10.)
         if research_open {
-            let key_to_tech: [(KeyCode, u32); 10] = [
-                (KeyCode::Key1, 0),
-                (KeyCode::Key2, 1),
-                (KeyCode::Key3, 2),
-                (KeyCode::Key4, 3),
-                (KeyCode::Key5, 4),
-                (KeyCode::Key6, 5),
-                (KeyCode::Key7, 6),
-                (KeyCode::Key8, 7),
-                (KeyCode::Key9, 8),
-                (KeyCode::Key0, 9),
+            let n = TECHS.len();
+            if is_key_pressed(KeyCode::Down) {
+                research_cursor = (research_cursor + 1) % n;
+            }
+            if is_key_pressed(KeyCode::Up) {
+                research_cursor = (research_cursor + n - 1) % n;
+            }
+            let num_keys = [
+                KeyCode::Key1,
+                KeyCode::Key2,
+                KeyCode::Key3,
+                KeyCode::Key4,
+                KeyCode::Key5,
+                KeyCode::Key6,
+                KeyCode::Key7,
+                KeyCode::Key8,
+                KeyCode::Key9,
+                KeyCode::Key0,
             ];
-            for (key, tech_id) in key_to_tech {
+            let mut chosen: Option<u32> = is_key_pressed(KeyCode::Enter)
+                .then_some(u32::try_from(research_cursor).unwrap_or(0));
+            for (i, key) in num_keys.into_iter().enumerate() {
                 if is_key_pressed(key) {
-                    // Core validates affordability, prereq, and lab presence.
-                    if sim.research_state(HUMAN).1.is_none() {
-                        pending.push(Command::Research {
-                            owner: HUMAN,
-                            tech_id,
-                        });
-                    }
-                    research_open = false;
-                    break;
+                    research_cursor = i;
+                    chosen = Some(u32::try_from(i).unwrap_or(0));
                 }
+            }
+            if let Some(tech_id) = chosen {
+                // Core validates affordability, prereq, fork lock, and lab presence.
+                if sim.research_state(HUMAN).1.is_none() {
+                    pending.push(Command::Research {
+                        owner: HUMAN,
+                        tech_id,
+                    });
+                }
+                research_open = false;
             }
             if is_key_pressed(KeyCode::Escape) {
                 research_open = false;
             }
         }
         if over && is_key_pressed(KeyCode::R) {
-            sim = new_match(scenario);
+            // Survival restarts on a fresh procedural map; skirmish replays its map.
+            sim = if survival_run {
+                scenario.build(survival_seed())
+            } else {
+                new_match(scenario)
+            };
+            view = view::ViewState::default();
+            view.on_tick(&sim);
+            fog = fog::Fog::new(sim.map().width(), sim.map().height());
+            particles.clear();
+            camera = anim::Camera::default();
+            hitstop = 0.0;
+            over_announced = false;
+            prev_wave_secs = i64::MAX;
+            perk_open = false;
+            prev_waves = 0;
+            audio.set_music(audio::Music::Combat);
             selected = None;
             build_mode = None;
             pending.clear();
@@ -287,6 +419,7 @@ async fn main() {
         // Return to the map-select screen.
         if over && is_key_pressed(KeyCode::M) {
             phase = Phase::Title;
+            audio.set_music(audio::Music::Menu);
             selected = None;
             build_mode = None;
             pending.clear();
@@ -298,8 +431,15 @@ async fn main() {
         // research modal is open (the modal freezes time so the player can read it).
         // Clamp frame time so a stall / slow frame can't dump hundreds of ticks at
         // once (the "spiral of death") and fast-forward past wave spawns.
-        accumulator += get_frame_time().min(0.1);
-        if paused || over || research_open {
+        let dt = get_frame_time().min(0.1);
+        // Hit-stop freezes the sim (in wall-clock) for a beat on big impacts; the
+        // accumulator simply doesn't grow, so no ticks run and rendering continues.
+        if hitstop > 0.0 {
+            hitstop = (hitstop - dt).max(0.0);
+        } else {
+            accumulator += dt;
+        }
+        if paused || over || research_open || perk_open {
             accumulator = 0.0;
             pending.clear();
         }
@@ -307,16 +447,116 @@ async fn main() {
             let mut commands = std::mem::take(&mut pending);
             commands.extend(sim.ai_commands(ENEMY));
             sim.step(&commands);
+            view.on_tick(&sim);
             accumulator -= TICK_DT;
         }
+        view.frame(dt);
+        // Turn this frame's FX events into particles, then advance the pool.
+        let ofx = board_origin_x(&sim, cell);
+        for ev in view.events.drain(..) {
+            match ev {
+                view::FxEvent::Death {
+                    world,
+                    building,
+                    human,
+                } => {
+                    let p = vec2(ofx + world.x * cell, WORLD_TOP + world.y * cell);
+                    let col = if human { TEAM_PLAYER } else { TEAM_ENEMY };
+                    particles.explosion(p, col, if building { 1.8 } else { 1.0 });
+                    if building {
+                        particles.debris(p, col);
+                        hitstop = hitstop.max(0.07);
+                    }
+                    particles.scorch(world, if building { 0.9 } else { 0.45 });
+                    camera.add_trauma(if building { 0.5 } else { 0.18 });
+                    audio.play_throttled(audio::Sfx::Explosion, 0.04);
+                }
+                view::FxEvent::Spawn {
+                    world,
+                    building,
+                    human,
+                } => {
+                    let p = vec2(ofx + world.x * cell, WORLD_TOP + world.y * cell);
+                    let col = if human { TEAM_PLAYER } else { TEAM_ENEMY };
+                    if building {
+                        particles.poof(p, col);
+                        audio.play_throttled(audio::Sfx::Build, 0.06);
+                    } else {
+                        particles.warp_in(p, col);
+                        audio.play_throttled(audio::Sfx::Train, 0.06);
+                    }
+                }
+                view::FxEvent::Hit {
+                    world,
+                    human,
+                    amount,
+                } => {
+                    let p = vec2(ofx + world.x * cell, WORLD_TOP + world.y * cell);
+                    let col = if human { TEAM_PLAYER } else { TEAM_ENEMY };
+                    particles.impact(p, col, amount * 0.12);
+                    camera.add_trauma((amount * 0.01).min(0.12));
+                }
+            }
+        }
+        // Muzzle flashes at the firing end of this tick's shots.
+        for &(from, _to) in sim.recent_attacks() {
+            let f = vec2(
+                ofx + tile_to_px(from.x, cell),
+                WORLD_TOP + tile_to_px(from.y, cell),
+            );
+            particles.muzzle(f, TRACER);
+        }
+        if !sim.recent_attacks().is_empty() {
+            audio.play_throttled(audio::Sfx::Laser, 0.05);
+        }
+        particles.update(dt);
+        camera.update(dt);
 
-        draw(&sim, selected, build_mode, cell, &sprites);
-        ui::draw(&sim, build_mode, paused, selected, &sprites);
+        // Wave-incoming alarm: fire once as the countdown crosses 5 seconds.
+        let wave_secs = sim
+            .ticks_until_next_wave()
+            .map_or(i64::MAX, |t| (t / 30) as i64);
+        if prev_wave_secs > 5 && wave_secs <= 5 {
+            audio.play(audio::Sfx::WaveIncoming);
+        }
+        prev_wave_secs = wave_secs;
+
+        // Game-over jingle, once; stop the music; record the survival high score.
+        if let Some(winner) = sim.winner() {
+            if !over_announced {
+                over_announced = true;
+                audio.stop_music();
+                audio.play(if winner == HUMAN {
+                    audio::Sfx::Victory
+                } else {
+                    audio::Sfx::Defeat
+                });
+                if survival_run {
+                    best_waves = meta::record_waves(sim.waves_survived());
+                }
+            }
+        }
+
+        let alpha = (accumulator / TICK_DT).clamp(0.0, 1.0);
+        let (sx, sy) = camera.offset(7.0);
+        fog.update(&sim);
+
+        draw(
+            &sim, &view, &particles, &fog, selected, build_mode, cell, alpha, sx, sy, &sprites,
+        );
+        ui::draw(&sim, build_mode, paused, selected, &fog, &sprites);
+        if survival_run {
+            draw_survival_hud(&sim, &sprites);
+        }
         if research_open {
-            draw_research_modal(&sim, &sprites);
+            draw_research_modal(&sim, research_cursor, &sprites);
+        }
+        if perk_open {
+            draw_perk_modal(&sim, &sprites);
         }
         if let Some(winner) = sim.winner() {
-            draw_game_over(winner, &sprites);
+            let score = survival_run.then(|| (sim.waves_survived(), best_waves));
+            draw_game_over(winner, score, &sprites);
         }
         next_frame().await;
     }
@@ -445,12 +685,12 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         0.0,
         with_alpha(REGAL_BG_HI, 0.85),
     );
-    // antique-map linework: contour rings + graticule (faint deco gold)
-    let ring = Color::from_rgba(201, 164, 76, 16);
+    // tactical-console linework: contour rings + graticule (faint holo cyan)
+    let ring = Color::from_rgba(64, 220, 235, 18);
     for r in [150.0_f32, 280.0, 430.0] {
         draw_circle_lines(cx, fc, r, 1.0, ring);
     }
-    let grat = Color::from_rgba(201, 164, 76, 11);
+    let grat = Color::from_rgba(64, 220, 235, 12);
     let mut gx = cx % 132.0;
     while gx < w {
         draw_line(gx, 0.0, gx, h, 1.0, grat);
@@ -469,7 +709,7 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
             w - inset * 2.0,
             h - inset * 2.0,
             26.0,
-            Color::from_rgba(6, 12, 9, a),
+            Color::from_rgba(3, 6, 12, a),
         );
     }
 
@@ -486,7 +726,7 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         "STELLAR FRONT",
         c.y - 80.0,
         62.0,
-        DECO_GOLD_HI,
+        with_alpha(DECO_GOLD_HI, holo_flicker()),
         sprites.font_regal(),
     );
     deco_rule(cx, c.y - 46.0, 180.0);
@@ -517,6 +757,13 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         17.0,
         DECO_GOLD,
         sprites.font(),
+    );
+    centered(
+        "— or press  S  for SURVIVAL: endless escalating waves —",
+        c.y + c.h + 58.0,
+        16.0,
+        GOLD_HI,
+        sprites.font_bold(),
     );
 }
 
@@ -568,7 +815,7 @@ fn draw_scenario_row(scenario: Scenario, rect: Rect, selected: bool, sprites: &S
             rect.y,
             rect.w,
             rect.h,
-            Color::from_rgba(201, 164, 76, 64),
+            Color::from_rgba(64, 220, 235, 56),
         );
         draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.5, DECO_GOLD);
         diamond(rect.x + 18.0, rect.y + rect.h / 2.0, 5.0, DECO_GOLD_HI);
@@ -598,12 +845,13 @@ fn draw_scenario_row(scenario: Scenario, rect: Rect, selected: bool, sprites: &S
     );
 }
 
-fn draw_game_over(winner: PlayerId, sprites: &Sprites) {
+fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 175));
-    let (pw, ph) = (440.0, 184.0);
+    let (pw, ph) = (440.0, 212.0);
     let (px, py) = ((w - pw) / 2.0, (h - ph) / 2.0);
     draw_rectangle(px, py, pw, ph, PANEL);
+    glow_rect(px, py, pw, ph, HOLO_GLOW, 3);
     draw_rectangle(px, py, pw, 4.0, GOLD);
     draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
     let (msg, color) = if winner == HUMAN {
@@ -611,13 +859,133 @@ fn draw_game_over(winner: PlayerId, sprites: &Sprites) {
     } else {
         ("OVERRUN", BAD)
     };
-    centered(msg, py + 92.0, 56.0, color, sprites.font_display());
+    centered(msg, py + 78.0, 54.0, color, sprites.font_display());
+    if let Some((waves, best)) = survival_score {
+        centered(
+            &format!("WAVES SURVIVED  {waves}"),
+            py + 116.0,
+            22.0,
+            GOLD_HI,
+            sprites.font_bold(),
+        );
+        centered(
+            &format!("BEST  {best}"),
+            py + 140.0,
+            16.0,
+            TEXT_DIM,
+            sprites.font(),
+        );
+    }
     centered(
         "R to restart    •    M for map select",
-        py + 132.0,
-        22.0,
+        py + 176.0,
+        20.0,
         TEXT,
         sprites.font(),
+    );
+}
+
+/// A compact survival readout (waves survived = score) under the top bar.
+fn draw_survival_hud(sim: &Sim, sprites: &Sprites) {
+    let s = format!("WAVE {}", sim.waves_survived() + 1);
+    let fb = sprites.font_bold();
+    let tw = measure_text(&s, fb, 20, 1.0).width;
+    let x = (screen_width() - tw) / 2.0;
+    let y = WORLD_TOP + 20.0;
+    draw_rectangle(x - 12.0, y - 17.0, tw + 24.0, 24.0, PANEL);
+    glow_rect(x - 12.0, y - 17.0, tw + 24.0, 24.0, HOLO_GLOW, 2);
+    draw_text_ex(
+        &s,
+        x,
+        y,
+        TextParams {
+            font: fb,
+            font_size: 20,
+            color: GOLD_HI,
+            ..Default::default()
+        },
+    );
+}
+
+/// Survival perk-draft overlay: pick one untaken perk with number keys 1-N.
+fn draw_perk_modal(sim: &Sim, sprites: &Sprites) {
+    let (w, h) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 200));
+    let owned = sim.perks(HUMAN);
+    let n = perk::PERK_COUNT;
+    let row_h = 52.0;
+    let pw = 460.0_f32.min(w - 40.0);
+    let ph = 64.0 + n as f32 * row_h + 44.0;
+    let px = (w - pw) / 2.0;
+    let py = (h - ph) / 2.0;
+    draw_rectangle(px, py, pw, ph, PANEL);
+    glow_rect(px, py, pw, ph, HOLO_GLOW, 3);
+    draw_rectangle(px, py, pw, 4.0, GOLD);
+    draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
+    centered("CHOOSE A PERK", py + 38.0, 26.0, GOLD, sprites.font_bold());
+    let fb = sprites.font_bold();
+    let f = sprites.font();
+    for i in 0..n {
+        let ry = py + 64.0 + i as f32 * row_h;
+        let taken = owned & (1 << i) != 0;
+        let row = Rect::new(px + 12.0, ry, pw - 24.0, row_h - 8.0);
+        draw_rectangle(
+            row.x,
+            row.y,
+            row.w,
+            row.h,
+            if taken { WELL } else { PANEL_RAISED },
+        );
+        let rim = if taken { BORDER_NEUTRAL } else { GOLD_HI };
+        draw_rectangle_lines(row.x, row.y, row.w, row.h, 1.5, rim);
+        // Number chip.
+        let key_s = format!("{}", i + 1);
+        draw_text_ex(
+            &key_s,
+            row.x + 12.0,
+            row.y + 30.0,
+            TextParams {
+                font: fb,
+                font_size: 22,
+                color: if taken { TEXT_DIM } else { GOLD_HI },
+                ..Default::default()
+            },
+        );
+        let name_col = if taken { TEXT_DIM } else { TEXT };
+        draw_text_ex(
+            perk::name(i),
+            row.x + 44.0,
+            row.y + 22.0,
+            TextParams {
+                font: fb,
+                font_size: 19,
+                color: name_col,
+                ..Default::default()
+            },
+        );
+        let desc = if taken {
+            "— already taken —"
+        } else {
+            perk::description(i)
+        };
+        draw_text_ex(
+            desc,
+            row.x + 44.0,
+            row.y + 40.0,
+            TextParams {
+                font: f,
+                font_size: 15,
+                color: if taken { TEXT_DIM } else { GOOD },
+                ..Default::default()
+            },
+        );
+    }
+    centered(
+        "press 1-4 to choose  \u{2022}  Esc to skip",
+        py + ph - 18.0,
+        15.0,
+        TEXT_DIM,
+        f,
     );
 }
 
@@ -659,22 +1027,27 @@ fn tech_status(
     if prereq.is_some_and(|p| mask & (1 << p) == 0) {
         return TechStatus::Locked;
     }
+    // A doctrine fork locks out its counterpart once the other is researched.
+    if rts_core::game::tech::excludes(tech_id).is_some_and(|other| mask & (1 << other) != 0) {
+        return TechStatus::Locked;
+    }
     if !has_lab {
         return TechStatus::NoLab;
     }
     TechStatus::Available
 }
 
-/// Full-screen overlay listing all 10 techs with their status + progress.
-/// Number keys 1-0 start research; Escape closes.
-fn draw_research_modal(sim: &Sim, sprites: &Sprites) {
+/// Full-screen overlay listing the whole tech tree with status + progress. The
+/// `cursor` row is highlighted; ↑/↓ move it, Enter (or 1-0 for the first ten)
+/// starts research; Escape closes.
+fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     // Dark full-screen overlay — time is frozen while this is up.
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 200));
 
     let pw = 560.0_f32.min(w - 40.0);
-    // 10 rows + title bar + footer
-    let row_h = 34.0;
+    // One row per tech + title bar + footer.
+    let row_h = 30.0;
     let head_h = 48.0;
     let foot_h = 36.0;
     let n = TECHS.len() as f32;
@@ -703,28 +1076,41 @@ fn draw_research_modal(sim: &Sim, sprites: &Sprites) {
         if i % 2 == 0 {
             draw_rectangle(px + 8.0, ry - 4.0, pw - 16.0, row_h - 2.0, WELL);
         }
+        // Highlight the cursor row.
+        if i == cursor {
+            draw_rectangle(
+                px + 8.0,
+                ry - 4.0,
+                pw - 16.0,
+                row_h - 2.0,
+                with_alpha(GOLD, 0.16),
+            );
+            draw_rectangle_lines(px + 8.0, ry - 4.0, pw - 16.0, row_h - 2.0, 1.5, GOLD_HI);
+        }
 
-        // Number key chip (1-9, then 0 for the 10th).
-        let key_char = if i < 9 {
-            char::from_digit(u32::try_from(i + 1).unwrap_or(0), 10).unwrap_or('?')
-        } else {
-            '0'
-        };
-        let key_s = key_char.to_string();
-        draw_rectangle(px + 14.0, ry - 2.0, 18.0, 18.0, PANEL);
-        draw_rectangle_lines(px + 14.0, ry - 2.0, 18.0, 18.0, 1.0, BORDER_NEUTRAL);
-        let kw = measure_text(&key_s, f, 14, 1.0).width;
-        draw_text_ex(
-            &key_s,
-            px + 23.0 - kw / 2.0,
-            ry + 12.0,
-            TextParams {
-                font: f,
-                font_size: 14,
-                color: TEXT_DIM,
-                ..Default::default()
-            },
-        );
+        // Number-key chip for the first ten techs (the rest use ↑/↓ + Enter).
+        if i < 10 {
+            let key_char = if i < 9 {
+                char::from_digit(u32::try_from(i + 1).unwrap_or(0), 10).unwrap_or('?')
+            } else {
+                '0'
+            };
+            let key_s = key_char.to_string();
+            draw_rectangle(px + 14.0, ry - 2.0, 18.0, 18.0, PANEL);
+            draw_rectangle_lines(px + 14.0, ry - 2.0, 18.0, 18.0, 1.0, BORDER_NEUTRAL);
+            let kw = measure_text(&key_s, f, 14, 1.0).width;
+            draw_text_ex(
+                &key_s,
+                px + 23.0 - kw / 2.0,
+                ry + 12.0,
+                TextParams {
+                    font: f,
+                    font_size: 14,
+                    color: TEXT_DIM,
+                    ..Default::default()
+                },
+            );
+        }
 
         // Tech name.
         draw_text_ex(
@@ -796,7 +1182,7 @@ fn draw_research_modal(sim: &Sim, sprites: &Sprites) {
         OLIVE,
     );
     centered(
-        "1-0 research  \u{2022}  Esc close",
+        "\u{2191}\u{2193} select  \u{2022}  Enter / 1-0 research  \u{2022}  Esc close",
         footer_y,
         15.0,
         TEXT_DIM,
@@ -804,26 +1190,46 @@ fn draw_research_modal(sim: &Sim, sprites: &Sprites) {
     );
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the single render entry point threads sim, view/particle layers, selection, camera and assets"
+)]
 fn draw(
     sim: &Sim,
+    view: &view::ViewState,
+    particles: &particles::Particles,
+    fog: &fog::Fog,
     selected: Option<EntityId>,
     build_mode: Option<BuildingKind>,
     cell: f32,
+    alpha: f32,
+    sx: f32,
+    sy: f32,
     sprites: &Sprites,
 ) {
     clear_background(BASE_CHARCOAL);
-    draw_ground(sim, cell);
-    draw_terrain(sim, cell);
-    let ox = board_origin_x(sim, cell);
+    // The world layer is offset by the screen-shake (sx, sy); the HUD is not.
+    let ox = board_origin_x(sim, cell) + sx;
+    let wtop = WORLD_TOP + sy;
+    draw_ground(sim, cell, ox, wtop);
+    // Scorch decals sit on the ground, under terrain and pieces.
+    particles.draw_scorches(ox, wtop, cell);
+    draw_terrain(sim, cell, ox, wtop);
+    draw_fog(sim, fog, cell, ox, wtop);
     for v in sim.views() {
-        let x = ox + tile_to_px(v.pos.x, cell);
-        let y = WORLD_TOP + tile_to_px(v.pos.y, cell);
+        // Hide enemy pieces standing in tiles the player can't currently see.
+        if v.owner != HUMAN {
+            let (tc, tr) = pos_tile(v.pos);
+            if !fog.visible(tc, tr) {
+                continue;
+            }
+        }
         let team = if v.owner == HUMAN {
             TEAM_PLAYER
         } else {
             TEAM_ENEMY
         };
-        let (texture, size, is_building) = match v.kind {
+        let (texture, base_size, is_building) = match v.kind {
             EntityKindView::Building(b) => (
                 sprites.building(b),
                 if matches!(b, BuildingKind::CommandCenter) {
@@ -843,17 +1249,77 @@ fn draw(
                 false,
             ),
         };
-        draw_piece(x, y, size, texture, team, is_building);
-        draw_health_bar(x, y, cell, v.hp, v.max_hp);
-        draw_shield_bar(x, y, cell, v.shield, v.max_shield);
+        // Smoothly interpolated transform + animated stats from the view layer,
+        // falling back to the raw sim values if the entity isn't tracked yet.
+        let (wx, wy, hp, max_hp, sh, max_sh, scale, flash) = view.entity(v.id, alpha).map_or_else(
+            || {
+                (
+                    v.pos.x.to_bits() as f32 / 65536.0,
+                    v.pos.y.to_bits() as f32 / 65536.0,
+                    v.hp.to_bits() as f32 / 65536.0,
+                    (v.max_hp.to_bits() as f32 / 65536.0).max(1.0),
+                    v.shield.to_bits() as f32 / 65536.0,
+                    v.max_shield.to_bits() as f32 / 65536.0,
+                    1.0,
+                    0.0,
+                )
+            },
+            |e| {
+                (
+                    e.world.x,
+                    e.world.y,
+                    e.hp,
+                    e.max_hp,
+                    e.shield,
+                    e.max_shield,
+                    e.scale,
+                    e.flash,
+                )
+            },
+        );
+        let x = ox + wx * cell;
+        let y = wtop + wy * cell;
+        draw_piece(x, y, base_size * scale, texture, team, is_building, flash);
+        draw_health_bar(x, y, cell, hp, max_hp);
+        draw_shield_bar(x, y, cell, sh, max_sh);
         if Some(v.id) == selected {
-            draw_circle_lines(x, y, size * 0.62, 2.0, SELECT_RING);
+            // Pulsing double ring — a live holographic selection lock.
+            let pulse = (get_time() as f32 * 3.0).sin() * 0.5 + 0.5;
+            draw_circle_lines(x, y, base_size * 0.62, 2.0, SELECT_RING);
+            draw_circle_lines(
+                x,
+                y,
+                base_size * (0.66 + pulse * 0.08),
+                1.5,
+                with_alpha(SELECT_RING, 0.35 + pulse * 0.4),
+            );
         }
     }
-    draw_tracers(sim, cell);
+    draw_tracers(sim, cell, ox, wtop);
+    // Particles (muzzle flashes, explosions, debris, warp-ins) over the pieces.
+    particles.draw(sx, sy);
+    // Floating damage numbers, rising and fading.
+    let pf = sprites.font_bold();
+    for (world, amount, t) in view.popups() {
+        let s = format!("-{amount}");
+        let tw = measure_text(&s, pf, 16, 1.0).width;
+        let px = ox + world.x * cell - tw / 2.0;
+        let py = wtop + world.y * cell - 0.6 * cell - t * 22.0;
+        draw_text_ex(
+            &s,
+            px,
+            py,
+            TextParams {
+                font: pf,
+                font_size: 16,
+                color: with_alpha(BAD, 1.0 - t),
+                ..Default::default()
+            },
+        );
+    }
     if let Some(kind) = build_mode {
-        draw_build_grid(sim, cell);
-        draw_build_ghost(sim, kind, cell);
+        draw_build_grid(sim, cell, ox, wtop);
+        draw_build_ghost(sim, kind, cell, ox, wtop);
     }
 }
 
@@ -879,6 +1345,19 @@ fn contact_shadow(x: f32, y: f32, base: f32) {
 /// Draws the white silhouette icon (or a fallback shape) centered on a piece.
 fn piece_icon(x: f32, y: f32, isz: f32, texture: Option<&Texture2D>, team: Color, building: bool) {
     if let Some(tex) = texture {
+        // Hologram: a slightly larger team-tinted glow copy behind a bright core,
+        // so the silhouette reads as a projection rather than solid clip-art.
+        let g = isz * 1.12;
+        draw_texture_ex(
+            tex,
+            x - g / 2.0,
+            y - g / 2.0,
+            with_alpha(team, 0.5),
+            DrawTextureParams {
+                dest_size: Some(vec2(g, g)),
+                ..DrawTextureParams::default()
+            },
+        );
         draw_texture_ex(
             tex,
             x - isz / 2.0,
@@ -901,12 +1380,22 @@ fn piece_icon(x: f32, y: f32, isz: f32, texture: Option<&Texture2D>, team: Color
 /// foundation slab with a thin gold baseplate tying them to the HUD. Both sit on a
 /// contact shadow, with the white silhouette framed by the team base so faction
 /// reads instantly and the piece has volume rather than looking like flat clip-art.
-fn draw_piece(x: f32, y: f32, size: f32, texture: Option<&Texture2D>, team: Color, building: bool) {
+fn draw_piece(
+    x: f32,
+    y: f32,
+    size: f32,
+    texture: Option<&Texture2D>,
+    team: Color,
+    building: bool,
+    flash: f32,
+) {
     let base = size * 0.5;
     contact_shadow(x, y, base);
     if building {
         let s = size * 0.86;
-        // Extruded team slab, lit top face, gold-rimmed (a map "plinth").
+        // Soft holographic projection bloom around the structure.
+        glow_rect(x - s / 2.0, y - s / 2.0, s, s, with_alpha(team, 0.28), 3);
+        // Extruded team slab, lit top face, holo-rimmed (a map "plinth").
         draw_rectangle(x - s / 2.0, y - s / 2.0, s, s, darken(team, 0.45));
         draw_rectangle(x - s / 2.0, y - s / 2.0, s, s * 0.5, darken(team, 0.66));
         draw_rectangle_lines(x - s / 2.0, y - s / 2.0, s, s, 2.0, DECO_GOLD);
@@ -921,8 +1410,18 @@ fn draw_piece(x: f32, y: f32, size: f32, texture: Option<&Texture2D>, team: Colo
         // Thin gold baseplate tying structures to the gold HUD.
         draw_rectangle(x - s / 2.0, y + s / 2.0 - 2.0, s, 2.0, GOLD);
         piece_icon(x, y, size * 0.6, texture, team, true);
+        if flash > 0.0 {
+            draw_rectangle(
+                x - s / 2.0,
+                y - s / 2.0,
+                s,
+                s,
+                with_alpha(WHITE, flash * 0.6),
+            );
+        }
     } else {
         let r = size * 0.58;
+        draw_circle(x, y, r + 4.0, with_alpha(team, 0.14)); // holographic halo
         draw_circle(x, y, r, darken(team, 0.5)); // base
         draw_circle(x, y - r * 0.14, r * 0.82, team); // top-lit bulge
         draw_circle_lines(x, y, r, 2.0, DECO_GOLD); // gold rim
@@ -935,6 +1434,9 @@ fn draw_piece(x: f32, y: f32, size: f32, texture: Option<&Texture2D>, team: Colo
             Color::new(1.0, 1.0, 1.0, 0.32),
         );
         piece_icon(x, y, size * 0.6, texture, team, false);
+        if flash > 0.0 {
+            draw_circle(x, y, r, with_alpha(WHITE, flash * 0.6));
+        }
     }
 }
 
@@ -964,59 +1466,63 @@ fn board_size(sim: &Sim, cell: f32) -> (f32, f32) {
 /// Draws the battlefield as a gilded antique **hex** campaign-map: flat-top hex
 /// terrain tiles in warm painted tones, a sepia varnish + edge vignette, and an
 /// ornate gold deco frame with corner ornaments — matching the regal menu.
-fn draw_ground(sim: &Sim, cell: f32) {
+fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     let cols = sim.map().width();
     let rows = sim.map().height();
     let (bw, bh) = board_size(sim, cell);
-    let ox = board_origin_x(sim, cell);
-    draw_rectangle(ox, WORLD_TOP, bw, bh, GROUND);
+    draw_rectangle(ox, wtop, bw, bh, GROUND);
+    // A diagonal band of hexes sweeps across the board over time, lit brighter —
+    // a holographic graticule scan.
+    let pulse = (get_time() * 4.0) as i32;
     for row in 0..rows {
         for col in 0..cols {
-            let (cx, cy) = hex_center_px(col, row, cell, ox);
+            let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
             draw_hex(cx, cy, cell, terrain_tone(col, row));
             if (col / 4 + row / 4).is_multiple_of(2) {
                 draw_hex(cx, cy, cell, GROUND_MACRO);
             }
-            draw_hex_outline(cx, cy, cell, 1.0, GRID);
+            let on_band = (i32::from(col) + i32::from(row) - pulse).rem_euclid(14) == 0;
+            draw_hex_outline(cx, cy, cell, 1.0, if on_band { GRID_HOT } else { GRID });
         }
     }
-    // Warm sepia varnish — a soft gold wash lifting the lit center.
+    // Cool holographic center bloom lifting the lit center.
     draw_ellipse(
         ox + bw / 2.0,
-        WORLD_TOP + bh * 0.42,
+        wtop + bh * 0.42,
         bw * 0.5,
         bh * 0.42,
         0.0,
         VARNISH,
     );
-    // Edge vignette: concentric darkening frames, heaviest at the rim.
+    // Edge vignette: concentric darkening frames, heaviest at the rim (cool void).
     for (i, alpha) in [80u8, 60, 45, 30].into_iter().enumerate() {
         let inset = i as f32 * cell;
         draw_rectangle_lines(
             ox + inset,
-            WORLD_TOP + inset,
+            wtop + inset,
             bw - inset * 2.0,
             bh - inset * 2.0,
             cell,
-            Color::from_rgba(16, 12, 4, alpha),
+            Color::from_rgba(2, 5, 10, alpha),
         );
     }
-    // Ornate gold deco frame (brass bevel) + inner gold rule + corner ornaments.
-    let board = Rect::new(ox, WORLD_TOP, bw, bh);
+    // Glowing holographic frame (cyan bevel) + soft outer bloom + corner ornaments.
+    let board = Rect::new(ox, wtop, bw, bh);
+    glow_rect(ox, wtop, bw, bh, HOLO_GLOW, 3);
     beveled_frame(board, 5.0, DECO_GOLD_HI, theme::GOLD_DK);
-    draw_rectangle_lines(ox, WORLD_TOP, bw, bh, 1.0, BRONZE);
+    draw_rectangle_lines(ox, wtop, bw, bh, 1.0, BRONZE);
     draw_rectangle_lines(
         ox + 8.0,
-        WORLD_TOP + 8.0,
+        wtop + 8.0,
         bw - 16.0,
         bh - 16.0,
         1.5,
         with_alpha(DECO_GOLD, 0.7),
     );
-    corner_ornament(ox, WORLD_TOP, 1.0, 1.0);
-    corner_ornament(ox + bw, WORLD_TOP, -1.0, 1.0);
-    corner_ornament(ox, WORLD_TOP + bh, 1.0, -1.0);
-    corner_ornament(ox + bw, WORLD_TOP + bh, -1.0, -1.0);
+    corner_ornament(ox, wtop, 1.0, 1.0);
+    corner_ornament(ox + bw, wtop, -1.0, 1.0);
+    corner_ornament(ox, wtop + bh, 1.0, -1.0);
+    corner_ornament(ox + bw, wtop + bh, -1.0, -1.0);
 }
 
 /// The hovered hex during building placement (mouse → cell), board centered.
@@ -1029,9 +1535,8 @@ fn mouse_hex(sim: &Sim, cell: f32) -> (u16, u16) {
 }
 
 /// Faint hex outlines over buildable cells, shown while placing a building.
-fn draw_build_grid(sim: &Sim, cell: f32) {
+fn draw_build_grid(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     let col = Color::from_rgba(255, 255, 255, 24);
-    let ox = board_origin_x(sim, cell);
     for row in 0..sim.map().height() {
         for tx in 0..sim.map().width() {
             if sim
@@ -1039,32 +1544,30 @@ fn draw_build_grid(sim: &Sim, cell: f32) {
                 .tile(i32::from(tx), i32::from(row))
                 .is_some_and(|t| t.buildable)
             {
-                let (cx, cy) = hex_center_px(tx, row, cell, ox);
+                let (cx, cy) = hex_center_px(tx, row, cell, ox, wtop);
                 draw_hex_outline(cx, cy, cell, 1.0, col);
             }
         }
     }
 }
 
-/// Draws shot tracers for the most recent combat tick (combat juice).
-fn draw_tracers(sim: &Sim, cell: f32) {
-    let color = TRACER;
-    let ox = board_origin_x(sim, cell);
+/// Draws shot tracers for the most recent combat tick (combat juice): a wide
+/// translucent cyan glow under a bright thin core, so lasers read as energy bolts.
+fn draw_tracers(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     for &(from, to) in sim.recent_attacks() {
-        draw_line(
+        let (fx, fy) = (
             ox + tile_to_px(from.x, cell),
-            WORLD_TOP + tile_to_px(from.y, cell),
-            ox + tile_to_px(to.x, cell),
-            WORLD_TOP + tile_to_px(to.y, cell),
-            1.5,
-            color,
+            wtop + tile_to_px(from.y, cell),
         );
+        let (tx, ty) = (ox + tile_to_px(to.x, cell), wtop + tile_to_px(to.y, cell));
+        draw_line(fx, fy, tx, ty, 4.0, with_alpha(TRACER, 0.28));
+        draw_line(fx, fy, tx, ty, 1.5, TRACER);
     }
 }
 
 /// Draws a translucent placement ghost on the moused hex: green if buildable and
 /// affordable, red otherwise.
-fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32) {
+fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32) {
     let (col, row) = mouse_hex(sim, cell);
     let buildable = sim
         .map()
@@ -1076,7 +1579,7 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32) {
     } else {
         Color::from_rgba(200, 80, 80, 120)
     };
-    let (cx, cy) = hex_center_px(col, row, cell, board_origin_x(sim, cell));
+    let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
     draw_hex(cx, cy, cell, fill);
     draw_hex_outline(
         cx,
@@ -1090,15 +1593,39 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32) {
 /// Draws impassable terrain as **mountain hexes** (ramparts): a dark rampart body
 /// with a lighter raised peak and a dark outline, matching the design's mountain
 /// tiles that block movement.
-fn draw_terrain(sim: &Sim, cell: f32) {
+/// Shrouds tiles the human can't currently see: a heavy veil over never-seen
+/// tiles and a lighter haze over explored-but-out-of-sight tiles.
+fn draw_fog(sim: &Sim, fog: &fog::Fog, cell: f32, ox: f32, wtop: f32) {
+    let unseen = Color::from_rgba(3, 6, 12, 232);
+    let explored = Color::from_rgba(3, 6, 12, 150);
+    for row in 0..sim.map().height() {
+        for col in 0..sim.map().width() {
+            if fog.visible(col, row) {
+                continue;
+            }
+            let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
+            draw_hex(
+                cx,
+                cy,
+                cell,
+                if fog.explored(col, row) {
+                    explored
+                } else {
+                    unseen
+                },
+            );
+        }
+    }
+}
+
+fn draw_terrain(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     let map = sim.map();
-    let ox = board_origin_x(sim, cell);
     for row in 0..map.height() {
         for col in 0..map.width() {
             if map.tile(i32::from(col), i32::from(row)).unwrap().passable {
                 continue;
             }
-            let (cx, cy) = hex_center_px(col, row, cell, ox);
+            let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
             draw_hex(cx, cy, cell, TERRAIN_WALL); // rampart body
             draw_hex(cx, cy - cell * 0.12, cell * 0.6, WALL_TOP); // raised lit peak
             draw_hex(cx, cy - cell * 0.2, cell * 0.28, WALL_HI); // bright cap
@@ -1109,8 +1636,8 @@ fn draw_terrain(sim: &Sim, cell: f32) {
 
 /// Health bar over a piece. Full-health pieces are left clean; once damaged a
 /// framed gauge appears so it reads as a deliberate readout, not a stray sliver.
-fn draw_health_bar(x: f32, y: f32, cell: f32, hp: Fixed, max_hp: Fixed) {
-    let frac = (hp.to_bits() as f32 / max_hp.to_bits() as f32).clamp(0.0, 1.0);
+fn draw_health_bar(x: f32, y: f32, cell: f32, hp: f32, max_hp: f32) {
+    let frac = (hp / max_hp).clamp(0.0, 1.0);
     if frac >= 0.999 {
         return;
     }
@@ -1124,11 +1651,11 @@ fn draw_health_bar(x: f32, y: f32, cell: f32, hp: Fixed, max_hp: Fixed) {
 
 /// Cyan shield bar drawn directly above the HP bar. Only visible when the entity
 /// has a non-zero shield max (i.e. the owner has researched at least Shield I).
-fn draw_shield_bar(x: f32, y: f32, cell: f32, shield: Fixed, max_shield: Fixed) {
-    if max_shield <= Fixed::ZERO {
+fn draw_shield_bar(x: f32, y: f32, cell: f32, shield: f32, max_shield: f32) {
+    if max_shield <= 0.0 {
         return;
     }
-    let frac = (shield.to_bits() as f32 / max_shield.to_bits() as f32).clamp(0.0, 1.0);
+    let frac = (shield / max_shield).clamp(0.0, 1.0);
     let width = cell * 1.1;
     let left = x - width / 2.0;
     // Position 3 px above the HP bar track (HP bar top = y - cell * 0.82).

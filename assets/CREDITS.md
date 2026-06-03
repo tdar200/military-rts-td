@@ -51,5 +51,26 @@ Used as the military-stencil display face for the victory/defeat banner.
 **Cinzel**, by Natanael Gama, used under the **SIL Open Font License 1.1** —
 full license in `assets/fonts/Cinzel-OFL.txt`.
 Source: https://fonts.google.com/specimen/Cinzel
-The inscriptional Roman serif for the regal menu register (wordmark, cartouche
-titles, scenario names) — the Civilization-VII-inspired "Field Command" look.
+Previously the inscriptional Roman serif for the regal menu register. Retained in
+the repo but no longer loaded after the **Holographic Tactical Command** UI
+overhaul — the wordmark and menus now use Rajdhani to match the sci-fi register.
+
+## Audio
+
+All sound effects and music are **procedurally generated** for this project with
+**FFmpeg** (sine/noise synthesis) and are therefore original works released into
+the public domain (**CC0 1.0**). No third-party audio is used. Files live in
+`assets/audio/` as OGG Vorbis:
+
+| File | Use |
+|---|---|
+| `ui_click.ogg` | command-bar button click |
+| `laser.ogg` | weapon fire (throttled) |
+| `explosion.ogg` | unit/building destruction |
+| `build.ogg` / `train.ogg` | structure placed / unit deployed |
+| `wave_incoming.ogg` | alarm as the wave countdown crosses 5 s |
+| `victory.ogg` / `defeat.ogg` | match-end jingle |
+| `music_menu.ogg` / `music_combat.ogg` | looping menu / in-match ambience |
+
+Regenerate with the FFmpeg commands recorded in the project history; tweak the
+synthesis expressions to taste.

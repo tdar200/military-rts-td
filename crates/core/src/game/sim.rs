@@ -65,10 +65,44 @@ struct Entity {
     tile: Option<(u16, u16)>,
     build_queue: Vec<UnitKind>,
     build_progress: u32,
+    /// Confirmed kills, accumulated for veterancy.
+    kills: u32,
+    /// Veterancy rank (0..=3), derived from `kills`; boosts outgoing damage.
+    rank: u8,
+}
+
+/// Veterancy rank for a given kill count (0 → 3, capped).
+const fn rank_for_kills(kills: u32) -> u8 {
+    if kills >= 9 {
+        3
+    } else if kills >= 5 {
+        2
+    } else if kills >= 2 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Outgoing-damage multiplier for a veterancy rank: +0%, +10%, +20%, +35%.
+const fn veterancy_factor(rank: u8) -> Fixed {
+    match rank {
+        0 => Fixed::ONE,
+        1 => Fixed::from_ratio(11, 10),
+        2 => Fixed::from_ratio(6, 5),
+        _ => Fixed::from_ratio(27, 20),
+    }
 }
 
 /// Antimatter cost to train a Capital Ship.
 const CAPITAL_ANTIMATTER_COST: Fixed = Fixed::from_int(100);
+
+/// Base population allowance before any production buildings.
+const SUPPLY_BASE: u32 = 8;
+/// Extra population headroom per Command Center.
+const SUPPLY_PER_CC: u32 = 6;
+/// Extra population headroom per Barracks.
+const SUPPLY_PER_BARRACKS: u32 = 5;
 
 /// Per-player resources.
 #[derive(Clone, Copy, Debug)]
@@ -82,6 +116,8 @@ struct Player {
     era: u8,
     /// Accumulated antimatter (third resource).
     antimatter: Fixed,
+    /// Bitmask of chosen survival perks (bit i = perk i active).
+    active_perks: u32,
 }
 
 /// A player or AI input, applied at a tick boundary.
@@ -122,6 +158,13 @@ pub enum Command {
         owner: PlayerId,
         /// Tech id to research.
         tech_id: u32,
+    },
+    /// Draft a survival perk (a one-time permanent run upgrade).
+    ChoosePerk {
+        /// Owning player.
+        owner: PlayerId,
+        /// Perk id (see [`crate::game::perk`]).
+        perk: u32,
     },
 }
 
@@ -172,12 +215,41 @@ pub struct WaveConfig {
     pub growth: u32,
     /// World position units spawn at.
     pub spawn: Vec2,
-    /// What to spawn.
+    /// What to spawn (the base unit; ignored per-unit when `escalate` is set).
     pub unit: UnitKind,
     /// Player the wave belongs to.
     pub attacker: PlayerId,
     /// Player the wave marches against.
     pub defender: PlayerId,
+    /// Survival escalation: when set, later waves broaden their composition
+    /// (anti-armor, tanks, then air) and a Capital "boss" joins every 5th wave.
+    pub escalate: bool,
+}
+
+/// Survival wave composition: which unit a given index in wave `wave` spawns as.
+/// Broadens deterministically over time so the player must diversify defenses.
+const fn escalating_unit(wave: u32, i: u32) -> UnitKind {
+    match wave {
+        0..=1 => UnitKind::Infantry,
+        2..=3 => {
+            if i.is_multiple_of(3) {
+                UnitKind::AntiArmor
+            } else {
+                UnitKind::Infantry
+            }
+        }
+        4..=6 => match i % 3 {
+            0 => UnitKind::Tank,
+            1 => UnitKind::AntiArmor,
+            _ => UnitKind::Infantry,
+        },
+        _ => match i % 4 {
+            0 => UnitKind::Tank,
+            1 => UnitKind::Helicopter,
+            2 => UnitKind::AntiArmor,
+            _ => UnitKind::Infantry,
+        },
+    }
 }
 
 /// The deterministic RTS world.
@@ -288,6 +360,7 @@ impl Sim {
                 active_research: None,
                 era: 0,
                 antimatter: Fixed::ZERO,
+                active_perks: 0,
             }; PLAYER_COUNT],
             entities: Vec::new(),
             free: Vec::new(),
@@ -419,6 +492,12 @@ impl Sim {
         Some(if into == 0 { 0 } else { cfg.interval - into })
     }
 
+    /// Number of waves that have already spawned — the survival-mode score.
+    #[must_use]
+    pub const fn waves_survived(&self) -> u32 {
+        self.wave_count
+    }
+
     /// Number of living entities.
     #[must_use]
     pub fn entity_count(&self) -> usize {
@@ -432,6 +511,55 @@ impl Sim {
             .iter()
             .filter(|e| e.alive && e.owner == player && matches!(e.kind, Kind::Unit(_)))
             .count()
+    }
+
+    /// Population cap for `player`: a base allowance plus headroom from the
+    /// Command Center and each Barracks, so expanding production also lifts the
+    /// supply ceiling (the build-economy-vs-army decision).
+    #[must_use]
+    pub fn supply_cap(&self, player: PlayerId) -> u32 {
+        let mut cap = SUPPLY_BASE;
+        for e in &self.entities {
+            if e.alive && e.owner == player {
+                cap += match e.kind {
+                    Kind::Building(BuildingKind::CommandCenter) => SUPPLY_PER_CC,
+                    Kind::Building(BuildingKind::Barracks) => SUPPLY_PER_BARRACKS,
+                    _ => 0,
+                };
+            }
+        }
+        if self.players[usize::from(player.0)].active_perks & (1 << crate::game::perk::CONSCRIPTION)
+            != 0
+        {
+            cap += 8;
+        }
+        cap
+    }
+
+    /// The player's active survival perks (bitmask).
+    #[must_use]
+    pub const fn perks(&self, player: PlayerId) -> u32 {
+        self.players[player.0 as usize].active_perks
+    }
+
+    /// Supply in use: living units plus units still queued for training, so the
+    /// cap can't be bypassed by over-queueing.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "unit/queue counts fit u32 for any real game"
+    )]
+    pub fn supply_used(&self, player: PlayerId) -> u32 {
+        let mut used = 0;
+        for e in &self.entities {
+            if e.alive && e.owner == player {
+                match e.kind {
+                    Kind::Unit(_) => used += 1,
+                    Kind::Building(_) => used += e.build_queue.len() as u32,
+                }
+            }
+        }
+        used
     }
 
     /// Whether the entity exists and is alive.
@@ -519,6 +647,7 @@ impl Sim {
             }
             h.write_u64(u64::from(p.era));
             h.write_i64(p.antimatter.to_bits());
+            h.write_u64(u64::from(p.active_perks));
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -530,6 +659,8 @@ impl Sim {
             h.write_i64(e.shield.to_bits());
             h.write_u64(u64::from(e.last_combat_tick));
             h.write_u64(u64::from(e.cooldown));
+            h.write_u64(u64::from(e.kills));
+            h.write_u64(u64::from(e.rank));
             match e.move_target {
                 Some(t) => {
                     h.write_u64(1);
@@ -586,6 +717,8 @@ impl Sim {
             tile: Some((x, y)),
             build_queue: Vec::new(),
             build_progress: 0,
+            kills: 0,
+            rank: 0,
         })
     }
 
@@ -611,6 +744,8 @@ impl Sim {
             tile: None,
             build_queue: Vec::new(),
             build_progress: 0,
+            kills: 0,
+            rank: 0,
         })
     }
 
@@ -640,11 +775,24 @@ impl Sim {
         if !(self.tick - cfg.first_delay).is_multiple_of(cfg.interval) {
             return;
         }
-        let size = cfg.base_size + cfg.growth * self.wave_count;
+        let w = self.wave_count;
+        let size = cfg.base_size + cfg.growth * w;
         let target = self.command_center_pos(cfg.defender);
         for i in 0..size {
             let offset = Vec2::new(Fixed::ZERO, Fixed::from_ratio(i64::from(i), 3));
-            let spawned = self.add_unit(cfg.attacker, cfg.unit, cfg.spawn + offset);
+            let kind = if cfg.escalate {
+                escalating_unit(w, i)
+            } else {
+                cfg.unit
+            };
+            let spawned = self.add_unit(cfg.attacker, kind, cfg.spawn + offset);
+            if let Some(t) = target {
+                self.order_unit_to(spawned.0 as usize, t);
+            }
+        }
+        // Boss: a Capital ship joins every 5th wave once escalation is underway.
+        if cfg.escalate && (w + 1).is_multiple_of(5) {
+            let spawned = self.add_unit(cfg.attacker, UnitKind::Capital, cfg.spawn);
             if let Some(t) = target {
                 self.order_unit_to(spawned.0 as usize, t);
             }
@@ -767,7 +915,12 @@ impl Sim {
                         && e.owner == owner
                         && matches!(e.kind, Kind::Building(BuildingKind::Barracks))
                 });
-                if ok && self.players[p].credits >= cost && self.players[p].antimatter >= am_cost {
+                let has_supply = self.supply_used(owner) < self.supply_cap(owner);
+                if ok
+                    && has_supply
+                    && self.players[p].credits >= cost
+                    && self.players[p].antimatter >= am_cost
+                {
                     self.players[p].credits = self.players[p].credits - cost;
                     self.players[p].antimatter = self.players[p].antimatter - am_cost;
                     if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
@@ -799,11 +952,26 @@ impl Sim {
                     Some(req) => self.players[p].researched_techs & (1u32 << req) != 0,
                     None => true,
                 };
+                // A doctrine fork locks out its counterpart once chosen.
+                let fork_ok = match crate::game::tech::excludes(tech_id) {
+                    Some(other) => self.players[p].researched_techs & (1u32 << other) == 0,
+                    None => true,
+                };
                 let has_lab = self.has_research_lab(owner);
-                if !already && !busy && prereq_ok && has_lab && self.players[p].credits >= def.cost
+                if !already
+                    && !busy
+                    && prereq_ok
+                    && fork_ok
+                    && has_lab
+                    && self.players[p].credits >= def.cost
                 {
                     self.players[p].credits = self.players[p].credits - def.cost;
                     self.players[p].active_research = Some((tech_id, def.duration));
+                }
+            }
+            Command::ChoosePerk { owner, perk } => {
+                if perk < crate::game::perk::PERK_COUNT {
+                    self.players[usize::from(owner.0)].active_perks |= 1u32 << perk;
                 }
             }
         }
@@ -913,13 +1081,27 @@ impl Sim {
         let mut powered = [false; PLAYER_COUNT];
         for p in 0..PLAYER_COUNT {
             powered[p] = produced[p] >= consumed[p];
-            let factor = if powered[p] {
+            // Power is a gradient, not a switch: a deficit scales income by the
+            // fraction of demand actually met, floored at 1/2. Meeting more of
+            // your demand is rewarded smoothly instead of an all-or-nothing cliff.
+            let half = Fixed::from_ratio(1, 2);
+            let factor = if powered[p] || consumed[p] <= 0 {
                 Fixed::ONE
             } else {
-                Fixed::from_ratio(1, 2)
+                let frac = Fixed::from_ratio(i64::from(produced[p]), i64::from(consumed[p]));
+                if frac < half {
+                    half
+                } else {
+                    frac
+                }
             };
             let econ = self.player_economy_bonus(PlayerId(u8::try_from(p).unwrap()));
-            self.players[p].credits = self.players[p].credits + (income[p] + econ) * factor;
+            // Logistics perk: +50% credit income.
+            let mut credit_income = income[p] + econ;
+            if self.players[p].active_perks & (1 << crate::game::perk::LOGISTICS) != 0 {
+                credit_income = credit_income * Fixed::from_ratio(3, 2);
+            }
+            self.players[p].credits = self.players[p].credits + credit_income * factor;
             self.players[p].antimatter = self.players[p].antimatter + am_income[p] * factor;
         }
         powered
@@ -1015,7 +1197,10 @@ impl Sim {
         reason = "grid cell coordinates are clamped into the map bounds before use; combat loop is long by necessity"
     )]
     fn run_combat(&mut self) {
-        let snap: Vec<(bool, u8, Vec2, ArmorType, bool)> = self
+        // Pre-tick snapshot (all attackers this tick target the same frozen
+        // state, so combat is order-independent and bit-deterministic). The last
+        // field is current HP, used for focus-fire targeting.
+        let snap: Vec<(bool, u8, Vec2, ArmorType, bool, Fixed)> = self
             .entities
             .iter()
             .map(|e| {
@@ -1025,6 +1210,7 @@ impl Sim {
                     e.pos,
                     armor_of(&self.balance, e.kind),
                     is_air_of(&self.balance, e.kind),
+                    e.hp,
                 )
             })
             .collect();
@@ -1052,11 +1238,28 @@ impl Sim {
             core::array::from_fn(|p| self.player_armor_bonus(PlayerId(u8::try_from(p).unwrap())));
         let era_dmg: [Fixed; PLAYER_COUNT] =
             core::array::from_fn(|p| era_damage_factor(self.players[p].era));
+        // Survival perks: Overcharge scales outgoing damage; Bulwark adds flat
+        // mitigation. No perks chosen ⇒ ONE / ZERO ⇒ base combat is unchanged.
+        let perk_dmg: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
+            if self.players[p].active_perks & (1 << crate::game::perk::OVERCHARGE) != 0 {
+                Fixed::from_ratio(5, 4)
+            } else {
+                Fixed::ONE
+            }
+        });
+        let perk_mit: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
+            if self.players[p].active_perks & (1 << crate::game::perk::BULWARK) != 0 {
+                Fixed::from_int(2)
+            } else {
+                Fixed::ZERO
+            }
+        });
 
-        let mut damage: Vec<(usize, Fixed, bool)> = Vec::new();
+        // (target index, attacker index, damage, pierces-shields).
+        let mut damage: Vec<(usize, usize, Fixed, bool)> = Vec::new();
         let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
         let mut candidates: Vec<usize> = Vec::new();
-        for e in &mut self.entities {
+        for (i, e) in self.entities.iter_mut().enumerate() {
             if !e.alive {
                 continue;
             }
@@ -1083,7 +1286,13 @@ impl Sim {
             candidates.sort_unstable();
 
             let range_sq = profile.range * profile.range;
-            let mut best: Option<(usize, Fixed)> = None;
+            // Target the NEAREST valid enemy (preserves lane/base pressure so
+            // matches resolve), breaking distance ties by LOWEST HP — a focus-fire
+            // tie-break that secures kills when several foes are equidistant. Ties
+            // resolve to the lowest index (candidates are scanned in ascending
+            // index order and we only replace on a strict improvement), keeping
+            // the simulation bit-for-bit deterministic.
+            let mut best: Option<(usize, Fixed, Fixed)> = None;
             for &j in &candidates {
                 let t = snap[j];
                 if t.1 == e.owner.0 {
@@ -1098,15 +1307,23 @@ impl Sim {
                     continue;
                 }
                 let dist_sq = (t.2 - e.pos).length_squared();
-                if dist_sq <= range_sq && best.is_none_or(|(_, bd)| dist_sq < bd) {
-                    best = Some((j, dist_sq));
+                if dist_sq > range_sq {
+                    continue;
+                }
+                let thp = t.5;
+                let better =
+                    best.is_none_or(|(_, bd, bhp)| dist_sq < bd || (dist_sq == bd && thp < bhp));
+                if better {
+                    best = Some((j, dist_sq, thp));
                 }
             }
-            if let Some((j, _)) = best {
+            if let Some((j, _, _)) = best {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
-                let base = profile.damage * mult * era_dmg[usize::from(e.owner.0)];
+                let raw = profile.damage * mult * era_dmg[usize::from(e.owner.0)]
+                    + weapon[usize::from(e.owner.0)];
+                let dmg = raw * veterancy_factor(e.rank) * perk_dmg[usize::from(e.owner.0)];
                 let pierces = matches!(profile.damage_type, DamageType::AntiArmor);
-                damage.push((j, base + weapon[usize::from(e.owner.0)], pierces));
+                damage.push((j, i, dmg, pierces));
                 lines.push((e.pos, snap[j].2));
                 e.cooldown = profile.period;
             }
@@ -1116,9 +1333,9 @@ impl Sim {
             reason = "tick fits u32 for any real game"
         )]
         let tick = self.tick as u32;
-        for (j, dmg, pierces) in damage {
+        for (j, attacker, dmg, pierces) in damage {
             let owner = self.entities[j].owner;
-            let mit = armor[usize::from(owner.0)];
+            let mit = armor[usize::from(owner.0)] + perk_mit[usize::from(owner.0)];
             // Armor research subtracts flat mitigation, but a mitigated hit still
             // deals at least 1 (no immunity). With no armor research (mit == 0),
             // damage is unchanged, keeping base combat identical.
@@ -1132,14 +1349,25 @@ impl Sim {
             } else {
                 dmg
             };
-            let e = &mut self.entities[j];
-            e.last_combat_tick = tick;
-            if pierces {
-                e.hp = e.hp - net;
-            } else {
-                let absorbed = if e.shield < net { e.shield } else { net };
-                e.shield = e.shield - absorbed;
-                e.hp = e.hp - (net - absorbed);
+            let killed = {
+                let e = &mut self.entities[j];
+                e.last_combat_tick = tick;
+                let was_alive = e.hp > Fixed::ZERO;
+                if pierces {
+                    e.hp = e.hp - net;
+                } else {
+                    let absorbed = if e.shield < net { e.shield } else { net };
+                    e.shield = e.shield - absorbed;
+                    e.hp = e.hp - (net - absorbed);
+                }
+                // Only the blow that crosses 0 counts, so a target killed by an
+                // earlier hit this tick can't be double-credited.
+                was_alive && e.hp <= Fixed::ZERO
+            };
+            if killed {
+                let a = &mut self.entities[attacker];
+                a.kills += 1;
+                a.rank = rank_for_kills(a.kills);
             }
         }
         self.attacks = lines;
@@ -1703,7 +1931,80 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 13_355_596_211_711_344_768);
+        assert_eq!(s.state_hash(), 5_674_700_667_207_928_704);
+    }
+
+    #[test]
+    fn doctrine_fork_locks_out_the_counterpart() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
+        s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
+        // Research Assault Doctrine (17) to completion.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 17,
+        }]);
+        for _ in 0..700 {
+            s.step(&[]);
+        }
+        assert!(
+            s.research_state(P0).0 & (1 << 17) != 0,
+            "assault doctrine should be researched"
+        );
+        // Fortress Doctrine (18) is now permanently locked out.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 18,
+        }]);
+        assert!(
+            s.research_state(P0).1.is_none(),
+            "fortress doctrine should be rejected (fork already chosen)"
+        );
+        assert!(s.research_state(P0).0 & (1 << 18) == 0);
+    }
+
+    #[test]
+    fn supply_cap_limits_trained_units() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        let b = s.add_building(P0, BuildingKind::Barracks, 4, 2);
+        let cap = s.supply_cap(P0); // 8 base + 6 CC + 5 barracks
+        assert_eq!(cap, 19);
+        // Queue far more than the cap in a single tick; the cap must hold.
+        let mut cmds = alloc::vec::Vec::new();
+        for _ in 0..(cap + 8) {
+            cmds.push(Command::Train {
+                owner: P0,
+                barracks: b,
+                kind: UnitKind::Infantry,
+            });
+        }
+        s.step(&cmds);
+        assert_eq!(s.supply_used(P0), cap, "training exceeded the supply cap");
+    }
+
+    #[test]
+    fn perk_choice_sets_bit_and_applies_effect() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(1000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        let base_cap = s.supply_cap(P0);
+        s.step(&[Command::ChoosePerk {
+            owner: P0,
+            perk: crate::game::perk::CONSCRIPTION,
+        }]);
+        assert!(s.perks(P0) & (1 << crate::game::perk::CONSCRIPTION) != 0);
+        assert_eq!(
+            s.supply_cap(P0),
+            base_cap + 8,
+            "conscription should lift the cap"
+        );
+        // An out-of-range perk id is ignored.
+        s.step(&[Command::ChoosePerk {
+            owner: P0,
+            perk: 99,
+        }]);
+        assert_eq!(s.perks(P0), 1 << crate::game::perk::CONSCRIPTION);
     }
 
     fn wave_cfg() -> WaveConfig {
@@ -1716,6 +2017,7 @@ mod tests {
             unit: UnitKind::Infantry,
             attacker: P1,
             defender: P0,
+            escalate: false,
         }
     }
 

@@ -1,141 +1,152 @@
-//! Shared visual theme — the "FIELD COMMAND" palette.
+//! Shared visual theme — the "HOLOGRAPHIC TACTICAL COMMAND" palette.
 //!
-//! A two-register system inspired by Civilization VII's gold-on-dark regality,
-//! adapted to a military command HUD: a lean, functional **gunmetal + olive-drab**
-//! in-match HUD where gold appears only on *live/important* elements, with the
-//! brass/stencil flourish reserved for the menus. Civ VII's strengths are
-//! borrowed (restrained palette, gold accent, refined panels) while its
-//! documented flaws are avoided — we keep a *cool* structural neutral for resting
-//! borders so gold stays meaningful, code state by hue + semantic color (not
-//! grey-on-grey), and keep text density and contrast high.
+//! A single coherent sci-fi register: a deep-space near-black field lit by
+//! **cyan/teal holographic glow**, which carries the "live/important" role that
+//! gold used to (credits, active build, selection, menu rules). A restrained
+//! **warm red** is reserved for hostile/alert signals (enemy faction, incoming
+//! wave, low HP, defeat) so threat reads instantly and stays hue-distinct from
+//! the cyan accent and the green "good" indicator. Resting borders stay a cool,
+//! dim steel so the cyan glow remains a highlight rather than an everywhere line.
 //!
-//! Every color the shell draws lives here as a token so the battlefield and the
-//! HUD stay one coherent system.
+//! The constant *names* are kept stable across the theme overhaul (e.g. `GOLD`,
+//! `DECO_GOLD`, `PARCHMENT`, the `MAP_*`/`REGAL_*` families) so every call site
+//! recolors at once; only their *values* changed from the old parchment register
+//! to this holographic one. Every color the shell draws lives here as a token so
+//! the battlefield and the HUD stay one system.
 
 use macroquad::prelude::*;
 
 // --- backdrops ---
-/// Title/menu clear color — the deepest charcoal (regal register). Also the
-/// letterbox outside the battlefield play area.
-pub const BASE_CHARCOAL: Color = color_u8!(14, 16, 19, 255);
-/// Battlefield ground tile (base shade).
-pub const GROUND: Color = color_u8!(26, 31, 20, 255);
-/// Alternating ground tile — a visibly lighter olive so the checkerboard reads.
-pub const GROUND_ALT: Color = color_u8!(38, 48, 28, 255);
-/// Coarse macro-sector overlay, breaking the field into 4x4 blocks.
-pub const GROUND_MACRO: Color = color_u8!(32, 38, 26, 40);
-/// Tile grid over the ground — visible enough to read as a tactical surface.
-pub const GRID: Color = color_u8!(70, 80, 60, 55);
-/// Impassable terrain (walls) — olive-gray body (middle face).
-pub const TERRAIN_WALL: Color = color_u8!(51, 56, 43, 255);
-/// Lit top face of a wall block.
-pub const WALL_TOP: Color = color_u8!(78, 85, 62, 255);
+/// Title/menu clear color — the deepest space-black-blue. Also the letterbox
+/// outside the battlefield play area.
+pub const BASE_CHARCOAL: Color = color_u8!(6, 9, 16, 255);
+/// Battlefield ground tile (base shade) — dark blue-slate.
+pub const GROUND: Color = color_u8!(10, 16, 26, 255);
+/// Alternating ground tile — a step lighter so the grid reads as a surface.
+pub const GROUND_ALT: Color = color_u8!(14, 22, 34, 255);
+/// Coarse macro-sector overlay, breaking the field into 4x4 blocks (translucent).
+pub const GROUND_MACRO: Color = color_u8!(18, 34, 52, 40);
+/// Tile grid over the ground — cyan, low alpha, reads as a holographic graticule.
+pub const GRID: Color = color_u8!(40, 120, 150, 70);
+/// Brighter grid pulse line (used for the moving graticule sweep on the board).
+pub const GRID_HOT: Color = color_u8!(70, 200, 235, 110);
+/// Impassable terrain (walls) — dark crystalline body (middle face).
+pub const TERRAIN_WALL: Color = color_u8!(14, 30, 44, 255);
+/// Lit top face of a wall/pylon block.
+pub const WALL_TOP: Color = color_u8!(24, 90, 110, 255);
 /// Bright highlight line along a wall's top edge.
-pub const WALL_HI: Color = color_u8!(92, 102, 72, 255);
+pub const WALL_HI: Color = color_u8!(64, 220, 235, 255);
 /// Wall outline / dark groove.
-pub const WALL_EDGE: Color = color_u8!(20, 23, 15, 255);
+pub const WALL_EDGE: Color = color_u8!(3, 5, 10, 255);
 /// Soft drop-shadow under a unit/building (translucent, stacked for soft edge).
-pub const PIECE_SHADOW: Color = color_u8!(0, 0, 0, 70);
+pub const PIECE_SHADOW: Color = color_u8!(0, 0, 0, 90);
 
 // --- panels ---
-/// Primary HUD panel fill (gunmetal, slightly translucent over the map).
-pub const PANEL: Color = color_u8!(21, 24, 28, 242);
+/// Primary HUD panel fill (dark translucent glass over the map).
+pub const PANEL: Color = color_u8!(10, 18, 28, 225);
 /// Button rest / minimap inner field — one step up from `PANEL`.
-pub const PANEL_RAISED: Color = color_u8!(28, 32, 38, 255);
-/// Button hover — a cool steel lift, distinct in hue from the warm active fill.
-pub const PANEL_HOVER: Color = color_u8!(42, 55, 68, 255);
-/// Active/selected build button — a warm brass-brown (a *hue* jump from the cool
-/// rest/hover greys, so "selected" reads at a glance, not by brightness alone).
-pub const PANEL_ACTIVE: Color = color_u8!(58, 46, 18, 255);
+pub const PANEL_RAISED: Color = color_u8!(16, 28, 42, 255);
+/// Button hover — a cool steel lift.
+pub const PANEL_HOVER: Color = color_u8!(24, 52, 70, 255);
+/// Active/selected build button — a cyan-saturated fill (a *hue* jump from the
+/// cooler rest/hover panels, so "selected" reads at a glance).
+pub const PANEL_ACTIVE: Color = color_u8!(16, 70, 86, 255);
 
 // --- structure / accent ---
-/// Resting border + separators on all in-match HUD panels (kept cool, so gold
-/// stays a highlight rather than the everywhere-border).
-pub const BORDER_NEUTRAL: Color = color_u8!(58, 68, 80, 255);
-/// The gold accent — used sparingly, only where something is live/important
-/// (credits value, active build, minimap viewport, keybind, menu rules).
-pub const GOLD: Color = color_u8!(217, 169, 56, 255);
-/// Brighter gold for menu wordmark/markers and the single brightest active cue.
-pub const GOLD_HI: Color = color_u8!(242, 204, 102, 255);
-/// Shadowed gold for the dark side of a brass bevel (panel/tooltip rims).
-pub const GOLD_DK: Color = color_u8!(108, 84, 28, 255);
-/// Dark inset well behind medallions / under HUD chrome.
-pub const WELL: Color = color_u8!(9, 11, 14, 255);
+/// Resting border + separators on all in-match HUD panels (kept cool/dim so the
+/// cyan glow stays a highlight rather than the everywhere-border).
+pub const BORDER_NEUTRAL: Color = color_u8!(40, 78, 96, 255);
+/// The primary holographic accent ("HOLO") — used where something is
+/// live/important (credits value, active build, minimap viewport, menu rules).
+/// Kept under the historical name `GOLD` so existing call sites recolor cyan.
+pub const GOLD: Color = color_u8!(64, 220, 235, 255);
+/// Brightest holographic highlight — wordmark, scanline crest, brightest cue.
+pub const GOLD_HI: Color = color_u8!(150, 245, 255, 255);
+/// Shadowed holo for the dark side of a glowing bevel (panel/tooltip rims).
+pub const GOLD_DK: Color = color_u8!(24, 90, 110, 255);
+/// Dark inset well behind medallions / under HUD chrome (the deepest void).
+pub const WELL: Color = color_u8!(3, 5, 10, 255);
 
-// --- military anchor ---
-/// Olive-drab — selection-panel gutter, minimap terrain, command-bar group
-/// divider. Carries the "field command" identity brass cannot.
-pub const OLIVE: Color = color_u8!(58, 64, 41, 255);
+// --- divider anchor ---
+/// Structural divider — selection-panel gutter, minimap terrain, command-bar
+/// group divider. Kept under the historical name `OLIVE`; now a dim holo steel.
+pub const OLIVE: Color = color_u8!(30, 64, 80, 255);
 
 // --- text ---
-/// Primary text on panels — warm off-white/parchment, high contrast on gunmetal.
-pub const TEXT: Color = color_u8!(236, 228, 208, 255);
+/// Primary text on panels — cool off-white, high contrast on the dark glass.
+pub const TEXT: Color = color_u8!(206, 232, 240, 255);
 /// Secondary captions/labels — never carries a number read at a glance.
-pub const TEXT_DIM: Color = color_u8!(163, 156, 134, 255);
+pub const TEXT_DIM: Color = color_u8!(120, 158, 174, 255);
 
 // --- semantic state ---
 /// Positive: power surplus, high HP, affordable price, victory.
-pub const GOOD: Color = color_u8!(91, 196, 107, 255);
-/// Caution: next-wave countdown, paused, mid HP. Pushed orange to separate it
-/// from `GOLD` by hue.
-pub const WARN: Color = color_u8!(240, 169, 60, 255);
+pub const GOOD: Color = color_u8!(80, 230, 160, 255);
+/// Caution: next-wave countdown, paused, mid HP. Warm amber — reads as alert
+/// against the cyan field and stays hue-distinct from `GOLD`.
+pub const WARN: Color = color_u8!(240, 176, 64, 255);
 /// Threat: incoming wave, power deficit, unaffordable, low HP, defeat, enemy.
-pub const BAD: Color = color_u8!(226, 72, 61, 255);
+pub const BAD: Color = color_u8!(240, 78, 70, 255);
 
 // --- factions / on-map ---
-/// Player faction tint — a desaturated steel-teal that sits in the olive/gold
-/// palette instead of reading like a bright debug cyan.
-pub const TEAM_PLAYER: Color = color_u8!(90, 147, 168, 255);
-/// Alien (enemy) faction tint — an acidic chartreuse that reads as toxic and
-/// synthetic, kept hue-distinct from the green full-HP bars (`GOOD`) and bright
-/// against the darker terrain so enemy silhouettes stay legible.
-pub const TEAM_ENEMY: Color = color_u8!(140, 210, 30, 255);
-/// On-map selection ring — shares the active-gold language.
+/// Player faction tint — a bright friendly cyan hologram.
+pub const TEAM_PLAYER: Color = color_u8!(70, 200, 235, 255);
+/// Alien (enemy) faction tint — a hostile warm red, the standard "incoming
+/// threat" signal in a cyan UI and hue-distinct from `GOOD` and `GRID`.
+pub const TEAM_ENEMY: Color = color_u8!(240, 96, 80, 255);
+/// On-map selection ring — the brightest holo highlight.
 pub const SELECT_RING: Color = GOLD_HI;
-/// Combat tracer line (warmed toward the gold family, translucent).
-pub const TRACER: Color = color_u8!(255, 228, 140, 200);
+/// Combat tracer line — a bright cyan laser bolt (translucent).
+pub const TRACER: Color = color_u8!(150, 245, 255, 220);
 /// Health-bar track (behind the colored fill), on-map and in the selection panel.
-pub const HP_TRACK: Color = color_u8!(40, 46, 34, 255);
-/// Energy-shield bar tint.
-pub const SHIELD: Color = color_u8!(90, 200, 235, 255);
+pub const HP_TRACK: Color = color_u8!(16, 30, 40, 255);
+/// Energy-shield bar tint — blue-violet, distinct from HP and the team cyan.
+pub const SHIELD: Color = color_u8!(120, 180, 255, 255);
 
-// --- REGAL register (Civ-VII menu): parchment + antiquarian field + deco gold ---
-/// Deep antiquarian teal-green menu field.
-pub const REGAL_BG: Color = color_u8!(21, 39, 31, 255);
+// --- holographic FX tokens ---
+/// Translucent cyan bloom fill — stack a few expanding copies for a cheap glow.
+pub const HOLO_GLOW: Color = color_u8!(64, 220, 235, 70);
+/// Moving scanline sweep tint over panels/pieces/board.
+pub const SCANLINE: Color = color_u8!(120, 245, 255, 22);
+/// Translucent warm-red bloom for enemy/incoming alert glows.
+pub const ALERT_GLOW: Color = color_u8!(240, 96, 80, 90);
+
+// --- REGAL register (now the holographic command-console menu surfaces) ---
+/// Menu field base — deep space (kept under the `REGAL_BG` name).
+pub const REGAL_BG: Color = color_u8!(8, 12, 20, 255);
 /// Darkest corner of the menu vignette.
-pub const REGAL_BG_LO: Color = color_u8!(10, 22, 17, 255);
+pub const REGAL_BG_LO: Color = color_u8!(3, 5, 10, 255);
 /// Lit center of the menu field.
-pub const REGAL_BG_HI: Color = color_u8!(33, 57, 45, 255);
-/// Aged-paper panel fill (base).
-pub const PARCHMENT: Color = color_u8!(233, 220, 189, 255);
-/// Lit top of parchment.
-pub const PARCHMENT_HI: Color = color_u8!(244, 234, 208, 255);
-/// Shaded/aged lower parchment.
-pub const PARCHMENT_LO: Color = color_u8!(214, 195, 154, 255);
-/// Foxed/worn parchment edge.
-pub const PARCHMENT_EDGE: Color = color_u8!(179, 156, 105, 255);
-/// Dark sepia ink — serif text on parchment.
-pub const INK: Color = color_u8!(44, 36, 21, 255);
-/// Muted ink — captions on parchment.
-pub const INK_DIM: Color = color_u8!(106, 88, 54, 255);
-/// Antique bronze — ornament body / shadow line.
-pub const BRONZE: Color = color_u8!(124, 92, 39, 255);
-/// Antique deco gold — ornaments & frames (warmer than the HUD gold).
-pub const DECO_GOLD: Color = color_u8!(201, 164, 76, 255);
-/// Lit deco-gold highlight.
-pub const DECO_GOLD_HI: Color = color_u8!(236, 202, 116, 255);
+pub const REGAL_BG_HI: Color = color_u8!(14, 24, 38, 255);
+/// Console panel fill (was parchment) — dark holographic glass.
+pub const PARCHMENT: Color = color_u8!(12, 22, 34, 235);
+/// Lit top of a console panel.
+pub const PARCHMENT_HI: Color = color_u8!(20, 36, 52, 235);
+/// Shaded lower console panel.
+pub const PARCHMENT_LO: Color = color_u8!(8, 16, 26, 235);
+/// Console panel edge / frame seat.
+pub const PARCHMENT_EDGE: Color = color_u8!(40, 78, 96, 255);
+/// Primary console text (was sepia ink) — cool off-white.
+pub const INK: Color = color_u8!(206, 232, 240, 255);
+/// Muted console caption text.
+pub const INK_DIM: Color = color_u8!(120, 158, 174, 255);
+/// Ornament shadow line (was bronze) — dim holo.
+pub const BRONZE: Color = color_u8!(24, 90, 110, 255);
+/// Deco accent for ornaments & frames — the primary holo cyan.
+pub const DECO_GOLD: Color = color_u8!(64, 220, 235, 255);
+/// Lit deco-cyan highlight.
+pub const DECO_GOLD_HI: Color = color_u8!(150, 245, 255, 255);
 
-// --- warm Civ campaign-map terrain tones (square tiles painted, varnished) ---
-/// Grassland base.
-pub const MAP_GRASS: Color = color_u8!(93, 110, 60, 255);
-/// Grassland variant (lighter).
-pub const MAP_GRASS2: Color = color_u8!(107, 124, 69, 255);
-/// Plains / steppe (yellow-green).
-pub const MAP_PLAINS: Color = color_u8!(139, 137, 80, 255);
-/// Forest (dark green).
-pub const MAP_FOREST: Color = color_u8!(63, 85, 48, 255);
-/// Warm sepia varnish wash unifying the board with the parchment register.
-pub const VARNISH: Color = color_u8!(201, 164, 76, 36);
+// --- board terrain tones (holographic floor) ---
+/// Floor base.
+pub const MAP_GRASS: Color = color_u8!(10, 16, 26, 255);
+/// Floor variant (a step lighter).
+pub const MAP_GRASS2: Color = color_u8!(14, 22, 34, 255);
+/// Floor sector accent (faint cyan-tinted).
+pub const MAP_PLAINS: Color = color_u8!(16, 28, 40, 255);
+/// Floor low band (darker).
+pub const MAP_FOREST: Color = color_u8!(8, 14, 22, 255);
+/// Cool holographic center-bloom wash unifying the board.
+pub const VARNISH: Color = color_u8!(64, 220, 235, 30);
 
 /// Health-bar fill color by remaining fraction: green → amber → red. Used by both
 /// the on-map bars and the selection panel so they read identically.
@@ -148,4 +159,55 @@ pub fn hp_color(frac: f32) -> Color {
     } else {
         BAD
     }
+}
+
+/// A subtle alpha multiplier (0..1) that makes "live" holographic elements
+/// flicker faintly. Frame-rate independent (driven by wall-clock `get_time`).
+#[must_use]
+pub fn holo_flicker() -> f32 {
+    const FLOOR: f32 = 0.86;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "wall-clock time only drives a cosmetic flicker; precision loss is irrelevant"
+    )]
+    let t = get_time() as f32;
+    FLOOR + (1.0 - FLOOR) * (t * 9.0).sin().abs()
+}
+
+/// Returns `base` with its alpha scaled by `mul` (clamped 0..1). Handy for
+/// pulsing/flickering a token without defining a new constant.
+#[must_use]
+pub fn with_alpha(base: Color, mul: f32) -> Color {
+    Color {
+        a: (base.a * mul).clamp(0.0, 1.0),
+        ..base
+    }
+}
+
+/// Draws a cheap fake-bloom glow: `layers` expanding translucent outlines of
+/// `color` around the rectangle `(x, y, w, h)`. Cyan glow without a shader.
+pub fn glow_rect(x: f32, y: f32, w: f32, h: f32, color: Color, layers: u8) {
+    for layer in 1..=layers {
+        let grow = f32::from(layer) * 2.0;
+        let alpha = color.a * (1.0 - f32::from(layer) / f32::from(layers + 1));
+        draw_rectangle_lines(
+            x - grow,
+            y - grow,
+            w + grow * 2.0,
+            h + grow * 2.0,
+            1.5,
+            Color { a: alpha, ..color },
+        );
+    }
+}
+
+/// Draws a single horizontal scanline sweeping down the rectangle over time.
+pub fn scanline(x: f32, y: f32, w: f32, h: f32) {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "wall-clock time only drives a cosmetic sweep position"
+    )]
+    let phase = (get_time() as f32 * 0.35).fract();
+    let sy = y + phase * h;
+    draw_rectangle(x, sy, w, 1.5, SCANLINE);
 }

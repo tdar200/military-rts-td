@@ -9,6 +9,8 @@ pub mod hex;
 pub mod lockstep;
 pub mod map;
 pub mod path;
+pub mod perk;
+pub mod procgen;
 pub mod scenario;
 pub mod sim;
 pub mod stats;

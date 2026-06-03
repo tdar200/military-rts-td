@@ -8,7 +8,7 @@
 use crate::fixed::Fixed;
 
 /// Number of techs in the tree.
-pub const TECH_COUNT: usize = 17;
+pub const TECH_COUNT: usize = 19;
 
 /// Which global stat a tech improves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -206,6 +206,26 @@ pub const TECHS: [TechDef; TECH_COUNT] = [
         prereq: None,
         bonus: Fixed::ZERO,
     },
+    // --- Doctrine fork: a one-time, mutually-exclusive specialization (see
+    // `excludes`). Commit to overwhelming offense OR an entrenched defense.
+    TechDef {
+        id: 17,
+        name: "Assault Doctrine",
+        branch: TechBranch::Weapons,
+        cost: Fixed::from_int(600),
+        duration: 600,
+        prereq: None,
+        bonus: Fixed::from_int(3),
+    },
+    TechDef {
+        id: 18,
+        name: "Fortress Doctrine",
+        branch: TechBranch::Armor,
+        cost: Fixed::from_int(600),
+        duration: 600,
+        prereq: None,
+        bonus: Fixed::from_int(3),
+    },
 ];
 
 // Keep TECH_COUNT in sync with the table: the last tech's id must be the last
@@ -228,9 +248,31 @@ pub const fn is_era_key(id: u32) -> bool {
     matches!(tech(id), Some(t) if matches!(t.branch, TechBranch::Era))
 }
 
+/// The mutually-exclusive counterpart of `id` in a doctrine fork, if any.
+/// Researching a tech permanently locks out the tech this returns.
+#[must_use]
+pub const fn excludes(id: u32) -> Option<u32> {
+    match id {
+        17 => Some(18),
+        18 => Some(17),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_era_key, tech, TechBranch, TECHS, TECH_COUNT};
+    use super::{excludes, is_era_key, tech, TechBranch, TECHS, TECH_COUNT};
+
+    #[test]
+    fn doctrine_fork_is_mutually_exclusive() {
+        // The two doctrines exclude each other; nothing else is part of a fork.
+        assert_eq!(excludes(17), Some(18));
+        assert_eq!(excludes(18), Some(17));
+        assert_eq!(excludes(0), None);
+        assert_eq!(excludes(16), None);
+        assert_eq!(tech(17).unwrap().name, "Assault Doctrine");
+        assert_eq!(tech(18).unwrap().name, "Fortress Doctrine");
+    }
 
     #[test]
     fn is_shield_branch() {
@@ -240,7 +282,7 @@ mod tests {
         // Chain by prereq: 14→13, 15→14.
         assert_eq!(tech(14).unwrap().prereq, Some(13));
         assert_eq!(tech(15).unwrap().prereq, Some(14));
-        assert_eq!(TECH_COUNT, 17);
+        assert_eq!(TECH_COUNT, 19);
     }
 
     #[test]
@@ -256,7 +298,7 @@ mod tests {
         assert_eq!(t.name, "Anti-Grav Drives");
         assert!(matches!(t.branch, TechBranch::AntiGrav));
         assert_eq!(t.prereq, None);
-        assert_eq!(TECH_COUNT, 17);
+        assert_eq!(TECH_COUNT, 19);
     }
 
     #[test]

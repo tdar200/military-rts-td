@@ -55,7 +55,6 @@ pub struct Sprites {
     font: Option<Font>,
     font_bold: Option<Font>,
     font_display: Option<Font>,
-    font_regal: Option<Font>,
 }
 
 impl Sprites {
@@ -78,14 +77,11 @@ impl Sprites {
         let font_display = load_ttf_font("assets/fonts/BlackOpsOne-Regular.ttf")
             .await
             .ok();
-        // Inscriptional Roman serif (Cinzel) for the regal menu register.
-        let font_regal = load_ttf_font("assets/fonts/Cinzel-Bold.ttf").await.ok();
         Self {
             map,
             font,
             font_bold,
             font_display,
-            font_regal,
         }
     }
 
@@ -111,14 +107,12 @@ impl Sprites {
         }
     }
 
-    /// The inscriptional Roman serif (Cinzel) for the regal menu register. Falls
-    /// back to the bold UI font when unavailable.
+    /// The wide geometric sci-fi face used for the wordmark and menu headers — now
+    /// the bold UI font (Rajdhani-Bold), so the holographic register stays
+    /// consistent rather than reverting to a serif.
     #[must_use]
     pub const fn font_regal(&self) -> Option<&Font> {
-        match self.font_regal.as_ref() {
-            Some(font) => Some(font),
-            None => self.font_bold.as_ref(),
-        }
+        self.font_bold.as_ref()
     }
 
     /// Texture for a unit kind, if loaded.

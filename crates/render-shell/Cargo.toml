@@ -17,6 +17,13 @@ path = "src/main.rs"
 rts-core = { path = "../core" }
 macroquad = "0.4"
 
+# Audio is opt-in: it pulls quad-snd, which links ALSA on Linux (needs
+# `libasound2-dev` natively). Off by default so bare-Linux CI builds with no
+# extra system packages; enable for real builds: `cargo build --features audio`.
+# (Web/wasm uses WebAudio and needs no system dep.)
+[features]
+audio = ["macroquad/audio"]
+
 [lints]
 workspace = true
 

@@ -1,17 +1,18 @@
 //! In-game UI: a top resource ribbon and a bottom command bar of build/train
-//! buttons, in the "FIELD COMMAND" theme (see [`crate::theme`]).
+//! buttons, in the "HOLOGRAPHIC TACTICAL COMMAND" theme (see [`crate::theme`]).
 //!
-//! The in-match HUD is the *lean* register: gunmetal panels with cool neutral
-//! borders, gold reserved for live/important elements, an olive-drab military
-//! anchor, and button states that read by hue (warm active vs cool rest/hover)
-//! rather than brightness alone. Buttons emit the same `Command`s as the hotkeys,
-//! so the UI is just another input source.
+//! The HUD is dark holographic glass: translucent panels with cool dim borders,
+//! cyan glow reserved for live/important elements (credits, active build), a warm
+//! amber/red for alerts, and button states that read by hue (cyan-saturated
+//! active vs cool rest/hover) rather than brightness alone. Buttons emit the same
+//! `Command`s as the hotkeys, so the UI is just another input source.
 
 use crate::sprites::Sprites;
 use crate::theme::{
-    hp_color, BAD, BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD,
-    GROUND_ALT, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD,
-    TEAM_ENEMY, TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
+    glow_rect, holo_flicker, hp_color, scanline, with_alpha, ALERT_GLOW, BAD, BORDER_NEUTRAL,
+    BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD, GROUND_ALT, HOLO_GLOW, HP_TRACK,
+    OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TEXT,
+    TEXT_DIM, WARN, WELL,
 };
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
@@ -171,15 +172,16 @@ pub fn draw(
     build_mode: Option<BuildingKind>,
     paused: bool,
     selected: Option<EntityId>,
+    fog: &crate::fog::Fog,
     sprites: &Sprites,
 ) {
-    draw_minimap(sim);
+    draw_minimap(sim, fog);
     draw_top_bar(sim, paused, sprites);
     draw_selection_panel(sim, selected, sprites);
     draw_command_bar(sim, build_mode, sprites);
 }
 
-/// L-shaped gold corner brackets — the Civ-style framed-panel filigree.
+/// L-shaped corner brackets — the holographic framed-panel filigree.
 fn corner_brackets(x: f32, y: f32, w: f32, h: f32, leg: f32, col: Color) {
     let thick = 2.0;
     // top-left
@@ -196,20 +198,23 @@ fn corner_brackets(x: f32, y: f32, w: f32, h: f32, leg: f32, col: Color) {
     draw_rectangle(x + w - thick, y + h - leg, thick, leg, col);
 }
 
-/// Civ-style gilded panel chrome: dark fill, an inner neutral hairline, a gold rim
-/// with a **brass bevel** (lit top/left, shadowed bottom/right) for dimensional
-/// relief, and gold corner brackets — an ornate frame that reads as premium rather
-/// than a flat sticker.
+/// Holographic panel chrome: dark translucent glass, an inner dim hairline, a
+/// glowing cyan rim with a soft outer bloom, a lit top / shaded bottom holo bevel,
+/// bright corner ticks, and a slow scanline sweep — reads as a live projection
+/// rather than a flat sticker.
 fn fill_panel(x: f32, y: f32, w: f32, h: f32) {
     draw_rectangle(x, y, w, h, PANEL);
+    // Soft outer bloom around the frame.
+    glow_rect(x, y, w, h, HOLO_GLOW, 3);
     draw_rectangle_lines(x + 3.0, y + 3.0, w - 6.0, h - 6.0, 1.0, BORDER_NEUTRAL);
     draw_rectangle_lines(x, y, w, h, 1.5, GOLD);
-    // Brass bevel: lit top + left, shadowed bottom + right.
+    // Holo bevel: lit top + left, shaded bottom + right.
     draw_line(x, y + 0.5, x + w, y + 0.5, 1.0, GOLD_HI);
     draw_line(x + 0.5, y, x + 0.5, y + h, 1.0, GOLD_HI);
     draw_line(x, y + h - 0.5, x + w, y + h - 0.5, 1.0, GOLD_DK);
     draw_line(x + w - 0.5, y, x + w - 0.5, y + h, 1.0, GOLD_DK);
     corner_brackets(x, y, w, h, 12.0, GOLD_HI);
+    scanline(x, y, w, h);
 }
 
 /// A gold yield-coin glyph (credits): a struck coin with a lit face and an
@@ -249,6 +254,8 @@ fn icon_chevrons(cx: f32, cy: f32, s: f32, col: Color) {
 /// reserved for live elements (active build, ribbon coin, selection); resting
 /// buttons pass a neutral ring so gold stays meaningful.
 fn medallion(cx: f32, cy: f32, r: f32, tex: Option<&Texture2D>, tint: Color, ring: Color) {
+    // Soft holographic halo behind the disc.
+    draw_circle(cx, cy, r + 3.0, HOLO_GLOW);
     draw_circle(cx, cy, r, WELL);
     if let Some(tex) = tex {
         let d = r * 1.4;
@@ -396,7 +403,7 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     draw_rectangle_lines(text_x, bar_y, bar_w, 7.0, 1.0, BORDER_NEUTRAL);
 }
 
-fn draw_minimap(sim: &Sim) {
+fn draw_minimap(sim: &Sim, fog: &crate::fog::Fog) {
     let map_w = f32::from(sim.map().width());
     let map_h = f32::from(sim.map().height());
     let mm_w = 188.0;
@@ -435,9 +442,15 @@ fn draw_minimap(sim: &Sim) {
         }
     }
     for v in sim.views() {
+        // Don't leak fogged enemy positions on the minimap.
         let col = if v.owner == HUMAN {
             TEAM_PLAYER
         } else {
+            let tc = (v.pos.x.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
+            let tr = (v.pos.y.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
+            if !fog.visible(tc, tr) {
+                continue;
+            }
             TEAM_ENEMY
         };
         let dot_x = field_x + (v.pos.x.to_bits() as f32 / 65536.0) * scale_x;
@@ -446,7 +459,8 @@ fn draw_minimap(sim: &Sim) {
         draw_rectangle(dot_x - 3.0, dot_y - 3.0, 6.0, 6.0, WELL);
         draw_rectangle(dot_x - 2.0, dot_y - 2.0, 4.0, 4.0, col);
     }
-    // Ornate gold deco frame (brass bevel) — matches the map + menu frames.
+    // Glowing holographic frame — matches the map + menu frames.
+    glow_rect(origin_x, origin_y, mm_w, mm_h, HOLO_GLOW, 3);
     draw_rectangle(origin_x, origin_y, mm_w, 2.0, DECO_GOLD_HI);
     draw_rectangle(origin_x, origin_y, 2.0, mm_h, DECO_GOLD_HI);
     draw_rectangle(origin_x, origin_y + mm_h - 2.0, mm_w, 2.0, GOLD_DK);
@@ -457,7 +471,7 @@ fn draw_minimap(sim: &Sim) {
         mm_w - 6.0,
         mm_h - 6.0,
         1.0,
-        color_u8!(201, 164, 76, 102),
+        with_alpha(DECO_GOLD, 0.4),
     );
     draw_rectangle_lines(
         origin_x - 1.0,
@@ -528,7 +542,14 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
     icon_coin(x + 7.0, 18.0, 8.0);
     x += 22.0;
     let credits = (sim.credits(HUMAN).to_bits() / 65536).to_string();
-    text(&credits, x, 26.0, 22.0, GOLD_HI, fb);
+    text(
+        &credits,
+        x,
+        26.0,
+        22.0,
+        with_alpha(GOLD_HI, holo_flicker()),
+        fb,
+    );
     x += text_width(&credits, 22.0, fb) + 18.0;
     ribbon_divider(x - 9.0);
 
@@ -542,11 +563,14 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
     x += text_width(&power, 18.0, fb) + 18.0;
     ribbon_divider(x - 9.0);
 
-    // UNITS — rank chevrons + count (secondary: smaller).
+    // UNITS — rank chevrons + count / supply cap (amber when at the cap).
     icon_chevrons(x + 7.0, 19.0, 8.0, TEXT_DIM);
     x += 20.0;
-    let units = sim.unit_count(HUMAN).to_string();
-    text(&units, x, 25.0, 18.0, TEXT, fb);
+    let used = sim.unit_count(HUMAN);
+    let cap = sim.supply_cap(HUMAN);
+    let units = format!("{used}/{cap}");
+    let units_col = if used as u32 >= cap { WARN } else { TEXT };
+    text(&units, x, 25.0, 18.0, units_col, fb);
     x += text_width(&units, 18.0, fb) + 18.0;
     ribbon_divider(x - 9.0);
 
@@ -577,6 +601,9 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
         let pill_w = tw + 22.0;
         let px = screen_width() - pill_w - 10.0;
         draw_rectangle(px, 5.0, pill_w, TOP_BAR_H - 12.0, WELL);
+        // Alert bloom: red when imminent, cyan-tinted otherwise.
+        let glow = if secs <= 5 { ALERT_GLOW } else { HOLO_GLOW };
+        glow_rect(px, 5.0, pill_w, TOP_BAR_H - 12.0, glow, 3);
         draw_rectangle_lines(px, 5.0, pill_w, TOP_BAR_H - 12.0, 1.5, col);
         text(&s, px + 11.0, 25.0, 20.0, col, fb);
     }
@@ -649,6 +676,7 @@ fn draw_button(
     };
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, rim);
     if active {
+        glow_rect(r.x, r.y, r.w, r.h, HOLO_GLOW, 3);
         draw_rectangle(r.x, r.y, r.w, 2.0, GOLD_HI);
         corner_brackets(r.x, r.y, r.w, r.h, 10.0, GOLD_HI);
     }
