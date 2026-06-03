@@ -149,9 +149,9 @@ pub fn survival(seed: u64) -> Sim {
 
     // Escalating waves from the beachhead toward the player.
     sim.set_waves(WaveConfig {
-        first_delay: 240,
-        interval: 420,
-        base_size: 4,
+        first_delay: 5400,
+        interval: 540,
+        base_size: 2,
         growth: 1,
         spawn: Vec2::new(
             Fixed::from_int(i32::from(w) - 5),
@@ -484,11 +484,13 @@ mod tests {
 
     #[test]
     fn survival_overruns_an_undefended_base() {
-        // Player does nothing; escalating waves must eventually take the base, so
-        // the run resolves (no soft-lock) and waves actually spawned.
+        // Player does nothing; the enemy AI (+ escalating waves once the grace
+        // period expires) must eventually take the base so the run resolves with
+        // no soft-lock. Wave-spawn coverage is handled by
+        // `survival_has_a_three_minute_grace_period`.
         let mut s = survival(3);
         let mut winner = None;
-        for _ in 0..8000 {
+        for _ in 0..20000 {
             let enemy = s.ai_commands(PlayerId(1));
             s.step(&enemy);
             if let Some(w) = s.winner() {
@@ -501,7 +503,27 @@ mod tests {
             Some(PlayerId(1)),
             "undefended survival never resolved"
         );
-        assert!(s.waves_survived() > 0, "no waves spawned");
+    }
+
+    #[test]
+    fn survival_has_a_three_minute_grace_period() {
+        let mut s = survival(7);
+        // 30 Hz -> 3 minutes = 5400 ticks. No enemy units before then.
+        for _ in 0..5000 {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.unit_count(PlayerId(1)),
+            0,
+            "no waves should spawn during the grace period"
+        );
+        for _ in 0..1000 {
+            s.step(&[]);
+        }
+        assert!(
+            s.unit_count(PlayerId(1)) > 0,
+            "waves should begin after the grace period"
+        );
     }
 
     #[test]
