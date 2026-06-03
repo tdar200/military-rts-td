@@ -183,17 +183,14 @@ mod tests {
     }
 
     #[test]
-    fn antimatter_plant_produces_antimatter_and_draws_power() {
+    fn antimatter_plant_is_an_extractor_and_draws_power() {
         use crate::game::stats::BuildingKind;
         let st = BuildingKind::AntimatterPlant.stats();
-        assert!(st.antimatter_income > crate::fixed::Fixed::ZERO);
+        // AntimatterPlant is now an extractor: mines deposits instead of passive income.
+        assert_eq!(st.antimatter_income, crate::fixed::Fixed::ZERO);
+        assert!(st.mine_rate > 0);
         assert!(st.power_consumed > 0);
         assert!(!st.produces_units && st.attack.is_none());
-        // Existing buildings produce no antimatter.
-        assert_eq!(
-            BuildingKind::Refinery.stats().antimatter_income,
-            crate::fixed::Fixed::ZERO
-        );
     }
 
     #[test]

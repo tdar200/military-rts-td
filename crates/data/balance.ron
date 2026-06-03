@@ -39,7 +39,7 @@
         produces_units: false, attack: None, cost: 100,
     ),
     refinery: (
-        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 5,
+        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 0, mine_rate: 5,
         produces_units: false, attack: None, cost: 150,
     ),
     barracks: (
@@ -63,11 +63,11 @@
         produces_units: false, attack: None, cost: 20,
     ),
     research_lab: (
-        max_hp: 300, power_produced: 0, power_consumed: 25, credit_income: 0,
+        max_hp: 300, power_produced: 0, power_consumed: 25, credit_income: 0, research_income: 4,
         produces_units: false, attack: None, cost: 250,
     ),
     antimatter_plant: (
-        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 0, antimatter_income: 5,
+        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 0, antimatter_income: 0, mine_rate: 5,
         produces_units: false, attack: None, cost: 200,
     ),
 )

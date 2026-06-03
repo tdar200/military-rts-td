@@ -67,6 +67,10 @@ struct BuildingData {
     produces_units: bool,
     attack: Option<AttackData>,
     cost: i32,
+    #[serde(default)]
+    mine_rate: i32,
+    #[serde(default)]
+    research_income: i32,
 }
 
 #[derive(Deserialize)]
@@ -137,6 +141,8 @@ fn to_building(b: &BuildingData) -> BuildingStats {
         produces_units: b.produces_units,
         attack: b.attack.as_ref().map(to_attack),
         cost: Fixed::from_int(b.cost),
+        mine_rate: b.mine_rate,
+        research_income: Fixed::from_int(b.research_income),
     }
 }
 

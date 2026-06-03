@@ -179,6 +179,10 @@ pub struct BuildingStats {
     pub attack: Option<AttackProfile>,
     /// Credit cost to construct.
     pub cost: Fixed,
+    /// Resource/tick this building mines from a deposit it stands on (Extractors).
+    pub mine_rate: i32,
+    /// Research/tick this building produces while powered (Research Labs).
+    pub research_income: Fixed,
 }
 
 /// The kinds of mobile unit.
@@ -329,6 +333,8 @@ impl BuildingKind {
                 produces_units: false,
                 attack: None,
                 cost: Fixed::from_int(cost),
+                mine_rate: 0,
+                research_income: Fixed::ZERO,
             }
         }
         match self {
@@ -339,7 +345,8 @@ impl BuildingKind {
             },
             Self::Refinery => BuildingStats {
                 power_consumed: 20,
-                credit_income: Fixed::from_int(5),
+                credit_income: Fixed::ZERO,
+                mine_rate: 5,
                 ..base(300, 150)
             },
             Self::Barracks => BuildingStats {
@@ -370,11 +377,13 @@ impl BuildingKind {
             Self::Wall => base(200, 20),
             Self::ResearchLab => BuildingStats {
                 power_consumed: 25,
+                research_income: Fixed::from_int(4),
                 ..base(300, 250)
             },
             Self::AntimatterPlant => BuildingStats {
                 power_consumed: 20,
-                antimatter_income: Fixed::from_int(5),
+                antimatter_income: Fixed::ZERO,
+                mine_rate: 5,
                 ..base(300, 200)
             },
         }
@@ -415,9 +424,11 @@ mod tests {
     }
 
     #[test]
-    fn power_plant_produces_and_refinery_earns() {
+    fn power_plant_produces_and_refinery_mines() {
         assert!(BuildingKind::PowerPlant.stats().power_produced > 0);
-        assert!(BuildingKind::Refinery.stats().credit_income > Fixed::ZERO);
+        // Refinery is now an extractor: mines deposits instead of passive income.
+        assert_eq!(BuildingKind::Refinery.stats().credit_income, Fixed::ZERO);
+        assert!(BuildingKind::Refinery.stats().mine_rate > 0);
         assert!(BuildingKind::CommandCenter.stats().max_hp > Fixed::from_int(500));
     }
 
