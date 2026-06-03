@@ -55,6 +55,10 @@ const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
 /// The battlefield is drawn below the top bar.
 const WORLD_TOP: f32 = ui::TOP_BAR_H;
+/// Surviving this many waves earns the celebratory "BEACHHEAD SECURED" milestone.
+/// The run keeps going — survival stays an endurance mode; this is the goal to
+/// beat, not an ending.
+const SURVIVAL_MILESTONE_WAVE: u32 = 15;
 
 /// Top-level screen state.
 #[derive(Clone, Copy, PartialEq)]
@@ -246,6 +250,8 @@ async fn main() {
     let mut perk_open = false;
     let mut prev_waves = 0_u32;
     let mut best_waves = meta::best_waves();
+    // Seconds left on the transient "BEACHHEAD SECURED" milestone banner.
+    let mut milestone_flash: f32 = 0.0;
 
     loop {
         if phase == Phase::Title {
@@ -282,6 +288,7 @@ async fn main() {
                 prev_wave_secs = i64::MAX;
                 perk_open = false;
                 prev_waves = 0;
+                milestone_flash = 0.0;
                 audio.set_music(audio::Music::Combat);
                 selected = None;
                 build_mode = None;
@@ -303,6 +310,11 @@ async fn main() {
         if survival_run && !over {
             let w = sim.waves_survived();
             if w > prev_waves {
+                // Crossing the milestone wave earns the celebration (run continues).
+                if prev_waves < SURVIVAL_MILESTONE_WAVE && w >= SURVIVAL_MILESTONE_WAVE {
+                    milestone_flash = 5.0;
+                    audio.play(audio::Sfx::Victory);
+                }
                 prev_waves = w;
                 if sim.perks(HUMAN).count_ones() < perk::PERK_COUNT {
                     perk_open = true;
@@ -448,6 +460,7 @@ async fn main() {
             prev_wave_secs = i64::MAX;
             perk_open = false;
             prev_waves = 0;
+            milestone_flash = 0.0;
             audio.set_music(audio::Music::Combat);
             selected = None;
             build_mode = None;
@@ -592,6 +605,10 @@ async fn main() {
         ui::draw(&sim, build_mode, paused, selected, &fog, &sprites);
         if survival_run {
             draw_survival_hud(&sim, &sprites);
+            if milestone_flash > 0.0 {
+                milestone_flash -= get_frame_time();
+                draw_milestone_banner(milestone_flash, &sprites);
+            }
         }
         if research_open {
             draw_research_modal(&sim, research_cursor, &sprites);
@@ -807,7 +824,9 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         sprites.font(),
     );
     centered(
-        "— or press  S  for SURVIVAL: endless escalating waves —",
+        &format!(
+            "— or press  S  for SURVIVAL: hold {SURVIVAL_MILESTONE_WAVE} endless waves to secure the beachhead —"
+        ),
         c.y + c.h + 58.0,
         16.0,
         GOLD_HI,
@@ -903,7 +922,13 @@ fn draw_scenario_row(scenario: Scenario, rect: Rect, selected: bool, sprites: &S
 fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 175));
-    let (pw, ph) = (440.0, 212.0);
+    // Survival runs get a taller card: waves + (possibly) the milestone + best.
+    let pw = 440.0;
+    let ph = if survival_score.is_some() {
+        240.0
+    } else {
+        212.0
+    };
     let (px, py) = ((w - pw) / 2.0, (h - ph) / 2.0);
     draw_rectangle(px, py, pw, ph, PANEL);
     glow_rect(px, py, pw, ph, HOLO_GLOW, 3);
@@ -923,9 +948,18 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
             GOLD_HI,
             sprites.font_bold(),
         );
+        if waves >= SURVIVAL_MILESTONE_WAVE {
+            centered(
+                "\u{2605}  BEACHHEAD SECURED  \u{2605}",
+                py + 142.0,
+                17.0,
+                GOOD,
+                sprites.font_bold(),
+            );
+        }
         centered(
             &format!("BEST  {best}"),
-            py + 140.0,
+            py + 164.0,
             16.0,
             TEXT_DIM,
             sprites.font(),
@@ -933,7 +967,7 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
     }
     centered(
         "R to restart    •    M for map select",
-        py + 176.0,
+        py + ph - 36.0,
         20.0,
         TEXT,
         sprites.font(),
@@ -959,6 +993,45 @@ fn draw_survival_hud(sim: &Sim, sprites: &Sprites) {
             color: GOLD_HI,
             ..Default::default()
         },
+    );
+}
+
+/// Transient celebration when the survival milestone wave is reached. The run
+/// keeps going — this marks the goal beaten, it is not an ending. Fades out over
+/// its final second.
+fn draw_milestone_banner(remaining: f32, sprites: &Sprites) {
+    let alpha = remaining.clamp(0.0, 1.0);
+    let fd = sprites.font_display();
+    let s = "BEACHHEAD SECURED";
+    let tw = measure_text(s, fd, 40, 1.0).width;
+    let x = (screen_width() - tw) / 2.0;
+    let y = WORLD_TOP + 110.0;
+    draw_rectangle(
+        x - 26.0,
+        y - 36.0,
+        tw + 52.0,
+        72.0,
+        with_alpha(PANEL, 0.88 * alpha),
+    );
+    glow_rect(x - 26.0, y - 36.0, tw + 52.0, 72.0, HOLO_GLOW, 3);
+    draw_rectangle(x - 26.0, y - 36.0, tw + 52.0, 3.0, with_alpha(GOOD, alpha));
+    draw_text_ex(
+        s,
+        x,
+        y + 8.0,
+        TextParams {
+            font: fd,
+            font_size: 40,
+            color: with_alpha(GOOD, alpha),
+            ..Default::default()
+        },
+    );
+    centered(
+        "the line held — now see how long you can last",
+        y + 28.0,
+        14.0,
+        with_alpha(TEXT_DIM, alpha),
+        sprites.font(),
     );
 }
 
