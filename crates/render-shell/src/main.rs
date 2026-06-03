@@ -334,9 +334,29 @@ async fn main() {
             }
         }
 
-        // Input: UI command bar first, then map (suppressed while over the UI or
-        // a modal).
-        if !research_open && !perk_open && !doctrine_open {
+        // Survey phase: the only interaction is founding the Command Center. A
+        // left-click on a buildable hex emits FoundBase; normal map/UI input is
+        // suppressed until the base exists.
+        let surveying = sim.surveying();
+        if surveying {
+            if is_mouse_button_pressed(MouseButton::Left) && !ui::pointer_over_ui() {
+                let (col, row) = input::cursor_tile(&sim, cell);
+                if sim
+                    .map()
+                    .tile(i32::from(col), i32::from(row))
+                    .is_some_and(|t| t.buildable)
+                {
+                    pending.push(Command::FoundBase {
+                        owner: HUMAN,
+                        x: col,
+                        y: row,
+                    });
+                    audio.play(audio::Sfx::Build);
+                }
+            }
+        } else if !research_open && !perk_open && !doctrine_open {
+            // Input: UI command bar first, then map (suppressed while over the UI
+            // or a modal).
             if is_mouse_button_pressed(MouseButton::Left) && ui::pointer_over_ui() {
                 audio.play(audio::Sfx::UiClick);
             }
@@ -608,8 +628,11 @@ async fn main() {
         draw(
             &sim, &view, &particles, selected, build_mode, cell, alpha, sx, sy, &sprites,
         );
+        if surveying {
+            draw_survey_overlay(&sim, cell, &sprites);
+        }
         ui::draw(&sim, build_mode, paused, game_speed, selected, &sprites);
-        if survival_run {
+        if survival_run && !surveying {
             draw_survival_hud(&sim, &sprites);
             if milestone_flash > 0.0 {
                 milestone_flash -= get_frame_time();
@@ -981,6 +1004,81 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
 }
 
 /// A compact survival readout (waves survived = score) under the top bar.
+/// The Survey-phase overlay: tint every hex by foundability (red illegal / cyan
+/// legal / green deposit-adjacent premium), ring the cursor tile, and prompt the
+/// player to choose a site. Founding adjacent to an Ore deposit pays a bonus, so
+/// green tiles are the recommended picks.
+fn draw_survey_overlay(sim: &Sim, cell: f32, sprites: &Sprites) {
+    let ox = board_origin_x(sim, cell);
+    let wtop = WORLD_TOP;
+    let map = sim.map();
+    let (cur_c, cur_r) = input::cursor_tile(sim, cell);
+    let pulse = (get_time() as f32 * 2.5).sin() * 0.5 + 0.5;
+    for row in 0..map.height() {
+        for col in 0..map.width() {
+            let buildable = map
+                .tile(i32::from(col), i32::from(row))
+                .is_some_and(|t| t.buildable);
+            if !buildable {
+                continue; // leave blocked/occupied tiles untinted (read as illegal)
+            }
+            let near_ore = map.deposits().any(|(dx, dy, d)| {
+                matches!(d.kind, rts_core::game::map::DepositKind::Ore)
+                    && (i32::from(dx) - i32::from(col)).abs() <= 1
+                    && (i32::from(dy) - i32::from(row)).abs() <= 1
+            });
+            let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
+            let tint = if near_ore {
+                with_alpha(GOOD, 0.22)
+            } else {
+                with_alpha(HOLO_GLOW, 0.10)
+            };
+            draw_hex(cx, cy, cell * 0.9, tint);
+        }
+    }
+    // Cursor: green ring on a legal tile (brighter if a premium ore site), red if
+    // illegal.
+    let legal = map
+        .tile(i32::from(cur_c), i32::from(cur_r))
+        .is_some_and(|t| t.buildable);
+    let (cx, cy) = hex_center_px(cur_c, cur_r, cell, ox, wtop);
+    let ring = if legal { GOOD } else { BAD };
+    draw_circle_lines(cx, cy, cell * (0.5 + pulse * 0.12), 2.5, ring);
+
+    // Prompt banner.
+    let fd = sprites.font_display();
+    let title = "SURVEY  \u{2014}  CHOOSE A FOUNDING SITE";
+    let tw = measure_text(title, fd, 30, 1.0).width;
+    let bx = (screen_width() - tw) / 2.0;
+    let by = WORLD_TOP + 36.0;
+    draw_rectangle(
+        bx - 22.0,
+        by - 30.0,
+        tw + 44.0,
+        64.0,
+        with_alpha(PANEL, 0.85),
+    );
+    glow_rect(bx - 22.0, by - 30.0, tw + 44.0, 64.0, HOLO_GLOW, 3);
+    draw_text_ex(
+        title,
+        bx,
+        by,
+        TextParams {
+            font: fd,
+            font_size: 30,
+            color: GOLD_HI,
+            ..Default::default()
+        },
+    );
+    centered(
+        "click a tile to land your Command Center  \u{2022}  green = beside ore (bonus)",
+        by + 22.0,
+        15.0,
+        TEXT_DIM,
+        sprites.font(),
+    );
+}
+
 fn draw_survival_hud(sim: &Sim, sprites: &Sprites) {
     let s = format!("WAVE {}", sim.waves_survived() + 1);
     let fb = sprites.font_bold();

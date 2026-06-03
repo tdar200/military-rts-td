@@ -174,6 +174,20 @@ pub fn gather_commands(
     cmds
 }
 
+/// The map tile under the mouse cursor (for survey-phase founding).
+#[must_use]
+pub fn cursor_tile(sim: &Sim, cell: f32) -> (u16, u16) {
+    let (mx, my) = mouse_position();
+    let ox = crate::board_origin_x(sim, cell);
+    let wx = (mx - ox) / cell;
+    let wy = (my - crate::ui::TOP_BAR_H) / cell;
+    hex::from_world(
+        SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
+        sim.map().width(),
+        sim.map().height(),
+    )
+}
+
 #[must_use]
 fn nearest_friendly_unit(sim: &Sim, wx: f32, wy: f32) -> Option<EntityId> {
     let mut best: Option<(EntityId, f32)> = None;
