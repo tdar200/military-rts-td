@@ -40,16 +40,26 @@ use sprites::Sprites;
 // Explicit theme imports (not a glob) so they take precedence over the
 // like-named macroquad prelude color constants (e.g. GOLD).
 use theme::{
-    glow_rect, holo_flicker, hp_color, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE, DECO_GOLD,
-    DECO_GOLD_HI, GOLD, GOLD_HI, GOOD, GRID, GRID_HOT, GROUND, GROUND_MACRO, HOLO_GLOW, HP_TRACK,
-    INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2, MAP_PLAINS, OLIVE, PANEL, PANEL_RAISED,
-    PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW, REGAL_BG, REGAL_BG_HI,
-    REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL, TEXT, TEXT_DIM,
-    TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
+    glow_rect, holo_flicker, hp_color, ALERT_GLOW, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE,
+    DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_HI, GOOD, GRID, GRID_HOT, GROUND, GROUND_MACRO, HOLO_GLOW,
+    HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2, MAP_PLAINS, OLIVE, PANEL,
+    PANEL_RAISED, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW, REGAL_BG,
+    REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL, TEXT,
+    TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
 };
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
 const TICK_DT: f32 = 1.0 / 30.0;
+/// Sim-speed gears (the +/- keys step through these).
+const GEARS: [u32; 4] = [1, 2, 4, 8];
+/// Tech-tree era column headers (tier 0..4).
+const TECH_ERAS: [&str; 5] = [
+    "FOUNDATION",
+    "EXPANSION",
+    "INDUSTRIAL",
+    "ENERGY",
+    "ASCENDANCY",
+];
 const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
 /// The battlefield is drawn below the top bar.
@@ -57,7 +67,7 @@ const WORLD_TOP: f32 = ui::TOP_BAR_H;
 /// Surviving this many waves earns the celebratory "BEACHHEAD SECURED" milestone.
 /// The run keeps going — survival stays an endurance mode; this is the goal to
 /// beat, not an ending.
-const SURVIVAL_MILESTONE_WAVE: u32 = 15;
+const SURVIVAL_MILESTONE_WAVE: u32 = 5;
 
 /// Top-level screen state.
 #[derive(Clone, Copy, PartialEq)]
@@ -239,6 +249,11 @@ async fn main() {
     // Audio bookkeeping: one-shot game-over jingle + wave-incoming alarm edges.
     let mut over_announced = false;
     let mut prev_wave_secs: i64 = i64::MAX;
+    // Commanded-time auto-pause: freeze + banner on a key event so the player is
+    // never ambushed mid-menu and never misses a beat. Edge-detected, fires once.
+    let mut auto_pause_msg: Option<(&'static str, f32)> = None;
+    let mut prev_era: u8 = 0;
+    let mut prev_researching = false;
     // Whether the current match is a survival run (drives the score HUD + summary).
     let mut survival_run = false;
     // Survival perk draft: a modal opens each new wave until all perks are taken.
@@ -283,6 +298,9 @@ async fn main() {
                 perk_open = false;
                 prev_waves = 0;
                 milestone_flash = 0.0;
+                auto_pause_msg = None;
+                prev_era = 0;
+                prev_researching = false;
                 audio.set_music(audio::Music::Combat);
                 selected = None;
                 build_mode = None;
@@ -372,11 +390,14 @@ async fn main() {
         if !research_open && !doctrine_open && is_key_pressed(KeyCode::Space) {
             paused = !paused;
         }
+        // Speed gears (GEARS): fast-forward the long peaceful build stretches.
         if is_key_pressed(KeyCode::Equal) {
-            game_speed = (game_speed + 1).min(3);
+            let i = GEARS.iter().position(|&g| g == game_speed).unwrap_or(0);
+            game_speed = GEARS[(i + 1).min(GEARS.len() - 1)];
         }
         if is_key_pressed(KeyCode::Minus) {
-            game_speed = game_speed.saturating_sub(1).max(1);
+            let i = GEARS.iter().position(|&g| g == game_speed).unwrap_or(0);
+            game_speed = GEARS[i.saturating_sub(1)];
         }
         // Toggle research modal with Y (only while playing, not paused, not on title/game-over).
         if !over && !paused && !doctrine_open && is_key_pressed(KeyCode::Y) {
@@ -417,10 +438,9 @@ async fn main() {
                 doctrine_open = false;
             }
         }
-        // Research modal: ↑/↓ move the cursor over the full tree, Enter researches
-        // the highlighted tech; number keys 1-0 are quick shortcuts for the first
-        // ten; Escape closes. (Cursor navigation makes every tech reachable —
-        // eras, shields, anti-grav, and the doctrine fork, not just the first 10.)
+        // Tech-tree modal: ↑/↓ move the cursor through the nodes, Enter researches
+        // the highlighted one, or click a node directly. Escape closes. The core
+        // validates prereqs/fork/affordability, so a bad pick is a harmless no-op.
         if research_open {
             let n = TECHS.len();
             if is_key_pressed(KeyCode::Down) {
@@ -429,35 +449,25 @@ async fn main() {
             if is_key_pressed(KeyCode::Up) {
                 research_cursor = (research_cursor + n - 1) % n;
             }
-            let num_keys = [
-                KeyCode::Key1,
-                KeyCode::Key2,
-                KeyCode::Key3,
-                KeyCode::Key4,
-                KeyCode::Key5,
-                KeyCode::Key6,
-                KeyCode::Key7,
-                KeyCode::Key8,
-                KeyCode::Key9,
-                KeyCode::Key0,
-            ];
             let mut chosen: Option<u32> = is_key_pressed(KeyCode::Enter)
                 .then_some(u32::try_from(research_cursor).unwrap_or(0));
-            for (i, key) in num_keys.into_iter().enumerate() {
-                if is_key_pressed(key) {
-                    research_cursor = i;
-                    chosen = Some(u32::try_from(i).unwrap_or(0));
+            if is_mouse_button_pressed(MouseButton::Left) {
+                let (mx, my) = mouse_position();
+                for t in &TECHS {
+                    if tech_node_rect(t.id).contains(vec2(mx, my)) {
+                        research_cursor = t.id as usize;
+                        chosen = Some(t.id);
+                    }
                 }
             }
             if let Some(tech_id) = chosen {
-                // Core validates affordability, prereq, fork lock, and lab presence.
                 if sim.research_state(HUMAN).1.is_none() {
                     pending.push(Command::Research {
                         owner: HUMAN,
                         tech_id,
                     });
                 }
-                research_open = false;
+                // Keep the tree open so the player can queue the next pick / browse.
             }
             if is_key_pressed(KeyCode::Escape) {
                 research_open = false;
@@ -480,6 +490,9 @@ async fn main() {
             perk_open = false;
             prev_waves = 0;
             milestone_flash = 0.0;
+            auto_pause_msg = None;
+            prev_era = 0;
+            prev_researching = false;
             audio.set_music(audio::Music::Combat);
             selected = None;
             build_mode = None;
@@ -597,12 +610,32 @@ async fn main() {
         particles.update(dt);
         camera.update(dt);
 
-        // Wave-incoming alarm: fire once as the countdown crosses 5 seconds.
+        // Wave-incoming alarm + auto-pause: a siege telegraphs at 30 s out.
         let wave_secs = sim
             .ticks_until_next_wave()
             .map_or(i64::MAX, |t| (t / 30) as i64);
         if prev_wave_secs > 5 && wave_secs <= 5 {
             audio.play(audio::Sfx::WaveIncoming);
+        }
+        // Commanded-time auto-pause edges (skip while a modal already holds time):
+        // siege warning (30 s out), an era advance, and research completing.
+        if !over && !paused && !research_open && !doctrine_open && !perk_open {
+            let era = sim.player_era(HUMAN);
+            let researching = sim.research_state(HUMAN).1.is_some();
+            let mut event: Option<&'static str> = None;
+            if prev_wave_secs > 30 && wave_secs <= 30 {
+                event = Some("ASSAULT INBOUND  \u{2014}  from the east");
+            } else if era > prev_era {
+                event = Some("NEW ERA REACHED");
+            } else if prev_researching && !researching {
+                event = Some("RESEARCH COMPLETE");
+            }
+            if let Some(msg) = event {
+                paused = true;
+                auto_pause_msg = Some((msg, 4.0));
+            }
+            prev_era = era;
+            prev_researching = researching;
         }
         prev_wave_secs = wave_secs;
 
@@ -637,6 +670,15 @@ async fn main() {
             if milestone_flash > 0.0 {
                 milestone_flash -= get_frame_time();
                 draw_milestone_banner(milestone_flash, &sprites);
+            }
+        }
+        // Auto-pause banner: what froze the game, and how to resume.
+        if let Some((msg, t)) = auto_pause_msg.as_mut() {
+            *t -= get_frame_time();
+            if *t <= 0.0 || !paused {
+                auto_pause_msg = None;
+            } else {
+                draw_auto_pause_banner(msg, &sprites);
             }
         }
         if research_open {
@@ -854,7 +896,7 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
     );
     centered(
         &format!(
-            "— or press  S  for SURVIVAL: hold {SURVIVAL_MILESTONE_WAVE} endless waves to secure the beachhead —"
+            "— or press  S  for SURVIVAL: survey, found your colony, and hold {SURVIVAL_MILESTONE_WAVE} sieges —"
         ),
         c.y + c.h + 58.0,
         16.0,
@@ -862,7 +904,7 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         sprites.font_bold(),
     );
     centered(
-        "in battle:  Y research  \u{2022}  U doctrines  \u{2022}  Q cast ability  \u{2022}  Space pause  \u{2022}  +/- speed",
+        "Y tech tree  \u{2022}  U doctrines  \u{2022}  Q ability  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
         c.y + c.h + 82.0,
         13.0,
         INK_DIM,
@@ -1139,6 +1181,36 @@ fn draw_milestone_banner(remaining: f32, sprites: &Sprites) {
     );
 }
 
+/// The commanded-time auto-pause banner: names the event that froze the game and
+/// how to resume. Centered high so it doesn't fight the world view.
+fn draw_auto_pause_banner(msg: &str, sprites: &Sprites) {
+    let fb = sprites.font_bold();
+    let tw = measure_text(msg, fb, 26, 1.0).width;
+    let x = (screen_width() - tw) / 2.0;
+    let y = WORLD_TOP + 84.0;
+    draw_rectangle(x - 24.0, y - 30.0, tw + 48.0, 58.0, with_alpha(PANEL, 0.9));
+    glow_rect(x - 24.0, y - 30.0, tw + 48.0, 58.0, ALERT_GLOW, 3);
+    draw_rectangle(x - 24.0, y - 30.0, tw + 48.0, 3.0, WARN);
+    draw_text_ex(
+        msg,
+        x,
+        y,
+        TextParams {
+            font: fb,
+            font_size: 26,
+            color: WARN,
+            ..Default::default()
+        },
+    );
+    centered(
+        "PAUSED \u{2014} Space to resume",
+        y + 22.0,
+        14.0,
+        TEXT_DIM,
+        sprites.font(),
+    );
+}
+
 /// Survival perk-draft overlay: pick one untaken perk with number keys 1-N.
 fn draw_perk_modal(sim: &Sim, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
@@ -1235,38 +1307,95 @@ enum TechStatus {
     Available,
 }
 
-/// Returns the display status of tech `t` given the player's current research
-/// state, active research slot, and whether a research lab exists.
+/// Returns the display status of tech `def` given the player's research state,
+/// active research slot, and whether a research lab exists.
 fn tech_status(
-    tech_id: u32,
-    prereq: Option<u32>,
-    duration: u32,
+    def: &rts_core::game::tech::TechDef,
     mask: u32,
     active: Option<(u32, u32)>,
     has_lab: bool,
 ) -> TechStatus {
-    if mask & (1 << tech_id) != 0 {
+    if mask & (1 << def.id) != 0 {
         return TechStatus::Researched;
     }
     if let Some((active_id, ticks_remaining)) = active {
-        if active_id == tech_id {
+        if active_id == def.id {
             return TechStatus::InProgress {
                 ticks_remaining,
-                duration,
+                duration: def.duration,
             };
         }
     }
-    if prereq.is_some_and(|p| mask & (1 << p) == 0) {
+    // Locked if any prereq is unmet, or a fork counterpart was already chosen.
+    if def.prereqs.iter().any(|&p| mask & (1 << p) == 0)
+        || rts_core::game::tech::excludes(def.id).is_some_and(|o| mask & (1 << o) != 0)
+    {
         return TechStatus::Locked;
     }
-    // A doctrine fork locks out its counterpart once the other is researched.
-    if rts_core::game::tech::excludes(tech_id).is_some_and(|other| mask & (1 << other) != 0) {
-        return TechStatus::Locked;
-    }
-    if !has_lab {
+    // Research-paid tiers need a lab; the minerals-paid Foundation tier does not.
+    if def.tier > 0 && !has_lab {
         return TechStatus::NoLab;
     }
     TechStatus::Available
+}
+
+/// Fixed geometry for the tech-tree graph. Both the click hit-test and the
+/// renderer derive node rects from these so they always agree.
+const TECH_NODE_W: f32 = 150.0;
+const TECH_NODE_H: f32 = 44.0;
+const TECH_COL_GAP: f32 = 26.0;
+const TECH_ROW_GAP: f32 = 12.0;
+const TECH_HEAD_H: f32 = 60.0;
+
+fn tech_panel_origin() -> (f32, f32, f32, f32) {
+    let pw = (20.0 * 2.0 + 5.0 * TECH_NODE_W + 4.0 * TECH_COL_GAP).min(screen_width() - 12.0);
+    let ph = (TECH_HEAD_H + 6.0 * (TECH_NODE_H + TECH_ROW_GAP) + 28.0).min(screen_height() - 12.0);
+    (
+        (screen_width() - pw) / 2.0,
+        (screen_height() - ph) / 2.0,
+        pw,
+        ph,
+    )
+}
+
+/// Short label for a building kind (tech-tree unlock hints).
+const fn building_label(b: BuildingKind) -> &'static str {
+    match b {
+        BuildingKind::CommandCenter => "Command",
+        BuildingKind::PowerPlant => "Reactor",
+        BuildingKind::Refinery => "Extractor",
+        BuildingKind::Barracks => "Hangar",
+        BuildingKind::GunTurret => "Laser Turret",
+        BuildingKind::AaTurret => "Flak Turret",
+        BuildingKind::Wall => "Wall",
+        BuildingKind::ResearchLab => "Research Lab",
+        BuildingKind::AntimatterPlant => "Antimatter",
+    }
+}
+
+/// Short label for a unit kind (tech-tree unlock hints).
+const fn unit_label(u: UnitKind) -> &'static str {
+    match u {
+        UnitKind::Infantry => "Infantry",
+        UnitKind::Tank => "Crawler",
+        UnitKind::AntiArmor => "Lancer",
+        UnitKind::Helicopter => "Gunship",
+        UnitKind::Capital => "Capital",
+    }
+}
+
+/// Screen rect of tech `id`'s node: column = tier, lane = its position within the
+/// tier (id order).
+fn tech_node_rect(id: u32) -> Rect {
+    let def = &TECHS[id as usize];
+    let lane = TECHS
+        .iter()
+        .filter(|t| t.tier == def.tier && t.id < id)
+        .count() as f32;
+    let (px, py, _, _) = tech_panel_origin();
+    let x = px + 20.0 + f32::from(def.tier) * (TECH_NODE_W + TECH_COL_GAP);
+    let y = py + TECH_HEAD_H + lane * (TECH_NODE_H + TECH_ROW_GAP);
+    Rect::new(x, y, TECH_NODE_W, TECH_NODE_H)
 }
 
 /// Full-screen overlay listing the whole tech tree with status + progress. The
@@ -1446,153 +1575,172 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     );
 }
 
+/// The tech TREE as a pannable node graph: five era columns, prereq edges drawn
+/// between nodes, each node coloured by status (researched / in progress /
+/// available / locked / needs-lab) and labelled with what it UNLOCKS. Click a
+/// node or use ↑/↓ + Enter to research; time is frozen while it is open.
 fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
-    let (w, h) = (screen_width(), screen_height());
-    // Dark full-screen overlay — time is frozen while this is up.
-    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 200));
-
-    let pw = 560.0_f32.min(w - 40.0);
-    // One row per tech + title bar + footer.
-    let row_h = 30.0;
-    let head_h = 48.0;
-    let foot_h = 36.0;
-    let n = TECHS.len() as f32;
-    let ph = head_h + n * row_h + foot_h + 16.0;
-    let px = (w - pw) / 2.0;
-    let py = (h - ph) / 2.0;
-
-    // Panel background + gold top bar + border.
+    use rts_core::game::tech::TechUnlock;
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::from_rgba(0, 0, 0, 205),
+    );
+    let (px, py, pw, ph) = tech_panel_origin();
     draw_rectangle(px, py, pw, ph, PANEL);
     draw_rectangle(px, py, pw, 4.0, GOLD);
     draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
 
-    // Title.
-    let fb = sprites.font_bold();
-    let f = sprites.font();
-    centered("RESEARCH", py + 32.0, 26.0, GOLD, sprites.font_bold());
-    // Thin olive separator below the title.
-    draw_rectangle(px + 12.0, py + head_h - 4.0, pw - 24.0, 1.0, OLIVE);
-
-    let (mask, active) = sim.research_state(HUMAN);
-    let has_lab = sim.has_research_lab(HUMAN);
-
-    for (i, t) in TECHS.iter().enumerate() {
-        let ry = py + head_h + i as f32 * row_h + 8.0;
-        // Alternating subtle row tint for readability.
-        if i % 2 == 0 {
-            draw_rectangle(px + 8.0, ry - 4.0, pw - 16.0, row_h - 2.0, WELL);
-        }
-        // Highlight the cursor row.
-        if i == cursor {
-            draw_rectangle(
-                px + 8.0,
-                ry - 4.0,
-                pw - 16.0,
-                row_h - 2.0,
-                with_alpha(GOLD, 0.16),
-            );
-            draw_rectangle_lines(px + 8.0, ry - 4.0, pw - 16.0, row_h - 2.0, 1.5, GOLD_HI);
-        }
-
-        // Number-key chip for the first ten techs (the rest use ↑/↓ + Enter).
-        if i < 10 {
-            let key_char = if i < 9 {
-                char::from_digit(u32::try_from(i + 1).unwrap_or(0), 10).unwrap_or('?')
-            } else {
-                '0'
-            };
-            let key_s = key_char.to_string();
-            draw_rectangle(px + 14.0, ry - 2.0, 18.0, 18.0, PANEL);
-            draw_rectangle_lines(px + 14.0, ry - 2.0, 18.0, 18.0, 1.0, BORDER_NEUTRAL);
-            let kw = measure_text(&key_s, f, 14, 1.0).width;
-            draw_text_ex(
-                &key_s,
-                px + 23.0 - kw / 2.0,
-                ry + 12.0,
-                TextParams {
-                    font: f,
-                    font_size: 14,
-                    color: TEXT_DIM,
-                    ..Default::default()
-                },
-            );
-        }
-
-        // Tech name.
+    let font_bold = sprites.font_bold();
+    let font = sprites.font();
+    centered(
+        "RESEARCH  \u{2014}  TECH TREE",
+        py + 28.0,
+        24.0,
+        GOLD,
+        font_bold,
+    );
+    for (tier, label) in TECH_ERAS.iter().enumerate() {
+        let x = px + 20.0 + tier as f32 * (TECH_NODE_W + TECH_COL_GAP);
+        let lw = measure_text(label, font, 12, 1.0).width;
         draw_text_ex(
-            t.name,
-            px + 40.0,
-            ry + 14.0,
+            label,
+            x + (TECH_NODE_W - lw) / 2.0,
+            py + TECH_HEAD_H - 12.0,
             TextParams {
-                font: fb,
-                font_size: 16,
-                color: TEXT,
-                ..Default::default()
-            },
-        );
-
-        // Cost.
-        let cost_val = t.cost.to_bits() / 65536;
-        let cost_s = format!("${cost_val}");
-        let cost_w = measure_text(&cost_s, f, 14, 1.0).width;
-        draw_text_ex(
-            &cost_s,
-            px + pw / 2.0 - cost_w / 2.0,
-            ry + 14.0,
-            TextParams {
-                font: f,
-                font_size: 14,
+                font,
+                font_size: 12,
                 color: TEXT_DIM,
-                ..Default::default()
-            },
-        );
-
-        // Status (right-aligned).
-        let status = tech_status(t.id, t.prereq, t.duration, mask, active, has_lab);
-        let (status_s, status_col) = match status {
-            TechStatus::Researched => ("Researched".to_owned(), GOOD),
-            TechStatus::InProgress {
-                ticks_remaining,
-                duration,
-            } => {
-                // Compute percent safely using checked_div (duration could be 0).
-                let elapsed = duration.saturating_sub(ticks_remaining);
-                let pct = (elapsed * 100).checked_div(duration).unwrap_or(100);
-                (format!("In progress {pct}%"), WARN)
-            }
-            TechStatus::Locked => ("Locked".to_owned(), TEXT_DIM),
-            TechStatus::NoLab => ("No lab".to_owned(), BAD),
-            TechStatus::Available => ("Available".to_owned(), TEXT),
-        };
-        let sw = measure_text(&status_s, f, 14, 1.0).width;
-        draw_text_ex(
-            &status_s,
-            px + pw - sw - 20.0,
-            ry + 14.0,
-            TextParams {
-                font: f,
-                font_size: 14,
-                color: status_col,
                 ..Default::default()
             },
         );
     }
 
-    // Footer hint.
-    let footer_y = py + head_h + n * row_h + foot_h;
-    draw_rectangle(
-        px + 12.0,
-        py + head_h + n * row_h + 4.0,
-        pw - 24.0,
-        1.0,
-        OLIVE,
-    );
+    let (mask, active) = sim.research_state(HUMAN);
+    let has_lab = sim.has_research_lab(HUMAN);
+
+    // Prereq edges first, under the nodes — a researched prereq glows cyan.
+    for t in &TECHS {
+        let dst = tech_node_rect(t.id);
+        for &pre in t.prereqs {
+            let src = tech_node_rect(pre);
+            let done = mask & (1 << pre) != 0;
+            let col = if done {
+                with_alpha(HOLO_GLOW, 0.9)
+            } else {
+                with_alpha(TEXT_DIM, 0.5)
+            };
+            draw_line(
+                src.x + src.w,
+                src.y + src.h / 2.0,
+                dst.x,
+                dst.y + dst.h / 2.0,
+                1.5,
+                col,
+            );
+        }
+    }
+
+    // Nodes.
+    for (i, t) in TECHS.iter().enumerate() {
+        let r = tech_node_rect(t.id);
+        let status = tech_status(t, mask, active, has_lab);
+        let (fill, border) = match status {
+            TechStatus::Researched => (with_alpha(GOOD, 0.28), GOOD),
+            TechStatus::InProgress { .. } => (with_alpha(WARN, 0.28), WARN),
+            TechStatus::Available => (PANEL_RAISED, GOLD_HI),
+            TechStatus::NoLab => (PANEL, BAD),
+            TechStatus::Locked => (PANEL, BORDER_NEUTRAL),
+        };
+        draw_rectangle(r.x, r.y, r.w, r.h, fill);
+        let bw = if i == cursor { 2.5 } else { 1.0 };
+        let bc = if i == cursor { GOLD } else { border };
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, bw, bc);
+
+        let name_col = matches!(status, TechStatus::Locked)
+            .then_some(TEXT_DIM)
+            .unwrap_or(TEXT);
+        draw_text_ex(
+            t.name,
+            r.x + 7.0,
+            r.y + 15.0,
+            TextParams {
+                font: font_bold,
+                font_size: 13,
+                color: name_col,
+                ..Default::default()
+            },
+        );
+
+        // Unlock payload (what door it opens) — the headline reason to research it.
+        let unlock_s = t.unlocks.iter().fold(String::new(), |mut acc, u| {
+            let name = match u {
+                TechUnlock::Building(b) => building_label(*b),
+                TechUnlock::Unit(u) => unit_label(*u),
+            };
+            if !acc.is_empty() {
+                acc.push_str(", ");
+            }
+            acc.push_str(name);
+            acc
+        });
+        let no_unlock = unlock_s.is_empty();
+        let sub = if no_unlock {
+            // No unlock: a pure stat upgrade.
+            "upgrade".to_owned()
+        } else {
+            unlock_s
+        };
+        draw_text_ex(
+            &sub,
+            r.x + 7.0,
+            r.y + 29.0,
+            TextParams {
+                font,
+                font_size: 11,
+                color: if no_unlock { TEXT_DIM } else { SHIELD },
+                ..Default::default()
+            },
+        );
+
+        // Cost (currency by tier) bottom-right, or a status word.
+        let cost = t.cost.to_bits() / 65536;
+        let label = match status {
+            TechStatus::Researched => "\u{2713}".to_owned(),
+            TechStatus::InProgress {
+                ticks_remaining,
+                duration,
+            } => {
+                let pct = (duration.saturating_sub(ticks_remaining) * 100)
+                    .checked_div(duration)
+                    .unwrap_or(100);
+                format!("{pct}%")
+            }
+            TechStatus::Locked => "\u{1f512}".to_owned(),
+            _ => format!("{cost}{}", if t.tier == 0 { "M" } else { "R" }),
+        };
+        let lw = measure_text(&label, font, 11, 1.0).width;
+        draw_text_ex(
+            &label,
+            r.x + r.w - lw - 6.0,
+            r.y + 41.0,
+            TextParams {
+                font,
+                font_size: 11,
+                color: border,
+                ..Default::default()
+            },
+        );
+    }
+
     centered(
-        "\u{2191}\u{2193} select  \u{2022}  Enter / 1-0 research  \u{2022}  Esc close",
-        footer_y,
-        15.0,
+        "click a node or \u{2191}\u{2193} + Enter to research  \u{2022}  Esc close",
+        py + ph - 9.0,
+        14.0,
         TEXT_DIM,
-        f,
+        font,
     );
 }
 
@@ -2075,18 +2223,23 @@ fn draw_shield_bar(x: f32, y: f32, cell: f32, shield: f32, max_shield: f32) {
 #[cfg(test)]
 mod tests {
     use super::tech_status;
+    use rts_core::game::tech::tech;
+
+    // Heavy Chassis (id 1) is a research-paid tier-1 tech with prereq [10].
+    const T1: u32 = 1;
+    // Mobilization (id 6) is the minerals-paid root (no prereqs, no lab needed).
+    const ROOT: u32 = 6;
 
     #[test]
     fn researched_bit_takes_priority() {
-        // Bit 0 set => Researched regardless of active slot.
-        let status = tech_status(0, None, 300, 0b0001, None, true);
+        let status = tech_status(tech(ROOT).unwrap(), 1 << ROOT, None, true);
         assert!(matches!(status, super::TechStatus::Researched));
     }
 
     #[test]
     fn in_progress_reports_correct_percent() {
-        // 150 ticks remaining out of 300 => 50 %.
-        let status = tech_status(0, None, 300, 0, Some((0, 150)), true);
+        let def = tech(ROOT).unwrap();
+        let status = tech_status(def, 0, Some((ROOT, def.duration / 2)), true);
         if let super::TechStatus::InProgress {
             ticks_remaining,
             duration,
@@ -2102,21 +2255,21 @@ mod tests {
 
     #[test]
     fn locked_when_prereq_not_researched() {
-        // tech 1 requires tech 0; mask = 0 (nothing researched).
-        let status = tech_status(1, Some(0), 450, 0, None, true);
+        // Heavy Chassis needs tech 10; mask = 0 → locked.
+        let status = tech_status(tech(T1).unwrap(), 0, None, true);
         assert!(matches!(status, super::TechStatus::Locked));
     }
 
     #[test]
     fn no_lab_status_when_lab_absent() {
-        let status = tech_status(0, None, 300, 0, None, false);
+        // Prereqs met (10) but no lab → a research-paid tech needs one.
+        let status = tech_status(tech(T1).unwrap(), 1 << 10, None, false);
         assert!(matches!(status, super::TechStatus::NoLab));
     }
 
     #[test]
     fn available_when_prereq_met_and_lab_present() {
-        // tech 1 requires tech 0; mask = 0b0001 (tech 0 done).
-        let status = tech_status(1, Some(0), 450, 0b0001, None, true);
+        let status = tech_status(tech(T1).unwrap(), 1 << 10, None, true);
         assert!(matches!(status, super::TechStatus::Available));
     }
 }

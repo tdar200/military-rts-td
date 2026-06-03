@@ -506,9 +506,17 @@ fn draw_minimap(sim: &Sim) {
     );
 }
 
-fn draw_tooltip(button: Rect, action: Action, price: i64, sprites: &Sprites) {
+fn draw_tooltip(button: Rect, action: Action, price: i64, unlocked: bool, sprites: &Sprites) {
     let (name, role) = kind_name_role(action_kind(action), HUMAN);
-    let cost_s = format!("Cost  ${price}");
+    // Locked: name the gating tech instead of the cost.
+    let cost_s = if unlocked {
+        format!("Cost  ${price}")
+    } else {
+        gating_tech(action).map_or_else(
+            || "Locked".to_owned(),
+            |t| format!("Locked \u{2014} research {t}"),
+        )
+    };
     let font = sprites.font();
     let font_bold = sprites.font_bold();
     let tip_w = text_width(name, 17.0, font_bold)
@@ -542,7 +550,24 @@ fn draw_tooltip(button: Rect, action: Action, price: i64, sprites: &Sprites) {
     );
     text(name, tip_x + 10.0, tip_y + 19.0, 17.0, TEXT, font_bold);
     text(role, tip_x + 10.0, tip_y + 36.0, 14.0, TEXT_DIM, font);
-    text(&cost_s, tip_x + 10.0, tip_y + 53.0, 14.0, GOOD, font);
+    let cost_col = if unlocked { GOOD } else { WARN };
+    text(&cost_s, tip_x + 10.0, tip_y + 53.0, 14.0, cost_col, font);
+}
+
+/// The name of the tech that unlocks `action`, if any (for locked tooltips).
+fn gating_tech(action: Action) -> Option<&'static str> {
+    use rts_core::game::tech::{TechUnlock, TECHS};
+    let want = action_kind(action);
+    TECHS
+        .iter()
+        .find(|t| {
+            t.unlocks.iter().any(|u| match (u, want) {
+                (TechUnlock::Building(b), EntityKindView::Building(k)) => *b == k,
+                (TechUnlock::Unit(u), EntityKindView::Unit(k)) => *u == k,
+                _ => false,
+            })
+        })
+        .map(|t| t.name)
 }
 
 /// A thin neutral divider between ribbon yields (gold is reserved for values).
@@ -673,26 +698,56 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
     };
     for b in &buttons {
         let price = cost(sim, b.action);
+        let unlocked = match b.action {
+            Action::Build(k) => sim.building_unlocked(HUMAN, k),
+            Action::Train(k) => sim.unit_unlocked(HUMAN, k),
+        };
         let affordable = sim.minerals(HUMAN) >= price;
         let active = build_active(b.action, build_mode);
         let hover = b.rect.contains(pointer);
         let price_int = price.to_bits() / 65536;
-        draw_button(b, sprites, affordable, active, hover, price_int);
+        draw_button(b, sprites, unlocked, affordable, active, hover, price_int);
         if hover {
-            draw_tooltip(b.rect, b.action, price_int, sprites);
+            draw_tooltip(b.rect, b.action, price_int, unlocked, sprites);
         }
     }
 }
 
+#[allow(
+    clippy::fn_params_excessive_bools,
+    reason = "a button's visual state is genuinely four independent flags"
+)]
 fn draw_button(
     b: &Button,
     sprites: &Sprites,
+    unlocked: bool,
     affordable: bool,
     active: bool,
     hover: bool,
     price: i64,
 ) {
     let r = b.rect;
+    // Locked-by-tech buttons render dim with a lock glyph; the tooltip names the
+    // gating tech. They are visible (so the player anticipates the unlock) but
+    // clearly not yet usable.
+    if !unlocked {
+        draw_rectangle(r.x, r.y, r.w, r.h, PANEL);
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, BORDER_NEUTRAL);
+        let f = sprites.font();
+        let nw = text_width(b.label, 13.0, f);
+        text(
+            b.label,
+            r.x + (r.w - nw) / 2.0,
+            r.y + 26.0,
+            13.0,
+            TEXT_DIM,
+            f,
+        );
+        let lock = "\u{1f512}";
+        let lw = text_width(lock, 16.0, f);
+        text(lock, r.x + (r.w - lw) / 2.0, r.y + 48.0, 16.0, TEXT_DIM, f);
+        return;
+    }
     // Fill reads by HUE: warm brass when active vs cool rest/hover.
     let bg = if active {
         PANEL_ACTIVE
