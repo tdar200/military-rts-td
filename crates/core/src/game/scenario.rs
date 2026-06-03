@@ -221,8 +221,14 @@ pub fn survival(seed: u64) -> Sim {
     sim.set_waves(WaveConfig {
         first_delay: 5400,
         interval: 540,
-        base_size: 2,
-        growth: 1,
+        // Steep ramp: supply is hard-capped (~68 for a maxed base), so the waves
+        // must keep growing to overrun you. `size = base_size + growth * wave`, so
+        // wave ~25 fields ~78 attackers (plus a Capital boss every 5th wave) —
+        // enough to overwhelm even a maxed, veteran army around the 12-minute mark,
+        // while a typical mid-game army is pressured far earlier. The composition
+        // also hardens over time (see `escalating_unit`).
+        base_size: 3,
+        growth: 3,
         spawn: Vec2::new(
             Fixed::from_int(i32::from(w) - 5),
             Fixed::from_int(i32::from(mid)),
@@ -624,7 +630,7 @@ mod tests {
         let mut s = survival(3);
         let mut last_waves = 0;
         let mut winner = None;
-        for t in 0..18_000u64 {
+        for t in 0..30_000u64 {
             let cmds = s.ai_commands(PlayerId(0)); // player-AI builds + fights
             s.step(&cmds);
             let w = s.waves_survived();
