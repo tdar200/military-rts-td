@@ -230,7 +230,7 @@ async fn main() {
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
     let mut paused = false;
-    // Sim speed multiplier (1–3×): Civ-pace games need a fast-forward for the
+    // Sim speed multiplier (gears 1/2/4/8×): Civ-pace games need a fast-forward for the
     // quiet stretches. `-` slows, `=`/`+` speeds up; determinism is untouched
     // (the same ticks run, just more per wall-clock second).
     let mut game_speed: u32 = 1;
@@ -357,7 +357,16 @@ async fn main() {
         // suppressed until the base exists.
         let surveying = sim.surveying();
         if surveying {
-            if is_mouse_button_pressed(MouseButton::Left) && !ui::pointer_over_ui() {
+            // Reject clicks in the letterbox margins: cursor_tile clamps off-board
+            // points onto an edge tile, so check the raw world position is in bounds.
+            let (mx, my) = mouse_position();
+            let wx = (mx - board_origin_x(&sim, cell)) / cell;
+            let wy = (my - WORLD_TOP) / cell;
+            let on_board = wx >= 0.0
+                && wy >= 0.0
+                && wx < f32::from(sim.map().width())
+                && wy < f32::from(sim.map().height());
+            if on_board && is_mouse_button_pressed(MouseButton::Left) && !ui::pointer_over_ui() {
                 let (col, row) = input::cursor_tile(&sim, cell);
                 if sim
                     .map()
@@ -387,26 +396,34 @@ async fn main() {
                 cell,
             ));
         }
-        if !research_open && !doctrine_open && is_key_pressed(KeyCode::Space) {
+        // Survey allows only founding — pause/speed/modals are suppressed until
+        // the base exists.
+        if !surveying && !research_open && !doctrine_open && is_key_pressed(KeyCode::Space) {
             paused = !paused;
         }
         // Speed gears (GEARS): fast-forward the long peaceful build stretches.
-        if is_key_pressed(KeyCode::Equal) {
+        if !surveying && is_key_pressed(KeyCode::Equal) {
             let i = GEARS.iter().position(|&g| g == game_speed).unwrap_or(0);
             game_speed = GEARS[(i + 1).min(GEARS.len() - 1)];
         }
-        if is_key_pressed(KeyCode::Minus) {
+        if !surveying && is_key_pressed(KeyCode::Minus) {
             let i = GEARS.iter().position(|&g| g == game_speed).unwrap_or(0);
             game_speed = GEARS[i.saturating_sub(1)];
         }
-        // Toggle research modal with Y (only while playing, not paused, not on title/game-over).
-        if !over && !paused && !doctrine_open && is_key_pressed(KeyCode::Y) {
+        // Toggle research modal with Y (only while playing, not paused/surveying).
+        if !over && !paused && !surveying && !doctrine_open && is_key_pressed(KeyCode::Y) {
             research_open = !research_open;
         }
         // Toggle the Ascendancy Doctrines modal with U (Upgrades). Mutually
         // exclusive with research; unlike research it does NOT freeze time, so the
         // surplus can be spent on the fly and several levels bought in a row.
-        if !over && !paused && !research_open && !perk_open && is_key_pressed(KeyCode::U) {
+        if !over
+            && !paused
+            && !surveying
+            && !research_open
+            && !perk_open
+            && is_key_pressed(KeyCode::U)
+        {
             doctrine_open = !doctrine_open;
         }
         if doctrine_open {
@@ -1065,9 +1082,10 @@ fn draw_survey_overlay(sim: &Sim, cell: f32, sprites: &Sprites) {
                 continue; // leave blocked/occupied tiles untinted (read as illegal)
             }
             let near_ore = map.deposits().any(|(dx, dy, d)| {
+                // Match the core's true hex adjacency (apply_found_base) so the
+                // green tint marks exactly the tiles that pay the founding bonus.
                 matches!(d.kind, rts_core::game::map::DepositKind::Ore)
-                    && (i32::from(dx) - i32::from(col)).abs() <= 1
-                    && (i32::from(dy) - i32::from(row)).abs() <= 1
+                    && hex::distance((col, row), (dx, dy)) <= 1
             });
             let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
             let tint = if near_ore {

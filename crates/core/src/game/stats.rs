@@ -418,6 +418,11 @@ impl BuildingKind {
     }
 }
 
+// Unlock bitmasks (sim.rs) are u16, indexed by `index()`. Keep every kind under
+// bit 16 so a future variant can't silently alias another's unlock bit.
+const _: () = assert!(BuildingKind::AntimatterPlant.index() < 16);
+const _: () = assert!(UnitKind::Capital.index() < 16);
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -478,3 +483,4 @@ mod tests {
         assert!(Faction::Alien.index() < FACTION_COUNT);
     }
 }
+

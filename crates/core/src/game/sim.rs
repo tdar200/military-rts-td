@@ -1449,6 +1449,9 @@ impl Sim {
     /// before the Lab is unlocked); later tiers are Research-pool-paid and need a
     /// lab. Mirrors the validate-then-resolve pattern.
     fn apply_research(&mut self, owner: PlayerId, tech_id: u32) {
+        if matches!(self.phase, GamePhase::Survey) {
+            return; // can't research before founding a base
+        }
         let p = usize::from(owner.0);
         let Some(def) = crate::game::tech::tech(tech_id) else {
             return;
@@ -1713,6 +1716,11 @@ impl Sim {
     /// started also counts as its first tick of progress: a `duration`-tick tech
     /// completes after `duration` powered ticks counting the start tick.
     fn run_research(&mut self, powered: [bool; PLAYER_COUNT]) {
+        // No research before a base is founded (a base-less player reads as
+        // "powered" since 0 >= 0, so guard the phase explicitly).
+        if matches!(self.phase, GamePhase::Survey) {
+            return;
+        }
         for (player, &is_powered) in self.players.iter_mut().zip(powered.iter()) {
             if !is_powered {
                 continue;
@@ -2291,10 +2299,13 @@ impl Sim {
                     .map(|(x, y)| (BuildingKind::Refinery, x, y))
             })
             .or_else(|| {
-                (at_cap && barracks < MAX_AI_BARRACKS && afford(BuildingKind::Barracks))
-                    .then_some(near)
-                    .flatten()
-                    .map(|(x, y)| (BuildingKind::Barracks, x, y))
+                (at_cap
+                    && barracks < MAX_AI_BARRACKS
+                    && self.building_unlocked(player, BuildingKind::Barracks)
+                    && afford(BuildingKind::Barracks))
+                .then_some(near)
+                .flatten()
+                .map(|(x, y)| (BuildingKind::Barracks, x, y))
             })
             .or_else(|| {
                 (at_cap && reactors < MAX_AI_REACTORS && afford(BuildingKind::PowerPlant))

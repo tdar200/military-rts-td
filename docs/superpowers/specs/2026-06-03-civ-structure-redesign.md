@@ -49,9 +49,12 @@ unit); keep one exclusive doctrine fork at the capstone tier.
 - Units gated too (`unlocked_units` bitmask): Infantry via Mobilization, Tank
   via Heavy Chassis (+Barrage), AntiArmor via Munitions, Helicopter via
   Rotorcraft (+EMP), Capital via Capital Frames (+Nanite Field).
-- Endless Ascendancy doctrines stay as the post-tree sink, gated behind the
-  Ascendancy capstones (one exclusive offense/defense fork kept via the
-  existing `excludes()` machinery).
+- Endless Ascendancy doctrines stay as the post-tree sink. One exclusive
+  offense/defense doctrine fork is kept at the capstone via the existing
+  `excludes()` machinery. NOTE (impl 2026-06-04): the endless U-panel doctrines
+  are NOT hard-gated behind the capstone techs — they remain available as the
+  numeric sink and the capstone fork is the *tech-side* exclusive choice. This is
+  intentional; gating the panel was descoped to avoid coupling two systems.
 - Shell: replace the list modal with a pannable era-column node GRAPH with
   drawn prereq edges and click-to-research; opening it pauses the sim.
 - Eureka/boost discounts: deferred to a later phase (founding ore bonus ships

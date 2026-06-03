@@ -149,6 +149,15 @@ pub fn handle_click(sim: &Sim, build_mode: &mut Option<BuildingKind>) -> Vec<Com
     let (mx, my) = mouse_position();
     for b in layout() {
         if b.rect.contains(vec2(mx, my)) {
+            // Locked-by-tech actions are inert (the button is greyed); don't arm a
+            // dead-end build ghost or queue a train the core will reject.
+            let unlocked = match b.action {
+                Action::Build(k) => sim.building_unlocked(HUMAN, k),
+                Action::Train(k) => sim.unit_unlocked(HUMAN, k),
+            };
+            if !unlocked {
+                break;
+            }
             match b.action {
                 Action::Build(kind) => *build_mode = Some(kind),
                 Action::Train(kind) => {

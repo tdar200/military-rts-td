@@ -603,6 +603,60 @@ mod tests {
     }
 
     #[test]
+    fn survival_replays_across_the_founding_transition() {
+        // Drive BOTH sides and record the full command log, so the run crosses the
+        // Survey→Active flip (FoundBase: phase + phase_started + ore bonus). Replay
+        // into a fresh sim and assert the state hashes match — locks determinism of
+        // the one genuinely new hashed control-flow branch.
+        let mut a = survival(5);
+        let mut log = Vec::new();
+        for _ in 0..3000 {
+            let mut cmds = a.ai_commands(PlayerId(0));
+            cmds.extend(a.ai_commands(PlayerId(1)));
+            a.step(&cmds);
+            log.push(cmds);
+        }
+        assert!(
+            !a.surveying(),
+            "the run should have founded and crossed to Active"
+        );
+        let expected = a.state_hash();
+        let mut b = survival(5);
+        for batch in &log {
+            b.step(batch);
+        }
+        assert_eq!(
+            b.state_hash(),
+            expected,
+            "survival replay diverged across the founding transition"
+        );
+    }
+
+    #[test]
+    fn restricted_human_progresses_through_the_tech_tree() {
+        // The survival human starts with no army and a 3-building kit; driven by
+        // ai_commands it must research its way to a lab, an era, and a standing
+        // army — proving the progression is not soft-locked.
+        let mut s = survival(3);
+        for _ in 0..40_000u32 {
+            let cmds = s.ai_commands(PlayerId(0));
+            s.step(&cmds);
+        }
+        assert!(
+            s.has_research_lab(PlayerId(0)),
+            "human should research the Lab (Orbital Logistics)"
+        );
+        assert!(
+            s.player_era(PlayerId(0)) >= 1,
+            "human should advance at least one era"
+        );
+        assert!(
+            s.unit_count(PlayerId(0)) > 0,
+            "human should unlock + train an army"
+        );
+    }
+
+    #[test]
     fn survival_overruns_an_undefended_base() {
         // Player does nothing; the enemy AI (+ escalating waves once the grace
         // period expires) must eventually take the base so the run resolves with
