@@ -1,16 +1,23 @@
-//! The research tech tree — global, per-player upgrades.
+//! The research tech TREE — a per-player prerequisite DAG where research opens doors.
 //!
-//! Techs are code constants (ids are array indices). Each tech adds a flat
-//! `bonus` to its `branch`; a player's total branch bonus is the sum of the
-//! bonuses of the techs they've researched. Effects are applied live at
-//! combat/economy/movement resolution, never by mutating unit stats.
+//! Each tech can UNLOCK buildings/units (the primary payoff) and carries a flat
+//! stat `bonus` to its `branch` as a secondary rider. A player's total branch
+//! bonus is the sum of researched techs' bonuses, applied live at
+//! combat/economy/movement resolution.
+//!
+//! The tree has a single root (Mobilization), five tiers (Foundation → Expansion
+//! → Industrial → Energy → Ascendancy), multi-parent convergence edges, and a
+//! mutually-exclusive doctrine fork at the capstone. The Foundation tier is paid
+//! from MINERALS (so research bootstraps before the Research Lab exists); every
+//! later tier is paid from the Research pool.
 
 use crate::fixed::Fixed;
+use crate::game::stats::{BuildingKind, UnitKind};
 
 /// Number of techs in the tree.
 pub const TECH_COUNT: usize = 19;
 
-/// Which global stat a tech improves.
+/// Which global stat a tech's rider improves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum TechBranch {
     /// Adds flat damage to all of the player's attacks.
@@ -29,7 +36,16 @@ pub enum TechBranch {
     AntiGrav,
 }
 
-/// One research upgrade.
+/// What completing a tech makes available — the door it opens.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TechUnlock {
+    /// Makes a building kind placeable.
+    Building(BuildingKind),
+    /// Makes a unit kind trainable.
+    Unit(UnitKind),
+}
+
+/// One research node.
 ///
 /// `PartialEq`/`Eq` are intentionally absent: [`Fixed`] does not implement them.
 /// Use [`TechDef::id`] for identity comparisons.
@@ -39,200 +55,280 @@ pub struct TechDef {
     pub id: u32,
     /// Display name.
     pub name: &'static str,
-    /// Which branch this improves.
+    /// Tier (0..=4), the era/column this node sits in — drives the graph layout
+    /// and the cost currency (tier 0 is minerals-paid).
+    pub tier: u8,
+    /// Which branch the stat rider improves.
     pub branch: TechBranch,
-    /// Credit cost to research.
+    /// Cost to research (in Minerals for tier 0, else Research).
     pub cost: Fixed,
     /// Research duration in ticks.
     pub duration: u32,
-    /// Tech that must be researched first (always an earlier index, same branch).
-    pub prereq: Option<u32>,
-    /// Flat bonus added to the branch total when researched.
+    /// Techs that must ALL be researched first (a DAG; ids may be in any order).
+    pub prereqs: &'static [u32],
+    /// What this tech makes buildable/trainable on completion.
+    pub unlocks: &'static [TechUnlock],
+    /// Flat bonus added to the branch total when researched (the secondary rider).
     pub bonus: Fixed,
 }
 
-/// The full tech tree. Balance numbers are first-pass; tune via the playtest harness.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a terse positional constructor for the tech table; named struct fields would bloat the 19-row table"
+)]
+const fn t(
+    id: u32,
+    name: &'static str,
+    tier: u8,
+    branch: TechBranch,
+    cost: i32,
+    duration: u32,
+    prereqs: &'static [u32],
+    unlocks: &'static [TechUnlock],
+    bonus: Fixed,
+) -> TechDef {
+    TechDef {
+        id,
+        name,
+        tier,
+        branch,
+        cost: Fixed::from_int(cost),
+        duration,
+        prereqs,
+        unlocks,
+        bonus,
+    }
+}
+
+use TechBranch::{AntiGrav, Armor, Economy, Era, Mobility, Shields, Weapons};
+use TechUnlock::{Building as B, Unit as U};
+
+/// The full tech tree. Ids are kept stable across the redesign (so saves/forks
+/// and `excludes` ids don't shift); prereqs form the DAG independent of id order.
+// Ordered by id (index == id). Tiers/eras are encoded by the `tier` field, not
+// array position: Foundation(0, minerals-paid) → Expansion(1) → Industrial(2) →
+// Energy(3) → Ascendancy(4). The single root is Mobilization (id 6).
 pub const TECHS: [TechDef; TECH_COUNT] = [
-    TechDef {
-        id: 0,
-        name: "Weapons I",
-        branch: TechBranch::Weapons,
-        cost: Fixed::from_int(200),
-        duration: 900,
-        prereq: None,
-        bonus: Fixed::from_int(2),
-    },
-    TechDef {
-        id: 1,
-        name: "Weapons II",
-        branch: TechBranch::Weapons,
-        cost: Fixed::from_int(350),
-        duration: 1350,
-        prereq: Some(0),
-        bonus: Fixed::from_int(2),
-    },
-    TechDef {
-        id: 2,
-        name: "Weapons III",
-        branch: TechBranch::Weapons,
-        cost: Fixed::from_int(500),
-        duration: 1800,
-        prereq: Some(1),
-        bonus: Fixed::from_int(3),
-    },
-    TechDef {
-        id: 3,
-        name: "Armor I",
-        branch: TechBranch::Armor,
-        cost: Fixed::from_int(200),
-        duration: 900,
-        prereq: None,
-        bonus: Fixed::from_int(1),
-    },
-    TechDef {
-        id: 4,
-        name: "Armor II",
-        branch: TechBranch::Armor,
-        cost: Fixed::from_int(350),
-        duration: 1350,
-        prereq: Some(3),
-        bonus: Fixed::from_int(1),
-    },
-    TechDef {
-        id: 5,
-        name: "Armor III",
-        branch: TechBranch::Armor,
-        cost: Fixed::from_int(500),
-        duration: 1800,
-        prereq: Some(4),
-        bonus: Fixed::from_int(2),
-    },
-    TechDef {
-        id: 6,
-        name: "Economy I",
-        branch: TechBranch::Economy,
-        cost: Fixed::from_int(250),
-        duration: 1350,
-        prereq: None,
-        bonus: Fixed::from_int(1),
-    },
-    TechDef {
-        id: 7,
-        name: "Economy II",
-        branch: TechBranch::Economy,
-        cost: Fixed::from_int(400),
-        duration: 1800,
-        prereq: Some(6),
-        bonus: Fixed::from_int(1),
-    },
-    TechDef {
-        id: 8,
-        name: "Mobility I",
-        branch: TechBranch::Mobility,
-        cost: Fixed::from_int(200),
-        duration: 1080,
-        prereq: None,
-        bonus: Fixed::from_ratio(2, 100), // 0.02 tiles/tick
-    },
-    TechDef {
-        id: 9,
-        name: "Mobility II",
-        branch: TechBranch::Mobility,
-        cost: Fixed::from_int(350),
-        duration: 1440,
-        prereq: Some(8),
-        bonus: Fixed::from_ratio(2, 100), // 0.02 tiles/tick
-    },
-    TechDef {
-        id: 10,
-        name: "Reach Orbital",
-        branch: TechBranch::Era,
-        cost: Fixed::from_int(500),
-        duration: 1800,
-        prereq: None,
-        bonus: Fixed::ZERO,
-    },
-    TechDef {
-        id: 11,
-        name: "Reach Interplanetary",
-        branch: TechBranch::Era,
-        cost: Fixed::from_int(800),
-        duration: 2400,
-        prereq: Some(10),
-        bonus: Fixed::ZERO,
-    },
-    TechDef {
-        id: 12,
-        name: "Reach Interstellar",
-        branch: TechBranch::Era,
-        cost: Fixed::from_int(1200),
-        duration: 3000,
-        prereq: Some(11),
-        bonus: Fixed::ZERO,
-    },
-    TechDef {
-        id: 13,
-        name: "Shield I",
-        branch: TechBranch::Shields,
-        cost: Fixed::from_int(300),
-        duration: 1350,
-        prereq: None,
-        bonus: Fixed::from_int(30),
-    },
-    TechDef {
-        id: 14,
-        name: "Shield II",
-        branch: TechBranch::Shields,
-        cost: Fixed::from_int(450),
-        duration: 1800,
-        prereq: Some(13),
-        bonus: Fixed::from_int(40),
-    },
-    TechDef {
-        id: 15,
-        name: "Shield III",
-        branch: TechBranch::Shields,
-        cost: Fixed::from_int(600),
-        duration: 2250,
-        prereq: Some(14),
-        bonus: Fixed::from_int(50),
-    },
-    TechDef {
-        id: 16,
-        name: "Anti-Grav Drives",
-        branch: TechBranch::AntiGrav,
-        cost: Fixed::from_int(500),
-        duration: 1800,
-        prereq: None,
-        bonus: Fixed::ZERO,
-    },
-    // --- Doctrine fork: a one-time, mutually-exclusive specialization (see
-    // `excludes`). Commit to overwhelming offense OR an entrenched defense.
-    TechDef {
-        id: 17,
-        name: "Assault Doctrine",
-        branch: TechBranch::Weapons,
-        cost: Fixed::from_int(600),
-        duration: 1800,
-        prereq: None,
-        bonus: Fixed::from_int(3),
-    },
-    TechDef {
-        id: 18,
-        name: "Fortress Doctrine",
-        branch: TechBranch::Armor,
-        cost: Fixed::from_int(600),
-        duration: 1800,
-        prereq: None,
-        bonus: Fixed::from_int(3),
-    },
+    t(
+        0,
+        "Directed Energy",
+        0,
+        Weapons,
+        220,
+        600,
+        &[6],
+        &[B(BuildingKind::GunTurret)],
+        Fixed::from_int(2),
+    ),
+    t(
+        1,
+        "Heavy Chassis",
+        1,
+        Weapons,
+        320,
+        1050,
+        &[10],
+        &[U(UnitKind::Tank)],
+        Fixed::from_int(2),
+    ),
+    t(
+        2,
+        "Rotorcraft",
+        2,
+        Weapons,
+        520,
+        1350,
+        &[1, 11],
+        &[U(UnitKind::Helicopter)],
+        Fixed::from_int(3),
+    ),
+    t(
+        3,
+        "Composite Plating",
+        1,
+        Armor,
+        250,
+        900,
+        &[10],
+        &[],
+        Fixed::from_int(1),
+    ),
+    t(
+        4,
+        "Reactive Armor",
+        2,
+        Armor,
+        420,
+        1200,
+        &[3],
+        &[],
+        Fixed::from_int(1),
+    ),
+    t(
+        5,
+        "Ablative Hull",
+        3,
+        Armor,
+        650,
+        1500,
+        &[4, 12],
+        &[],
+        Fixed::from_int(2),
+    ),
+    // The single root: your first research builds your army (minerals-paid).
+    t(
+        6,
+        "Mobilization",
+        0,
+        Economy,
+        200,
+        600,
+        &[],
+        &[B(BuildingKind::Barracks), U(UnitKind::Infantry)],
+        Fixed::from_int(1),
+    ),
+    t(
+        7,
+        "Industrial Base",
+        2,
+        Economy,
+        400,
+        1200,
+        &[3, 1],
+        &[],
+        Fixed::from_int(1),
+    ),
+    t(
+        8,
+        "Mechanized Corps",
+        1,
+        Mobility,
+        280,
+        900,
+        &[10],
+        &[U(UnitKind::AntiArmor)],
+        Fixed::from_ratio(2, 100),
+    ),
+    t(
+        9,
+        "Anti-Grav Servos",
+        2,
+        Mobility,
+        420,
+        1200,
+        &[8],
+        &[],
+        Fixed::from_ratio(2, 100),
+    ),
+    // Era key -> Expansion; unlocks the Research Lab, ending the minerals bootstrap.
+    t(
+        10,
+        "Orbital Logistics",
+        0,
+        Era,
+        300,
+        900,
+        &[0],
+        &[B(BuildingKind::ResearchLab)],
+        Fixed::ZERO,
+    ),
+    // Era key -> Industrial; unlocks anti-air as the alien air threat arrives.
+    t(
+        11,
+        "Interplanetary Drive",
+        2,
+        Era,
+        500,
+        1500,
+        &[1, 3],
+        &[B(BuildingKind::AaTurret)],
+        Fixed::ZERO,
+    ),
+    // Era key -> Energy; unlocks the Antimatter Plant + Capital ships.
+    t(
+        12,
+        "Interstellar Drive",
+        3,
+        Era,
+        800,
+        1800,
+        &[11, 14],
+        &[B(BuildingKind::AntimatterPlant), U(UnitKind::Capital)],
+        Fixed::ZERO,
+    ),
+    t(
+        13,
+        "Deflector Fields",
+        1,
+        Shields,
+        300,
+        900,
+        &[10],
+        &[],
+        Fixed::from_int(30),
+    ),
+    t(
+        14,
+        "Shield Capacitors",
+        2,
+        Shields,
+        460,
+        1200,
+        &[13],
+        &[],
+        Fixed::from_int(40),
+    ),
+    t(
+        15,
+        "Shield Matrix",
+        3,
+        Shields,
+        700,
+        1500,
+        &[14, 12],
+        &[],
+        Fixed::from_int(50),
+    ),
+    t(
+        16,
+        "Anti-Grav Drives",
+        3,
+        AntiGrav,
+        700,
+        1500,
+        &[9, 12],
+        &[],
+        Fixed::ZERO,
+    ),
+    // Ascendancy (tier 4) — a mutually-exclusive doctrine fork (see `excludes`).
+    t(
+        17,
+        "Assault Doctrine",
+        4,
+        Weapons,
+        900,
+        1800,
+        &[12],
+        &[],
+        Fixed::from_int(3),
+    ),
+    t(
+        18,
+        "Fortress Doctrine",
+        4,
+        Armor,
+        900,
+        1800,
+        &[12],
+        &[],
+        Fixed::from_int(3),
+    ),
 ];
 
-// Keep TECH_COUNT in sync with the table: the last tech's id must be the last
-// index. A forgotten count bump or a mis-numbered id is then a compile error.
-const _: () = assert!(TECHS[TECH_COUNT - 1].id as usize == TECH_COUNT - 1);
+// Keep TECH_COUNT in sync: the array length must match.
+const _: () = assert!(TECHS.len() == TECH_COUNT);
 
-/// Look up a tech by id.
+/// Look up a tech by id (id == array index).
 #[must_use]
 pub const fn tech(id: u32) -> Option<&'static TechDef> {
     if (id as usize) < TECH_COUNT {
@@ -261,11 +357,11 @@ pub const fn excludes(id: u32) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{excludes, is_era_key, tech, TechBranch, TECHS, TECH_COUNT};
+    use super::{excludes, is_era_key, tech, TechUnlock, TECHS, TECH_COUNT};
+    use crate::game::stats::{BuildingKind, UnitKind};
 
     #[test]
     fn doctrine_fork_is_mutually_exclusive() {
-        // The two doctrines exclude each other; nothing else is part of a fork.
         assert_eq!(excludes(17), Some(18));
         assert_eq!(excludes(18), Some(17));
         assert_eq!(excludes(0), None);
@@ -275,60 +371,73 @@ mod tests {
     }
 
     #[test]
-    fn is_shield_branch() {
-        assert_eq!(tech(13).unwrap().branch, TechBranch::Shields);
-        assert_eq!(tech(14).unwrap().branch, TechBranch::Shields);
-        assert_eq!(tech(15).unwrap().branch, TechBranch::Shields);
-        // Chain by prereq: 14→13, 15→14.
-        assert_eq!(tech(14).unwrap().prereq, Some(13));
-        assert_eq!(tech(15).unwrap().prereq, Some(14));
-        assert_eq!(TECH_COUNT, 19);
-    }
-
-    #[test]
-    fn antigrav_tech_exists_at_id_16() {
-        // There is exactly one AntiGrav tech, at index 16.
-        let count = TECHS
-            .iter()
-            .filter(|t| matches!(t.branch, TechBranch::AntiGrav))
-            .count();
-        assert_eq!(count, 1, "exactly one AntiGrav tech");
-        let t = tech(16).unwrap();
-        assert_eq!(t.id, 16);
-        assert_eq!(t.name, "Anti-Grav Drives");
-        assert!(matches!(t.branch, TechBranch::AntiGrav));
-        assert_eq!(t.prereq, None);
-        assert_eq!(TECH_COUNT, 19);
-    }
-
-    #[test]
-    fn tree_is_well_formed() {
+    fn tree_is_a_well_formed_dag() {
         assert_eq!(TECHS.len(), TECH_COUNT);
         for (i, t) in TECHS.iter().enumerate() {
             assert_eq!(t.id as usize, i, "tech id must equal its index");
-            if let Some(p) = t.prereq {
-                assert!((p as usize) < i, "prereq must come earlier in the array");
-                assert_eq!(
-                    TECHS[p as usize].branch, t.branch,
-                    "prereq must be in the same branch"
+            for &p in t.prereqs {
+                assert!((p as usize) < TECH_COUNT, "prereq id in range");
+                assert_ne!(p, t.id, "no self-prereq");
+                // A prereq must sit in an earlier-or-equal tier (no forward edges).
+                assert!(
+                    TECHS[p as usize].tier <= t.tier,
+                    "prereq {p} of {} must not be in a later tier",
+                    t.id
                 );
             }
         }
-        assert!(tech(0).is_some());
-        assert!(tech(u32::try_from(TECH_COUNT).unwrap()).is_none());
-        assert_eq!(tech(0).unwrap().branch, TechBranch::Weapons);
+        // Exactly one root (Mobilization), so the tree has a single entry point.
+        let roots: usize = TECHS.iter().filter(|t| t.prereqs.is_empty()).count();
+        assert_eq!(roots, 1, "exactly one root tech");
+        assert_eq!(tech(6).unwrap().name, "Mobilization");
     }
 
     #[test]
-    fn is_era_key_identifies_era_techs() {
-        assert!(is_era_key(10) && is_era_key(12) && !is_era_key(0));
-        // Era techs chain by prereq: 11 requires 10, 12 requires 11.
-        assert_eq!(TECHS[11].prereq, Some(10));
-        assert_eq!(TECHS[12].prereq, Some(11));
-        // Non-era techs are not era keys.
-        assert!(!is_era_key(1));
-        assert!(!is_era_key(9));
-        // Out-of-range id is not an era key.
+    fn every_buildable_and_unit_kind_is_unlocked_by_some_tech() {
+        // Every kind NOT in the founding kit must be reachable via research.
+        let founding_buildings = [
+            BuildingKind::CommandCenter,
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Wall,
+        ];
+        for b in [
+            BuildingKind::Barracks,
+            BuildingKind::GunTurret,
+            BuildingKind::AaTurret,
+            BuildingKind::ResearchLab,
+            BuildingKind::AntimatterPlant,
+        ] {
+            assert!(!founding_buildings.contains(&b));
+            assert!(
+                TECHS
+                    .iter()
+                    .any(|t| t.unlocks.contains(&TechUnlock::Building(b))),
+                "{b:?} must be unlocked by a tech"
+            );
+        }
+        for u in [
+            UnitKind::Infantry,
+            UnitKind::Tank,
+            UnitKind::AntiArmor,
+            UnitKind::Helicopter,
+            UnitKind::Capital,
+        ] {
+            assert!(
+                TECHS
+                    .iter()
+                    .any(|t| t.unlocks.contains(&TechUnlock::Unit(u))),
+                "{u:?} must be unlocked by a tech"
+            );
+        }
+    }
+
+    #[test]
+    fn era_keys_are_the_tier_spine() {
+        // One era key advances into each of Expansion/Industrial/Energy.
+        assert!(is_era_key(10) && is_era_key(11) && is_era_key(12));
+        assert!(!is_era_key(0) && !is_era_key(16));
         assert!(!is_era_key(100));
+        assert_eq!(TECH_COUNT, 19);
     }
 }

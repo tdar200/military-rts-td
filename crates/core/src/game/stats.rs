@@ -239,6 +239,18 @@ pub const fn damage_multiplier(damage_type: DamageType, armor: ArmorType) -> Fix
 }
 
 impl UnitKind {
+    /// Stable 0-based index, for unlock bitmasks and tech wiring. Never reorder.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::Infantry => 0,
+            Self::Tank => 1,
+            Self::AntiArmor => 2,
+            Self::Helicopter => 3,
+            Self::Capital => 4,
+        }
+    }
+
     /// The balance stats for this unit kind.
     #[must_use]
     pub const fn stats(self) -> UnitStats {
@@ -318,6 +330,22 @@ impl UnitKind {
 }
 
 impl BuildingKind {
+    /// Stable 0-based index, for unlock bitmasks and tech wiring. Never reorder.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        match self {
+            Self::CommandCenter => 0,
+            Self::PowerPlant => 1,
+            Self::Refinery => 2,
+            Self::Barracks => 3,
+            Self::GunTurret => 4,
+            Self::AaTurret => 5,
+            Self::Wall => 6,
+            Self::ResearchLab => 7,
+            Self::AntimatterPlant => 8,
+        }
+    }
+
     /// The balance stats for this building kind.
     #[must_use]
     pub const fn stats(self) -> BuildingStats {

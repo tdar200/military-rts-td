@@ -200,6 +200,11 @@ struct Player {
     active_perks: u32,
     /// Level bought on each endless Ascendancy Doctrine track (see `DOC_*`).
     doctrine_levels: [u16; DOCTRINE_TRACKS],
+    /// Bitmask of buildable building kinds (bit = `BuildingKind::index`). Tech
+    /// research flips these on; the human starts with a tiny founding kit.
+    unlocked_buildings: u16,
+    /// Bitmask of trainable unit kinds (bit = `UnitKind::index`).
+    unlocked_units: u16,
 }
 
 /// A player or AI input, applied at a tick boundary.
@@ -510,6 +515,8 @@ impl Sim {
                 research: Fixed::ZERO,
                 active_perks: 0,
                 doctrine_levels: [0; DOCTRINE_TRACKS],
+                unlocked_buildings: u16::MAX,
+                unlocked_units: u16::MAX,
             }; PLAYER_COUNT],
             entities: Vec::new(),
             free: Vec::new(),
@@ -527,6 +534,62 @@ impl Sim {
     /// [`Command::FoundBase`] resolves; waves and defeat are held until then.
     pub const fn begin_survey(&mut self) {
         self.phase = GamePhase::Survey;
+    }
+
+    /// Restricts `player` to a starting founding kit — only `buildings` and
+    /// `units` are buildable until tech research unlocks the rest. Used for the
+    /// survival human (the AI sides stay fully unlocked).
+    pub fn set_starting_unlocks(
+        &mut self,
+        player: PlayerId,
+        buildings: &[BuildingKind],
+        units: &[UnitKind],
+    ) {
+        let p = usize::from(player.0);
+        self.players[p].unlocked_buildings = 0;
+        self.players[p].unlocked_units = 0;
+        for &b in buildings {
+            self.players[p].unlocked_buildings |= 1 << b.index();
+        }
+        for &u in units {
+            self.players[p].unlocked_units |= 1 << u.index();
+        }
+    }
+
+    /// Whether `player` may build `kind` yet (for the shell command bar).
+    #[must_use]
+    pub fn building_unlocked(&self, player: PlayerId, kind: BuildingKind) -> bool {
+        self.players[usize::from(player.0)].unlocked_buildings & (1 << kind.index()) != 0
+    }
+
+    /// Whether `player` may train `kind` yet (for the shell command bar).
+    #[must_use]
+    pub fn unit_unlocked(&self, player: PlayerId, kind: UnitKind) -> bool {
+        self.players[usize::from(player.0)].unlocked_units & (1 << kind.index()) != 0
+    }
+
+    /// Test-only: instantly grant `id` (set the bit, advance era, apply unlocks),
+    /// mirroring research completion. Lets tests satisfy DAG prereqs without
+    /// stepping the whole chain.
+    #[cfg(test)]
+    fn grant_tech(&mut self, player: PlayerId, id: u32) {
+        let p = usize::from(player.0);
+        self.players[p].researched_techs |= 1u32 << id;
+        if crate::game::tech::is_era_key(id) {
+            self.players[p].era = (self.players[p].era + 1).min(3);
+        }
+        if let Some(def) = crate::game::tech::tech(id) {
+            for unlock in def.unlocks {
+                match *unlock {
+                    crate::game::tech::TechUnlock::Building(b) => {
+                        self.players[p].unlocked_buildings |= 1 << b.index();
+                    }
+                    crate::game::tech::TechUnlock::Unit(u) => {
+                        self.players[p].unlocked_units |= 1 << u.index();
+                    }
+                }
+            }
+        }
     }
 
     /// Whether the run is still in the pre-founding Survey phase.
@@ -918,6 +981,8 @@ impl Sim {
             for t in 0..DOCTRINE_TRACKS {
                 h.write_u64(u64::from(p.doctrine_levels[t]));
             }
+            h.write_u64(u64::from(p.unlocked_buildings));
+            h.write_u64(u64::from(p.unlocked_units));
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -1217,7 +1282,8 @@ impl Sim {
                     .is_some_and(|t| t.buildable);
                 let cost = self.balance.building(kind).cost;
                 let p = usize::from(owner.0);
-                if buildable && self.players[p].minerals >= cost {
+                let unlocked = self.players[p].unlocked_buildings & (1 << kind.index()) != 0;
+                if unlocked && buildable && self.players[p].minerals >= cost {
                     self.players[p].minerals = self.players[p].minerals - cost;
                     self.add_building(owner, kind, x, y);
                 }
@@ -1243,7 +1309,9 @@ impl Sim {
                         && matches!(e.kind, Kind::Building(BuildingKind::Barracks))
                 });
                 let has_supply = self.supply_used(owner) < self.supply_cap(owner);
+                let unlocked = self.players[p].unlocked_units & (1 << kind.index()) != 0;
                 if ok
+                    && unlocked
                     && has_supply
                     && self.players[p].minerals >= cost
                     && self.players[p].alloys >= am_cost
@@ -1268,34 +1336,7 @@ impl Sim {
                     self.order_unit_to(idx, target);
                 }
             }
-            Command::Research { owner, tech_id } => {
-                let p = usize::from(owner.0);
-                let Some(def) = crate::game::tech::tech(tech_id) else {
-                    return;
-                };
-                let already = self.players[p].researched_techs & (1u32 << tech_id) != 0;
-                let busy = self.players[p].active_research.is_some();
-                let prereq_ok = match def.prereq {
-                    Some(req) => self.players[p].researched_techs & (1u32 << req) != 0,
-                    None => true,
-                };
-                // A doctrine fork locks out its counterpart once chosen.
-                let fork_ok = match crate::game::tech::excludes(tech_id) {
-                    Some(other) => self.players[p].researched_techs & (1u32 << other) == 0,
-                    None => true,
-                };
-                let has_lab = self.has_research_lab(owner);
-                if !already
-                    && !busy
-                    && prereq_ok
-                    && fork_ok
-                    && has_lab
-                    && self.players[p].research >= def.cost
-                {
-                    self.players[p].research = self.players[p].research - def.cost;
-                    self.players[p].active_research = Some((tech_id, def.duration));
-                }
-            }
+            Command::Research { owner, tech_id } => self.apply_research(owner, tech_id),
             Command::ChoosePerk { owner, perk } => {
                 if perk < crate::game::perk::PERK_COUNT {
                     self.players[usize::from(owner.0)].active_perks |= 1u32 << perk;
@@ -1400,6 +1441,38 @@ impl Sim {
             }
         }
         self.entities[idx].ability_cd = d.cooldown;
+    }
+
+    /// Begins researching `tech_id`: validate prereqs (full DAG), the doctrine
+    /// fork lock, and affordability, then deduct + start the timer. Foundation
+    /// (tier 0) techs are Minerals-paid and need no lab (so research bootstraps
+    /// before the Lab is unlocked); later tiers are Research-pool-paid and need a
+    /// lab. Mirrors the validate-then-resolve pattern.
+    fn apply_research(&mut self, owner: PlayerId, tech_id: u32) {
+        let p = usize::from(owner.0);
+        let Some(def) = crate::game::tech::tech(tech_id) else {
+            return;
+        };
+        let mask = self.players[p].researched_techs;
+        let already = mask & (1u32 << tech_id) != 0;
+        let busy = self.players[p].active_research.is_some();
+        let prereq_ok = def.prereqs.iter().all(|&r| mask & (1u32 << r) != 0);
+        let fork_ok =
+            crate::game::tech::excludes(tech_id).is_none_or(|other| mask & (1u32 << other) == 0);
+        let mineral_paid = def.tier == 0;
+        let affordable = if mineral_paid {
+            self.players[p].minerals >= def.cost
+        } else {
+            self.has_research_lab(owner) && self.players[p].research >= def.cost
+        };
+        if !already && !busy && prereq_ok && fork_ok && affordable {
+            if mineral_paid {
+                self.players[p].minerals = self.players[p].minerals - def.cost;
+            } else {
+                self.players[p].research = self.players[p].research - def.cost;
+            }
+            self.players[p].active_research = Some((tech_id, def.duration));
+        }
     }
 
     /// Founds the Command Center: the Survey-ending act. Validate-then-resolve —
@@ -1650,6 +1723,19 @@ impl Sim {
                     player.active_research = None;
                     if crate::game::tech::is_era_key(id) {
                         player.era = (player.era + 1).min(3);
+                    }
+                    // Research opens doors: flip on the buildings/units it unlocks.
+                    if let Some(def) = crate::game::tech::tech(id) {
+                        for unlock in def.unlocks {
+                            match *unlock {
+                                crate::game::tech::TechUnlock::Building(b) => {
+                                    player.unlocked_buildings |= 1 << b.index();
+                                }
+                                crate::game::tech::TechUnlock::Unit(u) => {
+                                    player.unlocked_units |= 1 << u.index();
+                                }
+                            }
+                        }
                     }
                 } else {
                     player.active_research = Some((id, ticks - 1));
@@ -2082,7 +2168,9 @@ impl Sim {
             BuildingKind::Barracks,
             BuildingKind::ResearchLab,
         ] {
-            if !self.has_building(player, kind) {
+            // Skip kinds not yet unlocked by research — otherwise the loop would
+            // spin forever on a locked essential and never build/train anything.
+            if self.building_unlocked(player, kind) && !self.has_building(player, kind) {
                 if kind == BuildingKind::Refinery {
                     // Refineries only earn income when built ON a deposit tile.
                     // Scan deposits in row-major order; pick the first whose tile
@@ -2128,6 +2216,7 @@ impl Sim {
         // Anti-air response: if the enemy fields aircraft and we have no AA yet,
         // build a turret to counter it.
         if !building_this_tick
+            && self.building_unlocked(player, BuildingKind::AaTurret)
             && self.enemy_has_air(player)
             && !self.has_building(player, BuildingKind::AaTurret)
             && minerals >= self.building_cost(BuildingKind::AaTurret)
@@ -2143,11 +2232,12 @@ impl Sim {
             building_this_tick = true;
         }
 
-        // Antimatter infrastructure: once Era 1 is reached, build an Antimatter
-        // Plant if we don't have one yet. Era ≥ 1 gating keeps the 120-tick golden
-        // run (AI stays Era 0) unaffected.
+        // Antimatter infrastructure: once it is unlocked (Interstellar / era 3),
+        // build an Antimatter Plant if we don't have one yet. Gating on the unlock
+        // keeps the 120-tick golden run (AI stays Era 0, plant locked) unaffected
+        // and stops the loop stalling on a not-yet-unlocked plant.
         if !building_this_tick
-            && self.player_era(player) >= 1
+            && self.building_unlocked(player, BuildingKind::AntimatterPlant)
             && !self.has_building(player, BuildingKind::AntimatterPlant)
             && minerals >= self.building_cost(BuildingKind::AntimatterPlant)
         {
@@ -2265,14 +2355,14 @@ impl Sim {
         let avail = minerals - spent_this_tick;
         if self.player_era(player) >= 1 && avail >= ASCEND_MIN_RESERVE {
             let (rmask, active) = self.research_state(player);
-            // The AI pursues only the 17 finite techs (ids 0..=16), never the
-            // forks, so the tree is "open" while any of those is eligible+unbought.
+            // The tree is "open" while any non-fork tech (tiers 0..=3) is still
+            // eligible+unbought — research stays reserved for the finite tree until
+            // it is exhausted, then funds the endless doctrines.
             let tree_open = active.is_some()
-                || (0..17u32).any(|id| {
-                    let def = crate::game::tech::TECHS[id as usize];
-                    let done = rmask & (1u32 << id) != 0;
-                    let prereq_ok = def.prereq.is_none_or(|req| rmask & (1u32 << req) != 0);
-                    !done && prereq_ok
+                || crate::game::tech::TECHS.iter().any(|def| {
+                    let done = rmask & (1u32 << def.id) != 0;
+                    let prereq_ok = def.prereqs.iter().all(|&r| rmask & (1u32 << r) != 0);
+                    def.tier < 4 && !done && prereq_ok
                 });
             // Track order: Forge (3) first to drain Minerals, then the research
             // tracks Weapons(0)/Armor(1)/Vitality(2). u8 ids avoid a fallible cast.
@@ -2295,25 +2385,31 @@ impl Sim {
             }
         }
 
-        // Research: with a lab and no active research, start the first eligible +
-        // affordable tech in a fixed priority order. Deterministic and symmetric
-        // for both players; skipping ineligible/unaffordable techs avoids stalls.
+        // Research: with no active research, start the first eligible + affordable
+        // tech in a fixed priority order — the unlock spine first (Mobilization →
+        // Directed Energy → era keys), so the AI opens its own kit, then the stat
+        // riders. Tier-0 techs are minerals-paid (no lab); later tiers need a lab
+        // and the Research pool. Deterministic, prereq-gated, no RNG.
         let (researched_mask, active_research) = self.research_state(player);
-        if self.has_research_lab(player) && active_research.is_none() {
-            // Priority by tech id: Economy I(6) → Weapons I(0) → Armor I(3) →
-            // Shield I(13) → Reach Orbital(10) → Economy II(7) → Weapons II(1) →
-            // Armor II(4) → Shield II(14) → Reach Interplanetary(11) → Mobility I(8) →
-            // Weapons III(2) → Armor III(5) → Shield III(15) → Reach Interstellar(12) →
-            // Mobility II(9) → Anti-Grav Drives(16).
+        if active_research.is_none() {
+            // Spine (6,0,10 unlock army/turret/lab + era 1) → expansion unlocks
+            // (1,8 = Tank/Lancer) → era 2 (11) → Heli(2) → econ/defense riders →
+            // era 3 (12 = Antimatter+Capital) → late riders → Anti-Grav(16).
             const RESEARCH_PRIORITY: [u32; 17] =
-                [6, 0, 3, 13, 10, 7, 1, 4, 14, 11, 8, 2, 5, 15, 12, 9, 16];
+                [6, 0, 10, 1, 8, 11, 2, 7, 3, 13, 4, 14, 12, 5, 15, 9, 16];
             for tech_id in RESEARCH_PRIORITY {
                 let def = crate::game::tech::TECHS[tech_id as usize];
                 let researched = researched_mask & (1u32 << tech_id) != 0;
                 let prereq_ok = def
-                    .prereq
-                    .is_none_or(|req| researched_mask & (1u32 << req) != 0);
-                if !researched && prereq_ok && self.research(player) >= def.cost {
+                    .prereqs
+                    .iter()
+                    .all(|&r| researched_mask & (1u32 << r) != 0);
+                let affordable = if def.tier == 0 {
+                    self.minerals(player) >= def.cost
+                } else {
+                    self.has_research_lab(player) && self.research(player) >= def.cost
+                };
+                if !researched && prereq_ok && affordable {
                     cmds.push(Command::Research {
                         owner: player,
                         tech_id,
@@ -2753,7 +2849,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 7_828_962_637_882_570_855);
+        assert_eq!(s.state_hash(), 2_767_408_481_316_525_773);
     }
 
     #[test]
@@ -2762,8 +2858,11 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
-        // Warm up the research pool: Assault Doctrine costs 600, lab produces 2/tick => 300 ticks.
-        for _ in 0..320 {
+        for id in [6u32, 0, 10, 1, 3, 13, 14, 11, 12] {
+            s.grant_tech(P0, id); // satisfy Assault Doctrine (17)'s prereq [12]
+        }
+        // Warm up the research pool: Assault Doctrine costs 900, lab makes 2/tick => 450 ticks.
+        for _ in 0..500 {
             s.step(&[]);
         }
         // Research Assault Doctrine (17) to completion.
@@ -3684,13 +3783,9 @@ mod tests {
     fn research_completes_after_its_duration_and_sets_the_bit() {
         use crate::game::tech::tech;
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
-        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
-        s.add_building(P0, BuildingKind::PowerPlant, 6, 20); // power so research advances
-        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
-        // Warm up the research pool: tech 0 costs 200, lab produces 2/tick => 100 ticks needed.
-        for _ in 0..110 {
-            s.step(&[]);
-        }
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20); // CC alone is powered
+        s.grant_tech(P0, 6); // Mobilization, the prereq of Directed Energy (0)
+                             // Tech 0 is a Foundation tech: minerals-paid, no lab needed.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 0,
@@ -3725,17 +3820,21 @@ mod tests {
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
-        // No ResearchLab yet → rejected.
-        s.step(&[Command::Research {
-            owner: P0,
-            tech_id: 0,
-        }]);
-        assert!(s.research_state(P0).1.is_none());
-        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
-        // Weapons II (id 1) needs Weapons I (id 0) → rejected.
+        // Satisfy Heavy Chassis (1)'s prereq so the ONLY blocker is the missing lab.
+        s.grant_tech(P0, 6);
+        s.grant_tech(P0, 0);
+        s.grant_tech(P0, 10);
+        // No ResearchLab yet → a research-paid tech is rejected.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 1,
+        }]);
+        assert!(s.research_state(P0).1.is_none());
+        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
+        // Rotorcraft (2) needs prereqs [1, 11], neither researched → rejected.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 2,
         }]);
         assert!(s.research_state(P0).1.is_none());
     }
@@ -3766,13 +3865,10 @@ mod tests {
     fn researching_an_era_key_tech_advances_the_era() {
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
-        s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
-        s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
+        s.grant_tech(P0, 6);
+        s.grant_tech(P0, 0); // prereq chain for Orbital Logistics (10)
         assert_eq!(s.player_era(P0), 0);
-        // Warm up the research pool: tech 10 costs 500, lab produces 2/tick => 250 ticks needed.
-        for _ in 0..260 {
-            s.step(&[]);
-        }
+        // Tech 10 is Foundation: minerals-paid, no lab needed.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 10,
@@ -3828,11 +3924,14 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
-        // Warm up the research pool: Shield I costs 300, lab produces 2/tick => 150 ticks needed.
+        s.grant_tech(P0, 6);
+        s.grant_tech(P0, 0);
+        s.grant_tech(P0, 10); // prereq of Deflector Fields (13)
+                              // Warm up the research pool: Shield I costs 300, lab produces 2/tick => 150 ticks.
         for _ in 0..160 {
             s.step(&[]);
         }
-        // Research Shield I (id 13) to completion.
+        // Research Deflector Fields (id 13) to completion.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 13,
@@ -3885,14 +3984,14 @@ mod tests {
         let mut s = Sim::new(Map::new(40, 40), 7, f(3000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
-        for _ in 0..8000 {
+        for _ in 0..16000 {
             let mut cmds = s.ai_commands(P0);
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
         assert!(
             s.player_shield_max(P0) > crate::fixed::Fixed::ZERO,
-            "AI (P0) should have researched a Shield tech after 8000 ticks"
+            "AI (P0) should have researched a Shield tech"
         );
     }
 
@@ -3937,8 +4036,11 @@ mod tests {
             .map(|i| u32::try_from(i).unwrap())
             .unwrap();
         assert!(!s.has_antigrav(P0));
-        // Warm up the research pool: Anti-Grav Drives costs 500, lab produces 2/tick => 250 ticks.
-        for _ in 0..260 {
+        for id in [6u32, 0, 10, 1, 3, 8, 9, 13, 14, 11, 12] {
+            s.grant_tech(P0, id); // satisfy Anti-Grav Drives (16)'s prereqs [9, 12]
+        }
+        // Warm up the research pool: Anti-Grav Drives costs 700, lab makes 2/tick => 350 ticks.
+        for _ in 0..400 {
             s.step(&[]);
         }
         s.step(&[Command::Research {
@@ -4031,31 +4133,34 @@ mod tests {
 
     #[test]
     fn lab_funds_tech_from_research_pool() {
-        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        let mut s = Sim::new(Map::new(20, 20), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
-        // No research yet -> research command rejected (can't afford).
+        // Heavy Chassis (1) is a research-paid tier-1 tech; satisfy its prereqs.
+        s.grant_tech(P0, 6);
+        s.grant_tech(P0, 0);
+        s.grant_tech(P0, 10);
+        // No research yet -> rejected even though minerals are plentiful.
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 0,
+            tech_id: 1,
         }]);
         assert!(
             s.research_state(P0).1.is_none(),
-            "tech 0 should be unaffordable at 0 research"
+            "tech 1 should be unaffordable at 0 research"
         );
-        // Accumulate research from the lab, then it becomes affordable.
         for _ in 0..400 {
             s.step(&[]);
         }
         assert!(s.research(P0).to_bits() > 0, "lab should produce research");
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 0,
+            tech_id: 1,
         }]);
         assert!(
             s.research_state(P0).1.is_some(),
-            "tech 0 should start once research is funded"
+            "tech 1 should start once research is funded"
         );
     }
 

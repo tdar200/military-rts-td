@@ -208,6 +208,19 @@ pub fn survival(seed: u64) -> Sim {
     // deposit above is one premium option among the procgen sites). The wave
     // clock starts at the founding tick.
     sim.begin_survey();
+    // The human starts with only a founding kit; the tech tree unlocks the rest
+    // (Barracks/Infantry via Mobilization, turrets/lab/capitals deeper in). The
+    // alien beachhead (P1) stays fully unlocked.
+    sim.set_starting_unlocks(
+        HUMAN,
+        &[
+            BuildingKind::CommandCenter,
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Wall,
+        ],
+        &[],
+    );
 
     // Endurance run: you outlast the waves rather than race to a win. Losing your
     // own Command Center ends it; the alien beachhead is just the wave source.
@@ -219,18 +232,18 @@ pub fn survival(seed: u64) -> Sim {
 
     // Escalating waves from the beachhead toward the player.
     sim.set_waves(WaveConfig {
-        // Civ pace: six peaceful minutes to found the colony, then one wave per
-        // minute. Each wave is a readable event you prepare for, not a stream.
+        // Civ pace: ~6 peaceful minutes to found the colony, then a TELEGRAPHED
+        // siege every ~10 minutes. Long build/expand/tech stretches punctuated by
+        // a handful of discrete, escalating assaults — building is the game,
+        // defense is the punctuation.
         first_delay: 10_800,
-        interval: 1800,
-        // Supply is hard-capped (~68 for a maxed base), so `size = base_size +
-        // growth * wave` keeps climbing past it — wave 15 (the milestone, ~21 min
-        // in) fields 49 attackers plus Capital bosses every 5th wave, and the
-        // composition hardens over time (see `escalating_unit`). At the one-per-
-        // minute cadence a defense fully retrains between waves, so the ramp must
-        // be steep enough to eventually out-mass a constantly-refreshed army.
-        base_size: 4,
-        growth: 3,
+        interval: 18_000,
+        // Few-but-huge sieges: with ~10 min to fully retrain, tech, and stack
+        // doctrines between them, each must be a wall. `size = base_size +
+        // growth * wave`, plus a Capital boss every 5th wave, plus the adapting
+        // swarm (each wave hardens the attacker — see `run_waves`).
+        base_size: 10,
+        growth: 8,
         spawn: Vec2::new(
             Fixed::from_int(i32::from(w) - 5),
             Fixed::from_int(i32::from(mid)),
@@ -645,7 +658,7 @@ mod tests {
         let mut s = survival(3);
         let mut last_waves = 0;
         let mut winner = None;
-        for t in 0..80_000u64 {
+        for t in 0..140_000u64 {
             let mut cmds = s.ai_commands(PlayerId(0)); // player-AI builds + fights
                                                        // Mirror the shell exactly: the beachhead AI acts once the first wave
                                                        // has spawned (render-shell main.rs gates it the same way), so enemy
