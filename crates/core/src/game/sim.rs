@@ -984,9 +984,9 @@ impl Sim {
                     && prereq_ok
                     && fork_ok
                     && has_lab
-                    && self.players[p].minerals >= def.cost
+                    && self.players[p].research >= def.cost
                 {
-                    self.players[p].minerals = self.players[p].minerals - def.cost;
+                    self.players[p].research = self.players[p].research - def.cost;
                     self.players[p].active_research = Some((tech_id, def.duration));
                 }
             }
@@ -1086,6 +1086,7 @@ impl Sim {
         let mut consumed = [0i32; PLAYER_COUNT];
         let mut income = [Fixed::ZERO; PLAYER_COUNT];
         let mut am_income = [Fixed::ZERO; PLAYER_COUNT];
+        let mut research = [Fixed::ZERO; PLAYER_COUNT];
         for e in &self.entities {
             if !e.alive {
                 continue;
@@ -1097,6 +1098,7 @@ impl Sim {
                 consumed[p] += st.power_consumed;
                 income[p] = income[p] + st.credit_income;
                 am_income[p] = am_income[p] + st.antimatter_income;
+                research[p] = research[p] + st.research_income;
             }
         }
         let mut powered = [false; PLAYER_COUNT];
@@ -1124,6 +1126,7 @@ impl Sim {
             }
             self.players[p].minerals = self.players[p].minerals + credit_income * factor;
             self.players[p].alloys = self.players[p].alloys + am_income[p] * factor;
+            self.players[p].research = self.players[p].research + research[p] * factor;
         }
         // Extractors mine the deposit they stand on (throttled by power like income).
         let mut to_mine: alloc::vec::Vec<(u16, u16, u8, i32)> = alloc::vec::Vec::new();
@@ -1569,7 +1572,7 @@ impl Sim {
                 let prereq_ok = def
                     .prereq
                     .is_none_or(|req| researched_mask & (1u32 << req) != 0);
-                if !researched && prereq_ok && minerals >= def.cost {
+                if !researched && prereq_ok && self.research(player) >= def.cost {
                     cmds.push(Command::Research {
                         owner: player,
                         tech_id,
@@ -2008,7 +2011,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 8_407_706_390_701_679_104);
+        assert_eq!(s.state_hash(), 697_568_124_865_822_640);
     }
 
     #[test]
@@ -2017,6 +2020,10 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
+        // Warm up the research pool: Assault Doctrine costs 600, lab produces 4/tick => 150 ticks.
+        for _ in 0..160 {
+            s.step(&[]);
+        }
         // Research Assault Doctrine (17) to completion.
         s.step(&[Command::Research {
             owner: P0,
@@ -2261,6 +2268,10 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P0, BuildingKind::PowerPlant, 6, 20); // power so research advances
         s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
+        // Warm up the research pool: tech 0 costs 200, lab produces 4/tick => 50 ticks needed.
+        for _ in 0..60 {
+            s.step(&[]);
+        }
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 0,
@@ -2339,6 +2350,10 @@ mod tests {
         s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
         s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
         assert_eq!(s.player_era(P0), 0);
+        // Warm up the research pool: tech 10 costs 500, lab produces 4/tick => 125 ticks needed.
+        for _ in 0..130 {
+            s.step(&[]);
+        }
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 10,
@@ -2394,6 +2409,10 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
+        // Warm up the research pool: Shield I costs 300, lab produces 4/tick => 75 ticks needed.
+        for _ in 0..80 {
+            s.step(&[]);
+        }
         // Research Shield I (id 13) to completion.
         s.step(&[Command::Research {
             owner: P0,
@@ -2499,6 +2518,10 @@ mod tests {
             .map(|i| u32::try_from(i).unwrap())
             .unwrap();
         assert!(!s.has_antigrav(P0));
+        // Warm up the research pool: Anti-Grav Drives costs 500, lab produces 4/tick => 125 ticks.
+        for _ in 0..130 {
+            s.step(&[]);
+        }
         s.step(&[Command::Research {
             owner: P0,
             tech_id: agid,
@@ -2584,6 +2607,36 @@ mod tests {
         assert!(
             plant_seen,
             "AI (P0) should build an Antimatter Plant after reaching Era 1"
+        );
+    }
+
+    #[test]
+    fn lab_funds_tech_from_research_pool() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
+        s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
+        // No research yet -> research command rejected (can't afford).
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 0,
+        }]);
+        assert!(
+            s.research_state(P0).1.is_none(),
+            "tech 0 should be unaffordable at 0 research"
+        );
+        // Accumulate research from the lab, then it becomes affordable.
+        for _ in 0..400 {
+            s.step(&[]);
+        }
+        assert!(s.research(P0).to_bits() > 0, "lab should produce research");
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 0,
+        }]);
+        assert!(
+            s.research_state(P0).1.is_some(),
+            "tech 0 should start once research is funded"
         );
     }
 
