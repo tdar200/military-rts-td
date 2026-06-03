@@ -106,10 +106,14 @@ const SUPPLY_PER_BARRACKS: u32 = 5;
 /// Extra population headroom per Reactor — so surplus Minerals convert into a
 /// bigger army (build reactors → raise the cap → field more units vs the waves).
 const SUPPLY_PER_REACTOR: u32 = 4;
-/// How many live (still-on-a-deposit) Extractors the AI expands to before it
-/// stops claiming new deposits. Bounds map-wide refinery sprawl while still
-/// letting the AI re-claim a fresh deposit when an old one depletes.
+/// How many live Ore Extractors the AI expands to before it stops claiming new
+/// Ore deposits. Bounds map-wide refinery sprawl while still letting the AI
+/// re-claim a fresh deposit when an old one depletes.
 const MAX_AI_EXTRACTORS: usize = 4;
+/// How many live Alloy Extractors the AI secures. Alloy is the scarce second
+/// resource that fuels Capital ships, so the AI deliberately claims a couple of
+/// Alloy deposits rather than spending its whole extractor budget on Ore.
+const MAX_AI_ALLOY_EXTRACTORS: usize = 2;
 /// Production buildings the AI will field. Bounds Barracks/Reactor expansion so
 /// surplus Minerals raise the supply ceiling to a healthy army — not an absurd
 /// map-carpeting one that wrecks its own defensive footprint.
@@ -614,6 +618,38 @@ impl Sim {
             .iter()
             .filter(|e| {
                 e.alive && e.owner == player && matches!(e.kind, Kind::Building(b) if b == kind)
+            })
+            .count()
+    }
+
+    /// The first buildable tile (row-major) holding an active deposit of `kind`,
+    /// if any — the AI's expansion target for that resource. Deterministic, no RNG.
+    #[must_use]
+    fn first_buildable_deposit(&self, kind: crate::game::map::DepositKind) -> Option<(u16, u16)> {
+        self.map.deposits().find_map(|(x, y, d)| {
+            (d.kind == kind
+                && self
+                    .map
+                    .tile(i32::from(x), i32::from(y))
+                    .is_some_and(|t| t.buildable))
+            .then_some((x, y))
+        })
+    }
+
+    /// How many of a player's living Extractors stand on a still-active deposit of
+    /// `kind`. Lets the AI bound expansion per resource (Ore → Minerals, Alloy →
+    /// Capital ships). AI-only; never read for combat, so determinism is unaffected.
+    #[must_use]
+    fn active_extractors_on(&self, player: PlayerId, kind: crate::game::map::DepositKind) -> usize {
+        self.entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && e.owner == player
+                    && matches!(e.kind, Kind::Building(BuildingKind::Refinery))
+                    && e.tile.is_some_and(|(tx, ty)| {
+                        self.map.deposit(tx, ty).is_some_and(|d| d.kind == kind)
+                    })
             })
             .count()
     }
@@ -1737,88 +1773,65 @@ impl Sim {
             building_this_tick = true;
         }
 
-        // Expand when Minerals pile up instead of banking them. Order matters and
-        // is power-aware: a power deficit stalls research/mining (see `run_research`
-        // / the `run_economy` throttle), so first add a Reactor when there is no
-        // headroom; then sustain income by claiming a fresh deposit (up to
-        // `MAX_AI_EXTRACTORS` live ones); then, once at the supply ceiling, raise the
-        // army cap — a Barracks (also adds production) until `MAX_AI_BARRACKS`, then
-        // Reactors (a pure supply sink for surplus Minerals) until `MAX_AI_REACTORS`.
-        // Every type is bounded, so the AI fields a healthy army without carpeting
-        // the map. Deterministic (row-major scan, no RNG). The flag is only set when
-        // a build is actually queued, so a full map never starves training/research
-        // by spinning on an unbuildable expansion.
+        // Expand when Minerals pile up instead of banking them. A single priority
+        // list — first affordable+placeable action wins — so a "wanted but
+        // unplaceable" step never blocks a lower one (the classic else-if-chain
+        // trap). Power-aware: a deficit stalls research/mining (see `run_research` /
+        // the `run_economy` throttle), so a Reactor comes first. Then sustain
+        // Minerals income (Ore extractors), then secure scarce Alloy (fuels Capital
+        // ships), then — once at the supply ceiling — raise the army cap with a
+        // Barracks, then Reactors as a pure supply sink. Every type is bounded, so
+        // the AI fields a healthy army without carpeting the map. Deterministic
+        // (row-major scans, no RNG); the flag is set only when a build is queued.
         if !building_this_tick && minerals >= Fixed::from_int(500) {
+            use crate::game::map::DepositKind;
             let (produced, consumed) = self.power_balance(player);
             let reactors = self.count_alive_buildings(player, BuildingKind::PowerPlant);
             let barracks = self.count_alive_buildings(player, BuildingKind::Barracks);
-            let active_extractors = self
-                .entities
-                .iter()
-                .filter(|e| {
-                    e.alive
-                        && e.owner == player
-                        && matches!(e.kind, Kind::Building(BuildingKind::Refinery))
-                        && e.tile
-                            .is_some_and(|(tx, ty)| self.map.deposit(tx, ty).is_some())
-                })
-                .count();
+            let ore_extractors = self.active_extractors_on(player, DepositKind::Ore);
+            let alloy_extractors = self.active_extractors_on(player, DepositKind::Alloy);
             let at_cap = self.supply_used(player) + 2 >= self.supply_cap(player);
-            if produced <= consumed
+            let near = self.find_buildable_near(cc_tile, enemy_cc);
+            let afford = |k| minerals >= self.building_cost(k);
+
+            let action: Option<(BuildingKind, u16, u16)> = (produced <= consumed
                 && reactors < MAX_AI_REACTORS
-                && minerals >= self.building_cost(BuildingKind::PowerPlant)
-            {
-                if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
-                    cmds.push(Command::Build {
-                        owner: player,
-                        kind: BuildingKind::PowerPlant,
-                        x,
-                        y,
-                    });
-                    building_this_tick = true;
-                }
-            } else if active_extractors < MAX_AI_EXTRACTORS
-                && minerals >= self.building_cost(BuildingKind::Refinery)
-            {
-                if let Some((dx, dy, _)) = self.map.deposits().find(|&(x, y, _)| {
-                    self.map
-                        .tile(i32::from(x), i32::from(y))
-                        .is_some_and(|t| t.buildable)
-                }) {
-                    cmds.push(Command::Build {
-                        owner: player,
-                        kind: BuildingKind::Refinery,
-                        x: dx,
-                        y: dy,
-                    });
-                    building_this_tick = true;
-                }
-            } else if at_cap
-                && barracks < MAX_AI_BARRACKS
-                && minerals >= self.building_cost(BuildingKind::Barracks)
-            {
-                if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
-                    cmds.push(Command::Build {
-                        owner: player,
-                        kind: BuildingKind::Barracks,
-                        x,
-                        y,
-                    });
-                    building_this_tick = true;
-                }
-            } else if at_cap
-                && reactors < MAX_AI_REACTORS
-                && minerals >= self.building_cost(BuildingKind::PowerPlant)
-            {
-                if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
-                    cmds.push(Command::Build {
-                        owner: player,
-                        kind: BuildingKind::PowerPlant,
-                        x,
-                        y,
-                    });
-                    building_this_tick = true;
-                }
+                && afford(BuildingKind::PowerPlant))
+            .then(|| near.map(|(x, y)| (BuildingKind::PowerPlant, x, y)))
+            .flatten()
+            .or_else(|| {
+                (ore_extractors < MAX_AI_EXTRACTORS && afford(BuildingKind::Refinery))
+                    .then(|| self.first_buildable_deposit(DepositKind::Ore))
+                    .flatten()
+                    .map(|(x, y)| (BuildingKind::Refinery, x, y))
+            })
+            .or_else(|| {
+                (alloy_extractors < MAX_AI_ALLOY_EXTRACTORS && afford(BuildingKind::Refinery))
+                    .then(|| self.first_buildable_deposit(DepositKind::Alloy))
+                    .flatten()
+                    .map(|(x, y)| (BuildingKind::Refinery, x, y))
+            })
+            .or_else(|| {
+                (at_cap && barracks < MAX_AI_BARRACKS && afford(BuildingKind::Barracks))
+                    .then_some(near)
+                    .flatten()
+                    .map(|(x, y)| (BuildingKind::Barracks, x, y))
+            })
+            .or_else(|| {
+                (at_cap && reactors < MAX_AI_REACTORS && afford(BuildingKind::PowerPlant))
+                    .then_some(near)
+                    .flatten()
+                    .map(|(x, y)| (BuildingKind::PowerPlant, x, y))
+            });
+
+            if let Some((kind, x, y)) = action {
+                cmds.push(Command::Build {
+                    owner: player,
+                    kind,
+                    x,
+                    y,
+                });
+                building_this_tick = true;
             }
         }
 
@@ -2690,6 +2703,57 @@ mod tests {
         assert!(
             saw_ascend,
             "the AI should ascend at least once over a survival run"
+        );
+    }
+
+    #[test]
+    fn ai_secures_alloy_and_fields_a_capital() {
+        // A map rich in Ore (Minerals) with a cluster of Alloy deposits. Over a long
+        // run the AI should tech to era 3, deliberately claim an Alloy deposit, and
+        // train at least one Capital ship — instead of staying infantry-only because
+        // it spent its whole extractor budget on Ore.
+        let mut map = Map::new(40, 40);
+        for x in 0..40u16 {
+            for y in 0..40u16 {
+                map.set_deposit(
+                    x,
+                    y,
+                    crate::game::map::Deposit {
+                        kind: crate::game::map::DepositKind::Ore,
+                        remaining: 10_000_000,
+                    },
+                );
+            }
+        }
+        for &(ax, ay) in &[(20u16, 20u16), (21, 20), (20, 21)] {
+            map.set_deposit(
+                ax,
+                ay,
+                crate::game::map::Deposit {
+                    kind: crate::game::map::DepositKind::Alloy,
+                    remaining: 10_000_000,
+                },
+            );
+        }
+        let mut s = Sim::new(map, 7, f(5000));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        let mut saw_capital = false;
+        for _ in 0..9000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            if s.views()
+                .iter()
+                .any(|v| v.owner == P0 && matches!(v.kind, EntityKindView::Unit(UnitKind::Capital)))
+            {
+                saw_capital = true;
+                break;
+            }
+        }
+        assert!(
+            saw_capital,
+            "AI should mine alloy and field a Capital ship by era 3"
         );
     }
 
