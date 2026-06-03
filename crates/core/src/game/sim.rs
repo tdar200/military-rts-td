@@ -98,11 +98,23 @@ const fn veterancy_factor(rank: u8) -> Fixed {
 const CAPITAL_ANTIMATTER_COST: Fixed = Fixed::from_int(100);
 
 /// Base population allowance before any production buildings.
-const SUPPLY_BASE: u32 = 8;
+const SUPPLY_BASE: u32 = 10;
 /// Extra population headroom per Command Center.
 const SUPPLY_PER_CC: u32 = 6;
 /// Extra population headroom per Barracks.
 const SUPPLY_PER_BARRACKS: u32 = 5;
+/// Extra population headroom per Reactor — so surplus Minerals convert into a
+/// bigger army (build reactors → raise the cap → field more units vs the waves).
+const SUPPLY_PER_REACTOR: u32 = 4;
+/// How many live (still-on-a-deposit) Extractors the AI expands to before it
+/// stops claiming new deposits. Bounds map-wide refinery sprawl while still
+/// letting the AI re-claim a fresh deposit when an old one depletes.
+const MAX_AI_EXTRACTORS: usize = 4;
+/// Production buildings the AI will field. Bounds Barracks/Reactor expansion so
+/// surplus Minerals raise the supply ceiling to a healthy army — not an absurd
+/// map-carpeting one that wrecks its own defensive footprint.
+const MAX_AI_BARRACKS: usize = 4;
+const MAX_AI_REACTORS: usize = 8;
 
 /// Per-player resources.
 #[derive(Clone, Copy, Debug)]
@@ -502,6 +514,18 @@ impl Sim {
         (produced, consumed)
     }
 
+    /// How many living buildings of `kind` a player owns. Used by the AI to bound
+    /// its own expansion (it never reads this for combat, so determinism is unaffected).
+    #[must_use]
+    fn count_alive_buildings(&self, player: PlayerId, kind: BuildingKind) -> usize {
+        self.entities
+            .iter()
+            .filter(|e| {
+                e.alive && e.owner == player && matches!(e.kind, Kind::Building(b) if b == kind)
+            })
+            .count()
+    }
+
     /// Ticks until the next enemy wave, or `None` if waves are disabled.
     #[must_use]
     pub fn ticks_until_next_wave(&self) -> Option<u64> {
@@ -545,6 +569,7 @@ impl Sim {
                 cap += match e.kind {
                     Kind::Building(BuildingKind::CommandCenter) => SUPPLY_PER_CC,
                     Kind::Building(BuildingKind::Barracks) => SUPPLY_PER_BARRACKS,
+                    Kind::Building(BuildingKind::PowerPlant) => SUPPLY_PER_REACTOR,
                     _ => 0,
                 };
             }
@@ -1576,6 +1601,91 @@ impl Sim {
             building_this_tick = true;
         }
 
+        // Expand when Minerals pile up instead of banking them. Order matters and
+        // is power-aware: a power deficit stalls research/mining (see `run_research`
+        // / the `run_economy` throttle), so first add a Reactor when there is no
+        // headroom; then sustain income by claiming a fresh deposit (up to
+        // `MAX_AI_EXTRACTORS` live ones); then, once at the supply ceiling, raise the
+        // army cap — a Barracks (also adds production) until `MAX_AI_BARRACKS`, then
+        // Reactors (a pure supply sink for surplus Minerals) until `MAX_AI_REACTORS`.
+        // Every type is bounded, so the AI fields a healthy army without carpeting
+        // the map. Deterministic (row-major scan, no RNG). The flag is only set when
+        // a build is actually queued, so a full map never starves training/research
+        // by spinning on an unbuildable expansion.
+        if !building_this_tick && minerals >= Fixed::from_int(500) {
+            let (produced, consumed) = self.power_balance(player);
+            let reactors = self.count_alive_buildings(player, BuildingKind::PowerPlant);
+            let barracks = self.count_alive_buildings(player, BuildingKind::Barracks);
+            let active_extractors = self
+                .entities
+                .iter()
+                .filter(|e| {
+                    e.alive
+                        && e.owner == player
+                        && matches!(e.kind, Kind::Building(BuildingKind::Refinery))
+                        && e.tile
+                            .is_some_and(|(tx, ty)| self.map.deposit(tx, ty).is_some())
+                })
+                .count();
+            let at_cap = self.supply_used(player) + 2 >= self.supply_cap(player);
+            if produced <= consumed
+                && reactors < MAX_AI_REACTORS
+                && minerals >= self.building_cost(BuildingKind::PowerPlant)
+            {
+                if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
+                    cmds.push(Command::Build {
+                        owner: player,
+                        kind: BuildingKind::PowerPlant,
+                        x,
+                        y,
+                    });
+                    building_this_tick = true;
+                }
+            } else if active_extractors < MAX_AI_EXTRACTORS
+                && minerals >= self.building_cost(BuildingKind::Refinery)
+            {
+                if let Some((dx, dy, _)) = self.map.deposits().find(|&(x, y, _)| {
+                    self.map
+                        .tile(i32::from(x), i32::from(y))
+                        .is_some_and(|t| t.buildable)
+                }) {
+                    cmds.push(Command::Build {
+                        owner: player,
+                        kind: BuildingKind::Refinery,
+                        x: dx,
+                        y: dy,
+                    });
+                    building_this_tick = true;
+                }
+            } else if at_cap
+                && barracks < MAX_AI_BARRACKS
+                && minerals >= self.building_cost(BuildingKind::Barracks)
+            {
+                if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
+                    cmds.push(Command::Build {
+                        owner: player,
+                        kind: BuildingKind::Barracks,
+                        x,
+                        y,
+                    });
+                    building_this_tick = true;
+                }
+            } else if at_cap
+                && reactors < MAX_AI_REACTORS
+                && minerals >= self.building_cost(BuildingKind::PowerPlant)
+            {
+                if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
+                    cmds.push(Command::Build {
+                        owner: player,
+                        kind: BuildingKind::PowerPlant,
+                        x,
+                        y,
+                    });
+                    building_this_tick = true;
+                }
+            }
+        }
+
         // Economy is up: train from an idle barracks. At Era 3+, prefer Capital Ships
         // (also needs sufficient antimatter).
         if !building_this_tick {
@@ -2097,8 +2207,8 @@ mod tests {
         let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         let b = s.add_building(P0, BuildingKind::Barracks, 4, 2);
-        let cap = s.supply_cap(P0); // 8 base + 6 CC + 5 barracks
-        assert_eq!(cap, 19);
+        let cap = s.supply_cap(P0); // 10 base + 6 CC + 5 barracks
+        assert_eq!(cap, 21);
         // Queue far more than the cap in a single tick; the cap must hold.
         let mut cmds = alloc::vec::Vec::new();
         for _ in 0..(cap + 8) {

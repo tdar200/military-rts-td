@@ -454,13 +454,16 @@ mod tests {
         assert_eq!(s.winner(), None, "match resolved sooner than expected");
         let after = s.unit_count(PlayerId(0)) + s.unit_count(PlayerId(1));
         assert!(after > before, "no armies were ever trained");
-        // No air on this map, so the AI builds no AA. The four essentials
-        // (PowerPlant/Refinery/Barracks/CommandCenter) are pre-placed, so the AI
-        // only adds one ResearchLab per side — 8 starting + 2 labs = 10 total.
+        // The four essentials (PowerPlant/Refinery/Barracks/CommandCenter) are
+        // pre-placed (8 structures). Beyond that each AI now expands its economy —
+        // a ResearchLab, plus claiming map deposits with extra Extractors and adding
+        // Reactors to keep them powered — instead of only adding a lab. Expansion is
+        // bounded (`MAX_AI_EXTRACTORS` + power-gated Reactors), so the count grows
+        // modestly rather than carpeting the map.
         let buildings = s.entity_count() - after;
-        assert_eq!(
-            buildings, 10,
-            "AI built unexpected structures on open_clash"
+        assert!(
+            (12..=20).contains(&buildings),
+            "AI built an unexpected number of structures on open_clash: {buildings}"
         );
     }
 
