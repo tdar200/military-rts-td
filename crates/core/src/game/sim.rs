@@ -107,15 +107,17 @@ const SUPPLY_PER_BARRACKS: u32 = 5;
 /// Per-player resources.
 #[derive(Clone, Copy, Debug)]
 struct Player {
-    credits: Fixed,
+    minerals: Fixed,
     /// Bitmask of researched tech ids (bit i = tech i complete).
     researched_techs: u32,
     /// In-progress research: (tech id, ticks remaining). One at a time.
     active_research: Option<(u32, u32)>,
     /// Current era index (0=Modern..3=Interstellar).
     era: u8,
-    /// Accumulated antimatter (third resource).
-    antimatter: Fixed,
+    /// Accumulated alloys (third resource).
+    alloys: Fixed,
+    /// Accumulated Research pool (funds the tech tree).
+    research: Fixed,
     /// Bitmask of chosen survival perks (bit i = perk i active).
     active_perks: u32,
 }
@@ -123,7 +125,7 @@ struct Player {
 /// A player or AI input, applied at a tick boundary.
 #[derive(Clone, Debug)]
 pub enum Command {
-    /// Construct a building on a tile (costs credits; tile must be buildable).
+    /// Construct a building on a tile (costs minerals; tile must be buildable).
     Build {
         /// Owning player.
         owner: PlayerId,
@@ -134,7 +136,7 @@ pub enum Command {
         /// Tile row.
         y: u16,
     },
-    /// Queue a unit for training at a barracks (costs credits).
+    /// Queue a unit for training at a barracks (costs minerals).
     Train {
         /// Owning player.
         owner: PlayerId,
@@ -152,7 +154,7 @@ pub enum Command {
         /// Destination.
         target: Vec2,
     },
-    /// Begin researching a tech (costs credits; needs a research lab; powered to progress).
+    /// Begin researching a tech (costs minerals; needs a research lab; powered to progress).
     Research {
         /// Owning player.
         owner: PlayerId,
@@ -355,11 +357,12 @@ impl Sim {
             rng: Rng::from_seed(seed),
             map,
             players: [Player {
-                credits: starting_credits,
+                minerals: starting_credits,
                 researched_techs: 0,
                 active_research: None,
                 era: 0,
-                antimatter: Fixed::ZERO,
+                alloys: Fixed::ZERO,
+                research: Fixed::ZERO,
                 active_perks: 0,
             }; PLAYER_COUNT],
             entities: Vec::new(),
@@ -416,25 +419,31 @@ impl Sim {
         &self.map
     }
 
-    /// A player's current credit balance.
+    /// A player's current minerals balance.
     #[must_use]
-    pub fn credits(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].credits
+    pub fn minerals(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].minerals
     }
 
-    /// A player's current antimatter balance.
+    /// A player's current alloys balance.
     #[must_use]
-    pub fn antimatter(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].antimatter
+    pub fn alloys(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].alloys
     }
 
-    /// Credit cost to construct a building (for UI affordability hints).
+    /// The player's accumulated Research pool (funds the tech tree).
+    #[must_use]
+    pub fn research(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].research
+    }
+
+    /// Mineral cost to construct a building (for UI affordability hints).
     #[must_use]
     pub const fn building_cost(&self, kind: BuildingKind) -> Fixed {
         self.balance.building(kind).cost
     }
 
-    /// Credit cost to train a unit (for UI affordability hints).
+    /// Mineral cost to train a unit (for UI affordability hints).
     #[must_use]
     pub const fn unit_cost(&self, kind: UnitKind) -> Fixed {
         self.balance.unit(kind).cost
@@ -634,8 +643,10 @@ impl Sim {
         h.write_u64(self.tick);
         h.write_u64(self.rng.current_state());
         h.write_u64(u64::from(self.wave_count));
+        // Per-player fields: minerals, researched_techs, active_research,
+        // era, alloys, research, active_perks — in this stable order.
         for p in &self.players {
-            h.write_i64(p.credits.to_bits());
+            h.write_i64(p.minerals.to_bits());
             h.write_u64(u64::from(p.researched_techs));
             match p.active_research {
                 Some((id, ticks)) => {
@@ -646,7 +657,8 @@ impl Sim {
                 None => h.write_u64(0),
             }
             h.write_u64(u64::from(p.era));
-            h.write_i64(p.antimatter.to_bits());
+            h.write_i64(p.alloys.to_bits());
+            h.write_i64(p.research.to_bits());
             h.write_u64(u64::from(p.active_perks));
         }
         for e in &self.entities {
@@ -899,8 +911,8 @@ impl Sim {
                     .is_some_and(|t| t.buildable);
                 let cost = self.balance.building(kind).cost;
                 let p = usize::from(owner.0);
-                if buildable && self.players[p].credits >= cost {
-                    self.players[p].credits = self.players[p].credits - cost;
+                if buildable && self.players[p].minerals >= cost {
+                    self.players[p].minerals = self.players[p].minerals - cost;
                     self.add_building(owner, kind, x, y);
                 }
             }
@@ -927,11 +939,11 @@ impl Sim {
                 let has_supply = self.supply_used(owner) < self.supply_cap(owner);
                 if ok
                     && has_supply
-                    && self.players[p].credits >= cost
-                    && self.players[p].antimatter >= am_cost
+                    && self.players[p].minerals >= cost
+                    && self.players[p].alloys >= am_cost
                 {
-                    self.players[p].credits = self.players[p].credits - cost;
-                    self.players[p].antimatter = self.players[p].antimatter - am_cost;
+                    self.players[p].minerals = self.players[p].minerals - cost;
+                    self.players[p].alloys = self.players[p].alloys - am_cost;
                     if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
                         e.build_queue.push(kind);
                     }
@@ -972,9 +984,9 @@ impl Sim {
                     && prereq_ok
                     && fork_ok
                     && has_lab
-                    && self.players[p].credits >= def.cost
+                    && self.players[p].minerals >= def.cost
                 {
-                    self.players[p].credits = self.players[p].credits - def.cost;
+                    self.players[p].minerals = self.players[p].minerals - def.cost;
                     self.players[p].active_research = Some((tech_id, def.duration));
                 }
             }
@@ -1110,8 +1122,8 @@ impl Sim {
             if self.players[p].active_perks & (1 << crate::game::perk::LOGISTICS) != 0 {
                 credit_income = credit_income * Fixed::from_ratio(3, 2);
             }
-            self.players[p].credits = self.players[p].credits + credit_income * factor;
-            self.players[p].antimatter = self.players[p].antimatter + am_income[p] * factor;
+            self.players[p].minerals = self.players[p].minerals + credit_income * factor;
+            self.players[p].alloys = self.players[p].alloys + am_income[p] * factor;
         }
         powered
     }
@@ -1419,7 +1431,7 @@ impl Sim {
         let Some(cc_tile) = self.command_center_tile(player) else {
             return cmds; // no base, no orders
         };
-        let credits = self.credits(player);
+        let minerals = self.minerals(player);
         let enemy_cc = self.command_center_tile(PlayerId(1 - player.0));
 
         // Build order: act on the first missing essential, then build no more
@@ -1432,7 +1444,7 @@ impl Sim {
             BuildingKind::ResearchLab,
         ] {
             if !self.has_building(player, kind) {
-                if credits >= self.building_cost(kind) {
+                if minerals >= self.building_cost(kind) {
                     if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                         cmds.push(Command::Build {
                             owner: player,
@@ -1452,7 +1464,7 @@ impl Sim {
         if !building_this_tick
             && self.enemy_has_air(player)
             && !self.has_building(player, BuildingKind::AaTurret)
-            && credits >= self.building_cost(BuildingKind::AaTurret)
+            && minerals >= self.building_cost(BuildingKind::AaTurret)
         {
             if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
@@ -1471,7 +1483,7 @@ impl Sim {
         if !building_this_tick
             && self.player_era(player) >= 1
             && !self.has_building(player, BuildingKind::AntimatterPlant)
-            && credits >= self.building_cost(BuildingKind::AntimatterPlant)
+            && minerals >= self.building_cost(BuildingKind::AntimatterPlant)
         {
             if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
@@ -1489,14 +1501,14 @@ impl Sim {
         if !building_this_tick {
             if let Some(barracks) = self.idle_barracks(player) {
                 let kind = if self.player_era(player) >= 3
-                    && credits >= self.balance.unit(UnitKind::Capital).cost
-                    && self.antimatter(player) >= CAPITAL_ANTIMATTER_COST
+                    && minerals >= self.balance.unit(UnitKind::Capital).cost
+                    && self.alloys(player) >= CAPITAL_ANTIMATTER_COST
                 {
                     UnitKind::Capital
                 } else {
                     UnitKind::Infantry
                 };
-                if credits >= self.balance.unit(kind).cost {
+                if minerals >= self.balance.unit(kind).cost {
                     cmds.push(Command::Train {
                         owner: player,
                         barracks,
@@ -1524,7 +1536,7 @@ impl Sim {
                 let prereq_ok = def
                     .prereq
                     .is_none_or(|req| researched_mask & (1u32 << req) != 0);
-                if !researched && prereq_ok && credits >= def.cost {
+                if !researched && prereq_ok && minerals >= def.cost {
                     cmds.push(Command::Research {
                         owner: player,
                         tech_id,
@@ -1687,8 +1699,8 @@ mod tests {
     #[test]
     fn new_sim_has_starting_credits_and_no_winner() {
         let s = Sim::new(Map::new(16, 16), 1, f(500));
-        assert_eq!(s.credits(P0), f(500));
-        assert_eq!(s.credits(P1), f(500));
+        assert_eq!(s.minerals(P0), f(500));
+        assert_eq!(s.minerals(P1), f(500));
         assert_eq!(s.winner(), None);
         assert_eq!(s.tick(), 0);
     }
@@ -1701,7 +1713,7 @@ mod tests {
         s.add_building(P0, BuildingKind::Refinery, 5, 1);
         s.step(&[]);
         // Refinery income is 5/tick while powered.
-        assert_eq!(s.credits(P0), f(5));
+        assert_eq!(s.minerals(P0), f(5));
     }
 
     #[test]
@@ -1710,7 +1722,7 @@ mod tests {
         // Refinery consumes 20 but there is no power plant -> deficit.
         s.add_building(P0, BuildingKind::Refinery, 5, 1);
         s.step(&[]);
-        assert_eq!(s.credits(P0), Fixed::from_ratio(5, 2)); // 2.5
+        assert_eq!(s.minerals(P0), Fixed::from_ratio(5, 2)); // 2.5
     }
 
     #[test]
@@ -1724,7 +1736,7 @@ mod tests {
             y: 5,
         }]);
         assert_eq!(s.entity_count(), before + 1);
-        assert_eq!(s.credits(P0), f(900)); // 1000 - 100
+        assert_eq!(s.minerals(P0), f(900)); // 1000 - 100
         assert!(!s.map().tile(5, 5).unwrap().buildable);
     }
 
@@ -1738,7 +1750,7 @@ mod tests {
             y: 5,
         }]);
         assert_eq!(s.entity_count(), 0);
-        assert_eq!(s.credits(P0), f(50));
+        assert_eq!(s.minerals(P0), f(50));
         assert!(s.map().tile(5, 5).unwrap().buildable);
     }
 
@@ -1754,8 +1766,8 @@ mod tests {
             barracks,
             kind: UnitKind::Infantry,
         }]);
-        assert_eq!(s.credits(P0), f(950)); // charged immediately
-                                           // Infantry build time is 30 ticks; not yet spawned at 29.
+        assert_eq!(s.minerals(P0), f(950)); // charged immediately
+                                            // Infantry build time is 30 ticks; not yet spawned at 29.
         for _ in 0..28 {
             s.step(&[]);
         }
@@ -1940,7 +1952,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 5_674_700_667_207_928_704);
+        assert_eq!(s.state_hash(), 17_072_287_564_067_226_816);
     }
 
     #[test]
@@ -2381,13 +2393,13 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
         s.add_building(P0, BuildingKind::AntimatterPlant, 4, 2);
-        assert_eq!(s.antimatter(P0), crate::fixed::Fixed::ZERO);
+        assert_eq!(s.alloys(P0), crate::fixed::Fixed::ZERO);
         for _ in 0..50 {
             s.step(&[]);
         }
         assert!(
-            s.antimatter(P0) > crate::fixed::Fixed::ZERO,
-            "antimatter accrues from a powered plant"
+            s.alloys(P0) > crate::fixed::Fixed::ZERO,
+            "alloys accrue from a powered antimatter plant"
         );
     }
 

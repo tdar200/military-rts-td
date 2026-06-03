@@ -541,7 +541,7 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
     let mut x = 14.0;
     icon_coin(x + 7.0, 18.0, 8.0);
     x += 22.0;
-    let credits = (sim.credits(HUMAN).to_bits() / 65536).to_string();
+    let credits = (sim.minerals(HUMAN).to_bits() / 65536).to_string();
     text(
         &credits,
         x,
@@ -585,7 +585,7 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
     let am_label = "AM";
     text(am_label, x, 25.0, 18.0, SHIELD, fb);
     x += text_width(am_label, 18.0, fb) + 4.0;
-    let am_val = (sim.antimatter(HUMAN).to_bits() / 65536).to_string();
+    let am_val = (sim.alloys(HUMAN).to_bits() / 65536).to_string();
     text(&am_val, x, 25.0, 18.0, SHIELD, fb);
 
     // Incoming-wave alert pill (right).
@@ -636,7 +636,7 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
     };
     for b in &buttons {
         let price = cost(sim, b.action);
-        let affordable = sim.credits(HUMAN) >= price;
+        let affordable = sim.minerals(HUMAN) >= price;
         let active = build_active(b.action, build_mode);
         let hover = b.rect.contains(pointer);
         let price_int = price.to_bits() / 65536;

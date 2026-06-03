@@ -1573,7 +1573,7 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32
         .map()
         .tile(i32::from(col), i32::from(row))
         .is_some_and(|t| t.buildable);
-    let affordable = sim.credits(HUMAN) >= sim.building_cost(kind);
+    let affordable = sim.minerals(HUMAN) >= sim.building_cost(kind);
     let fill = if buildable && affordable {
         Color::from_rgba(80, 200, 120, 120)
     } else {
