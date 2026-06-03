@@ -18,7 +18,6 @@
 
 mod anim;
 mod audio;
-mod fog;
 mod input;
 mod meta;
 mod particles;
@@ -158,13 +157,6 @@ fn tile_to_px(v: Fixed, cell: f32) -> f32 {
     v.to_bits() as f32 / 65536.0 * cell
 }
 
-/// The map tile a world position sits on (rounded, clamped non-negative).
-fn pos_tile(p: SimVec2) -> (u16, u16) {
-    let c = (p.x.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
-    let r = (p.y.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
-    (c, r)
-}
-
 /// Horizontal offset that centers the hex board in the window.
 fn board_origin_x(sim: &Sim, cell: f32) -> f32 {
     ((screen_width() - board_size(sim, cell).0) / 2.0).max(0.0)
@@ -228,6 +220,10 @@ async fn main() {
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
     let mut paused = false;
+    // Sim speed multiplier (1–3×): Civ-pace games need a fast-forward for the
+    // quiet stretches. `-` slows, `=`/`+` speeds up; determinism is untouched
+    // (the same ticks run, just more per wall-clock second).
+    let mut game_speed: u32 = 1;
     let mut research_open = false;
     let mut research_cursor: usize = 0;
     let mut doctrine_open = false;
@@ -237,7 +233,6 @@ async fn main() {
     // pool. Pure view state — never feeds back into the deterministic sim.
     let mut view = view::ViewState::default();
     let mut particles = particles::Particles::new();
-    let mut fog = fog::Fog::new(sim.map().width(), sim.map().height());
     let mut camera = anim::Camera::default();
     // Hit-stop: while > 0 the sim is frozen (in wall-clock) for impact emphasis.
     let mut hitstop = 0.0_f32;
@@ -280,7 +275,6 @@ async fn main() {
                 sim = sc.build(seed);
                 view = view::ViewState::default();
                 view.on_tick(&sim);
-                fog = fog::Fog::new(sim.map().width(), sim.map().height());
                 particles.clear();
                 camera = anim::Camera::default();
                 hitstop = 0.0;
@@ -357,6 +351,12 @@ async fn main() {
         }
         if !research_open && !doctrine_open && is_key_pressed(KeyCode::Space) {
             paused = !paused;
+        }
+        if is_key_pressed(KeyCode::Equal) {
+            game_speed = (game_speed + 1).min(3);
+        }
+        if is_key_pressed(KeyCode::Minus) {
+            game_speed = game_speed.saturating_sub(1).max(1);
         }
         // Toggle research modal with Y (only while playing, not paused, not on title/game-over).
         if !over && !paused && !doctrine_open && is_key_pressed(KeyCode::Y) {
@@ -452,7 +452,6 @@ async fn main() {
             };
             view = view::ViewState::default();
             view.on_tick(&sim);
-            fog = fog::Fog::new(sim.map().width(), sim.map().height());
             particles.clear();
             camera = anim::Camera::default();
             hitstop = 0.0;
@@ -491,7 +490,7 @@ async fn main() {
         if hitstop > 0.0 {
             hitstop = (hitstop - dt).max(0.0);
         } else {
-            accumulator += dt;
+            accumulator += dt * game_speed as f32;
         }
         if paused || over || research_open || perk_open {
             accumulator = 0.0;
@@ -605,12 +604,11 @@ async fn main() {
 
         let alpha = (accumulator / TICK_DT).clamp(0.0, 1.0);
         let (sx, sy) = camera.offset(7.0);
-        fog.update(&sim);
 
         draw(
-            &sim, &view, &particles, &fog, selected, build_mode, cell, alpha, sx, sy, &sprites,
+            &sim, &view, &particles, selected, build_mode, cell, alpha, sx, sy, &sprites,
         );
-        ui::draw(&sim, build_mode, paused, selected, &fog, &sprites);
+        ui::draw(&sim, build_mode, paused, game_speed, selected, &sprites);
         if survival_run {
             draw_survival_hud(&sim, &sprites);
             if milestone_flash > 0.0 {
@@ -841,7 +839,7 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         sprites.font_bold(),
     );
     centered(
-        "in battle:  Y research tree  \u{2022}  U ascendancy doctrines  \u{2022}  Space pause",
+        "in battle:  Y research  \u{2022}  U doctrines  \u{2022}  Q cast ability  \u{2022}  Space pause  \u{2022}  +/- speed",
         c.y + c.h + 82.0,
         13.0,
         INK_DIM,
@@ -1508,7 +1506,6 @@ fn draw(
     sim: &Sim,
     view: &view::ViewState,
     particles: &particles::Particles,
-    fog: &fog::Fog,
     selected: Option<EntityId>,
     build_mode: Option<BuildingKind>,
     cell: f32,
@@ -1527,15 +1524,7 @@ fn draw(
     // Scorch decals sit on the ground, under terrain and pieces.
     particles.draw_scorches(ox, wtop, cell);
     draw_terrain(sim, cell, ox, wtop);
-    draw_fog(sim, fog, cell, ox, wtop);
     for v in sim.views() {
-        // Hide enemy pieces standing in tiles the player can't currently see.
-        if v.owner != HUMAN {
-            let (tc, tr) = pos_tile(v.pos);
-            if !fog.visible(tc, tr) {
-                continue;
-            }
-        }
         let team = if v.owner == HUMAN {
             TEAM_PLAYER
         } else {
@@ -1936,34 +1925,6 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32
     let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
     draw_hex(cx, cy, cell, fill);
     draw_hex_outline(cx, cy, cell, 2.0, if good { GOOD } else { BAD });
-}
-
-/// Draws impassable terrain as **mountain hexes** (ramparts): a dark rampart body
-/// with a lighter raised peak and a dark outline, matching the design's mountain
-/// tiles that block movement.
-/// Shrouds tiles the human can't currently see: a heavy veil over never-seen
-/// tiles and a lighter haze over explored-but-out-of-sight tiles.
-fn draw_fog(sim: &Sim, fog: &fog::Fog, cell: f32, ox: f32, wtop: f32) {
-    let unseen = Color::from_rgba(3, 6, 12, 232);
-    let explored = Color::from_rgba(3, 6, 12, 150);
-    for row in 0..sim.map().height() {
-        for col in 0..sim.map().width() {
-            if fog.visible(col, row) {
-                continue;
-            }
-            let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
-            draw_hex(
-                cx,
-                cy,
-                cell,
-                if fog.explored(col, row) {
-                    explored
-                } else {
-                    unseen
-                },
-            );
-        }
-    }
 }
 
 fn draw_terrain(sim: &Sim, cell: f32, ox: f32, wtop: f32) {

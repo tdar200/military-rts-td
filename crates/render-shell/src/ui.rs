@@ -172,12 +172,12 @@ pub fn draw(
     sim: &Sim,
     build_mode: Option<BuildingKind>,
     paused: bool,
+    game_speed: u32,
     selected: Option<EntityId>,
-    fog: &crate::fog::Fog,
     sprites: &Sprites,
 ) {
-    draw_minimap(sim, fog);
-    draw_top_bar(sim, paused, sprites);
+    draw_minimap(sim);
+    draw_top_bar(sim, paused, game_speed, sprites);
     draw_selection_panel(sim, selected, sprites);
     draw_command_bar(sim, build_mode, sprites);
 }
@@ -432,7 +432,7 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     draw_rectangle_lines(text_x, bar_y, bar_w, 7.0, 1.0, BORDER_NEUTRAL);
 }
 
-fn draw_minimap(sim: &Sim, fog: &crate::fog::Fog) {
+fn draw_minimap(sim: &Sim) {
     let map_w = f32::from(sim.map().width());
     let map_h = f32::from(sim.map().height());
     let mm_w = 188.0;
@@ -471,15 +471,9 @@ fn draw_minimap(sim: &Sim, fog: &crate::fog::Fog) {
         }
     }
     for v in sim.views() {
-        // Don't leak fogged enemy positions on the minimap.
         let col = if v.owner == HUMAN {
             TEAM_PLAYER
         } else {
-            let tc = (v.pos.x.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
-            let tr = (v.pos.y.to_bits() as f32 / 65536.0).round().max(0.0) as u16;
-            if !fog.visible(tc, tr) {
-                continue;
-            }
             TEAM_ENEMY
         };
         let dot_x = field_x + (v.pos.x.to_bits() as f32 / 65536.0) * scale_x;
@@ -558,7 +552,7 @@ fn ribbon_divider(x: f32) {
 
 /// Civ-style yield ribbon: a gilded strip of icon+number pairs, with a framed
 /// alert pill for the incoming wave.
-fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
+fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     let fb = sprites.font_bold();
     draw_rectangle(0.0, 0.0, screen_width(), TOP_BAR_H, PANEL);
     // Seated, brass-beveled bottom edge: dark groove + deco-gold rule + lit line.
@@ -643,6 +637,12 @@ fn draw_top_bar(sim: &Sim, paused: bool, sprites: &Sprites) {
         glow_rect(px, 5.0, pill_w, TOP_BAR_H - 12.0, glow, 3);
         draw_rectangle_lines(px, 5.0, pill_w, TOP_BAR_H - 12.0, 1.5, col);
         text(&s, px + 11.0, 25.0, 20.0, col, fb);
+    }
+    if game_speed > 1 {
+        let s = format!("\u{25b6}\u{25b6} {game_speed}\u{00d7}");
+        let fb2 = sprites.font_bold();
+        let tw = text_width(&s, 16.0, fb2);
+        text(&s, screen_width() - tw - 220.0, 25.0, 16.0, GOOD, fb2);
     }
     if paused {
         let s = "PAUSED";
