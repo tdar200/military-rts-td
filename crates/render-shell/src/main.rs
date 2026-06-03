@@ -226,6 +226,8 @@ async fn main() {
     let mut paused = false;
     let mut research_open = false;
     let mut research_cursor: usize = 0;
+    let mut doctrine_open = false;
+    let mut doctrine_cursor: usize = 0;
     let mut phase = Phase::Title;
     // Shell-side animated view layer (interpolation, bars, FX events) + particle
     // pool. Pure view state — never feeds back into the deterministic sim.
@@ -286,6 +288,7 @@ async fn main() {
                 pending.clear();
                 accumulator = 0.0;
                 research_open = false;
+                doctrine_open = false;
             }
             draw_title(&sprites, scenario);
             next_frame().await;
@@ -327,7 +330,7 @@ async fn main() {
 
         // Input: UI command bar first, then map (suppressed while over the UI or
         // a modal).
-        if !research_open && !perk_open {
+        if !research_open && !perk_open && !doctrine_open {
             if is_mouse_button_pressed(MouseButton::Left) && ui::pointer_over_ui() {
                 audio.play(audio::Sfx::UiClick);
             }
@@ -340,12 +343,47 @@ async fn main() {
                 cell,
             ));
         }
-        if !research_open && is_key_pressed(KeyCode::Space) {
+        if !research_open && !doctrine_open && is_key_pressed(KeyCode::Space) {
             paused = !paused;
         }
         // Toggle research modal with Y (only while playing, not paused, not on title/game-over).
-        if !over && !paused && is_key_pressed(KeyCode::Y) {
+        if !over && !paused && !doctrine_open && is_key_pressed(KeyCode::Y) {
             research_open = !research_open;
+        }
+        // Toggle the Ascendancy Doctrines modal with U (Upgrades). Mutually
+        // exclusive with research; unlike research it does NOT freeze time, so the
+        // surplus can be spent on the fly and several levels bought in a row.
+        if !over && !paused && !research_open && !perk_open && is_key_pressed(KeyCode::U) {
+            doctrine_open = !doctrine_open;
+        }
+        if doctrine_open {
+            let n = 4usize;
+            if is_key_pressed(KeyCode::Down) {
+                doctrine_cursor = (doctrine_cursor + 1) % n;
+            }
+            if is_key_pressed(KeyCode::Up) {
+                doctrine_cursor = (doctrine_cursor + n - 1) % n;
+            }
+            let keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4];
+            let mut chosen: Option<usize> =
+                is_key_pressed(KeyCode::Enter).then_some(doctrine_cursor);
+            for (i, key) in keys.into_iter().enumerate() {
+                if is_key_pressed(key) {
+                    doctrine_cursor = i;
+                    chosen = Some(i);
+                }
+            }
+            if let Some(track) = chosen {
+                // Core validates affordability + lab presence; emit the intent and
+                // keep the modal open so the player can buy several levels.
+                pending.push(Command::Ascend {
+                    owner: HUMAN,
+                    track: u8::try_from(track).unwrap_or(0),
+                });
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                doctrine_open = false;
+            }
         }
         // Research modal: ↑/↓ move the cursor over the full tree, Enter researches
         // the highlighted tech; number keys 1-0 are quick shortcuts for the first
@@ -416,6 +454,7 @@ async fn main() {
             pending.clear();
             accumulator = 0.0;
             research_open = false;
+            doctrine_open = false;
         }
         // Return to the map-select screen.
         if over && is_key_pressed(KeyCode::M) {
@@ -426,6 +465,7 @@ async fn main() {
             pending.clear();
             accumulator = 0.0;
             research_open = false;
+            doctrine_open = false;
         }
 
         // Advance the fixed-timestep sim unless paused, the match is over, or the
@@ -555,6 +595,9 @@ async fn main() {
         }
         if research_open {
             draw_research_modal(&sim, research_cursor, &sprites);
+        }
+        if doctrine_open {
+            draw_doctrine_modal(&sim, doctrine_cursor, &sprites);
         }
         if perk_open {
             draw_perk_modal(&sim, &sprites);
@@ -769,6 +812,13 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
         16.0,
         GOLD_HI,
         sprites.font_bold(),
+    );
+    centered(
+        "in battle:  Y research tree  \u{2022}  U ascendancy doctrines  \u{2022}  Space pause",
+        c.y + c.h + 82.0,
+        13.0,
+        INK_DIM,
+        sprites.font(),
     );
 }
 
@@ -1045,6 +1095,180 @@ fn tech_status(
 /// Full-screen overlay listing the whole tech tree with status + progress. The
 /// `cursor` row is highlighted; ↑/↓ move it, Enter (or 1-0 for the first ten)
 /// starts research; Escape closes.
+/// The Ascendancy Doctrines panel (key: U). Four endless, escalating-cost
+/// upgrade tracks that spend the late-game Minerals/Research surplus on permanent
+/// army-wide quality. Unlike research it does not freeze time, so the overlay is
+/// kept light and the player can buy several levels between waves.
+fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
+    const NAMES: [&str; 4] = ["WEAPONS", "ARMOR", "VITALITY", "FORGE"];
+    const DESCS: [&str; 4] = [
+        "+1 damage / level",
+        "+0.5 armor / level",
+        "+8 shield / level",
+        "+0.25 damage & armor / level  \u{2022}  Minerals only",
+    ];
+    let (w, h) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 120));
+
+    let pw = 560.0_f32.min(w - 40.0);
+    let row_h = 58.0;
+    let head_h = 50.0;
+    let foot_h = 36.0;
+    let ph = head_h + 4.0 * row_h + foot_h + 16.0;
+    let px = (w - pw) / 2.0;
+    let py = (h - ph) / 2.0;
+
+    draw_rectangle(px, py, pw, ph, PANEL);
+    draw_rectangle(px, py, pw, 4.0, GOLD);
+    draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
+
+    let fb = sprites.font_bold();
+    let f = sprites.font();
+    centered("ASCENDANCY DOCTRINES", py + 32.0, 24.0, GOLD, fb);
+    draw_rectangle(px + 12.0, py + head_h - 4.0, pw - 24.0, 1.0, OLIVE);
+
+    let minerals = sim.minerals(HUMAN).to_bits() / 65536;
+    let research = sim.research(HUMAN).to_bits() / 65536;
+    let has_lab = sim.has_research_lab(HUMAN);
+
+    for track in 0..4usize {
+        let ry = py + head_h + track as f32 * row_h + 8.0;
+        if track % 2 == 0 {
+            draw_rectangle(px + 8.0, ry - 4.0, pw - 16.0, row_h - 4.0, WELL);
+        }
+        if track == cursor {
+            draw_rectangle(
+                px + 8.0,
+                ry - 4.0,
+                pw - 16.0,
+                row_h - 4.0,
+                with_alpha(GOLD, 0.16),
+            );
+            draw_rectangle_lines(px + 8.0, ry - 4.0, pw - 16.0, row_h - 4.0, 1.5, GOLD_HI);
+        }
+
+        // Number-key chip.
+        let key_s = (track + 1).to_string();
+        draw_rectangle(px + 14.0, ry + 6.0, 18.0, 18.0, PANEL);
+        draw_rectangle_lines(px + 14.0, ry + 6.0, 18.0, 18.0, 1.0, BORDER_NEUTRAL);
+        let kw = measure_text(&key_s, f, 14, 1.0).width;
+        draw_text_ex(
+            &key_s,
+            px + 23.0 - kw / 2.0,
+            ry + 20.0,
+            TextParams {
+                font: f,
+                font_size: 14,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+
+        let track_u8 = u8::try_from(track).unwrap_or(0);
+        let level = sim.doctrine_level(HUMAN, track_u8);
+        let (mc, rc) = sim.doctrine_cost(HUMAN, track_u8);
+        let mc_i = mc.to_bits() / 65536;
+        let rc_i = rc.to_bits() / 65536;
+        let is_forge = track == 3;
+        let lab_ok = is_forge || has_lab;
+        let afford = lab_ok && minerals >= mc_i && research >= rc_i;
+
+        // Name + current level.
+        draw_text_ex(
+            NAMES[track],
+            px + 42.0,
+            ry + 18.0,
+            TextParams {
+                font: fb,
+                font_size: 17,
+                color: TEXT,
+                ..Default::default()
+            },
+        );
+        let lvl_s = format!("Lv {level}");
+        draw_text_ex(
+            &lvl_s,
+            px + 180.0,
+            ry + 18.0,
+            TextParams {
+                font: f,
+                font_size: 15,
+                color: GOLD_HI,
+                ..Default::default()
+            },
+        );
+        // Description.
+        draw_text_ex(
+            DESCS[track],
+            px + 42.0,
+            ry + 38.0,
+            TextParams {
+                font: f,
+                font_size: 13,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+
+        // Cost (right-aligned), tinted by affordability.
+        let cost_s = if rc_i > 0 {
+            format!("{mc_i}M  {rc_i}R")
+        } else {
+            format!("{mc_i}M")
+        };
+        let col = if afford {
+            GOOD
+        } else if lab_ok {
+            TEXT_DIM
+        } else {
+            BAD
+        };
+        let cw = measure_text(&cost_s, f, 15, 1.0).width;
+        draw_text_ex(
+            &cost_s,
+            px + pw - cw - 20.0,
+            ry + 18.0,
+            TextParams {
+                font: f,
+                font_size: 15,
+                color: col,
+                ..Default::default()
+            },
+        );
+        if !lab_ok {
+            let note = "needs Research Lab";
+            let nw = measure_text(note, f, 12, 1.0).width;
+            draw_text_ex(
+                note,
+                px + pw - nw - 20.0,
+                ry + 38.0,
+                TextParams {
+                    font: f,
+                    font_size: 12,
+                    color: BAD,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    let footer_y = py + head_h + 4.0 * row_h + foot_h;
+    draw_rectangle(
+        px + 12.0,
+        py + head_h + 4.0 * row_h + 4.0,
+        pw - 24.0,
+        1.0,
+        OLIVE,
+    );
+    centered(
+        "\u{2191}\u{2193} select  \u{2022}  Enter / 1-4 ascend  \u{2022}  Esc close",
+        footer_y,
+        15.0,
+        TEXT_DIM,
+        f,
+    );
+}
+
 fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     // Dark full-screen overlay — time is frozen while this is up.
