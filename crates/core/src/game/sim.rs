@@ -116,6 +116,50 @@ const MAX_AI_EXTRACTORS: usize = 4;
 const MAX_AI_BARRACKS: usize = 4;
 const MAX_AI_REACTORS: usize = 8;
 
+// === Ascendancy Doctrines ===
+// Endless, escalating-cost upgrade tracks that turn a late-game resource surplus
+// into army QUALITY (not quantity) under the hard supply cap. Four tracks, not
+// mutually exclusive, no prereq. The next level's cost rises linearly with the
+// level already bought, so it keeps pace with — then outgrows — income, draining
+// the surplus forever instead of letting it bank. Effects fold into the existing
+// per-player weapon/armor/shield accessors, so the combat code is untouched.
+/// Number of doctrine tracks.
+const DOCTRINE_TRACKS: usize = 4;
+/// Hard ceiling on a track's level (keeps Fixed bits + hash width bounded).
+const DOCTRINE_LEVEL_CAP: u16 = 9999;
+/// Track index: army-wide flat weapon damage (research-heavy).
+const DOC_WEAPONS: usize = 0;
+/// Track index: army-wide flat armor mitigation (research-heavy).
+const DOC_ARMOR: usize = 1;
+/// Track index: army-wide shield-max (research-heavy survivability).
+const DOC_VITALITY: usize = 2;
+/// Track index: the minerals-only bank-drainer (lump cost + per-tick upkeep).
+const DOC_FORGE: usize = 3;
+/// Per-track cost ramp: cost(level L→L+1) = base + step * L. Minerals component.
+const DOCTRINE_MIN_BASE: [i32; DOCTRINE_TRACKS] = [300, 300, 300, 2000];
+const DOCTRINE_MIN_STEP: [i32; DOCTRINE_TRACKS] = [120, 120, 120, 900];
+/// Research component of the cost ramp (FORGE is minerals-only ⇒ 0).
+const DOCTRINE_RES_BASE: [i32; DOCTRINE_TRACKS] = [500, 500, 400, 0];
+const DOCTRINE_RES_STEP: [i32; DOCTRINE_TRACKS] = [180, 180, 150, 0];
+/// Per-level effect of the WEAPONS track: +1 flat damage.
+const WEAPON_STEP: Fixed = Fixed::from_int(1);
+/// Per-level effect of the ARMOR track: +0.5 flat mitigation (half-steps blunt
+/// swarms without granting immunity — the ≥1-damage clamp still applies).
+const ARMOR_STEP: Fixed = Fixed::from_ratio(1, 2);
+/// Per-level effect of the VITALITY track: +8 shield-max.
+const VITALITY_STEP: Fixed = Fixed::from_int(8);
+/// Per-level FORGE bonuses: a small flat weapon AND armor buff, so a FORGE level
+/// is a real purchase — and its steep, escalating minerals-only lump cost is the
+/// bank-drainer. The AI keeps `ASCEND_MIN_RESERVE` in hand, so the surplus churns
+/// down to a low equilibrium (continually buying levels) instead of sitting idle,
+/// while never starving unit retraining.
+const FORGE_WEAPON_STEP: Fixed = Fixed::from_ratio(1, 4);
+const FORGE_ARMOR_STEP: Fixed = Fixed::from_ratio(1, 4);
+/// The AI only ascends with at least this much minerals in reserve (and era ≥ 1),
+/// so the 120-tick golden run — which never reaches era 1 — never emits an Ascend
+/// and the golden hash stays stable across future balance tuning of the sink.
+const ASCEND_MIN_RESERVE: Fixed = Fixed::from_int(2000);
+
 /// Per-player resources.
 #[derive(Clone, Copy, Debug)]
 struct Player {
@@ -132,6 +176,8 @@ struct Player {
     research: Fixed,
     /// Bitmask of chosen survival perks (bit i = perk i active).
     active_perks: u32,
+    /// Level bought on each endless Ascendancy Doctrine track (see `DOC_*`).
+    doctrine_levels: [u16; DOCTRINE_TRACKS],
 }
 
 /// A player or AI input, applied at a tick boundary.
@@ -179,6 +225,14 @@ pub enum Command {
         owner: PlayerId,
         /// Perk id (see [`crate::game::perk`]).
         perk: u32,
+    },
+    /// Buy the next level of an endless Ascendancy Doctrine track (spends Minerals
+    /// and Research; rising cost is the rate limiter). See `DOC_*` track indices.
+    Ascend {
+        /// Owning player.
+        owner: PlayerId,
+        /// Track index (0..`DOCTRINE_TRACKS`).
+        track: u8,
     },
 }
 
@@ -264,6 +318,18 @@ const fn escalating_unit(wave: u32, i: u32) -> UnitKind {
             _ => UnitKind::Infantry,
         },
     }
+}
+
+/// Cost in `(minerals, research)` to buy the next level of doctrine `track` when
+/// the current level is `level`. Linear ramp `base + step * level` — exact in
+/// fixed-point, no float, so it stays clippy-clean and bit-identical everywhere.
+fn ascend_cost(track: usize, level: u16) -> (Fixed, Fixed) {
+    let l = Fixed::from_int(i32::from(level));
+    let minerals =
+        Fixed::from_int(DOCTRINE_MIN_BASE[track]) + Fixed::from_int(DOCTRINE_MIN_STEP[track]) * l;
+    let research =
+        Fixed::from_int(DOCTRINE_RES_BASE[track]) + Fixed::from_int(DOCTRINE_RES_STEP[track]) * l;
+    (minerals, research)
 }
 
 /// The deterministic RTS world.
@@ -381,6 +447,7 @@ impl Sim {
                 alloys: Fixed::ZERO,
                 research: Fixed::ZERO,
                 active_perks: 0,
+                doctrine_levels: [0; DOCTRINE_TRACKS],
             }; PLAYER_COUNT],
             entities: Vec::new(),
             free: Vec::new(),
@@ -459,6 +526,28 @@ impl Sim {
     #[must_use]
     pub fn research(&self, player: PlayerId) -> Fixed {
         self.players[usize::from(player.0)].research
+    }
+
+    /// A player's current level on Ascendancy Doctrine `track` (for the UI).
+    /// Out-of-range tracks read as 0.
+    #[must_use]
+    pub fn doctrine_level(&self, player: PlayerId, track: u8) -> u16 {
+        let t = usize::from(track);
+        if t >= DOCTRINE_TRACKS {
+            return 0;
+        }
+        self.players[usize::from(player.0)].doctrine_levels[t]
+    }
+
+    /// The `(minerals, research)` cost for `player` to buy the next level of
+    /// doctrine `track` (for UI affordability hints). Out-of-range ⇒ zero.
+    #[must_use]
+    pub fn doctrine_cost(&self, player: PlayerId, track: u8) -> (Fixed, Fixed) {
+        let t = usize::from(track);
+        if t >= DOCTRINE_TRACKS {
+            return (Fixed::ZERO, Fixed::ZERO);
+        }
+        ascend_cost(t, self.doctrine_level(player, track))
     }
 
     /// Mineral cost to construct a building (for UI affordability hints).
@@ -686,7 +775,8 @@ impl Sim {
         h.write_u64(self.rng.current_state());
         h.write_u64(u64::from(self.wave_count));
         // Per-player fields: minerals, researched_techs, active_research,
-        // era, alloys, research, active_perks — in this stable order.
+        // era, alloys, research, active_perks, doctrine_levels — in this stable
+        // order. Never reorder; appending is fine (and re-pins the golden hash).
         for p in &self.players {
             h.write_i64(p.minerals.to_bits());
             h.write_u64(u64::from(p.researched_techs));
@@ -702,6 +792,9 @@ impl Sim {
             h.write_i64(p.alloys.to_bits());
             h.write_i64(p.research.to_bits());
             h.write_u64(u64::from(p.active_perks));
+            for t in 0..DOCTRINE_TRACKS {
+                h.write_u64(u64::from(p.doctrine_levels[t]));
+            }
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -1037,6 +1130,29 @@ impl Sim {
                     self.players[usize::from(owner.0)].active_perks |= 1u32 << perk;
                 }
             }
+            Command::Ascend { owner, track } => self.apply_ascend(owner, track),
+        }
+    }
+
+    /// Buys the next level of doctrine `track` for `owner`, if unlocked and
+    /// affordable. FORGE (the minerals-only track) needs no lab; the research
+    /// tracks require a Research Lab. Validate-then-spend, mirroring `Research`.
+    fn apply_ascend(&mut self, owner: PlayerId, track: u8) {
+        let t = usize::from(track);
+        if t >= DOCTRINE_TRACKS {
+            return;
+        }
+        let p = usize::from(owner.0);
+        let level = self.players[p].doctrine_levels[t];
+        if level >= DOCTRINE_LEVEL_CAP {
+            return;
+        }
+        let (min_cost, res_cost) = ascend_cost(t, level);
+        let lab_ok = t == DOC_FORGE || self.has_research_lab(owner);
+        if lab_ok && self.players[p].minerals >= min_cost && self.players[p].research >= res_cost {
+            self.players[p].minerals = self.players[p].minerals - min_cost;
+            self.players[p].research = self.players[p].research - res_cost;
+            self.players[p].doctrine_levels[t] = (level + 1).min(DOCTRINE_LEVEL_CAP);
         }
     }
 
@@ -1061,10 +1177,10 @@ impl Sim {
         total
     }
     fn player_weapon_bonus(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Weapons)
+        self.branch_bonus(p, crate::game::tech::TechBranch::Weapons) + self.doctrine_weapon_bonus(p)
     }
     fn player_armor_bonus(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Armor)
+        self.branch_bonus(p, crate::game::tech::TechBranch::Armor) + self.doctrine_armor_bonus(p)
     }
     fn player_economy_bonus(&self, p: PlayerId) -> Fixed {
         self.branch_bonus(p, crate::game::tech::TechBranch::Economy)
@@ -1073,7 +1189,24 @@ impl Sim {
         self.branch_bonus(p, crate::game::tech::TechBranch::Mobility)
     }
     fn player_shield_max(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Shields)
+        self.branch_bonus(p, crate::game::tech::TechBranch::Shields) + self.doctrine_shield_bonus(p)
+    }
+    /// Flat weapon-damage bonus from the doctrine tracks (Weapons + Forge).
+    fn doctrine_weapon_bonus(&self, p: PlayerId) -> Fixed {
+        let lv = &self.players[usize::from(p.0)].doctrine_levels;
+        WEAPON_STEP * Fixed::from_int(i32::from(lv[DOC_WEAPONS]))
+            + FORGE_WEAPON_STEP * Fixed::from_int(i32::from(lv[DOC_FORGE]))
+    }
+    /// Flat armor-mitigation bonus from the doctrine tracks (Armor + Forge).
+    fn doctrine_armor_bonus(&self, p: PlayerId) -> Fixed {
+        let lv = &self.players[usize::from(p.0)].doctrine_levels;
+        ARMOR_STEP * Fixed::from_int(i32::from(lv[DOC_ARMOR]))
+            + FORGE_ARMOR_STEP * Fixed::from_int(i32::from(lv[DOC_FORGE]))
+    }
+    /// Shield-max bonus from the Vitality doctrine track.
+    fn doctrine_shield_bonus(&self, p: PlayerId) -> Fixed {
+        let lv = &self.players[usize::from(p.0)].doctrine_levels;
+        VITALITY_STEP * Fixed::from_int(i32::from(lv[DOC_VITALITY]))
     }
     /// Public accessor for the UI and tests outside the module.
     #[must_use]
@@ -1708,6 +1841,46 @@ impl Sim {
             }
         }
 
+        // Ascendancy Doctrines: once established (era ≥ 1) and holding a Minerals
+        // reserve, convert the surplus into army QUALITY. The minerals-only Forge
+        // track always runs (it bleeds the standing Minerals bank); the research-
+        // costed quality tracks only run once the finite tech tree is exhausted —
+        // era keys and Anti-Grav are worth more than incremental doctrine levels,
+        // so research is reserved for them while any finite tech is still pending.
+        // At most one per tick; the era ≥ 1 gate keeps the era-0 golden run from
+        // ever emitting an Ascend. Pure, row-major, no RNG.
+        if self.player_era(player) >= 1 && minerals >= ASCEND_MIN_RESERVE {
+            let (rmask, active) = self.research_state(player);
+            // The AI pursues only the 17 finite techs (ids 0..=16), never the
+            // forks, so the tree is "open" while any of those is eligible+unbought.
+            let tree_open = active.is_some()
+                || (0..17u32).any(|id| {
+                    let def = crate::game::tech::TECHS[id as usize];
+                    let done = rmask & (1u32 << id) != 0;
+                    let prereq_ok = def.prereq.is_none_or(|req| rmask & (1u32 << req) != 0);
+                    !done && prereq_ok
+                });
+            // Track order: Forge (3) first to drain Minerals, then the research
+            // tracks Weapons(0)/Armor(1)/Vitality(2). u8 ids avoid a fallible cast.
+            let tracks: &[u8] = if tree_open { &[3] } else { &[3, 0, 1, 2] };
+            for &track_id in tracks {
+                if self.doctrine_level(player, track_id) >= DOCTRINE_LEVEL_CAP {
+                    continue;
+                }
+                let (min_cost, res_cost) = self.doctrine_cost(player, track_id);
+                let is_forge = usize::from(track_id) == DOC_FORGE;
+                let lab_ok = is_forge || self.has_research_lab(player);
+                let res_ok = is_forge || self.research(player) >= res_cost;
+                if lab_ok && minerals >= min_cost && res_ok {
+                    cmds.push(Command::Ascend {
+                        owner: player,
+                        track: track_id,
+                    });
+                    break;
+                }
+            }
+        }
+
         // Research: with a lab and no active research, start the first eligible +
         // affordable tech in a fixed priority order. Deterministic and symmetric
         // for both players; skipping ineligible/unaffordable techs avoids stalls.
@@ -1871,7 +2044,8 @@ impl Sim {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim, UnitKind, WaveConfig,
+        ascend_cost, BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim, UnitKind,
+        WaveConfig,
     };
     use crate::fixed::Fixed;
     use crate::game::map::Map;
@@ -2165,7 +2339,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 17_905_425_896_978_043_177);
+        assert_eq!(s.state_hash(), 10_209_446_185_356_297_769);
     }
 
     #[test]
@@ -2243,6 +2417,233 @@ mod tests {
             perk: 99,
         }]);
         assert_eq!(s.perks(P0), 1 << crate::game::perk::CONSCRIPTION);
+    }
+
+    #[test]
+    fn ascend_cost_ramp_is_linear_and_exact() {
+        // Track 0 (Weapons): minerals 300 + 120*L, research 500 + 180*L.
+        let (m0, r0) = ascend_cost(0, 0);
+        assert_eq!(
+            (m0.to_bits(), r0.to_bits()),
+            (f(300).to_bits(), f(500).to_bits())
+        );
+        let (m1, r1) = ascend_cost(0, 1);
+        assert_eq!(
+            (m1.to_bits(), r1.to_bits()),
+            (f(420).to_bits(), f(680).to_bits())
+        );
+        // Track 3 (Forge): minerals-only — 2000 + 900*L, research always 0.
+        let (m3, r3) = ascend_cost(3, 2);
+        assert_eq!(
+            (m3.to_bits(), r3.to_bits()),
+            (f(3800).to_bits(), f(0).to_bits())
+        );
+    }
+
+    #[test]
+    fn ascend_charges_pools_and_increments_level() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
+        s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
+        // Warm the research pool (lab makes 4/tick while powered): two Weapons
+        // levels cost 500 + 680 research, so warm well past that.
+        for _ in 0..400 {
+            s.step(&[]);
+        }
+        // No deposits + CC credit_income 0 ⇒ minerals never grow, so the minerals
+        // delta is exactly the Ascend cost.
+        let m_before = s.minerals(P0);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 0,
+        }]);
+        assert_eq!(s.doctrine_level(P0, 0), 1);
+        assert_eq!(
+            (m_before - s.minerals(P0)).to_bits(),
+            f(300).to_bits(),
+            "first Weapons level should cost 300 minerals"
+        );
+        let m_before2 = s.minerals(P0);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 0,
+        }]);
+        assert_eq!(s.doctrine_level(P0, 0), 2);
+        assert_eq!(
+            (m_before2 - s.minerals(P0)).to_bits(),
+            f(420).to_bits(),
+            "second Weapons level should cost 420 minerals (ramp)"
+        );
+    }
+
+    #[test]
+    fn ascend_is_gated_by_lab_and_pools() {
+        // No lab + no research ⇒ a research track is a no-op, but Forge still works.
+        let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 0,
+        }]);
+        assert_eq!(s.doctrine_level(P0, 0), 0, "no lab ⇒ Weapons track blocked");
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 3,
+        }]);
+        assert_eq!(
+            s.doctrine_level(P0, 3),
+            1,
+            "Forge (minerals-only) needs no lab"
+        );
+        // A lab but an empty research pool still blocks a research track.
+        let mut poor = Sim::new(Map::new(20, 20), 1, f(100_000));
+        poor.add_building(P0, BuildingKind::ResearchLab, 2, 2);
+        poor.step(&[Command::Ascend {
+            owner: P0,
+            track: 0,
+        }]);
+        assert_eq!(
+            poor.doctrine_level(P0, 0),
+            0,
+            "no research ⇒ Weapons track blocked even with a lab"
+        );
+        // An out-of-range track id is ignored.
+        poor.step(&[Command::Ascend {
+            owner: P0,
+            track: 99,
+        }]);
+        assert_eq!(poor.doctrine_level(P0, 99), 0);
+    }
+
+    #[test]
+    fn doctrine_effects_fold_into_combat_factors() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(1_000_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
+        s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
+        for _ in 0..1000 {
+            s.step(&[]); // warm a large research pool (no Research cmds ⇒ no tech bonuses)
+        }
+        let w0 = s.player_weapon_bonus(P0);
+        let a0 = s.player_armor_bonus(P0);
+        let sh0 = s.shield_max(P0);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 0,
+        }]);
+        assert_eq!(
+            (s.player_weapon_bonus(P0) - w0).to_bits(),
+            super::WEAPON_STEP.to_bits(),
+            "Weapons doctrine adds flat damage"
+        );
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 1,
+        }]);
+        assert_eq!(
+            (s.player_armor_bonus(P0) - a0).to_bits(),
+            super::ARMOR_STEP.to_bits(),
+            "Armor doctrine adds flat mitigation"
+        );
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 2,
+        }]);
+        assert_eq!(
+            (s.shield_max(P0) - sh0).to_bits(),
+            super::VITALITY_STEP.to_bits(),
+            "Vitality doctrine raises shield max"
+        );
+        let wpre = s.player_weapon_bonus(P0);
+        let apre = s.player_armor_bonus(P0);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 3,
+        }]);
+        assert_eq!(
+            (s.player_weapon_bonus(P0) - wpre).to_bits(),
+            super::FORGE_WEAPON_STEP.to_bits(),
+            "Forge adds flat damage"
+        );
+        assert_eq!(
+            (s.player_armor_bonus(P0) - apre).to_bits(),
+            super::FORGE_ARMOR_STEP.to_bits(),
+            "Forge adds flat mitigation"
+        );
+    }
+
+    #[test]
+    fn forge_track_is_minerals_only_and_ramps() {
+        // Forge needs no lab and never touches the research pool; its steep
+        // minerals lump cost (2000, then 2900) is the bank-drainer.
+        let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        let r_before = s.research(P0);
+        let m0 = s.minerals(P0);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 3,
+        }]);
+        assert_eq!(s.doctrine_level(P0, 3), 1, "Forge needs no lab");
+        assert_eq!(
+            (m0 - s.minerals(P0)).to_bits(),
+            f(2000).to_bits(),
+            "first Forge level costs 2000 minerals"
+        );
+        assert_eq!(
+            s.research(P0).to_bits(),
+            r_before.to_bits(),
+            "Forge must not spend research"
+        );
+        let m1 = s.minerals(P0);
+        s.step(&[Command::Ascend {
+            owner: P0,
+            track: 3,
+        }]);
+        assert_eq!(s.doctrine_level(P0, 3), 2);
+        assert_eq!(
+            (m1 - s.minerals(P0)).to_bits(),
+            f(2900).to_bits(),
+            "second Forge level costs 2900 minerals (ramp)"
+        );
+    }
+
+    #[test]
+    fn doctrine_levels_are_hashed() {
+        let a = Sim::new(Map::new(8, 8), 1, f(0));
+        let mut b = Sim::new(Map::new(8, 8), 1, f(0));
+        b.players[0].doctrine_levels[2] = 1;
+        assert_ne!(
+            a.state_hash(),
+            b.state_hash(),
+            "doctrine_levels must participate in the determinism hash"
+        );
+    }
+
+    #[test]
+    fn ai_emits_no_ascend_in_the_golden_run() {
+        // Mirrors the golden setup: the era ≥ 1 AI gate must keep the 120-tick run
+        // from ever ascending, so the golden re-pin is one-time and stays stable
+        // across future balance tuning of the sink.
+        let mut s = Sim::new(Map::new(40, 40), 12_345, f(1500));
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        for _ in 0..120 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+        }
+        for pl in [P0, P1] {
+            assert_eq!(s.player_era(pl), 0, "golden run must stay era 0");
+            for track in 0..4u8 {
+                assert_eq!(
+                    s.doctrine_level(pl, track),
+                    0,
+                    "the AI must not ascend in the golden run"
+                );
+            }
+        }
     }
 
     #[test]
