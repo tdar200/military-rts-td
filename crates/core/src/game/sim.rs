@@ -174,6 +174,9 @@ const VITALITY_STEP: Fixed = Fixed::from_int(8);
 /// while never starving unit retraining.
 const FORGE_WEAPON_STEP: Fixed = Fixed::from_ratio(1, 4);
 const FORGE_ARMOR_STEP: Fixed = Fixed::from_ratio(1, 4);
+/// Minerals granted for founding the Command Center adjacent to an Ore deposit —
+/// the survey phase's premium-site payoff.
+const FOUNDING_ORE_BONUS: Fixed = Fixed::from_int(200);
 /// The AI only ascends with at least this much minerals in reserve (and era ≥ 1),
 /// so the 120-tick golden run — which never reaches era 1 — never emits an Ascend
 /// and the golden hash stays stable across future balance tuning of the sink.
@@ -252,6 +255,16 @@ pub enum Command {
         owner: PlayerId,
         /// Track index (0..`DOCTRINE_TRACKS`).
         track: u8,
+    },
+    /// Found the Command Center on a surveyed tile — the act that starts the
+    /// game. Only valid in the Survey phase; resolves instantly.
+    FoundBase {
+        /// Owning player.
+        owner: PlayerId,
+        /// Tile column.
+        x: u16,
+        /// Tile row.
+        y: u16,
     },
     /// Cast a unit's active ability at a world position (see [`crate::game::ability`]).
     /// Validated and resolved instantly; the per-unit cooldown is the rate limiter.
@@ -365,6 +378,17 @@ fn ascend_cost(track: usize, level: u16) -> (Fixed, Fixed) {
     (minerals, research)
 }
 
+/// The high-level game phase: surveying (choosing where to found the base)
+/// or active play. Survival starts in Survey; skirmish starts Active.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GamePhase {
+    /// No human base yet — the player is choosing a founding site. The wave
+    /// clock is frozen and an absent Command Center is not a loss.
+    Survey,
+    /// Normal play; the wave clock measures from `phase_started`.
+    Active,
+}
+
 /// The deterministic RTS world.
 #[derive(Clone, Debug)]
 pub struct Sim {
@@ -378,6 +402,11 @@ pub struct Sim {
     free: Vec<u32>,
     waves: Option<WaveConfig>,
     wave_count: u32,
+    /// Survey (pre-founding) vs Active play. Hashed.
+    phase: GamePhase,
+    /// Tick at which Active play began (0 unless founded mid-run). The wave
+    /// clock measures from here, so survey time never eats the peace window.
+    phase_started: u64,
     /// Endurance mode (survival): the run is won/lost only by the human's own
     /// Command Center surviving — destroying the alien beachhead does NOT win, so
     /// the player must outlast the waves rather than rush the spawner. Set at
@@ -486,10 +515,24 @@ impl Sim {
             free: Vec::new(),
             waves: None,
             wave_count: 0,
+            phase: GamePhase::Active,
+            phase_started: 0,
             survival: false,
             balance: Balance::const_default(),
             attacks: Vec::new(),
         }
+    }
+
+    /// Starts the run in the Survey phase: no human base exists until a
+    /// [`Command::FoundBase`] resolves; waves and defeat are held until then.
+    pub const fn begin_survey(&mut self) {
+        self.phase = GamePhase::Survey;
+    }
+
+    /// Whether the run is still in the pre-founding Survey phase.
+    #[must_use]
+    pub const fn surveying(&self) -> bool {
+        matches!(self.phase, GamePhase::Survey)
     }
 
     /// Enables endurance (survival) mode: the run ends only when the human's
@@ -684,10 +727,14 @@ impl Sim {
     #[must_use]
     pub fn ticks_until_next_wave(&self) -> Option<u64> {
         let cfg = self.waves?;
-        if self.tick < cfg.first_delay {
-            return Some(cfg.first_delay - self.tick);
+        if matches!(self.phase, GamePhase::Survey) {
+            return None; // the clock starts at founding
         }
-        let into = (self.tick - cfg.first_delay) % cfg.interval;
+        let t = self.tick - self.phase_started;
+        if t < cfg.first_delay {
+            return Some(cfg.first_delay - t);
+        }
+        let into = (t - cfg.first_delay) % cfg.interval;
         Some(if into == 0 { 0 } else { cfg.interval - into })
     }
 
@@ -811,6 +858,10 @@ impl Sim {
         reason = "the index is a player slot < PLAYER_COUNT (2), so it fits u8"
     )]
     pub fn winner(&self) -> Option<PlayerId> {
+        // Before founding, an absent base is a pending decision, not a defeat.
+        if matches!(self.phase, GamePhase::Survey) {
+            return None;
+        }
         let mut has_cc = [false; PLAYER_COUNT];
         for e in &self.entities {
             if e.alive && e.kind == Kind::Building(BuildingKind::CommandCenter) {
@@ -841,6 +892,11 @@ impl Sim {
         h.write_u64(self.tick);
         h.write_u64(self.rng.current_state());
         h.write_u64(u64::from(self.wave_count));
+        h.write_u64(match self.phase {
+            GamePhase::Survey => 0,
+            GamePhase::Active => 1,
+        });
+        h.write_u64(self.phase_started);
         // Per-player fields: minerals, researched_techs, active_research,
         // era, alloys, research, active_perks, doctrine_levels — in this stable
         // order. Never reorder; appending is fine (and re-pins the golden hash).
@@ -1023,10 +1079,16 @@ impl Sim {
     /// the defender's base.
     fn run_waves(&mut self) {
         let Some(cfg) = self.waves else { return };
-        if self.tick < cfg.first_delay {
+        // The wave clock is frozen until the base is founded, then measures from
+        // the founding tick — survey time never eats the first peace window.
+        if matches!(self.phase, GamePhase::Survey) {
             return;
         }
-        if !(self.tick - cfg.first_delay).is_multiple_of(cfg.interval) {
+        let t = self.tick - self.phase_started;
+        if t < cfg.first_delay {
+            return;
+        }
+        if !(t - cfg.first_delay).is_multiple_of(cfg.interval) {
             return;
         }
         let w = self.wave_count;
@@ -1240,6 +1302,7 @@ impl Sim {
                 }
             }
             Command::Ascend { owner, track } => self.apply_ascend(owner, track),
+            Command::FoundBase { owner, x, y } => self.apply_found_base(owner, x, y),
             Command::UseAbility {
                 owner,
                 unit,
@@ -1337,6 +1400,33 @@ impl Sim {
             }
         }
         self.entities[idx].ability_cd = d.cooldown;
+    }
+
+    /// Founds the Command Center: the Survey-ending act. Validate-then-resolve —
+    /// Survey phase only, on a buildable tile. Founding beside an Ore deposit
+    /// grants the colony bonus (the "green tile" payoff the survey overlay shows).
+    fn apply_found_base(&mut self, owner: PlayerId, x: u16, y: u16) {
+        if matches!(self.phase, GamePhase::Active) {
+            return;
+        }
+        let buildable = self
+            .map
+            .tile(i32::from(x), i32::from(y))
+            .is_some_and(|t| t.buildable);
+        if !buildable {
+            return;
+        }
+        self.add_building(owner, BuildingKind::CommandCenter, x, y);
+        self.phase = GamePhase::Active;
+        self.phase_started = self.tick;
+        let near_ore = self.map.deposits().any(|(dx, dy, d)| {
+            d.kind == crate::game::map::DepositKind::Ore
+                && crate::game::hex::distance((x, y), (dx, dy)) <= 1
+        });
+        if near_ore {
+            let p = usize::from(owner.0);
+            self.players[p].minerals = self.players[p].minerals + FOUNDING_ORE_BONUS;
+        }
     }
 
     /// Buys the next level of doctrine `track` for `owner`, if unlocked and
@@ -1852,6 +1942,45 @@ impl Sim {
     )]
     pub fn ai_commands(&self, player: PlayerId) -> Vec<Command> {
         let mut cmds = Vec::new();
+
+        // Survey phase: the only move is founding. Pick the first buildable tile
+        // hex-adjacent to an Ore deposit (the colony-bonus site), falling back to
+        // the first buildable Ore tile. Everyone else holds until play begins.
+        if matches!(self.phase, GamePhase::Survey) {
+            if self.command_center_tile(player).is_none() {
+                let mut site: Option<(u16, u16)> = None;
+                'scan: for (dx, dy, d) in self.map.deposits() {
+                    if d.kind != crate::game::map::DepositKind::Ore {
+                        continue;
+                    }
+                    for ny in -1..=1i32 {
+                        for nx in -1..=1i32 {
+                            let tx = i32::from(dx) + nx;
+                            let ty = i32::from(dy) + ny;
+                            let (Ok(txu), Ok(tyu)) = (u16::try_from(tx), u16::try_from(ty)) else {
+                                continue;
+                            };
+                            if self.map.tile(tx, ty).is_some_and(|t| t.buildable)
+                                && crate::game::hex::distance((dx, dy), (txu, tyu)) == 1
+                            {
+                                site = Some((txu, tyu));
+                                break 'scan;
+                            }
+                        }
+                    }
+                }
+                let site = site
+                    .or_else(|| self.first_buildable_deposit(crate::game::map::DepositKind::Ore));
+                if let Some((x, y)) = site {
+                    cmds.push(Command::FoundBase {
+                        owner: player,
+                        x,
+                        y,
+                    });
+                }
+            }
+            return cmds;
+        }
 
         // Abilities: cast the first ready tactical ability with a worthwhile
         // target — Barrage/EMP at the first enemy with ≥ 3 foes packed inside the
@@ -2624,7 +2753,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 16_203_029_281_872_491_098);
+        assert_eq!(s.state_hash(), 7_828_962_637_882_570_855);
     }
 
     #[test]

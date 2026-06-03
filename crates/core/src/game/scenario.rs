@@ -203,11 +203,11 @@ pub fn survival(seed: u64) -> Sim {
     );
     let mut sim = Sim::new(map, seed, Fixed::from_int(1800));
 
-    // Player base (left margin, kept clear by procgen).
-    sim.add_building(HUMAN, BuildingKind::CommandCenter, 3, mid);
-    sim.add_building(HUMAN, BuildingKind::PowerPlant, 2, mid - 2);
-    sim.add_building(HUMAN, BuildingKind::Refinery, 2, mid + 2);
-    sim.add_building(HUMAN, BuildingKind::Barracks, 5, mid);
+    // No pre-placed base: the run opens in the SURVEY phase and the player's
+    // first act is choosing where to found the Command Center (the home ore
+    // deposit above is one premium option among the procgen sites). The wave
+    // clock starts at the founding tick.
+    sim.begin_survey();
 
     // Endurance run: you outlast the waves rather than race to a win. Losing your
     // own Command Center ends it; the alien beachhead is just the wave source.
@@ -549,11 +549,20 @@ mod tests {
     }
 
     #[test]
-    fn survival_sets_up_both_bases_and_stays_connected() {
-        let s = survival(7);
-        assert_eq!(s.winner(), None, "a base is already dead");
-        // 4 player buildings + 2 beachhead buildings.
-        assert!(s.entity_count() >= 6, "too few starting buildings");
+    fn survival_opens_in_survey_then_founds_and_stays_connected() {
+        let mut s = survival(7);
+        assert!(s.surveying(), "survival opens in the survey phase");
+        assert_eq!(s.winner(), None, "no base yet is not a loss");
+        // Only the alien beachhead is pre-placed (CC + power); the human founds.
+        assert_eq!(s.entity_count(), 2, "only the beachhead is pre-placed");
+        let cmds = s.ai_commands(PlayerId(0));
+        s.step(&cmds);
+        assert!(!s.surveying(), "founding ends survey");
+        assert_eq!(
+            s.entity_count(),
+            3,
+            "the human CC now exists (2 beachhead + 1)"
+        );
         let start = corner_passable(s.map(), false);
         let goal = corner_passable(s.map(), true);
         assert!(
@@ -587,8 +596,10 @@ mod tests {
         // no soft-lock. Wave-spawn coverage is handled by
         // `survival_has_a_three_minute_grace_period`.
         let mut s = survival(3);
+        let found = s.ai_commands(PlayerId(0)); // human founds, then does nothing
+        s.step(&found);
         let mut winner = None;
-        for _ in 0..20000 {
+        for _ in 0..40000 {
             let enemy = s.ai_commands(PlayerId(1));
             s.step(&enemy);
             if let Some(w) = s.winner() {
@@ -606,7 +617,9 @@ mod tests {
     #[test]
     fn survival_has_a_peaceful_founding_grace_period() {
         let mut s = survival(7);
-        // 30 Hz -> 6 minutes = 10_800 ticks. No enemy units before then.
+        let cmds = s.ai_commands(PlayerId(0)); // found, starting the wave clock
+        s.step(&cmds);
+        // 30 Hz -> 6 minutes = 10_800 ticks from founding. No enemy units before.
         for _ in 0..10_000 {
             s.step(&[]);
         }
@@ -675,23 +688,26 @@ mod tests {
     }
 
     #[test]
-    fn survival_opening_economy_flows_during_the_peaceful_grace() {
-        // The player's pre-placed Extractor now sits on a home ore deposit, so the
-        // economy mines from the first tick — even with no player input.
+    fn survival_economy_flows_after_founding_and_stays_peaceful() {
+        // The survey-AI founds then builds an Extractor on the home deposit, so the
+        // economy mines; the build-up stays peaceful (first wave is 6 min AFTER
+        // founding, not from map load).
         let mut s = survival(3);
+        let cmds = s.ai_commands(PlayerId(0)); // founds
+        s.step(&cmds);
         let start = s.minerals(PlayerId(0)).to_bits();
-        for _ in 0..2000 {
-            s.step(&[]);
+        for _ in 0..3000 {
+            let c = s.ai_commands(PlayerId(0));
+            s.step(&c);
         }
         assert!(
             s.minerals(PlayerId(0)).to_bits() > start,
-            "opening economy should mine minerals from the home deposit"
+            "post-founding economy should mine minerals"
         );
-        // ...and the build-up stays peaceful (first wave is at tick 5400).
         assert_eq!(
             s.unit_count(PlayerId(1)),
             0,
-            "no enemy units during the grace period"
+            "no enemy units during the founding peace window"
         );
     }
 
