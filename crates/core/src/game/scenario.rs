@@ -6,7 +6,7 @@
 //! you can also push a lane to destroy the enemy Command Center.
 
 use crate::fixed::Fixed;
-use crate::game::map::{Map, Tile};
+use crate::game::map::{Deposit, DepositKind, Map, Tile};
 use crate::game::procgen;
 use crate::game::sim::{PlayerId, Sim, WaveConfig};
 use crate::game::stats::{BuildingKind, UnitKind};
@@ -26,6 +26,23 @@ pub fn lane_defense(seed: u64) -> Sim {
             map.set_tile(x, y, Tile::BLOCKED);
         }
     }
+
+    // Ore near each base, alloy on the contested mid-flanks (all clear of the
+    // wall band rows 9..=11 and the building tiles).
+    let ore = Deposit {
+        kind: DepositKind::Ore,
+        remaining: 500,
+    };
+    let alloy = Deposit {
+        kind: DepositKind::Alloy,
+        remaining: 300,
+    };
+    map.set_deposit(8, 5, ore);
+    map.set_deposit(8, 15, ore);
+    map.set_deposit(40, 5, ore);
+    map.set_deposit(40, 15, ore);
+    map.set_deposit(24, 3, alloy);
+    map.set_deposit(24, 18, alloy);
 
     let mut sim = Sim::new(map, seed, Fixed::from_int(1500));
 
@@ -61,7 +78,23 @@ pub fn lane_defense(seed: u64) -> Sim {
 /// and flanking matter most.
 #[must_use]
 pub fn open_clash(seed: u64) -> Sim {
-    let map = Map::new(40, 24);
+    let mut map = Map::new(40, 24);
+
+    // Ore near each base corner; alloy in the contested centre.
+    let ore = Deposit {
+        kind: DepositKind::Ore,
+        remaining: 500,
+    };
+    let alloy = Deposit {
+        kind: DepositKind::Alloy,
+        remaining: 300,
+    };
+    map.set_deposit(8, 17, ore);
+    map.set_deposit(8, 21, ore);
+    map.set_deposit(31, 4, ore);
+    map.set_deposit(31, 8, ore);
+    map.set_deposit(20, 12, alloy);
+
     let mut sim = Sim::new(map, seed, Fixed::from_int(2000));
 
     // Player base, bottom-left.
@@ -91,6 +124,22 @@ pub fn crossroads(seed: u64) -> Sim {
             map.set_tile(x, y, Tile::BLOCKED);
         }
     }
+
+    // Ore near each base corner; alloy on the open flanks beside the fortress.
+    let ore = Deposit {
+        kind: DepositKind::Ore,
+        remaining: 500,
+    };
+    let alloy = Deposit {
+        kind: DepositKind::Alloy,
+        remaining: 300,
+    };
+    map.set_deposit(7, 3, ore);
+    map.set_deposit(3, 7, ore);
+    map.set_deposit(23, 26, ore);
+    map.set_deposit(26, 23, ore);
+    map.set_deposit(2, 15, alloy);
+    map.set_deposit(27, 15, alloy);
 
     let mut sim = Sim::new(map, seed, Fixed::from_int(1500));
 
@@ -248,6 +297,23 @@ mod tests {
             }
         }
         panic!("map has no passable tile");
+    }
+
+    #[test]
+    fn every_wave_map_has_minable_deposits() {
+        for &sc in &[
+            Scenario::LaneDefense,
+            Scenario::Crossroads,
+            Scenario::Survival,
+        ] {
+            let s = sc.build(7);
+            let count = s.map().deposits().count();
+            assert!(
+                count >= 2,
+                "{}: needs deposits to mine ({count})",
+                sc.name()
+            );
+        }
     }
 
     #[test]
