@@ -31,12 +31,31 @@ impl Tile {
     };
 }
 
+/// The type of a resource deposit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum DepositKind {
+    /// Standard ore used for credit income.
+    Ore,
+    /// Rare alloy used for advanced production.
+    Alloy,
+}
+
+/// A finite resource deposit on a map tile.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub struct Deposit {
+    /// What kind of resource this deposit contains.
+    pub kind: DepositKind,
+    /// How many units of resource remain.
+    pub remaining: u32,
+}
+
 /// A rectangular grid of [`Tile`]s.
 #[derive(Clone, Debug)]
 pub struct Map {
     width: u16,
     height: u16,
     tiles: Vec<Tile>,
+    deposits: Vec<Option<Deposit>>,
 }
 
 impl Map {
@@ -50,6 +69,7 @@ impl Map {
             width,
             height,
             tiles,
+            deposits: alloc::vec![None; count],
         }
     }
 
@@ -93,11 +113,50 @@ impl Map {
             self.tiles[index] = tile;
         }
     }
+
+    /// The deposit at `(x, y)`, or `None` if there is none or `(x, y)` is out of bounds.
+    #[must_use]
+    pub fn deposit(&self, x: u16, y: u16) -> Option<Deposit> {
+        if x < self.width && y < self.height {
+            let index = usize::from(y) * usize::from(self.width) + usize::from(x);
+            self.deposits[index]
+        } else {
+            None
+        }
+    }
+
+    /// Places or replaces a deposit at `(x, y)`. Out-of-bounds coordinates are ignored.
+    pub fn set_deposit(&mut self, x: u16, y: u16, deposit: Deposit) {
+        if x < self.width && y < self.height {
+            let index = usize::from(y) * usize::from(self.width) + usize::from(x);
+            self.deposits[index] = Some(deposit);
+        }
+    }
+
+    /// Mines up to `amount` units from the deposit at `(x, y)`.
+    ///
+    /// Returns the actual amount mined (clamped to what remains). Clears the
+    /// deposit when exhausted. Returns `0` for out-of-bounds or missing deposits.
+    pub fn mine(&mut self, x: u16, y: u16, amount: u32) -> u32 {
+        if x >= self.width || y >= self.height {
+            return 0;
+        }
+        let index = usize::from(y) * usize::from(self.width) + usize::from(x);
+        let Some(dep) = &mut self.deposits[index] else {
+            return 0;
+        };
+        let mined = amount.min(dep.remaining);
+        dep.remaining -= mined;
+        if dep.remaining == 0 {
+            self.deposits[index] = None;
+        }
+        mined
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Map, Tile};
+    use super::{Deposit, DepositKind, Map, Tile};
 
     #[test]
     fn new_map_has_dimensions_and_is_open() {
@@ -133,5 +192,18 @@ mod tests {
         assert_eq!(m.tile(2, 1), Some(Tile::BLOCKED));
         // neighbours untouched
         assert_eq!(m.tile(2, 2), Some(Tile::OPEN));
+    }
+
+    #[test]
+    fn deposits_default_empty_and_round_trip() {
+        let mut m = Map::new(6, 4);
+        assert_eq!(m.deposit(2, 1), None);
+        m.set_deposit(2, 1, Deposit { kind: DepositKind::Ore, remaining: 500 });
+        assert_eq!(m.deposit(2, 1), Some(Deposit { kind: DepositKind::Ore, remaining: 500 }));
+        assert_eq!(m.mine(2, 1, 200), 200);
+        assert_eq!(m.deposit(2, 1).unwrap().remaining, 300);
+        assert_eq!(m.mine(2, 1, 999), 300); // clamps to remaining
+        assert_eq!(m.deposit(2, 1), None);  // exhausted -> cleared
+        assert_eq!(m.mine(5, 5, 10), 0);    // out of bounds / no deposit
     }
 }
