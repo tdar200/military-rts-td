@@ -267,6 +267,11 @@ pub struct Sim {
     free: Vec<u32>,
     waves: Option<WaveConfig>,
     wave_count: u32,
+    /// Endurance mode (survival): the run is won/lost only by the human's own
+    /// Command Center surviving — destroying the alien beachhead does NOT win, so
+    /// the player must outlast the waves rather than rush the spawner. Set at
+    /// construction; it only changes [`Sim::winner`] (a query), not hashed state.
+    survival: bool,
     balance: Balance,
     /// Transient render hint: (attacker, target) world positions of shots fired
     /// on the most recent combat tick. Deterministically derived, so it is not
@@ -369,9 +374,16 @@ impl Sim {
             free: Vec::new(),
             waves: None,
             wave_count: 0,
+            survival: false,
             balance: Balance::const_default(),
             attacks: Vec::new(),
         }
+    }
+
+    /// Enables endurance (survival) mode: the run ends only when the human's
+    /// Command Center falls; the alien beachhead can't be rushed for a cheap win.
+    pub const fn set_survival_mode(&mut self, on: bool) {
+        self.survival = on;
     }
 
     /// Shots fired on the most recent combat tick, as (attacker, target) world
@@ -623,6 +635,11 @@ impl Sim {
             if e.alive && e.kind == Kind::Building(BuildingKind::CommandCenter) {
                 has_cc[usize::from(e.owner.0)] = true;
             }
+        }
+        // Endurance mode: only the human (P0) losing their base ends the run —
+        // razing the alien beachhead is not a win, so the waves are the real test.
+        if self.survival {
+            return if has_cc[0] { None } else { Some(PlayerId(1)) };
         }
         let alive: usize = has_cc.iter().filter(|&&b| b).count();
         if alive == 1 {
@@ -2116,6 +2133,25 @@ mod tests {
             perk: 99,
         }]);
         assert_eq!(s.perks(P0), 1 << crate::game::perk::CONSCRIPTION);
+    }
+
+    #[test]
+    fn survival_is_endurance_not_a_rush_win() {
+        // In normal mode, being the only side with a Command Center is a win.
+        let mut normal = Sim::new(Map::new(10, 10), 1, f(0));
+        normal.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        assert_eq!(normal.winner(), Some(P0), "lone CC wins a normal match");
+
+        // In survival, razing/absence of the alien beachhead is NOT a win — only
+        // the human losing their own base ends the run.
+        let mut surv = Sim::new(Map::new(10, 10), 1, f(0));
+        surv.set_survival_mode(true);
+        surv.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        assert_eq!(
+            surv.winner(),
+            None,
+            "survival must not be won by razing the beachhead"
+        );
     }
 
     fn wave_cfg() -> WaveConfig {

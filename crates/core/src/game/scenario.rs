@@ -209,8 +209,11 @@ pub fn survival(seed: u64) -> Sim {
     sim.add_building(HUMAN, BuildingKind::Refinery, 2, mid + 2);
     sim.add_building(HUMAN, BuildingKind::Barracks, 5, mid);
 
-    // Alien beachhead (right margin): a Core Node + power so `winner()` works and
-    // there is a goal to push toward.
+    // Endurance run: you outlast the waves rather than race to a win. Losing your
+    // own Command Center ends it; the alien beachhead is just the wave source.
+    sim.set_survival_mode(true);
+
+    // Alien beachhead (right margin): a Core Node + power that pours out the waves.
     sim.add_building(ENEMY, BuildingKind::CommandCenter, w - 4, mid);
     sim.add_building(ENEMY, BuildingKind::PowerPlant, w - 3, mid - 2);
 
@@ -607,6 +610,50 @@ mod tests {
         assert!(
             s.unit_count(PlayerId(1)) > 0,
             "waves should begin after the grace period"
+        );
+    }
+
+    #[test]
+    #[ignore = "balance playtest — run with --ignored --nocapture to read the curve"]
+    fn survival_balance_playtest() {
+        // A competent AI plays the PLAYER side (claims deposits, builds, defends)
+        // against the waves. Prints the economy + survival curve for tuning.
+        let mut s = survival(3);
+        let mut last_waves = 0;
+        let mut winner = None;
+        for t in 0..18_000u64 {
+            let cmds = s.ai_commands(PlayerId(0)); // player-AI builds + fights
+            s.step(&cmds);
+            let w = s.waves_survived();
+            if w != last_waves {
+                last_waves = w;
+                std::eprintln!(
+                    "wave {} @ t={} ({}s): minerals={} research={} alloys={} units(P0)={} units(P1)={}",
+                    w, t, t / 30,
+                    s.minerals(PlayerId(0)).to_bits() / 65536,
+                    s.research(PlayerId(0)).to_bits() / 65536,
+                    s.alloys(PlayerId(0)).to_bits() / 65536,
+                    s.unit_count(PlayerId(0)),
+                    s.unit_count(PlayerId(1)),
+                );
+            }
+            if let Some(win) = s.winner() {
+                winner = Some(win);
+                std::eprintln!(
+                    "RESOLVED at t={} ({}s): winner={:?}, waves_survived={}",
+                    t,
+                    t / 30,
+                    win,
+                    w
+                );
+                break;
+            }
+        }
+        std::eprintln!(
+            "END: winner={:?}, waves_survived={}, final minerals={}",
+            winner,
+            s.waves_survived(),
+            s.minerals(PlayerId(0)).to_bits() / 65536
         );
     }
 
