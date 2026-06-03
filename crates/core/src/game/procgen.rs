@@ -13,7 +13,7 @@
               output; every value is range-checked before the cast"
 )]
 
-use crate::game::map::{Map, Tile};
+use crate::game::map::{Deposit, DepositKind, Map, Tile};
 use crate::game::path::find_path;
 
 /// Survival battlefield width in tiles.
@@ -81,6 +81,45 @@ pub fn generate(seed: u64) -> Map {
             map.set_tile(x, mid, Tile::OPEN);
         }
     }
+
+    // Deposit placement: scatter ore + alloy on passable tiles using the same
+    // seeded RNG so the layout stays deterministic. A guaranteed near-base ore is
+    // placed at (MARGIN, mid) first; extra ore and alloys are then scattered.
+    map.set_deposit(
+        MARGIN,
+        mid,
+        Deposit {
+            kind: DepositKind::Ore,
+            remaining: 600,
+        },
+    );
+    let extra_ore = 4 + (rng.next() % 4) as u16; // 4..=7
+    let alloys = 1 + (rng.next() % 2) as u16; // 1..=2
+    let mut placed = 0u16;
+    let mut tries = 0u16;
+    while placed < extra_ore + alloys && tries < 400 {
+        tries += 1;
+        let x = rng.range(1, WIDTH - 1);
+        let y = rng.range(0, HEIGHT);
+        let passable = map
+            .tile(i32::from(x), i32::from(y))
+            .is_some_and(|t| t.passable);
+        if passable && map.deposit(x, y).is_none() {
+            let kind = if placed < extra_ore {
+                DepositKind::Ore
+            } else {
+                DepositKind::Alloy
+            };
+            let remaining = if matches!(kind, DepositKind::Ore) {
+                500
+            } else {
+                300
+            };
+            map.set_deposit(x, y, Deposit { kind, remaining });
+            placed += 1;
+        }
+    }
+
     map
 }
 
@@ -114,6 +153,29 @@ mod tests {
             blocked_cells(2),
             "different seeds produced the same map"
         );
+    }
+
+    #[test]
+    fn procgen_places_ore_and_a_near_base_deposit() {
+        use crate::game::map::DepositKind;
+        for seed in 0..30_u64 {
+            let m = generate(seed);
+            let mut ore = 0;
+            let mut alloy = 0;
+            let mut near_base = false;
+            for (x, _y, d) in m.deposits() {
+                match d.kind {
+                    DepositKind::Ore => ore += 1,
+                    DepositKind::Alloy => alloy += 1,
+                }
+                if x < 12 {
+                    near_base = true;
+                }
+            }
+            assert!(ore >= 3, "seed {seed}: too few ore deposits ({ore})");
+            assert!(alloy >= 1, "seed {seed}: no alloy deposit");
+            assert!(near_base, "seed {seed}: no deposit near the player's base");
+        }
     }
 
     #[test]
