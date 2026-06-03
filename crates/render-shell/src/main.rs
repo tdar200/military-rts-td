@@ -446,7 +446,11 @@ async fn main() {
         }
         while accumulator >= TICK_DT {
             let mut commands = std::mem::take(&mut pending);
-            commands.extend(sim.ai_commands(ENEMY));
+            // In survival, keep the build-up peaceful: the alien beachhead AI only acts
+            // once the first wave has spawned. Skirmish AI is unaffected.
+            if !survival_run || sim.waves_survived() > 0 {
+                commands.extend(sim.ai_commands(ENEMY));
+            }
             sim.step(&commands);
             view.on_tick(&sim);
             accumulator -= TICK_DT;
