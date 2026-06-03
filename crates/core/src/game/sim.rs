@@ -1051,6 +1051,17 @@ impl Sim {
                 self.order_unit_to(spawned.0 as usize, t);
             }
         }
+        // The swarm ADAPTS: each escalating wave also hardens the attacker itself —
+        // a free doctrine level on a fixed rotation. This is the counterweight to
+        // the defender's endless Ascendancy stacking: a fully-retrained,
+        // doctrine-stacked army out-compounds any linear growth in wave COUNT, so
+        // the waves must climb the same quality curve to ever overwhelm it.
+        if cfg.escalate {
+            let p = usize::from(cfg.attacker.0);
+            let track = [DOC_WEAPONS, DOC_ARMOR, DOC_VITALITY][(w % 3) as usize];
+            let lv = self.players[p].doctrine_levels[track];
+            self.players[p].doctrine_levels[track] = (lv + 1).min(DOCTRINE_LEVEL_CAP);
+        }
         self.wave_count += 1;
     }
 
@@ -2382,8 +2393,8 @@ mod tests {
         // Refinery consumes 20 but there is no power plant -> deficit -> mine_rate halved.
         s.add_building(P0, BuildingKind::Refinery, 5, 1);
         s.step(&[]);
-        // mine_rate 5, throttled to 5/2 = 2 (integer division) when unpowered.
-        assert_eq!(s.minerals(P0), f(2));
+        // mine_rate 2, throttled to 2/2 = 1 when unpowered.
+        assert_eq!(s.minerals(P0), f(1));
     }
 
     #[test]
@@ -2428,12 +2439,12 @@ mod tests {
             kind: UnitKind::Infantry,
         }]);
         assert_eq!(s.minerals(P0), f(950)); // charged immediately
-                                            // Infantry build time is 30 ticks; not yet spawned at 29.
-        for _ in 0..28 {
+                                            // Infantry build time is 90 ticks; not yet spawned at 89.
+        for _ in 0..88 {
             s.step(&[]);
         }
         assert_eq!(s.unit_count(P0), units_before);
-        s.step(&[]); // 30th tick
+        s.step(&[]); // 90th tick
         assert_eq!(s.unit_count(P0), units_before + 1);
     }
 
@@ -2613,7 +2624,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 15_553_761_824_662_575_945);
+        assert_eq!(s.state_hash(), 16_203_029_281_872_491_098);
     }
 
     #[test]
@@ -2622,8 +2633,8 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
-        // Warm up the research pool: Assault Doctrine costs 600, lab produces 4/tick => 150 ticks.
-        for _ in 0..160 {
+        // Warm up the research pool: Assault Doctrine costs 600, lab produces 2/tick => 300 ticks.
+        for _ in 0..320 {
             s.step(&[]);
         }
         // Research Assault Doctrine (17) to completion.
@@ -2631,7 +2642,7 @@ mod tests {
             owner: P0,
             tech_id: 17,
         }]);
-        for _ in 0..700 {
+        for _ in 0..1900 {
             s.step(&[]);
         }
         assert!(
@@ -2720,9 +2731,9 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
-        // Warm the research pool (lab makes 4/tick while powered): two Weapons
+        // Warm the research pool (lab makes 2/tick while powered): two Weapons
         // levels cost 500 + 680 research, so warm well past that.
-        for _ in 0..400 {
+        for _ in 0..800 {
             s.step(&[]);
         }
         // No deposits + CC credit_income 0 ⇒ minerals never grow, so the minerals
@@ -2988,7 +2999,7 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut saw_capital = false;
-        for _ in 0..9000 {
+        for _ in 0..30_000 {
             let mut cmds = s.ai_commands(P0);
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
@@ -3318,6 +3329,40 @@ mod tests {
     }
 
     #[test]
+    fn escalating_waves_harden_the_attacker() {
+        // Each escalating wave grants the attacker a doctrine level (Weapons →
+        // Armor → Vitality rotation), so late waves grow in QUALITY, not just count.
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.set_waves(WaveConfig {
+            first_delay: 10,
+            interval: 10,
+            base_size: 1,
+            growth: 0,
+            spawn: Vec2::new(Fixed::from_int(15), Fixed::from_int(15)),
+            unit: UnitKind::Infantry,
+            attacker: P1,
+            defender: P0,
+            escalate: true,
+        });
+        for _ in 0..45 {
+            s.step(&[]);
+        }
+        let total: u32 = (0..4u8).map(|t| u32::from(s.doctrine_level(P1, t))).sum();
+        assert!(
+            total >= 3,
+            "after several escalating waves the attacker should hold doctrine levels (got {total})"
+        );
+        assert_eq!(
+            (0..4u8)
+                .map(|t| u32::from(s.doctrine_level(P0, t)))
+                .sum::<u32>(),
+            0,
+            "the defender gains nothing for free"
+        );
+    }
+
+    #[test]
     fn survival_is_endurance_not_a_rush_win() {
         // In normal mode, being the only side with a Command Center is a win.
         let mut normal = Sim::new(Map::new(10, 10), 1, f(0));
@@ -3513,8 +3558,8 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P0, BuildingKind::PowerPlant, 6, 20); // power so research advances
         s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
-        // Warm up the research pool: tech 0 costs 200, lab produces 4/tick => 50 ticks needed.
-        for _ in 0..60 {
+        // Warm up the research pool: tech 0 costs 200, lab produces 2/tick => 100 ticks needed.
+        for _ in 0..110 {
             s.step(&[]);
         }
         s.step(&[Command::Research {
@@ -3595,8 +3640,8 @@ mod tests {
         s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
         s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
         assert_eq!(s.player_era(P0), 0);
-        // Warm up the research pool: tech 10 costs 500, lab produces 4/tick => 125 ticks needed.
-        for _ in 0..130 {
+        // Warm up the research pool: tech 10 costs 500, lab produces 2/tick => 250 ticks needed.
+        for _ in 0..260 {
             s.step(&[]);
         }
         s.step(&[Command::Research {
@@ -3639,7 +3684,7 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut max_era = 0u8;
-        for _ in 0..6000 {
+        for _ in 0..18_000 {
             let mut cmds = s.ai_commands(P0);
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
@@ -3654,8 +3699,8 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
-        // Warm up the research pool: Shield I costs 300, lab produces 4/tick => 75 ticks needed.
-        for _ in 0..80 {
+        // Warm up the research pool: Shield I costs 300, lab produces 2/tick => 150 ticks needed.
+        for _ in 0..160 {
             s.step(&[]);
         }
         // Research Shield I (id 13) to completion.
@@ -3763,8 +3808,8 @@ mod tests {
             .map(|i| u32::try_from(i).unwrap())
             .unwrap();
         assert!(!s.has_antigrav(P0));
-        // Warm up the research pool: Anti-Grav Drives costs 500, lab produces 4/tick => 125 ticks.
-        for _ in 0..130 {
+        // Warm up the research pool: Anti-Grav Drives costs 500, lab produces 2/tick => 250 ticks.
+        for _ in 0..260 {
             s.step(&[]);
         }
         s.step(&[Command::Research {
@@ -3802,7 +3847,7 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut antigrav_seen = false;
-        for _ in 0..20_000 {
+        for _ in 0..60_000 {
             let mut cmds = s.ai_commands(P0);
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);

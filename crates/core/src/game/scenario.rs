@@ -31,11 +31,11 @@ pub fn lane_defense(seed: u64) -> Sim {
     // wall band rows 9..=11 and the building tiles).
     let ore = Deposit {
         kind: DepositKind::Ore,
-        remaining: 11_000,
+        remaining: 24_000,
     };
     let alloy = Deposit {
         kind: DepositKind::Alloy,
-        remaining: 6_000,
+        remaining: 15_000,
     };
     map.set_deposit(8, 5, ore);
     map.set_deposit(8, 15, ore);
@@ -62,8 +62,8 @@ pub fn lane_defense(seed: u64) -> Sim {
 
     // Escalating enemy waves marching on the player's base.
     sim.set_waves(WaveConfig {
-        first_delay: 300,
-        interval: 600,
+        first_delay: 3600,
+        interval: 1800,
         base_size: 4,
         growth: 2,
         spawn: Vec2::new(Fixed::from_int(43), Fixed::from_int(10)),
@@ -86,11 +86,11 @@ pub fn open_clash(seed: u64) -> Sim {
     // Ore near each base corner; alloy in the contested centre.
     let ore = Deposit {
         kind: DepositKind::Ore,
-        remaining: 11_000,
+        remaining: 24_000,
     };
     let alloy = Deposit {
         kind: DepositKind::Alloy,
-        remaining: 6_000,
+        remaining: 15_000,
     };
     map.set_deposit(8, 17, ore);
     map.set_deposit(8, 21, ore);
@@ -134,11 +134,11 @@ pub fn crossroads(seed: u64) -> Sim {
     // Ore near each base corner; alloy on the open flanks beside the fortress.
     let ore = Deposit {
         kind: DepositKind::Ore,
-        remaining: 11_000,
+        remaining: 24_000,
     };
     let alloy = Deposit {
         kind: DepositKind::Alloy,
-        remaining: 6_000,
+        remaining: 15_000,
     };
     map.set_deposit(7, 3, ore);
     map.set_deposit(3, 7, ore);
@@ -165,8 +165,8 @@ pub fn crossroads(seed: u64) -> Sim {
     // A siege cadence distinct from Lane Defense: fewer, larger, slower-building
     // waves that batter the fortress flanks rather than a steady trickle.
     sim.set_waves(WaveConfig {
-        first_delay: 450,
-        interval: 800,
+        first_delay: 4500,
+        interval: 2400,
         base_size: 6,
         growth: 3,
         spawn: Vec2::new(Fixed::from_int(25), Fixed::from_int(25)),
@@ -198,7 +198,7 @@ pub fn survival(seed: u64) -> Sim {
         mid + 2,
         Deposit {
             kind: DepositKind::Ore,
-            remaining: 14_000,
+            remaining: 30_000,
         },
     );
     let mut sim = Sim::new(map, seed, Fixed::from_int(1800));
@@ -219,15 +219,17 @@ pub fn survival(seed: u64) -> Sim {
 
     // Escalating waves from the beachhead toward the player.
     sim.set_waves(WaveConfig {
-        first_delay: 5400,
-        interval: 540,
-        // Steep ramp: supply is hard-capped (~68 for a maxed base), so the waves
-        // must keep growing to overrun you. `size = base_size + growth * wave`, so
-        // wave ~25 fields ~78 attackers (plus a Capital boss every 5th wave) —
-        // enough to overwhelm even a maxed, veteran army around the 12-minute mark,
-        // while a typical mid-game army is pressured far earlier. The composition
-        // also hardens over time (see `escalating_unit`).
-        base_size: 3,
+        // Civ pace: six peaceful minutes to found the colony, then one wave per
+        // minute. Each wave is a readable event you prepare for, not a stream.
+        first_delay: 10_800,
+        interval: 1800,
+        // Supply is hard-capped (~68 for a maxed base), so `size = base_size +
+        // growth * wave` keeps climbing past it — wave 15 (the milestone, ~21 min
+        // in) fields 49 attackers plus Capital bosses every 5th wave, and the
+        // composition hardens over time (see `escalating_unit`). At the one-per-
+        // minute cadence a defense fully retrains between waves, so the ramp must
+        // be steep enough to eventually out-mass a constantly-refreshed army.
+        base_size: 4,
         growth: 3,
         spawn: Vec2::new(
             Fixed::from_int(i32::from(w) - 5),
@@ -494,10 +496,10 @@ mod tests {
     fn a_wave_eventually_spawns() {
         let mut s = lane_defense(1);
         assert_eq!(s.unit_count(PlayerId(1)), 0);
-        for _ in 0..320 {
+        for _ in 0..3700 {
             s.step(&[]);
         }
-        // first_delay is 300, so a wave has spawned for the enemy by now
+        // first_delay is 3600, so a wave has spawned for the enemy by now
         assert!(s.unit_count(PlayerId(1)) >= 4);
     }
 
@@ -602,10 +604,10 @@ mod tests {
     }
 
     #[test]
-    fn survival_has_a_three_minute_grace_period() {
+    fn survival_has_a_peaceful_founding_grace_period() {
         let mut s = survival(7);
-        // 30 Hz -> 3 minutes = 5400 ticks. No enemy units before then.
-        for _ in 0..5000 {
+        // 30 Hz -> 6 minutes = 10_800 ticks. No enemy units before then.
+        for _ in 0..10_000 {
             s.step(&[]);
         }
         assert_eq!(
@@ -613,7 +615,7 @@ mod tests {
             0,
             "no waves should spawn during the grace period"
         );
-        for _ in 0..1000 {
+        for _ in 0..1500 {
             s.step(&[]);
         }
         assert!(
@@ -630,7 +632,7 @@ mod tests {
         let mut s = survival(3);
         let mut last_waves = 0;
         let mut winner = None;
-        for t in 0..30_000u64 {
+        for t in 0..80_000u64 {
             let mut cmds = s.ai_commands(PlayerId(0)); // player-AI builds + fights
                                                        // Mirror the shell exactly: the beachhead AI acts once the first wave
                                                        // has spawned (render-shell main.rs gates it the same way), so enemy

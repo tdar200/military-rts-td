@@ -252,9 +252,9 @@ impl UnitKind {
                     Fixed::from_int(3),
                     8,
                 ),
-                speed: Fixed::from_ratio(15, 100),
+                speed: Fixed::from_ratio(15, 200),
                 cost: Fixed::from_int(50),
-                build_time: 30,
+                build_time: 90,
                 is_air: false,
             },
             Self::Tank => UnitStats {
@@ -266,9 +266,9 @@ impl UnitKind {
                     Fixed::from_int(4),
                     20,
                 ),
-                speed: Fixed::from_ratio(10, 100),
+                speed: Fixed::from_ratio(10, 200),
                 cost: Fixed::from_int(200),
-                build_time: 90,
+                build_time: 270,
                 is_air: false,
             },
             Self::AntiArmor => UnitStats {
@@ -280,9 +280,9 @@ impl UnitKind {
                     Fixed::from_int(4),
                     16,
                 ),
-                speed: Fixed::from_ratio(12, 100),
+                speed: Fixed::from_ratio(12, 200),
                 cost: Fixed::from_int(110),
-                build_time: 50,
+                build_time: 150,
                 is_air: false,
             },
             Self::Helicopter => UnitStats {
@@ -294,9 +294,9 @@ impl UnitKind {
                     Fixed::from_int(4),
                     9,
                 ),
-                speed: Fixed::from_ratio(20, 100),
+                speed: Fixed::from_ratio(20, 200),
                 cost: Fixed::from_int(160),
-                build_time: 70,
+                build_time: 210,
                 is_air: true,
             },
             Self::Capital => UnitStats {
@@ -308,9 +308,9 @@ impl UnitKind {
                     Fixed::from_int(6),
                     18,
                 ),
-                speed: Fixed::from_ratio(8, 100),
+                speed: Fixed::from_ratio(8, 200),
                 cost: Fixed::from_int(500),
-                build_time: 200,
+                build_time: 600,
                 is_air: false,
             },
         }
@@ -346,7 +346,7 @@ impl BuildingKind {
             Self::Refinery => BuildingStats {
                 power_consumed: 20,
                 credit_income: Fixed::ZERO,
-                mine_rate: 5,
+                mine_rate: 2,
                 ..base(300, 150)
             },
             Self::Barracks => BuildingStats {
@@ -377,13 +377,13 @@ impl BuildingKind {
             Self::Wall => base(200, 20),
             Self::ResearchLab => BuildingStats {
                 power_consumed: 25,
-                research_income: Fixed::from_int(4),
+                research_income: Fixed::from_int(2),
                 ..base(300, 250)
             },
             Self::AntimatterPlant => BuildingStats {
                 power_consumed: 20,
                 antimatter_income: Fixed::ZERO,
-                mine_rate: 5,
+                mine_rate: 2,
                 ..base(300, 200)
             },
         }
