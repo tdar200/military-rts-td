@@ -1480,18 +1480,45 @@ impl Sim {
             BuildingKind::ResearchLab,
         ] {
             if !self.has_building(player, kind) {
-                if minerals >= self.building_cost(kind) {
-                    if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
-                        cmds.push(Command::Build {
-                            owner: player,
-                            kind,
-                            x,
-                            y,
-                        });
+                if kind == BuildingKind::Refinery {
+                    // Refineries only earn income when built ON a deposit tile.
+                    // Scan deposits in row-major order; pick the first whose tile
+                    // is still buildable. If no buildable deposit exists, skip the
+                    // Refinery and continue to the next building in the order — a
+                    // Refinery built off-deposit is useless, but it should not
+                    // block Barracks or ResearchLab from being built.
+                    let deposit_tile = self.map.deposits().find(|&(x, y, _)| {
+                        self.map
+                            .tile(i32::from(x), i32::from(y))
+                            .is_some_and(|t| t.buildable)
+                    });
+                    if let Some((dx, dy, _)) = deposit_tile {
+                        if minerals >= self.building_cost(kind) {
+                            cmds.push(Command::Build {
+                                owner: player,
+                                kind,
+                                x: dx,
+                                y: dy,
+                            });
+                        }
+                        building_this_tick = true;
+                        break;
                     }
+                    // No buildable deposit: skip Refinery, continue the build order.
+                } else {
+                    if minerals >= self.building_cost(kind) {
+                        if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
+                            cmds.push(Command::Build {
+                                owner: player,
+                                kind,
+                                x,
+                                y,
+                            });
+                        }
+                    }
+                    building_this_tick = true;
+                    break;
                 }
-                building_this_tick = true;
-                break;
             }
         }
 
@@ -2011,7 +2038,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 697_568_124_865_822_640);
+        assert_eq!(s.state_hash(), 17_905_425_896_978_043_177);
     }
 
     #[test]
@@ -2638,6 +2665,27 @@ mod tests {
             s.research_state(P0).1.is_some(),
             "tech 0 should start once research is funded"
         );
+    }
+
+    #[test]
+    fn ai_claims_and_mines_a_nearby_deposit() {
+        let mut map = Map::new(24, 12);
+        map.set_deposit(
+            7,
+            6,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Ore,
+                remaining: 800,
+            },
+        );
+        let mut s = Sim::new(map, 1, f(100_000));
+        s.add_building(P1, BuildingKind::CommandCenter, 4, 6);
+        for _ in 0..500 {
+            let cmds = s.ai_commands(P1);
+            s.step(&cmds);
+        }
+        let mined = s.map().deposit(7, 6).is_none_or(|d| d.remaining < 800);
+        assert!(mined, "AI never claimed and mined the deposit");
     }
 
     #[test]
