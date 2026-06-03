@@ -65,9 +65,13 @@ struct Button {
 }
 
 fn layout() -> [Button; 12] {
-    let w = 92.0;
-    let h = CMD_BAR_H - 16.0;
+    // Responsive width: fit all 12 buttons + the unit-group gap inside the
+    // window (a fixed 92 px overflowed a 1024 px window, pushing the Gunship
+    // and Capital buttons off-screen).
     let pad = 6.0;
+    let avail = screen_width() - 24.0 - GROUP_GAP - 11.0 * pad;
+    let w = (avail / 12.0).clamp(64.0, 104.0);
+    let h = CMD_BAR_H - 16.0;
     let y = screen_height() - CMD_BAR_H + 8.0;
     let mk = |i: usize, label, key, action| {
         // The unit group starts at index 7 (after 7 build buttons 0–6).
@@ -83,13 +87,8 @@ fn layout() -> [Button; 12] {
         mk(0, "Reactor", 'P', Action::Build(BuildingKind::PowerPlant)),
         mk(1, "Extractor", 'R', Action::Build(BuildingKind::Refinery)),
         mk(2, "Hangar", 'B', Action::Build(BuildingKind::Barracks)),
-        mk(
-            3,
-            "Laser Turret",
-            'G',
-            Action::Build(BuildingKind::GunTurret),
-        ),
-        mk(4, "Flak Turret", 'A', Action::Build(BuildingKind::AaTurret)),
+        mk(3, "Laser", 'G', Action::Build(BuildingKind::GunTurret)),
+        mk(4, "Flak", 'A', Action::Build(BuildingKind::AaTurret)),
         mk(5, "Lab", 'L', Action::Build(BuildingKind::ResearchLab)),
         mk(
             6,

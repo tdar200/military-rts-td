@@ -9,6 +9,14 @@
 use crate::fixed::Fixed;
 use crate::game::stats::UnitKind;
 
+/// Every ability, for exhaustive table checks (tests iterate this so a future
+/// variant cannot ship without sane tuning numbers).
+pub const ALL_ABILITIES: [AbilityKind; 3] = [
+    AbilityKind::Barrage,
+    AbilityKind::EmpBurst,
+    AbilityKind::NaniteField,
+];
+
 /// Which ability a unit casts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AbilityKind {
@@ -54,8 +62,8 @@ pub const fn def(kind: AbilityKind) -> AbilityDef {
     match kind {
         // Half a shell's damage, but applied to EVERYTHING in the blast — pays off
         // against clumps (a survival wave) where the single-target gun does not.
-        // Tuned tactical, not nuclear: an early cut (30 dmg / radius 2 / 10 s) let
-        // five wave-tanks delete a packed 68-unit army inside one wave interval.
+        // Tuned tactical, not nuclear: an early cut (30 dmg / radius 2) let five
+        // wave-tanks delete a packed 68-unit army inside one wave interval.
         AbilityKind::Barrage => AbilityDef {
             cooldown: 360, // 12 s
             range: Fixed::from_int(6),
@@ -106,11 +114,7 @@ mod tests {
 
     #[test]
     fn defs_are_sane() {
-        for kind in [
-            AbilityKind::Barrage,
-            AbilityKind::EmpBurst,
-            AbilityKind::NaniteField,
-        ] {
+        for kind in super::ALL_ABILITIES {
             let d = def(kind);
             assert!(d.cooldown > 0, "{kind:?}: cooldown must rate-limit");
             assert!(d.range.to_bits() > 0, "{kind:?}: needs a cast range");

@@ -508,6 +508,14 @@ async fn main() {
             view.on_tick(&sim);
             accumulator -= TICK_DT;
         }
+        // Drop a selection whose entity died: slots are recycled, so a stale id
+        // could otherwise issue Move/UseAbility through a different unit that
+        // reused it.
+        if let Some(id) = selected {
+            if !sim.views().iter().any(|v| v.id == id && v.owner == HUMAN) {
+                selected = None;
+            }
+        }
         view.frame(dt);
         // Turn this frame's FX events into particles, then advance the pool.
         let ofx = board_origin_x(&sim, cell);

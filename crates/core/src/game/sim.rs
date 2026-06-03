@@ -73,7 +73,15 @@ struct Entity {
     ability_cd: u32,
     /// Remaining EMP-stun ticks: while > 0 the entity neither moves nor fires.
     stun_ticks: u32,
+    /// Post-stun hardening: while > 0 a fresh EMP cannot re-stun this entity, so
+    /// massed casters can never chain-stun a clump into a permanent lock (max
+    /// stun uptime = duration / (duration + `STUN_IMMUNITY`)).
+    stun_immunity: u32,
 }
+
+/// Ticks of EMP immunity granted when a stun wears off — twice the stun length,
+/// capping worst-case stun uptime at one third even against massed casters.
+const STUN_IMMUNITY: u32 = 90;
 
 /// Veterancy rank for a given kill count (0 → 3, capped).
 const fn rank_for_kills(kills: u32) -> u8 {
@@ -869,6 +877,7 @@ impl Sim {
             h.write_u64(u64::from(e.rank));
             h.write_u64(u64::from(e.ability_cd));
             h.write_u64(u64::from(e.stun_ticks));
+            h.write_u64(u64::from(e.stun_immunity));
             match e.move_target {
                 Some(t) => {
                     h.write_u64(1);
@@ -938,6 +947,7 @@ impl Sim {
             rank: 0,
             ability_cd: 0,
             stun_ticks: 0,
+            stun_immunity: 0,
         })
     }
 
@@ -967,6 +977,7 @@ impl Sim {
             rank: 0,
             ability_cd: 0,
             stun_ticks: 0,
+            stun_immunity: 0,
         })
     }
 
@@ -996,7 +1007,15 @@ impl Sim {
                 continue;
             }
             e.ability_cd = e.ability_cd.saturating_sub(1);
-            e.stun_ticks = e.stun_ticks.saturating_sub(1);
+            if e.stun_ticks > 0 {
+                e.stun_ticks -= 1;
+                if e.stun_ticks == 0 {
+                    // The moment a stun wears off, harden against the next one.
+                    e.stun_immunity = STUN_IMMUNITY;
+                }
+            } else {
+                e.stun_immunity = e.stun_immunity.saturating_sub(1);
+            }
         }
     }
 
@@ -1275,16 +1294,20 @@ impl Sim {
                 caster.rank = rank_for_kills(caster.kills);
             }
             AbilityKind::EmpBurst => {
-                // Stun enemy UNITS in the blast (structures shrug it off). A fresh
-                // stun never shortens one already in effect.
+                // Stun enemy UNITS in the blast (structures shrug it off). Already
+                // stunned or freshly-released (immune) units are unaffected, so
+                // massed EMPs cannot chain a clump into a permanent lock.
                 for e in &mut self.entities {
                     if !e.alive || e.owner == owner || !matches!(e.kind, Kind::Unit(_)) {
+                        continue;
+                    }
+                    if e.stun_ticks > 0 || e.stun_immunity > 0 {
                         continue;
                     }
                     if (e.pos - target).length_squared() > radius_sq {
                         continue;
                     }
-                    e.stun_ticks = e.stun_ticks.max(d.duration);
+                    e.stun_ticks = d.duration;
                 }
             }
             AbilityKind::NaniteField => {
@@ -1825,6 +1848,11 @@ impl Sim {
         // order, fixed thresholds, no RNG; at most one cast per tick keeps the
         // command volume flat. Costs nothing, so it never fights the build budget.
         'ability: for (i, e) in self.entities.iter().enumerate() {
+            // Re-scan only every 5th tick: the clump scan is O(n²) against packed
+            // fields, and a ≤166 ms casting-reaction delay is imperceptible.
+            if !self.tick.is_multiple_of(5) {
+                break 'ability;
+            }
             if !e.alive || e.owner != player || e.ability_cd > 0 || e.stun_ticks > 0 {
                 continue;
             }
@@ -1836,11 +1864,18 @@ impl Sim {
             let radius_sq = d.radius * d.radius;
             let range_sq = d.range * d.range;
             let unit_id = EntityId(u32::try_from(i).unwrap_or(u32::MAX));
+            // EMP only affects stunnable units (not buildings / already-stunned /
+            // immune targets), so its clump count and epicenter must match what
+            // the resolve would actually hit — otherwise casts are wasted.
+            let stunnable = |o: &Entity| {
+                matches!(o.kind, Kind::Unit(_)) && o.stun_ticks == 0 && o.stun_immunity == 0
+            };
+            let emp = matches!(kind, crate::game::ability::AbilityKind::EmpBurst);
             match kind {
                 crate::game::ability::AbilityKind::Barrage
                 | crate::game::ability::AbilityKind::EmpBurst => {
                     for t in &self.entities {
-                        if !t.alive || t.owner == player {
+                        if !t.alive || t.owner == player || (emp && !stunnable(t)) {
                             continue;
                         }
                         if (t.pos - e.pos).length_squared() > range_sq {
@@ -1852,6 +1887,7 @@ impl Sim {
                             .filter(|o| {
                                 o.alive
                                     && o.owner != player
+                                    && (!emp || stunnable(o))
                                     && (o.pos - t.pos).length_squared() <= radius_sq
                             })
                             .count();
@@ -2577,7 +2613,7 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 2_298_403_954_213_102_825);
+        assert_eq!(s.state_hash(), 15_553_761_824_662_575_945);
     }
 
     #[test]
@@ -3152,6 +3188,132 @@ mod tests {
             a.state_hash(),
             b.state_hash(),
             "identical ability usage must stay bit-identical"
+        );
+    }
+
+    #[test]
+    fn emp_immunity_prevents_chain_stun() {
+        let mut s = Sim::new(Map::new(30, 20), 1, f(0));
+        let heli_a = s.add_unit(P0, UnitKind::Helicopter, v(3, 3));
+        let heli_b = s.add_unit(P0, UnitKind::Helicopter, v(4, 4));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(8, 3));
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: heli_a,
+            target: v(8, 3),
+        }]);
+        assert!(s.entities[foe.0 as usize].stun_ticks > 0);
+        // Let the stun wear off — the release grants a hardening window.
+        for _ in 0..50 {
+            s.step(&[]);
+        }
+        assert_eq!(s.entities[foe.0 as usize].stun_ticks, 0);
+        assert!(
+            s.entities[foe.0 as usize].stun_immunity > 0,
+            "release must grant immunity"
+        );
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: heli_b,
+            target: v(8, 3),
+        }]);
+        assert_eq!(
+            s.entities[foe.0 as usize].stun_ticks, 0,
+            "an immune unit cannot be chain-stunned"
+        );
+        // Once the immunity lapses, EMP bites again.
+        s.entities[heli_b.0 as usize].ability_cd = 0;
+        for _ in 0..100 {
+            s.step(&[]);
+        }
+        assert_eq!(s.entities[foe.0 as usize].stun_immunity, 0);
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: heli_b,
+            target: v(8, 3),
+        }]);
+        assert!(
+            s.entities[foe.0 as usize].stun_ticks > 0,
+            "after the immunity window the unit is stunnable again"
+        );
+    }
+
+    #[test]
+    fn same_tick_double_cast_resolves_once() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        let tank = s.add_unit(P0, UnitKind::Tank, v(2, 3));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(7, 3));
+        let cmd = Command::UseAbility {
+            owner: P0,
+            unit: tank,
+            target: v(7, 3),
+        };
+        s.step(&[cmd.clone(), cmd]);
+        assert_eq!(
+            s.entities[foe.0 as usize].hp.to_bits(),
+            f(34).to_bits(),
+            "the first cast starts the cooldown; the same-tick duplicate must no-op"
+        );
+    }
+
+    #[test]
+    fn emp_freezes_a_moving_unit_then_it_resumes() {
+        let mut s = Sim::new(Map::new(40, 20), 1, f(0));
+        let heli = s.add_unit(P0, UnitKind::Helicopter, v(12, 4));
+        let foe = s.add_unit(P1, UnitKind::Tank, v(8, 3));
+        s.step(&[Command::Move {
+            owner: P1,
+            unit: foe,
+            target: v(20, 3),
+        }]);
+        for _ in 0..11 {
+            s.step(&[]);
+        }
+        let mid = s.entities[foe.0 as usize].pos;
+        assert_ne!(
+            mid.x.to_bits(),
+            v(8, 3).x.to_bits(),
+            "the tank must be moving before the EMP"
+        );
+        // Freeze it mid-path.
+        s.step(&[Command::UseAbility {
+            owner: P0,
+            unit: heli,
+            target: mid,
+        }]);
+        let frozen = s.entities[foe.0 as usize].pos.x.to_bits();
+        for _ in 0..20 {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.entities[foe.0 as usize].pos.x.to_bits(),
+            frozen,
+            "a stunned unit holds position mid-path"
+        );
+        for _ in 0..60 {
+            s.step(&[]);
+        }
+        assert_ne!(
+            s.entities[foe.0 as usize].pos.x.to_bits(),
+            frozen,
+            "the held path resumes once the stun expires"
+        );
+    }
+
+    #[test]
+    fn ai_heals_a_wounded_clump_with_nanite_field() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(0));
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 8);
+        let cap = s.add_unit(P0, UnitKind::Capital, v(5, 5));
+        let a = s.add_unit(P0, UnitKind::Infantry, v(6, 5));
+        let b = s.add_unit(P0, UnitKind::Infantry, v(5, 6));
+        s.entities[a.0 as usize].hp = f(10);
+        s.entities[b.0 as usize].hp = f(10);
+        let cmds = s.ai_commands(P0);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Command::UseAbility { unit, .. } if *unit == cap)),
+            "the AI Capital should heal a wounded clump"
         );
     }
 
