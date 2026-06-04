@@ -10,8 +10,8 @@
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
 use crate::game::civ::{
-    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, SectorDoctrine, SimDetail,
-    Species, AUTONOMY_FULL,
+    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, KardashevTier, SectorDoctrine,
+    SimDetail, Species, AUTONOMY_FULL,
 };
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
@@ -140,6 +140,10 @@ const FOUND_COLONY_COST: Fixed = Fixed::from_int(800);
 const MAX_COLONIES_PER_OWNER: usize = 8;
 /// Minimum tile spacing between a new colony and every existing Command Center.
 const MIN_COLONY_SPACING: u16 = 6;
+/// Extra attackers per wave for each colony the defender holds — the coupling
+/// that makes a bigger empire face proportionally harder sieges (scale forces
+/// the strategic layer). Zero colonies ⇒ legacy waves are unchanged.
+const EMPIRE_WAVE_PRESSURE: u32 = 2;
 
 // === Ascendancy Doctrines ===
 // Endless, escalating-cost upgrade tracks that turn a late-game resource surplus
@@ -668,6 +672,12 @@ impl Sim {
     #[must_use]
     pub fn colony_count_for(&self, owner: PlayerId) -> usize {
         self.count_owner_colonies(owner)
+    }
+
+    /// `owner`'s current Kardashev tier, derived from its empire size.
+    #[must_use]
+    pub fn kardashev_tier(&self, owner: PlayerId) -> KardashevTier {
+        KardashevTier::from_colony_count(self.count_owner_colonies(owner))
     }
 
     /// Razes a colony, freeing its slot for reuse. Idempotent: freeing an already
@@ -1377,7 +1387,11 @@ impl Sim {
             return;
         }
         let w = self.wave_count;
-        let size = cfg.base_size + cfg.growth * w;
+        // Wave pressure scales with the defender's empire size (Kardashev climb):
+        // bigger empires draw proportionally larger sieges. Legacy scenarios have
+        // no colonies, so this term is 0 and waves are unchanged.
+        let empire = u32::try_from(self.count_owner_colonies(cfg.defender)).unwrap_or(0);
+        let size = cfg.base_size + cfg.growth * w + EMPIRE_WAVE_PRESSURE * empire;
         let target = self.command_center_pos(cfg.defender);
         for i in 0..size {
             let offset = Vec2::new(Fixed::ZERO, Fixed::from_ratio(i64::from(i), 3));
@@ -3394,6 +3408,58 @@ mod tests {
             level: 9,
         }]);
         assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
+    }
+
+    // ---- M9: Kardashev tier + empire-scaled wave pressure ----
+
+    #[test]
+    fn kardashev_tier_climbs_with_empire_size() {
+        use crate::game::civ::KardashevTier;
+        let mut s = Sim::new(Map::new(64, 24), 1, f(50_000));
+        // No colonies yet ⇒ Planetary.
+        assert_eq!(s.kardashev_tier(P0), KardashevTier::Planetary);
+        // Found colonies and watch the tier rise.
+        let mut x = 4;
+        for _ in 0..6 {
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, x, 12);
+            s.add_colony(P0, cc, 0);
+            x += 8;
+        }
+        // 6 colonies ⇒ Galactic.
+        assert_eq!(s.kardashev_tier(P0), KardashevTier::Galactic);
+    }
+
+    #[test]
+    fn waves_scale_with_the_defenders_empire() {
+        // A wave's size grows with how many colonies the defender holds.
+        fn first_wave_attackers(colonies: usize) -> usize {
+            let mut s = Sim::new(Map::new(40, 20), 1, f(50_000));
+            s.add_building(P0, BuildingKind::CommandCenter, 3, 10);
+            // Give P0 (the defender) some colonies seated on extra CommandCenters.
+            let mut x = 8;
+            for _ in 0..colonies {
+                let cc = s.add_building(P0, BuildingKind::CommandCenter, x, 10);
+                s.add_colony(P0, cc, 0);
+                x += 4;
+            }
+            s.set_waves(WaveConfig {
+                first_delay: 0,
+                interval: 100,
+                base_size: 3,
+                growth: 0,
+                spawn: v(36, 10),
+                unit: UnitKind::Infantry,
+                attacker: P1,
+                defender: P0,
+                escalate: false,
+            });
+            s.step(&[]); // first wave fires at t=0
+            s.unit_count(P1)
+        }
+        let small = first_wave_attackers(0);
+        let big = first_wave_attackers(3);
+        assert_eq!(small, 3, "0 colonies ⇒ base wave size");
+        assert!(big > small, "a larger empire draws a larger siege");
     }
 
     // ---- M7: sector governance + LOD ----

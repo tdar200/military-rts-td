@@ -163,6 +163,40 @@ pub enum ExportIntent {
     ImportPriority = 2,
 }
 
+/// An empire's Kardashev tier — its civilization-scale progress.
+///
+/// Derived from how far it has expanded. Distinct from a tech's `RealityClass`
+/// honesty label: this is *how powerful the civilization is* — the climb the
+/// whole game is about.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum KardashevTier {
+    /// Planetary (≈ Type I) — a single world.
+    Planetary = 0,
+    /// Interplanetary — a handful of colonies.
+    Interplanetary = 1,
+    /// Interstellar — a spreading empire.
+    Interstellar = 2,
+    /// Galactic (≈ Type III) — a vast dominion.
+    Galactic = 3,
+    /// Transcendent (Type IV+) — masters of the universe.
+    Transcendent = 4,
+}
+
+impl KardashevTier {
+    /// The tier an empire of `colony_count` colonies has reached.
+    #[must_use]
+    pub const fn from_colony_count(colony_count: usize) -> Self {
+        match colony_count {
+            0 | 1 => Self::Planetary,
+            2 | 3 => Self::Interplanetary,
+            4 | 5 => Self::Interstellar,
+            6 | 7 => Self::Galactic,
+            _ => Self::Transcendent,
+        }
+    }
+}
+
 /// The civilization archetype a colony belongs to.
 ///
 /// Every species runs the SAME simulation; the discriminant only *biases*
