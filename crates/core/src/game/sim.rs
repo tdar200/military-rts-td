@@ -9,6 +9,7 @@
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
+use crate::game::civ::{Colony, ColonyId};
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
@@ -422,6 +423,12 @@ pub struct Sim {
     /// on the most recent combat tick. Deterministically derived, so it is not
     /// part of the state hash.
     attacks: Vec<(Vec2, Vec2)>,
+    /// The autonomous-civilization layer: colonies that drive themselves through
+    /// the command channel (see [`crate::game::civ`]). Hashed. Empty in the
+    /// legacy single-base scenarios, so they behave exactly as before.
+    colonies: Vec<Colony>,
+    /// Recycled colony slots (LIFO), mirroring [`Sim::free`] for entities.
+    colony_free: Vec<u32>,
 }
 
 const fn armor_of(balance: &Balance, kind: Kind) -> ArmorType {
@@ -527,6 +534,8 @@ impl Sim {
             survival: false,
             balance: Balance::const_default(),
             attacks: Vec::new(),
+            colonies: Vec::new(),
+            colony_free: Vec::new(),
         }
     }
 
@@ -534,6 +543,67 @@ impl Sim {
     /// [`Command::FoundBase`] resolves; waves and defeat are held until then.
     pub const fn begin_survey(&mut self) {
         self.phase = GamePhase::Survey;
+    }
+
+    /// Registers an autonomous [`Colony`] seated on `seat`, owned by `owner`, at
+    /// the given autonomy level, and returns its stable [`ColonyId`]. Recycles a
+    /// freed slot (LIFO) when one is available, mirroring the entity arena.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "colony index fits u32 for any real game (mirrors alloc_slot)"
+    )]
+    pub fn add_colony(
+        &mut self,
+        owner: PlayerId,
+        seat: EntityId,
+        autonomy_level: u8,
+    ) -> ColonyId {
+        let colony = Colony {
+            alive: true,
+            owner,
+            seat,
+            autonomy_level,
+        };
+        if let Some(index) = self.colony_free.pop() {
+            self.colonies[index as usize] = colony;
+            ColonyId(index)
+        } else {
+            let index = self.colonies.len() as u32;
+            self.colonies.push(colony);
+            ColonyId(index)
+        }
+    }
+
+    /// Razes a colony, freeing its slot for reuse. Idempotent: freeing an already
+    /// dead (or out-of-range) colony is a no-op, and a slot is never pushed twice.
+    pub fn free_colony(&mut self, colony: ColonyId) {
+        let index = colony.0 as usize;
+        if let Some(c) = self.colonies.get_mut(index) {
+            if c.alive {
+                c.alive = false;
+                self.colony_free.push(colony.0);
+            }
+        }
+    }
+
+    /// The autonomous commands of every living colony this tick, gathered in
+    /// ascending colony-id order. A **pure function of hashed state** (no RNG,
+    /// no floats) — the same lockstep-safe contract as [`Sim::ai_commands`], so a
+    /// driver may log/replay the batch (or regenerate it) without drift.
+    ///
+    /// M0: a colony at [`AUTONOMY_FULL`] delegates wholesale to the proven AI
+    /// brain for its owner ("automated at maturity"); a manual colony (autonomy
+    /// `0`) emits nothing — the player drives it via direct commands. The earned
+    /// 1..=8 gradient (per-category gating) arrives in M3.
+    #[must_use]
+    pub fn colony_commands(&self) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        for c in &self.colonies {
+            if c.is_fully_autonomous() {
+                cmds.extend(self.ai_commands(c.owner));
+            }
+        }
+        cmds
     }
 
     /// Restricts `player` to a starting founding kit — only `buildings` and
@@ -1030,6 +1100,19 @@ impl Sim {
                 crate::game::map::DepositKind::Alloy => 1,
             });
             h.write_u64(u64::from(dep.remaining));
+        }
+        // Colony layer — appended last (per the stable-order rule above). Empty in
+        // legacy scenarios, so the only effect there is two zero-length markers.
+        h.write_u64(self.colonies.len() as u64);
+        for c in &self.colonies {
+            h.write_u64(u64::from(c.alive));
+            h.write_u64(u64::from(c.owner.0));
+            h.write_u64(u64::from(c.seat.0));
+            h.write_u64(u64::from(c.autonomy_level));
+        }
+        h.write_u64(self.colony_free.len() as u64);
+        for &slot in &self.colony_free {
+            h.write_u64(u64::from(slot));
         }
         h.finish()
     }
@@ -2860,7 +2943,76 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        assert_eq!(s.state_hash(), 2_767_408_481_316_525_773);
+        // Re-pinned once when the colony layer (M0) was appended to `state_hash`:
+        // the legacy golden run has zero colonies, so the only delta is the two
+        // appended zero-length markers (colonies.len, colony_free.len).
+        assert_eq!(s.state_hash(), 2_655_449_448_163_852_813);
+    }
+
+    // ---- M0: autonomous colony prototype ----
+
+    #[test]
+    fn full_autonomy_colony_drives_its_owner_like_the_ai() {
+        // "Automated at maturity": a colony at full autonomy must emit exactly the
+        // commands the proven pure AI brain would emit for its owner.
+        let mut s = Sim::new(Map::new(40, 40), 12_345, f(1500));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+        // Drive P0 only through its autonomous colony; advance a while so there is
+        // real work (build/train/move) to generate.
+        for _ in 0..40 {
+            let mut cmds = s.colony_commands();
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+        }
+        let via_colony = format!("{:?}", s.colony_commands());
+        let via_ai = format!("{:?}", s.ai_commands(P0));
+        assert_eq!(via_colony, via_ai);
+    }
+
+    #[test]
+    fn manual_colony_emits_no_commands() {
+        // "Manual at birth": an autonomy-0 colony never acts on its own.
+        let mut s = Sim::new(Map::new(40, 40), 7, f(1500));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_colony(P0, cc, 0);
+        // Even after the economy has banked plenty, it stays silent.
+        for _ in 0..50 {
+            assert!(s.colony_commands().is_empty());
+            s.step(&[]);
+        }
+    }
+
+    #[test]
+    fn autonomous_colony_run_is_deterministic() {
+        // The colony layer is a pure function of hashed state: two identical runs
+        // produce a bit-identical hash (the lockstep/replay guarantee).
+        fn run() -> u64 {
+            let mut s = Sim::new(Map::new(40, 40), 99, f(1500));
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+            s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+            s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
+            for _ in 0..200 {
+                let mut cmds = s.colony_commands();
+                cmds.extend(s.ai_commands(P1));
+                s.step(&cmds);
+            }
+            s.state_hash()
+        }
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn colony_slots_are_recycled() {
+        // The colony arena mirrors the entity recycler: a fresh colony reuses a
+        // freed slot (LIFO) rather than growing the vec unbounded.
+        let mut s = Sim::new(Map::new(16, 16), 1, f(500));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 8);
+        let first = s.add_colony(P0, cc, 0);
+        s.free_colony(first);
+        let reused = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        assert_eq!(first, reused);
     }
 
     #[test]

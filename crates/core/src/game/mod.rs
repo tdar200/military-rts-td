@@ -6,6 +6,7 @@
 
 pub mod ability;
 pub mod balance;
+pub mod civ;
 pub mod hex;
 pub mod lockstep;
 pub mod map;
