@@ -35,7 +35,8 @@ use rts_core::game::perk;
 use rts_core::game::scenario;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
-use rts_core::game::tech::TECHS;
+use rts_core::game::tech_grid::{self, RealityClass};
+use rts_core::game::tech_grid_table::GRID as TECH_GRID;
 use rts_core::vec::Vec2 as SimVec2;
 use sprites::Sprites;
 // Explicit theme imports (not a glob) so they take precedence over the
@@ -53,13 +54,24 @@ use theme::{
 const TICK_DT: f32 = 1.0 / 30.0;
 /// Sim-speed gears (the +/- keys step through these).
 const GEARS: [u32; 4] = [1, 2, 4, 8];
-/// Tech-tree era column headers (tier 0..4).
-const TECH_ERAS: [&str; 5] = [
-    "FOUNDATION",
-    "EXPANSION",
-    "INDUSTRIAL",
-    "ENERGY",
-    "ASCENDANCY",
+/// Capability-grid era column headers (10 eras, 1990s → cosmic).
+const GRID_ERAS: [&str; 10] = [
+    "FND", "QNT", "RNW", "FUS", "SPC", "ST2", "GAL", "DRK", "HiD", "CSM",
+];
+/// Capability-grid branch row codes (10 branches).
+const GRID_BRANCHES: [&str; 10] = ["C", "E", "M", "P", "W", "D", "B", "S", "X", "G"];
+/// Full branch names for the research detail readout.
+const GRID_BRANCH_NAMES: [&str; 10] = [
+    "Compute",
+    "Energy",
+    "Materials",
+    "Propulsion",
+    "Weapons",
+    "Defense",
+    "Biotech",
+    "Sensors",
+    "Exotic",
+    "Gravity",
 ];
 const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
@@ -419,26 +431,43 @@ async fn main() {
                 doctrine_open = false;
             }
         }
-        // Tech-tree modal: ↑/↓ move the cursor through the nodes, Enter researches
-        // the highlighted one, or click a node directly. Escape closes. The core
-        // validates prereqs/fork/affordability, so a bad pick is a harmless no-op.
+        // Research grid: ←/→ move the cursor by era, ↑/↓ by branch, [ ] by step;
+        // Enter researches the highlighted node, or click a pip directly. Escape
+        // closes. The core validates prereqs/lab/affordability, so a bad pick is a
+        // harmless no-op. The cursor is a grid id (era*50 + branch*5 + step).
         if research_open {
-            let n = TECHS.len();
-            if is_key_pressed(KeyCode::Down) {
-                research_cursor = (research_cursor + 1) % n;
+            let (mut era, mut branch, mut step) = (
+                research_cursor as u32 / 50,
+                (research_cursor as u32 / 5) % 10,
+                research_cursor as u32 % 5,
+            );
+            if is_key_pressed(KeyCode::Left) {
+                era = (era + 9) % 10;
+            }
+            if is_key_pressed(KeyCode::Right) {
+                era = (era + 1) % 10;
             }
             if is_key_pressed(KeyCode::Up) {
-                research_cursor = (research_cursor + n - 1) % n;
+                branch = (branch + 9) % 10;
             }
-            let mut chosen: Option<u32> = is_key_pressed(KeyCode::Enter)
-                .then_some(u32::try_from(research_cursor).unwrap_or(0));
+            if is_key_pressed(KeyCode::Down) {
+                branch = (branch + 1) % 10;
+            }
+            if is_key_pressed(KeyCode::LeftBracket) {
+                step = (step + 4) % 5;
+            }
+            if is_key_pressed(KeyCode::RightBracket) {
+                step = (step + 1) % 5;
+            }
+            research_cursor = (era * 50 + branch * 5 + step) as usize;
+
+            let mut chosen: Option<u32> =
+                is_key_pressed(KeyCode::Enter).then_some(research_cursor as u32);
             if is_mouse_button_pressed(MouseButton::Left) {
                 let (mx, my) = mouse_position();
-                for t in &TECHS {
-                    if tech_node_rect(t.id).contains(vec2(mx, my)) {
-                        research_cursor = t.id as usize;
-                        chosen = Some(t.id);
-                    }
+                if let Some(id) = grid_pip_at(&grid_layout(), mx, my) {
+                    research_cursor = id as usize;
+                    chosen = Some(id);
                 }
             }
             if let Some(tech_id) = chosen {
@@ -448,7 +477,7 @@ async fn main() {
                         tech_id,
                     });
                 }
-                // Keep the tree open so the player can queue the next pick / browse.
+                // Keep the grid open so the player can queue the next pick / browse.
             }
             if is_key_pressed(KeyCode::Escape) {
                 research_open = false;
@@ -1261,55 +1290,82 @@ enum TechStatus {
     Available,
 }
 
-/// Returns the display status of tech `def` given the player's research state,
-/// active research slot, and whether a research lab exists.
+/// Returns the display status of grid node `node` given the player's research
+/// bitset, active research slot, and whether a research lab exists.
 fn tech_status(
-    def: &rts_core::game::tech::TechDef,
-    mask: u32,
+    node: &rts_core::game::tech_grid::GridNode,
+    set: &rts_core::game::tech_grid::TechBitset,
     active: Option<(u32, u32)>,
     has_lab: bool,
 ) -> TechStatus {
-    if mask & (1 << def.id) != 0 {
+    if set.get(node.id) {
         return TechStatus::Researched;
     }
     if let Some((active_id, ticks_remaining)) = active {
-        if active_id == def.id {
+        if active_id == node.id {
             return TechStatus::InProgress {
                 ticks_remaining,
-                duration: def.duration,
+                duration: node.duration,
             };
         }
     }
-    // Locked if any prereq is unmet, or a fork counterpart was already chosen.
-    if def.prereqs.iter().any(|&p| mask & (1 << p) == 0)
-        || rts_core::game::tech::excludes(def.id).is_some_and(|o| mask & (1 << o) != 0)
-    {
+    // Locked while any prerequisite node is still unresearched.
+    if node.prereqs.iter().any(|&p| !set.get(p)) {
         return TechStatus::Locked;
     }
-    // Research-paid tiers need a lab; the money-paid Foundation tier does not.
-    if def.tier > 0 && !has_lab {
+    // Era 0 is the bootstrap (no lab); every later era needs a Research Lab.
+    if node.era > 0 && !has_lab {
         return TechStatus::NoLab;
     }
     TechStatus::Available
 }
 
-/// Fixed geometry for the tech-tree graph. Both the click hit-test and the
-/// renderer derive node rects from these so they always agree.
-const TECH_NODE_W: f32 = 150.0;
-const TECH_NODE_H: f32 = 44.0;
-const TECH_COL_GAP: f32 = 26.0;
-const TECH_ROW_GAP: f32 = 12.0;
-const TECH_HEAD_H: f32 = 60.0;
+/// Screen geometry of the 10×10 capability grid, shared by the read-only viewer,
+/// the interactive research modal, and the mouse hit-test so they always agree.
+struct GridLayout {
+    ox: f32,
+    oy: f32,
+    cell_w: f32,
+    cell_h: f32,
+    pip_w: f32,
+    gap: f32,
+    label_w: f32,
+}
 
-fn tech_panel_origin() -> (f32, f32, f32, f32) {
-    let pw = (20.0 * 2.0 + 5.0 * TECH_NODE_W + 4.0 * TECH_COL_GAP).min(screen_width() - 12.0);
-    let ph = (TECH_HEAD_H + 6.0 * (TECH_NODE_H + TECH_ROW_GAP) + 28.0).min(screen_height() - 12.0);
-    (
-        (screen_width() - pw) / 2.0,
-        (screen_height() - ph) / 2.0,
-        pw,
-        ph,
-    )
+fn grid_layout() -> GridLayout {
+    let (w, h) = (screen_width(), screen_height());
+    let label_w = 26.0;
+    let pad = 20.0;
+    let gap = 2.0;
+    let cell_w = ((w - pad * 2.0 - label_w) / 10.0).min(96.0);
+    let cell_h = ((h - 150.0) / 10.0).min(40.0);
+    let grid_w = cell_w * 10.0;
+    let ox = (w - grid_w - label_w) / 2.0 + label_w;
+    GridLayout {
+        ox,
+        oy: 92.0,
+        cell_w,
+        cell_h,
+        pip_w: (cell_w - gap * 6.0) / 5.0,
+        gap,
+        label_w,
+    }
+}
+
+/// Screen rect of one grid pip (era column, branch row, step within the cell).
+fn grid_pip_rect(l: &GridLayout, era: u32, branch: u32, step: u32) -> Rect {
+    let cx = l.ox + era as f32 * l.cell_w;
+    let ry = l.oy + branch as f32 * l.cell_h;
+    let px = cx + l.gap + step as f32 * (l.pip_w + l.gap);
+    Rect::new(px, ry + 4.0, l.pip_w, l.cell_h - 8.0)
+}
+
+/// The grid id whose pip is under `(mx, my)`, if any.
+fn grid_pip_at(l: &GridLayout, mx: f32, my: f32) -> Option<u32> {
+    (0..500u32).find(|&id| {
+        let (era, branch, step) = (id / 50, (id / 5) % 10, id % 5);
+        grid_pip_rect(l, era, branch, step).contains(vec2(mx, my))
+    })
 }
 
 /// Short label for a building kind (tech-tree unlock hints).
@@ -1338,80 +1394,42 @@ const fn unit_label(u: UnitKind) -> &'static str {
     }
 }
 
-/// Screen rect of tech `id`'s node: column = tier, lane = its position within the
-/// tier (id order).
-fn tech_node_rect(id: u32) -> Rect {
-    let def = &TECHS[id as usize];
-    let lane = TECHS
-        .iter()
-        .filter(|t| t.tier == def.tier && t.id < id)
-        .count() as f32;
-    let (px, py, _, _) = tech_panel_origin();
-    let x = px + 20.0 + f32::from(def.tier) * (TECH_NODE_W + TECH_COL_GAP);
-    let y = py + TECH_HEAD_H + lane * (TECH_NODE_H + TECH_ROW_GAP);
-    Rect::new(x, y, TECH_NODE_W, TECH_NODE_H)
+/// Pip colour for a node's reality class (how grounded-in-real-science it is).
+const fn reality_color(r: RealityClass) -> Color {
+    match r {
+        RealityClass::Achieved => GOOD,
+        RealityClass::Emerging => GRID_HOT,
+        RealityClass::Theoretical => SHIELD,
+        RealityClass::Speculative => WARN,
+        RealityClass::Lore => TEXT_DIM,
+    }
 }
 
-/// Full-screen overlay listing the whole tech tree with status + progress. The
-/// `cursor` row is highlighted; ↑/↓ move it, Enter (or 1-0 for the first ten)
-/// starts research; Escape closes.
-/// The Ascendancy Doctrines panel (key: U). Four endless, escalating-cost
-/// upgrade tracks that spend the late-game Minerals/Research surplus on permanent
-/// army-wide quality. Unlike research it does not freeze time, so the overlay is
-/// kept light and the player can buy several levels between waves.
-/// A read-only viewer for the 500-slot Ascension capability grid: 10 era columns
-/// × 10 branch lanes, each cell's 5 steps coloured by reality class, with the
-/// "Frontier of Known Physics" divider after era 4. Toggle with G; Esc closes.
-fn draw_grid_viewer(sprites: &Sprites) {
-    use rts_core::game::tech_grid::RealityClass;
-    use rts_core::game::tech_grid_table::GRID;
-
-    const BRANCHES: [&str; 10] = ["C", "E", "M", "P", "W", "D", "B", "S", "X", "G"];
-    const ERAS: [&str; 10] = [
-        "FND", "QNT", "RNW", "FUS", "SPC", "ST2", "GAL", "DRK", "HiD", "CSM",
-    ];
-
-    const fn reality_color(r: RealityClass) -> Color {
-        match r {
-            RealityClass::Achieved => GOOD,
-            RealityClass::Emerging => GRID_HOT,
-            RealityClass::Theoretical => SHIELD,
-            RealityClass::Speculative => WARN,
-            RealityClass::Lore => TEXT_DIM,
-        }
+/// Human-readable name of a reality class (the honesty label).
+const fn reality_name(r: RealityClass) -> &'static str {
+    match r {
+        RealityClass::Achieved => "Achieved",
+        RealityClass::Emerging => "Emerging",
+        RealityClass::Theoretical => "Theoretical",
+        RealityClass::Speculative => "Speculative",
+        RealityClass::Lore => "Lore",
     }
+}
 
-    let (w, h) = (screen_width(), screen_height());
-    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 180));
-    let fb = sprites.font_bold();
+/// Draws the 10×10 capability-grid backdrop (era headers, branch codes, every
+/// node pip coloured by `tint`, and the "Frontier of Known Physics" divider).
+/// `tint(id)` returns each pip's colour so callers can show reality (read-only
+/// viewer) or research status (interactive modal). Returns the shared layout.
+fn draw_grid_backdrop(l: &GridLayout, sprites: &Sprites, tint: impl Fn(u32) -> Color) {
     let f = sprites.font();
-
-    centered("ASCENSION — CAPABILITY GRID", 38.0, 24.0, GOLD, fb);
-    centered(
-        "10 eras × 10 branches × 5 steps   •   G / Esc to close",
-        60.0,
-        14.0,
-        TEXT_DIM,
-        f,
-    );
-
-    let label_w = 26.0;
-    let pad = 20.0;
-    let cell_w = ((w - pad * 2.0 - label_w) / 10.0).min(96.0);
-    let cell_h = ((h - 130.0) / 10.0).min(40.0);
-    let grid_w = cell_w * 10.0;
-    let ox = (w - grid_w - label_w) / 2.0 + label_w;
-    let oy = 92.0;
-    let gap = 2.0;
-    let pip_w = (cell_w - gap * 6.0) / 5.0;
-
-    for (e, name) in ERAS.iter().enumerate() {
-        let cx = ox + e as f32 * cell_w;
+    let fb = sprites.font_bold();
+    for (e, name) in GRID_ERAS.iter().enumerate() {
+        let cx = l.ox + e as f32 * l.cell_w;
         let tw = measure_text(name, f, 12, 1.0).width;
         draw_text_ex(
             name,
-            cx + (cell_w - tw) / 2.0,
-            oy - 6.0,
+            cx + (l.cell_w - tw) / 2.0,
+            l.oy - 6.0,
             TextParams {
                 font: f,
                 font_size: 12,
@@ -1420,12 +1438,12 @@ fn draw_grid_viewer(sprites: &Sprites) {
             },
         );
     }
-    for (b, code) in BRANCHES.iter().enumerate() {
-        let ry = oy + b as f32 * cell_h;
+    for (b, code) in GRID_BRANCHES.iter().enumerate() {
+        let ry = l.oy + b as f32 * l.cell_h;
         draw_text_ex(
             code,
-            ox - label_w + 6.0,
-            ry + cell_h / 2.0 + 4.0,
+            l.ox - l.label_w + 6.0,
+            ry + l.cell_h / 2.0 + 4.0,
             TextParams {
                 font: fb,
                 font_size: 14,
@@ -1434,23 +1452,22 @@ fn draw_grid_viewer(sprites: &Sprites) {
             },
         );
         for e in 0..10u32 {
-            let cx = ox + e as f32 * cell_w;
-            draw_rectangle_lines(cx, ry, cell_w, cell_h, 1.0, BORDER_NEUTRAL);
+            let cx = l.ox + e as f32 * l.cell_w;
+            draw_rectangle_lines(cx, ry, l.cell_w, l.cell_h, 1.0, BORDER_NEUTRAL);
             for step in 0..5u32 {
                 let id = e * 50 + b as u32 * 5 + step;
-                let col = reality_color(GRID[id as usize].reality);
-                let px = cx + gap + step as f32 * (pip_w + gap);
-                draw_rectangle(px, ry + 4.0, pip_w, cell_h - 8.0, col);
+                let r = grid_pip_rect(l, e, b as u32, step);
+                draw_rectangle(r.x, r.y, r.w, r.h, tint(id));
             }
         }
     }
     // The "Frontier of Known Physics" divider after era 4.
-    let fx = ox + 5.0 * cell_w;
-    draw_rectangle(fx - 1.5, oy, 3.0, cell_h * 10.0, WARN);
+    let fx = l.ox + 5.0 * l.cell_w;
+    draw_rectangle(fx - 1.5, l.oy, 3.0, l.cell_h * 10.0, WARN);
     draw_text_ex(
         "FRONTIER OF KNOWN PHYSICS",
-        ox + cell_w,
-        oy + cell_h * 10.0 + 18.0,
+        l.ox + l.cell_w,
+        l.oy + l.cell_h * 10.0 + 18.0,
         TextParams {
             font: f,
             font_size: 12,
@@ -1458,6 +1475,36 @@ fn draw_grid_viewer(sprites: &Sprites) {
             ..Default::default()
         },
     );
+}
+
+/// A read-only viewer for the 500-slot Ascension capability grid, pips coloured
+/// by reality class. Toggle with G; Esc closes.
+fn draw_grid_viewer(sprites: &Sprites) {
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::from_rgba(0, 0, 0, 180),
+    );
+    centered(
+        "ASCENSION — CAPABILITY GRID",
+        38.0,
+        24.0,
+        GOLD,
+        sprites.font_bold(),
+    );
+    centered(
+        "10 eras × 10 branches × 5 steps   •   G / Esc to close",
+        60.0,
+        14.0,
+        TEXT_DIM,
+        sprites.font(),
+    );
+    let l = grid_layout();
+    draw_grid_backdrop(&l, sprites, |id| {
+        reality_color(TECH_GRID[id as usize].reality)
+    });
 }
 
 fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
@@ -1627,12 +1674,22 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     );
 }
 
-/// The tech TREE as a pannable node graph: five era columns, prereq edges drawn
-/// between nodes, each node coloured by status (researched / in progress /
-/// available / locked / needs-lab) and labelled with what it UNLOCKS. Click a
-/// node or use ↑/↓ + Enter to research; time is frozen while it is open.
+/// Status-aware pip colour for the interactive research grid.
+const fn status_color(status: TechStatus, reality: RealityClass) -> Color {
+    match status {
+        TechStatus::Researched => GOOD,
+        TechStatus::InProgress { .. } => WARN,
+        TechStatus::Available => GOLD_HI,
+        TechStatus::NoLab => BAD,
+        // Locked nodes still show the science landscape, but muted.
+        TechStatus::Locked => with_alpha(reality_color(reality), 0.3),
+    }
+}
+
+/// The interactive capability-grid research modal. The `cursor` grid id is
+/// highlighted; the panel below reads out the selected node. Toggle with Y;
+/// ←/→ era, ↑/↓ branch, [ ] step, Enter/click to research, Esc closes.
 fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
-    use rts_core::game::tech::TechUnlock;
     draw_rectangle(
         0.0,
         0.0,
@@ -1640,158 +1697,133 @@ fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         screen_height(),
         Color::from_rgba(0, 0, 0, 205),
     );
-    let (px, py, pw, ph) = tech_panel_origin();
-    draw_rectangle(px, py, pw, ph, PANEL);
-    draw_rectangle(px, py, pw, 4.0, GOLD);
-    draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
-
-    let font_bold = sprites.font_bold();
     let font = sprites.font();
+    let font_bold = sprites.font_bold();
     centered(
-        "RESEARCH  \u{2014}  TECH TREE",
-        py + 28.0,
+        "RESEARCH \u{2014} CAPABILITY GRID",
+        38.0,
         24.0,
         GOLD,
         font_bold,
     );
-    for (tier, label) in TECH_ERAS.iter().enumerate() {
-        let x = px + 20.0 + tier as f32 * (TECH_NODE_W + TECH_COL_GAP);
-        let lw = measure_text(label, font, 12, 1.0).width;
-        draw_text_ex(
-            label,
-            x + (TECH_NODE_W - lw) / 2.0,
-            py + TECH_HEAD_H - 12.0,
-            TextParams {
-                font,
-                font_size: 12,
-                color: TEXT_DIM,
-                ..Default::default()
-            },
-        );
-    }
 
-    let (mask, active) = sim.research_state(HUMAN);
+    let (set, active) = sim.research_state(HUMAN);
     let has_lab = sim.has_research_lab(HUMAN);
+    let l = grid_layout();
+    draw_grid_backdrop(&l, sprites, |id| {
+        let node = &TECH_GRID[id as usize];
+        status_color(tech_status(node, &set, active, has_lab), node.reality)
+    });
 
-    // Prereq edges first, under the nodes — a researched prereq glows cyan.
-    for t in &TECHS {
-        let dst = tech_node_rect(t.id);
-        for &pre in t.prereqs {
-            let src = tech_node_rect(pre);
-            let done = mask & (1 << pre) != 0;
-            let col = if done {
-                with_alpha(HOLO_GLOW, 0.9)
-            } else {
-                with_alpha(TEXT_DIM, 0.5)
-            };
-            draw_line(
-                src.x + src.w,
-                src.y + src.h / 2.0,
-                dst.x,
-                dst.y + dst.h / 2.0,
-                1.5,
-                col,
-            );
+    // Cursor highlight: outline the selected pip and its enclosing cell.
+    let cid = u32::try_from(cursor).unwrap_or(0).min(499);
+    let (era, branch, step) = (cid / 50, (cid / 5) % 10, cid % 5);
+    let pip = grid_pip_rect(&l, era, branch, step);
+    draw_rectangle_lines(
+        pip.x - 1.0,
+        pip.y - 1.0,
+        pip.w + 2.0,
+        pip.h + 2.0,
+        2.0,
+        GOLD,
+    );
+    let cx = l.ox + era as f32 * l.cell_w;
+    let cy = l.oy + branch as f32 * l.cell_h;
+    draw_rectangle_lines(cx, cy, l.cell_w, l.cell_h, 1.5, GOLD_HI);
+
+    // Detail panel for the selected node.
+    let node = &TECH_GRID[cid as usize];
+    let status = tech_status(node, &set, active, has_lab);
+    let dy = l.oy + l.cell_h * 10.0 + 34.0;
+    draw_text_ex(
+        node.name,
+        l.ox - l.label_w,
+        dy,
+        TextParams {
+            font: font_bold,
+            font_size: 18,
+            color: GOLD,
+            ..Default::default()
+        },
+    );
+    let branch_name = GRID_BRANCH_NAMES[branch as usize];
+    let coord = format!(
+        "{} \u{00b7} {} \u{00b7} step {}/5 \u{00b7} {}",
+        GRID_ERAS[era as usize],
+        branch_name,
+        step + 1,
+        reality_name(node.reality),
+    );
+    draw_text_ex(
+        &coord,
+        l.ox - l.label_w,
+        dy + 20.0,
+        TextParams {
+            font,
+            font_size: 13,
+            color: TEXT_DIM,
+            ..Default::default()
+        },
+    );
+    let status_word = match status {
+        TechStatus::Researched => "RESEARCHED".to_owned(),
+        TechStatus::InProgress {
+            ticks_remaining,
+            duration,
+        } => {
+            let pct = (duration.saturating_sub(ticks_remaining) * 100)
+                .checked_div(duration)
+                .unwrap_or(100);
+            format!("RESEARCHING {pct}%")
         }
-    }
-
-    // Nodes.
-    for (i, t) in TECHS.iter().enumerate() {
-        let r = tech_node_rect(t.id);
-        let status = tech_status(t, mask, active, has_lab);
-        let (fill, border) = match status {
-            TechStatus::Researched => (with_alpha(GOOD, 0.28), GOOD),
-            TechStatus::InProgress { .. } => (with_alpha(WARN, 0.28), WARN),
-            TechStatus::Available => (PANEL_RAISED, GOLD_HI),
-            TechStatus::NoLab => (PANEL, BAD),
-            TechStatus::Locked => (PANEL, BORDER_NEUTRAL),
-        };
-        draw_rectangle(r.x, r.y, r.w, r.h, fill);
-        let bw = if i == cursor { 2.5 } else { 1.0 };
-        let bc = if i == cursor { GOLD } else { border };
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, bw, bc);
-
-        let name_col = matches!(status, TechStatus::Locked)
-            .then_some(TEXT_DIM)
-            .unwrap_or(TEXT);
+        TechStatus::Available => "AVAILABLE".to_owned(),
+        TechStatus::NoLab => "NEEDS RESEARCH LAB".to_owned(),
+        TechStatus::Locked => "LOCKED".to_owned(),
+    };
+    let costs = format!(
+        "${}   EN {}   LB {}   \u{2022}   {}",
+        node.money, node.energy, node.labour, status_word,
+    );
+    let cost_col = match status {
+        TechStatus::Available => GOLD_HI,
+        TechStatus::Researched => GOOD,
+        TechStatus::InProgress { .. } => WARN,
+        _ => BAD,
+    };
+    draw_text_ex(
+        &costs,
+        l.ox - l.label_w,
+        dy + 40.0,
+        TextParams {
+            font,
+            font_size: 13,
+            color: cost_col,
+            ..Default::default()
+        },
+    );
+    // What gameplay door this node opens, if any.
+    let unlock = tech_grid::real_building(node.id)
+        .map(building_label)
+        .or_else(|| tech_grid::real_unit(node.id).map(unit_label));
+    if let Some(name) = unlock {
+        let unlock_s = format!("Unlocks: {name}");
         draw_text_ex(
-            t.name,
-            r.x + 7.0,
-            r.y + 15.0,
+            &unlock_s,
+            l.ox - l.label_w,
+            dy + 60.0,
             TextParams {
-                font: font_bold,
+                font,
                 font_size: 13,
-                color: name_col,
-                ..Default::default()
-            },
-        );
-
-        // Unlock payload (what door it opens) — the headline reason to research it.
-        let unlock_s = t.unlocks.iter().fold(String::new(), |mut acc, u| {
-            let name = match u {
-                TechUnlock::Building(b) => building_label(*b),
-                TechUnlock::Unit(u) => unit_label(*u),
-            };
-            if !acc.is_empty() {
-                acc.push_str(", ");
-            }
-            acc.push_str(name);
-            acc
-        });
-        let no_unlock = unlock_s.is_empty();
-        let sub = if no_unlock {
-            // No unlock: a pure stat upgrade.
-            "upgrade".to_owned()
-        } else {
-            unlock_s
-        };
-        draw_text_ex(
-            &sub,
-            r.x + 7.0,
-            r.y + 29.0,
-            TextParams {
-                font,
-                font_size: 11,
-                color: if no_unlock { TEXT_DIM } else { SHIELD },
-                ..Default::default()
-            },
-        );
-
-        // Cost (currency by tier) bottom-right, or a status word.
-        let cost = t.cost.to_bits() / 65536;
-        let label = match status {
-            TechStatus::Researched => "\u{2713}".to_owned(),
-            TechStatus::InProgress {
-                ticks_remaining,
-                duration,
-            } => {
-                let pct = (duration.saturating_sub(ticks_remaining) * 100)
-                    .checked_div(duration)
-                    .unwrap_or(100);
-                format!("{pct}%")
-            }
-            TechStatus::Locked => "\u{1f512}".to_owned(),
-            // All research is paid from Money now.
-            _ => format!("${cost}"),
-        };
-        let lw = measure_text(&label, font, 11, 1.0).width;
-        draw_text_ex(
-            &label,
-            r.x + r.w - lw - 6.0,
-            r.y + 41.0,
-            TextParams {
-                font,
-                font_size: 11,
-                color: border,
+                color: SHIELD,
                 ..Default::default()
             },
         );
     }
 
     centered(
-        "click a node or \u{2191}\u{2193} + Enter to research  \u{2022}  Esc close",
-        py + ph - 9.0,
-        14.0,
+        "\u{2190}\u{2192} era  \u{2191}\u{2193} branch  [ ] step  \u{2022}  Enter / click to research  \u{2022}  Y / Esc close",
+        screen_height() - 14.0,
+        13.0,
         TEXT_DIM,
         font,
     );
@@ -2275,32 +2307,39 @@ fn draw_shield_bar(x: f32, y: f32, cell: f32, shield: f32, max_shield: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::tech_status;
-    use rts_core::game::tech::tech;
+    use super::{tech_status, TechStatus};
+    use rts_core::game::tech_grid::{node, TechBitset};
 
-    // Heavy Chassis (id 1) is a research-paid tier-1 tech with prereq [10].
-    const T1: u32 = 1;
-    // Mobilization (id 6) is the money-paid root (no prereqs, no lab needed).
-    const ROOT: u32 = 6;
+    // Node 20 (Combined-Arms Doctrine) is an era-0 root: no prereqs, no lab.
+    const ROOT: u32 = 20;
+    // Node 70 (Solid-State Laser) is an era-1 node with prereqs [24, 9].
+    const ERA1: u32 = 70;
+
+    fn bits(ids: &[u32]) -> TechBitset {
+        let mut b = TechBitset::empty();
+        for &id in ids {
+            b.set(id);
+        }
+        b
+    }
 
     #[test]
     fn researched_bit_takes_priority() {
-        let status = tech_status(tech(ROOT).unwrap(), 1 << ROOT, None, true);
-        assert!(matches!(status, super::TechStatus::Researched));
+        let status = tech_status(node(ROOT).unwrap(), &bits(&[ROOT]), None, true);
+        assert!(matches!(status, TechStatus::Researched));
     }
 
     #[test]
     fn in_progress_reports_correct_percent() {
-        let def = tech(ROOT).unwrap();
-        let status = tech_status(def, 0, Some((ROOT, def.duration / 2)), true);
-        if let super::TechStatus::InProgress {
+        let n = node(ROOT).unwrap();
+        let status = tech_status(n, &TechBitset::empty(), Some((ROOT, n.duration / 2)), true);
+        if let TechStatus::InProgress {
             ticks_remaining,
             duration,
         } = status
         {
             let elapsed = duration.saturating_sub(ticks_remaining);
-            let pct = (elapsed * 100) / duration;
-            assert_eq!(pct, 50);
+            assert_eq!((elapsed * 100) / duration, 50);
         } else {
             panic!("expected InProgress");
         }
@@ -2308,21 +2347,21 @@ mod tests {
 
     #[test]
     fn locked_when_prereq_not_researched() {
-        // Heavy Chassis needs tech 10; mask = 0 → locked.
-        let status = tech_status(tech(T1).unwrap(), 0, None, true);
-        assert!(matches!(status, super::TechStatus::Locked));
+        // Node 70 needs [24, 9]; an empty bitset → locked.
+        let status = tech_status(node(ERA1).unwrap(), &TechBitset::empty(), None, true);
+        assert!(matches!(status, TechStatus::Locked));
     }
 
     #[test]
     fn no_lab_status_when_lab_absent() {
-        // Prereqs met (10) but no lab → a research-paid tech needs one.
-        let status = tech_status(tech(T1).unwrap(), 1 << 10, None, false);
-        assert!(matches!(status, super::TechStatus::NoLab));
+        // Direct prereqs met but era 1 → a Research Lab is required.
+        let status = tech_status(node(ERA1).unwrap(), &bits(&[24, 9]), None, false);
+        assert!(matches!(status, TechStatus::NoLab));
     }
 
     #[test]
     fn available_when_prereq_met_and_lab_present() {
-        let status = tech_status(tech(T1).unwrap(), 1 << 10, None, true);
-        assert!(matches!(status, super::TechStatus::Available));
+        let status = tech_status(node(ERA1).unwrap(), &bits(&[24, 9]), None, true);
+        assert!(matches!(status, TechStatus::Available));
     }
 }

@@ -1,6 +1,6 @@
 //! Active unit abilities — the tactical "buttons" of combat.
 //!
-//! A flat data table in the style of [`crate::game::tech`]: each heavy unit kind
+//! A flat data table in the style of [`crate::game::tech_grid`]: each heavy unit kind
 //! carries one ability, cast with [`crate::game::sim::Command::UseAbility`] at a
 //! world position within range. Effects resolve instantly and deterministically
 //! (fixed magnitudes, no RNG); the per-entity cooldown is tick-based, hashed, and
