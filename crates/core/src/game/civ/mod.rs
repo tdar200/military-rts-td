@@ -163,6 +163,55 @@ pub enum ExportIntent {
     ImportPriority = 2,
 }
 
+/// The civilization archetype a colony belongs to.
+///
+/// Every species runs the SAME simulation; the discriminant only *biases*
+/// deterministic behaviour (expansion drive, colony ceiling), so conflict still
+/// emerges from competition over the same scarce resources, not from scripting.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Species {
+    /// Humanity — the balanced baseline.
+    #[default]
+    Standard = 0,
+    /// Swarm — fast, sprawling expansion; weak early economy.
+    Swarm = 1,
+    /// Machine — high automation, energy-hungry, strong logistics.
+    Machine = 2,
+    /// Trader — economy-first, expansion-shy, dangerous late.
+    Trader = 3,
+    /// Ancient — few colonies, very strong, slow to spread.
+    Ancient = 4,
+    /// Dark-sector — stealthy, hidden resources, hard to counter.
+    DarkSector = 5,
+}
+
+impl Species {
+    /// Ticks between this species' auto-expansion attempts (lower = pushier).
+    #[must_use]
+    pub const fn expand_period(self) -> u64 {
+        match self {
+            Self::Swarm => 120,
+            Self::Standard | Self::Machine => 240,
+            Self::DarkSector => 320,
+            Self::Trader => 480,
+            Self::Ancient => 600,
+        }
+    }
+
+    /// How many colonies this species will auto-found.
+    #[must_use]
+    pub const fn colony_cap(self) -> usize {
+        match self {
+            Self::Swarm => 8,
+            Self::Machine | Self::DarkSector => 5,
+            Self::Standard => 4,
+            Self::Trader => 3,
+            Self::Ancient => 2,
+        }
+    }
+}
+
 /// A direct, one-shot override the player issues to a single colony, taking
 /// precedence over its standing policy until cleared.
 #[repr(u8)]
@@ -269,6 +318,8 @@ pub struct Colony {
     pub stockpile: [Fixed; SPECIAL_COUNT],
     /// Per-special awareness/capability (Unknown → Detected → Extractable).
     pub knowledge_of: [Knowledge; SPECIAL_COUNT],
+    /// The civilization archetype, which biases autonomous behaviour.
+    pub species: Species,
 }
 
 impl Colony {

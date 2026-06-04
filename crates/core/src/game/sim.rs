@@ -10,7 +10,7 @@
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
 use crate::game::civ::{
-    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, AUTONOMY_FULL,
+    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, Species, AUTONOMY_FULL,
 };
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
@@ -133,10 +133,10 @@ const MAX_AI_BARRACKS: usize = 4;
 const MAX_AI_REACTORS: usize = 8;
 /// Money an autonomous colony spends to found a new colony.
 const FOUND_COLONY_COST: Fixed = Fixed::from_int(800);
-/// Most colonies one owner will auto-found (bounds runaway expansion).
-const MAX_COLONIES_PER_OWNER: usize = 4;
-/// Ticks between a colony's auto-expansion attempts.
-const EXPAND_PERIOD: u64 = 240;
+/// Hard safety ceiling on auto-founded colonies per owner (the per-species
+/// [`Species::colony_cap`](crate::game::civ::Species::colony_cap) is the soft
+/// limit; this just bounds the worst case).
+const MAX_COLONIES_PER_OWNER: usize = 8;
 /// Minimum tile spacing between a new colony and every existing Command Center.
 const MIN_COLONY_SPACING: u16 = 6;
 
@@ -627,6 +627,7 @@ impl Sim {
             stockpile: [Fixed::ZERO; crate::game::civ::special::SPECIAL_COUNT],
             knowledge_of: [crate::game::civ::special::Knowledge::Unknown;
                 crate::game::civ::special::SPECIAL_COUNT],
+            species: Species::Standard,
         };
         if let Some(index) = self.colony_free.pop() {
             self.colonies[index as usize] = colony;
@@ -635,6 +636,13 @@ impl Sim {
             let index = self.colonies.len() as u32;
             self.colonies.push(colony);
             ColonyId(index)
+        }
+    }
+
+    /// Sets a colony's species (scenario setup; biases its autonomous behaviour).
+    pub fn set_colony_species(&mut self, colony: ColonyId, species: Species) {
+        if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+            c.species = species;
         }
     }
 
@@ -699,8 +707,8 @@ impl Sim {
             );
             if level >= 6
                 && expanding
-                && self.tick.is_multiple_of(EXPAND_PERIOD)
-                && self.count_owner_colonies(c.owner) < MAX_COLONIES_PER_OWNER
+                && self.tick.is_multiple_of(c.species.expand_period())
+                && self.count_owner_colonies(c.owner) < c.species.colony_cap()
                 && self.money(c.owner) >= FOUND_COLONY_COST
             {
                 if let Some(site) = self.first_colony_site(&planned) {
@@ -1215,6 +1223,7 @@ impl Sim {
                 h.write_u64(u64::from(d));
             }
             h.write_u64(c.directive as u64);
+            h.write_u64(c.species as u64);
             for s in c.stockpile {
                 h.write_i64(s.to_bits());
             }
@@ -3323,6 +3332,84 @@ mod tests {
         assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
     }
 
+    // ---- M6: species biases + emergent conflict ----
+
+    #[test]
+    fn species_bias_expansion_drive() {
+        use crate::game::civ::Species;
+        // Swarm is pushier and sprawls wider than the Ancients.
+        assert!(Species::Swarm.expand_period() < Species::Ancient.expand_period());
+        assert!(Species::Swarm.colony_cap() > Species::Ancient.colony_cap());
+        assert_eq!(Species::Standard.colony_cap(), 4);
+    }
+
+    #[test]
+    fn species_caps_expansion_per_archetype() {
+        use crate::game::civ::{ColonyPolicy, ExpansionIntent, Species};
+        // An Ancient colony stops at its low colony cap even with room + money.
+        let mut s = Sim::new(Map::new(48, 48), 1, f(1_000_000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 3, 3);
+        let col = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        s.set_colony_species(col, Species::Ancient);
+        s.step(&[Command::SetColonyPolicy {
+            owner: P0,
+            colony: col,
+            policy: ColonyPolicy {
+                expansion: ExpansionIntent::Aggressive,
+                ..ColonyPolicy::default()
+            },
+        }]);
+        // Run well past an expansion window that lands after level 6 is earned
+        // (Ancient's expand period is long).
+        for _ in 0..2000 {
+            let cmds = s.colony_commands();
+            s.step(&cmds);
+        }
+        assert_eq!(
+            s.colony_count_for(P0),
+            Species::Ancient.colony_cap(),
+            "Ancient expansion is capped at its archetype ceiling"
+        );
+    }
+
+    #[test]
+    fn conflict_emerges_over_a_shared_deposit() {
+        // Two AI empires sharing one contested deposit-rich map fight without any
+        // scripting — scarcity drives the war. Deterministic.
+        let mut map = Map::new(28, 12);
+        map.set_deposit(
+            14,
+            6,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Ore,
+                remaining: 50_000,
+            },
+        );
+        let mut s = Sim::new(map, 5, f(3000));
+        s.add_building(P0, BuildingKind::CommandCenter, 3, 6);
+        s.add_building(P1, BuildingKind::CommandCenter, 24, 6);
+        let mut peak_units = 0;
+        let mut prev_units = 0;
+        let mut saw_casualty = false;
+        for _ in 0..4000 {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(s.ai_commands(P1));
+            s.step(&cmds);
+            let units = s.unit_count(P0) + s.unit_count(P1);
+            peak_units = peak_units.max(units);
+            // A drop in total living units between ticks is a battlefield death.
+            if units < prev_units {
+                saw_casualty = true;
+            }
+            prev_units = units;
+        }
+        assert!(peak_units > 0, "both empires fielded forces");
+        assert!(
+            saw_casualty,
+            "casualties were taken — conflict emerged without scripting"
+        );
+    }
+
     // ---- M5: planetary expansion ----
 
     #[test]
@@ -3345,12 +3432,12 @@ mod tests {
 
     #[test]
     fn found_colony_respects_the_per_owner_cap() {
-        let mut s = Sim::new(Map::new(40, 40), 1, f(100_000));
+        let mut s = Sim::new(Map::new(64, 40), 1, f(100_000));
         let cc = s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_colony(P0, cc, 0);
-        // Try to found many; only up to the cap (incl. the starting one) take.
+        // Try to found many at distinct in-bounds tiles; only up to the cap take.
         let mut x = 10;
-        for _ in 0..8 {
+        for _ in 0..10 {
             s.step(&[Command::FoundColony {
                 owner: P0,
                 parent: ColonyId(0),
