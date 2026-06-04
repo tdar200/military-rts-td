@@ -2985,6 +2985,77 @@ mod tests {
     const P1: PlayerId = PlayerId(1);
 
     #[test]
+    fn probe_wave_spawn_offboard() {
+        use crate::game::scenario::survival;
+        let mut s = survival(7);
+        // Found the base (survey AI emits FoundBase).
+        let cmds = s.ai_commands(P0);
+        s.step(&cmds);
+        let h = i64::from(s.map().height());
+        let w = i64::from(s.map().width());
+        std::eprintln!("MAP {w}x{h}");
+        // Run through several waves; after each tick, report any enemy units whose
+        // world-y rounds to an off-board tile, and what tile from_world clamps to.
+        let mut max_seen_y_bits: i64 = i64::MIN;
+        let mut max_wave_size = 0usize;
+        let mut last_wc = s.wave_count;
+        for _ in 0..120_000u64 {
+            s.step(&[]);
+            if s.wave_count != last_wc {
+                last_wc = s.wave_count;
+                // count alive enemy units & inspect their spawn tiles right after spawn
+                let mut count = 0usize;
+                let mut offboard = 0usize;
+                let mut maxy = i64::MIN;
+                for e in &s.entities {
+                    if !e.alive || e.owner != P1 {
+                        continue;
+                    }
+                    if !matches!(e.kind, super::Kind::Unit(_)) {
+                        continue;
+                    }
+                    count += 1;
+                    let yb = e.pos.y.to_bits();
+                    if yb > maxy {
+                        maxy = yb;
+                    }
+                    if yb > max_seen_y_bits {
+                        max_seen_y_bits = yb;
+                    }
+                    let (tc, tr) =
+                        crate::game::hex::from_world(e.pos, s.map().width(), s.map().height());
+                    if i64::from(tr) >= h - 1 || e.pos.y.round_to_int() >= h {
+                        offboard += 1;
+                        if offboard <= 3 {
+                            std::eprintln!(
+                                "  wave#{} unit pos.y={} (tile r={}, clamped) col={}",
+                                s.wave_count,
+                                yb / 65536,
+                                tr,
+                                tc
+                            );
+                        }
+                    }
+                }
+                if count > max_wave_size {
+                    max_wave_size = count;
+                }
+                std::eprintln!(
+                    "WAVE_COUNT={} alive_enemy_units={} max_pos_y={} offboard(>=h-1 or >=h)={}",
+                    s.wave_count,
+                    count,
+                    maxy / 65536,
+                    offboard
+                );
+            }
+            if s.wave_count >= 8 {
+                break;
+            }
+        }
+        std::eprintln!("MAX_SEEN_POS_Y={} (height={})", max_seen_y_bits / 65536, h);
+    }
+
+    #[test]
     fn new_sim_has_starting_credits_and_no_winner() {
         let s = Sim::new(Map::new(16, 16), 1, f(500));
         assert_eq!(s.money(P0), f(500));

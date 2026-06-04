@@ -31,7 +31,7 @@ use rts_core::fixed::Fixed;
 use rts_core::game::hex;
 use rts_core::game::map::DepositKind;
 use rts_core::game::perk;
-use rts_core::game::scenario::Scenario;
+use rts_core::game::scenario;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::game::tech::TECHS;
@@ -86,73 +86,12 @@ fn window_conf() -> Conf {
     }
 }
 
-/// The match seed. Fixed for now (every match on a map plays from the same seed);
-/// a future lobby supplies this for `PvP`.
-const MATCH_SEED: u64 = 2026;
-
-fn new_match(scenario: Scenario) -> Sim {
-    scenario.build(MATCH_SEED)
-}
-
 /// A fresh, run-varying seed for a Survival match (derived from the wall clock).
 /// Survival runs aren't replayed or networked, so a non-deterministic seed is
 /// fine — each run stays fully deterministic *given* its seed, and every run gets
 /// a different procedural map.
 fn survival_seed() -> u64 {
     (get_time() * 1000.0) as u64 ^ 0xA5A5_5A5A_C3C3_3C3C
-}
-
-/// Clickable band for the "press S for Survival" banner on the title screen,
-/// shared by the renderer and the hit-test so they can't drift.
-fn survival_button_rect() -> Rect {
-    let c = cartouche();
-    let w = 520.0_f32.min(screen_width() - 40.0);
-    Rect::new((screen_width() - w) / 2.0, c.y + c.h + 44.0, w, 30.0)
-}
-
-/// Centered vertical list of selectable maps on the title screen, paired with the
-/// clickable rectangle for each. Shared by the renderer and the hit-test so they
-/// can't drift.
-fn scenario_rows() -> [(Scenario, Rect); 3] {
-    let c = cartouche();
-    let rows_top = c.y + CART_HEAD_H;
-    let mut out = [(Scenario::LaneDefense, Rect::new(0.0, 0.0, 0.0, 0.0)); 3];
-    for (i, &sc) in Scenario::ALL.iter().enumerate() {
-        out[i] = (
-            sc,
-            Rect::new(
-                c.x + 12.0,
-                rows_top + i as f32 * CART_ROW_H,
-                c.w - 24.0,
-                CART_ROW_H,
-            ),
-        );
-    }
-    out
-}
-
-/// The map the pointer is hovering on the title screen, if any.
-fn scenario_at_pointer() -> Option<Scenario> {
-    let (mx, my) = mouse_position();
-    scenario_rows()
-        .into_iter()
-        .find(|(_, rect)| rect.contains(vec2(mx, my)))
-        .map(|(sc, _)| sc)
-}
-
-/// A scenario chosen by number key (1/2/3) this frame, if any.
-fn scenario_hotkey() -> Option<Scenario> {
-    for (i, &sc) in Scenario::ALL.iter().enumerate() {
-        let key = match i {
-            0 => KeyCode::Key1,
-            1 => KeyCode::Key2,
-            _ => KeyCode::Key3,
-        };
-        if is_key_pressed(key) {
-            return Some(sc);
-        }
-    }
-    None
 }
 
 /// Pixels per world unit, sized so the whole hex board fits between the bars.
@@ -223,8 +162,7 @@ fn draw_hex_outline(cx: f32, cy: f32, cell: f32, thick: f32, col: Color) {
 async fn main() {
     let sprites = Sprites::load().await;
     let mut audio = audio::AudioMgr::load().await;
-    let mut scenario = Scenario::LaneDefense;
-    let mut sim = new_match(scenario);
+    let mut sim = scenario::survival(survival_seed());
     let mut selected: Option<EntityId> = None;
     let mut build_mode: Option<BuildingKind> = None;
     let mut pending = Vec::new();
@@ -257,7 +195,7 @@ async fn main() {
     let mut prev_era: u8 = 0;
     let mut prev_researching = false;
     // Whether the current match is a survival run (drives the score HUD + summary).
-    let mut survival_run = false;
+    let mut survival_run = true;
     // Survival perk draft: a modal opens each new wave until all perks are taken.
     let mut perk_open = false;
     let mut prev_waves = 0_u32;
@@ -267,29 +205,16 @@ async fn main() {
 
     loop {
         if phase == Phase::Title {
-            // Hover highlights a map; click / number key / Enter chooses one.
-            if let Some(hovered) = scenario_at_pointer() {
-                scenario = hovered;
-            }
-            let clicked = is_mouse_button_pressed(MouseButton::Left);
-            let (mx, my) = mouse_position();
-            let on_survival = survival_button_rect().contains(vec2(mx, my));
-            // 'S' or the Survival banner launches a Survival run on a fresh
-            // procedural map; a map row / number key / Enter launches the picked
-            // skirmish scenario.
-            let start = if is_key_pressed(KeyCode::S) || (clicked && on_survival) {
-                Some((Scenario::Survival, survival_seed()))
-            } else {
-                scenario_hotkey()
-                    .or_else(|| (clicked && !on_survival).then_some(scenario))
-                    .or_else(|| is_key_pressed(KeyCode::Enter).then_some(scenario))
-                    .map(|sc| (sc, MATCH_SEED))
-            };
-            if let Some((sc, seed)) = start {
-                scenario = sc;
-                survival_run = sc == Scenario::Survival;
+            // Survival is the only mode: any start input (Enter / Space / click /
+            // legacy 'S') begins a fresh procedural Survival run.
+            let start = is_key_pressed(KeyCode::Enter)
+                || is_key_pressed(KeyCode::Space)
+                || is_key_pressed(KeyCode::S)
+                || is_mouse_button_pressed(MouseButton::Left);
+            if start {
+                survival_run = true;
                 phase = Phase::Playing;
-                sim = sc.build(seed);
+                sim = scenario::survival(survival_seed());
                 view = view::ViewState::default();
                 view.on_tick(&sim);
                 particles.clear();
@@ -312,7 +237,7 @@ async fn main() {
                 doctrine_open = false;
                 grid_open = false;
             }
-            draw_title(&sprites, scenario);
+            draw_title(&sprites);
             next_frame().await;
             continue;
         }
@@ -508,12 +433,8 @@ async fn main() {
             }
         }
         if over && is_key_pressed(KeyCode::R) {
-            // Survival restarts on a fresh procedural map; skirmish replays its map.
-            sim = if survival_run {
-                scenario.build(survival_seed())
-            } else {
-                new_match(scenario)
-            };
+            // Restart on a fresh procedural Survival map.
+            sim = scenario::survival(survival_seed());
             view = view::ViewState::default();
             view.on_tick(&sim);
             particles.clear();
@@ -842,7 +763,7 @@ fn cartouche() -> Rect {
 const CART_HEAD_H: f32 = 56.0;
 const CART_ROW_H: f32 = 58.0;
 
-fn draw_title(sprites: &Sprites, selected: Scenario) {
+fn draw_title(sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     let cx = w / 2.0;
     let fc = h * 0.40; // field center y
@@ -906,43 +827,34 @@ fn draw_title(sprites: &Sprites, selected: Scenario) {
 
     // --- parchment cartouche ---
     draw_cartouche(c);
+    centered("SURVIVAL", c.y + 30.0, 24.0, INK, sprites.font_regal());
     centered(
-        "CHOOSE YOUR FRONT",
-        c.y + 28.0,
-        21.0,
-        INK,
-        sprites.font_regal(),
-    );
-    centered(
-        "THREE FRONTS · ONE WAR",
-        c.y + 46.0,
+        "Survey a world, found your colony, hold the line.",
+        c.y + 52.0,
         13.0,
         INK_DIM,
         sprites.font(),
     );
-    for (sc, rect) in scenario_rows() {
-        draw_scenario_row(sc, rect, sc == selected, sprites);
-    }
-
-    centered(
-        "click a map, press 1–3, or ENTER",
-        c.y + c.h + 34.0,
-        17.0,
-        DECO_GOLD,
-        sprites.font(),
-    );
     centered(
         &format!(
-            "— or press  S  for SURVIVAL: survey, found your colony, and hold {SURVIVAL_MILESTONE_WAVE} sieges —"
+            "Hold {SURVIVAL_MILESTONE_WAVE} escalating sieges on an ever-changing procedural front."
         ),
-        c.y + c.h + 58.0,
-        16.0,
-        GOLD_HI,
+        c.y + c.h - 16.0,
+        13.0,
+        with_alpha(INK, 0.8),
+        sprites.font(),
+    );
+
+    centered(
+        "PRESS ENTER OR CLICK TO BEGIN",
+        c.y + c.h + 40.0,
+        19.0,
+        with_alpha(GOLD_HI, holo_flicker()),
         sprites.font_bold(),
     );
     centered(
-        "Y tech tree  \u{2022}  U doctrines  \u{2022}  Q ability  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
-        c.y + c.h + 82.0,
+        "Y tech tree  \u{2022}  U doctrines  \u{2022}  Q ability  \u{2022}  G grid  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
+        c.y + c.h + 70.0,
         13.0,
         INK_DIM,
         sprites.font(),
@@ -978,53 +890,6 @@ fn draw_cartouche(c: Rect) {
     corner_ornament(c.x - 6.0, c.y + c.h + 6.0, 1.0, -1.0);
     corner_ornament(c.x + c.w + 6.0, c.y + c.h + 6.0, -1.0, -1.0);
     keystone_crest(c.x + c.w / 2.0, c.y - 6.0);
-}
-
-/// Draws one selectable map row on the parchment (sepia-ink serif name + tagline,
-/// gold wash + diamond marker when selected).
-fn draw_scenario_row(scenario: Scenario, rect: Rect, selected: bool, sprites: &Sprites) {
-    draw_line(
-        rect.x,
-        rect.y,
-        rect.x + rect.w,
-        rect.y,
-        1.0,
-        with_alpha(BRONZE, 0.3),
-    );
-    if selected {
-        draw_rectangle(
-            rect.x,
-            rect.y,
-            rect.w,
-            rect.h,
-            Color::from_rgba(64, 220, 235, 56),
-        );
-        draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.5, DECO_GOLD);
-        diamond(rect.x + 18.0, rect.y + rect.h / 2.0, 5.0, DECO_GOLD_HI);
-    }
-    let name_color = if selected { INK } else { with_alpha(INK, 0.82) };
-    draw_text_ex(
-        scenario.name(),
-        rect.x + 38.0,
-        rect.y + 27.0,
-        TextParams {
-            font: sprites.font_regal(),
-            font_size: 24,
-            color: name_color,
-            ..Default::default()
-        },
-    );
-    draw_text_ex(
-        scenario.tagline(),
-        rect.x + 38.0,
-        rect.y + 47.0,
-        TextParams {
-            font: sprites.font(),
-            font_size: 16,
-            color: INK_DIM,
-            ..Default::default()
-        },
-    );
 }
 
 fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites: &Sprites) {

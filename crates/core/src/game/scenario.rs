@@ -757,6 +757,47 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "balance probe — run with --ignored --nocapture"]
+    fn survival_longrun_resolution_probe() {
+        for seed in [3u64, 7, 11, 19, 23] {
+            let mut s = survival(seed);
+            let mut winner = None;
+            let mut peak_p1 = 0usize;
+            let horizon = 400_000u64;
+            for _ in 0..horizon {
+                let mut cmds = s.ai_commands(PlayerId(0));
+                if s.waves_survived() > 0 {
+                    cmds.extend(s.ai_commands(PlayerId(1)));
+                }
+                s.step(&cmds);
+                peak_p1 = peak_p1.max(s.unit_count(PlayerId(1)));
+                if let Some(w) = s.winner() {
+                    winner = Some(w);
+                    break;
+                }
+            }
+            std::eprintln!(
+                "seed={} winner={:?} waves={} P0units={} P1units={} peakP1={} supplycapP0={} supplyusedP0={} docW={} docA={} docV={} docF={} atkDocW={} atkDocA={} atkDocV={}",
+                seed,
+                winner,
+                s.waves_survived(),
+                s.unit_count(PlayerId(0)),
+                s.unit_count(PlayerId(1)),
+                peak_p1,
+                s.supply_cap(PlayerId(0)),
+                s.supply_used(PlayerId(0)),
+                s.doctrine_level(PlayerId(0), 0),
+                s.doctrine_level(PlayerId(0), 1),
+                s.doctrine_level(PlayerId(0), 2),
+                s.doctrine_level(PlayerId(0), 3),
+                s.doctrine_level(PlayerId(1), 0),
+                s.doctrine_level(PlayerId(1), 1),
+                s.doctrine_level(PlayerId(1), 2),
+            );
+        }
+    }
+
+    #[test]
     fn survival_economy_flows_after_founding_and_stays_peaceful() {
         // The survey-AI founds then builds an Extractor on the home deposit, so the
         // economy mines; the build-up stays peaceful (first wave is 6 min AFTER
