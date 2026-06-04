@@ -9,7 +9,7 @@
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
-use crate::game::civ::{Colony, ColonyId};
+use crate::game::civ::{Colony, ColonyId, ColonyIntent, ColonyPolicy, AUTONOMY_FULL};
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
@@ -279,6 +279,34 @@ pub enum Command {
         unit: EntityId,
         /// Target point — must be within the ability's range of the caster.
         target: Vec2,
+    },
+    /// Set a colony's requested autonomy level (the *effective* level is still
+    /// capped by what the colony has earned). Player → colony configuration.
+    SetColonyAutonomy {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target colony.
+        colony: ColonyId,
+        /// Requested autonomy `0..=9`.
+        level: u8,
+    },
+    /// Replace a colony's standing policy (the stances it executes autonomously).
+    SetColonyPolicy {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target colony.
+        colony: ColonyId,
+        /// The new policy.
+        policy: ColonyPolicy,
+    },
+    /// Issue a one-shot directive overriding a colony's standing policy.
+    DirectColony {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target colony.
+        colony: ColonyId,
+        /// The override intent (`Auto` clears it).
+        intent: ColonyIntent,
     },
 }
 
@@ -556,6 +584,9 @@ impl Sim {
             owner,
             seat,
             autonomy_level,
+            autonomy_progress: 0,
+            policy: ColonyPolicy::default(),
+            directive: ColonyIntent::Auto,
         };
         if let Some(index) = self.colony_free.pop() {
             self.colonies[index as usize] = colony;
@@ -565,6 +596,12 @@ impl Sim {
             self.colonies.push(colony);
             ColonyId(index)
         }
+    }
+
+    /// Read access to a living colony by id (for the UI and tests).
+    #[must_use]
+    pub fn colony(&self, id: ColonyId) -> Option<&Colony> {
+        self.colonies.get(id.0 as usize).filter(|c| c.alive)
     }
 
     /// Razes a colony, freeing its slot for reuse. Idempotent: freeing an already
@@ -584,16 +621,26 @@ impl Sim {
     /// no floats) — the same lockstep-safe contract as [`Sim::ai_commands`], so a
     /// driver may log/replay the batch (or regenerate it) without drift.
     ///
-    /// M0: a colony at [`AUTONOMY_FULL`] delegates wholesale to the proven AI
-    /// brain for its owner ("automated at maturity"); a manual colony (autonomy
-    /// `0`) emits nothing — the player drives it via direct commands. The earned
-    /// 1..=8 gradient (per-category gating) arrives in M3.
+    /// Each colony generates its owner's AI commands, then keeps only the
+    /// categories its *effective* autonomy permits (see
+    /// [`command_min_autonomy`](crate::game::civ::command_min_autonomy)). At
+    /// autonomy 0 it stays silent (manual); at the cap, nothing is filtered, so a
+    /// fully-autonomous colony delegates wholesale to the proven AI brain.
     #[must_use]
     pub fn colony_commands(&self) -> Vec<Command> {
         let mut cmds = Vec::new();
         for c in &self.colonies {
-            if c.is_fully_autonomous() {
-                cmds.extend(self.ai_commands(c.owner));
+            if !c.alive {
+                continue;
+            }
+            let level = c.effective_autonomy();
+            if level == 0 {
+                continue;
+            }
+            for cmd in self.ai_commands(c.owner) {
+                if crate::game::civ::command_min_autonomy(&cmd) <= level {
+                    cmds.push(cmd);
+                }
             }
         }
         cmds
@@ -1084,6 +1131,11 @@ impl Sim {
             h.write_u64(u64::from(c.owner.0));
             h.write_u64(u64::from(c.seat.0));
             h.write_u64(u64::from(c.autonomy_level));
+            h.write_u64(u64::from(c.autonomy_progress));
+            for d in c.policy.discriminants() {
+                h.write_u64(u64::from(d));
+            }
+            h.write_u64(c.directive as u64);
         }
         h.write_u64(self.colony_free.len() as u64);
         for &slot in &self.colony_free {
@@ -1166,6 +1218,7 @@ impl Sim {
             self.apply_command(command);
         }
         self.run_economy();
+        self.run_autonomy();
         self.run_research();
         self.run_production();
         self.run_waves();
@@ -1331,60 +1384,66 @@ impl Sim {
         self.entities.get(id.0 as usize)
     }
 
+    /// Constructs `kind` at `(x, y)` for `owner` if the tile is buildable, the
+    /// kind is unlocked, and all three resource costs are affordable.
+    fn apply_build(&mut self, owner: PlayerId, kind: BuildingKind, x: u16, y: u16) {
+        let buildable = self
+            .map
+            .tile(i32::from(x), i32::from(y))
+            .is_some_and(|t| t.buildable);
+        let st = self.balance.building(kind);
+        let p = usize::from(owner.0);
+        let unlocked = self.players[p].unlocked_buildings & (1 << kind.index()) != 0;
+        if unlocked
+            && buildable
+            && self.players[p].money >= st.money_cost
+            && self.players[p].energy >= st.energy_cost
+            && self.players[p].labour >= st.labour_cost
+        {
+            self.players[p].money = self.players[p].money - st.money_cost;
+            self.players[p].energy = self.players[p].energy - st.energy_cost;
+            self.players[p].labour = self.players[p].labour - st.labour_cost;
+            self.add_building(owner, kind, x, y);
+        }
+    }
+
+    /// Queues `kind` at `barracks` for `owner` if owned, unlocked, under the
+    /// supply cap, era-eligible, and all three resource costs are affordable.
+    fn apply_train(&mut self, owner: PlayerId, barracks: EntityId, kind: UnitKind) {
+        if matches!(kind, UnitKind::Capital) && self.players[usize::from(owner.0)].era < 3 {
+            return;
+        }
+        let st = self.balance.unit(kind);
+        let p = usize::from(owner.0);
+        let ok = self.entity(barracks).is_some_and(|e| {
+            e.alive && e.owner == owner && matches!(e.kind, Kind::Building(BuildingKind::Barracks))
+        });
+        let has_supply = self.supply_used(owner) < self.supply_cap(owner);
+        let unlocked = self.players[p].unlocked_units & (1 << kind.index()) != 0;
+        if ok
+            && unlocked
+            && has_supply
+            && self.players[p].money >= st.money_cost
+            && self.players[p].energy >= st.energy_cost
+            && self.players[p].labour >= st.labour_cost
+        {
+            self.players[p].money = self.players[p].money - st.money_cost;
+            self.players[p].energy = self.players[p].energy - st.energy_cost;
+            self.players[p].labour = self.players[p].labour - st.labour_cost;
+            if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
+                e.build_queue.push(kind);
+            }
+        }
+    }
+
     fn apply_command(&mut self, command: &Command) {
         match *command {
-            Command::Build { owner, kind, x, y } => {
-                let buildable = self
-                    .map
-                    .tile(i32::from(x), i32::from(y))
-                    .is_some_and(|t| t.buildable);
-                let st = self.balance.building(kind);
-                let p = usize::from(owner.0);
-                let unlocked = self.players[p].unlocked_buildings & (1 << kind.index()) != 0;
-                if unlocked
-                    && buildable
-                    && self.players[p].money >= st.money_cost
-                    && self.players[p].energy >= st.energy_cost
-                    && self.players[p].labour >= st.labour_cost
-                {
-                    self.players[p].money = self.players[p].money - st.money_cost;
-                    self.players[p].energy = self.players[p].energy - st.energy_cost;
-                    self.players[p].labour = self.players[p].labour - st.labour_cost;
-                    self.add_building(owner, kind, x, y);
-                }
-            }
+            Command::Build { owner, kind, x, y } => self.apply_build(owner, kind, x, y),
             Command::Train {
                 owner,
                 barracks,
                 kind,
-            } => {
-                if matches!(kind, UnitKind::Capital) && self.players[usize::from(owner.0)].era < 3 {
-                    return;
-                }
-                let st = self.balance.unit(kind);
-                let p = usize::from(owner.0);
-                let ok = self.entity(barracks).is_some_and(|e| {
-                    e.alive
-                        && e.owner == owner
-                        && matches!(e.kind, Kind::Building(BuildingKind::Barracks))
-                });
-                let has_supply = self.supply_used(owner) < self.supply_cap(owner);
-                let unlocked = self.players[p].unlocked_units & (1 << kind.index()) != 0;
-                if ok
-                    && unlocked
-                    && has_supply
-                    && self.players[p].money >= st.money_cost
-                    && self.players[p].energy >= st.energy_cost
-                    && self.players[p].labour >= st.labour_cost
-                {
-                    self.players[p].money = self.players[p].money - st.money_cost;
-                    self.players[p].energy = self.players[p].energy - st.energy_cost;
-                    self.players[p].labour = self.players[p].labour - st.labour_cost;
-                    if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
-                        e.build_queue.push(kind);
-                    }
-                }
-            }
+            } => self.apply_train(owner, barracks, kind),
             Command::Move {
                 owner,
                 unit,
@@ -1411,6 +1470,39 @@ impl Sim {
                 unit,
                 target,
             } => self.apply_use_ability(owner, unit, target),
+            Command::SetColonyAutonomy {
+                owner,
+                colony,
+                level,
+            } => {
+                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+                    if c.alive && c.owner == owner {
+                        c.autonomy_level = level.min(AUTONOMY_FULL);
+                    }
+                }
+            }
+            Command::SetColonyPolicy {
+                owner,
+                colony,
+                policy,
+            } => {
+                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+                    if c.alive && c.owner == owner {
+                        c.policy = policy;
+                    }
+                }
+            }
+            Command::DirectColony {
+                owner,
+                colony,
+                intent,
+            } => {
+                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+                    if c.alive && c.owner == owner {
+                        c.directive = intent;
+                    }
+                }
+            }
         }
     }
 
@@ -1739,6 +1831,17 @@ impl Sim {
             let mined = self.map.mine(tx, ty, want);
             let amount = Fixed::from_int(i32::try_from(mined).unwrap_or(0));
             self.players[p].money = self.players[p].money + amount;
+        }
+    }
+
+    /// Advances each colony's earned-autonomy progress. M3 accrues one qualifying
+    /// tick per tick for every living colony; later milestones gate this on the
+    /// colony's stability/growth so higher autonomy must genuinely be earned.
+    fn run_autonomy(&mut self) {
+        for c in &mut self.colonies {
+            if c.alive {
+                c.autonomy_progress = c.autonomy_progress.saturating_add(1);
+            }
         }
     }
 
@@ -2896,9 +2999,10 @@ mod tests {
         let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
         s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
-        // Drive P0 only through its autonomous colony; advance a while so there is
-        // real work (build/train/move) to generate.
-        for _ in 0..40 {
+        // The colony must first EARN full autonomy (one level per 120 ticks); run
+        // well past 9*120 so its effective level reaches the cap, at which point no
+        // command category is filtered and it delegates wholesale to the AI brain.
+        for _ in 0..1100 {
             let mut cmds = s.colony_commands();
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
@@ -2938,6 +3042,92 @@ mod tests {
             s.state_hash()
         }
         assert_eq!(run(), run());
+    }
+
+    // ---- M3: policy + earned-autonomy gradient ----
+
+    #[test]
+    fn autonomy_is_earned_over_time() {
+        use crate::game::civ::AUTONOMY_HOLD_TICKS;
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 10);
+        let col = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        // Freshly founded: requested 9 but earned 0 ⇒ acts at 0 (silent).
+        assert!(s.colony_commands().is_empty());
+        // After two hold windows it has earned level 2 (Build unlocked).
+        for _ in 0..=(AUTONOMY_HOLD_TICKS * 2) {
+            s.step(&[]);
+        }
+        assert_eq!(s.colony(col).unwrap().earned_autonomy(), 2);
+    }
+
+    #[test]
+    fn requested_autonomy_caps_the_effective_level() {
+        use crate::game::civ::AUTONOMY_HOLD_TICKS;
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 10);
+        let col = s.add_colony(P0, cc, 1); // request only level 1
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 5) {
+            s.step(&[]);
+        }
+        // Earned 5, but requested 1 ⇒ effective is capped at 1.
+        assert_eq!(s.colony(col).unwrap().earned_autonomy(), 5);
+        assert_eq!(s.colony(col).unwrap().effective_autonomy(), 1);
+    }
+
+    #[test]
+    fn hold_directive_freezes_a_colony() {
+        use crate::game::civ::{ColonyIntent, AUTONOMY_HOLD_TICKS};
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 10);
+        let col = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 10) {
+            s.step(&[]);
+        }
+        assert!(!s.colony_commands().is_empty(), "earned colony acts");
+        s.step(&[Command::DirectColony {
+            owner: P0,
+            colony: col,
+            intent: ColonyIntent::Hold,
+        }]);
+        assert!(
+            s.colony_commands().is_empty(),
+            "a Hold directive freezes autonomous action"
+        );
+    }
+
+    #[test]
+    fn set_policy_and_autonomy_commands_apply() {
+        use crate::game::civ::{ColonyPolicy, MilitaryIntent};
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 10);
+        let col = s.add_colony(P0, cc, 0);
+        s.step(&[Command::SetColonyAutonomy {
+            owner: P0,
+            colony: col,
+            level: 4,
+        }]);
+        assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
+        let policy = ColonyPolicy {
+            military: MilitaryIntent::Conquest,
+            ..ColonyPolicy::default()
+        };
+        s.step(&[Command::SetColonyPolicy {
+            owner: P0,
+            colony: col,
+            policy,
+        }]);
+        assert_eq!(
+            s.colony(col).unwrap().policy.military,
+            MilitaryIntent::Conquest
+        );
+        // A non-owner cannot reconfigure it.
+        s.step(&[Command::SetColonyAutonomy {
+            owner: P1,
+            colony: col,
+            level: 9,
+        }]);
+        assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
     }
 
     #[test]
