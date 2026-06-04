@@ -260,7 +260,7 @@ fn run_playtest_report() {
 /// An army of `kind` units fitting roughly within `budget` credits.
 #[must_use]
 fn balance_army(kind: UnitKind, budget: i64) -> Vec<UnitKind> {
-    let cost = (kind.stats().cost.to_bits() / 65536).max(1);
+    let cost = (kind.stats().money_cost.to_bits() / 65536).max(1);
     let n = (budget / cost).max(1);
     (0..n).map(|_| kind).collect()
 }

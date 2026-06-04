@@ -50,7 +50,12 @@ struct UnitData {
     armor: ArmorKind,
     attack: AttackData,
     speed_milli: i32,
+    /// Money cost to train (the RON field stays `cost`).
     cost: i32,
+    #[serde(default)]
+    energy_cost: i32,
+    #[serde(default)]
+    labour_cost: i32,
     build_time: u32,
     #[serde(default)]
     is_air: bool,
@@ -59,18 +64,20 @@ struct UnitData {
 #[derive(Deserialize)]
 struct BuildingData {
     max_hp: i32,
-    power_produced: i32,
-    power_consumed: i32,
-    credit_income: i32,
     #[serde(default)]
-    antimatter_income: i32,
+    energy_output: i32,
+    #[serde(default)]
+    labour_output: i32,
     produces_units: bool,
     attack: Option<AttackData>,
+    /// Money cost to construct (the RON field stays `cost`).
     cost: i32,
     #[serde(default)]
-    mine_rate: i32,
+    energy_cost: i32,
     #[serde(default)]
-    research_income: i32,
+    labour_cost: i32,
+    #[serde(default)]
+    mine_rate: i32,
 }
 
 #[derive(Deserialize)]
@@ -124,7 +131,9 @@ fn to_unit(u: &UnitData) -> UnitStats {
         armor: to_armor(u.armor),
         attack: to_attack(&u.attack),
         speed: Fixed::from_ratio(i64::from(u.speed_milli), 1000),
-        cost: Fixed::from_int(u.cost),
+        money_cost: Fixed::from_int(u.cost),
+        energy_cost: Fixed::from_int(u.energy_cost),
+        labour_cost: Fixed::from_int(u.labour_cost),
         build_time: u.build_time,
         is_air: u.is_air,
     }
@@ -134,15 +143,14 @@ fn to_building(b: &BuildingData) -> BuildingStats {
     BuildingStats {
         max_hp: Fixed::from_int(b.max_hp),
         armor: ArmorType::Structure,
-        power_produced: b.power_produced,
-        power_consumed: b.power_consumed,
-        credit_income: Fixed::from_int(b.credit_income),
-        antimatter_income: Fixed::from_int(b.antimatter_income),
+        energy_output: b.energy_output,
+        labour_output: b.labour_output,
         produces_units: b.produces_units,
         attack: b.attack.as_ref().map(to_attack),
-        cost: Fixed::from_int(b.cost),
+        money_cost: Fixed::from_int(b.cost),
+        energy_cost: Fixed::from_int(b.energy_cost),
+        labour_cost: Fixed::from_int(b.labour_cost),
         mine_rate: b.mine_rate,
-        research_income: Fixed::from_int(b.research_income),
     }
 }
 

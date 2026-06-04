@@ -1350,7 +1350,7 @@ fn tech_status(
     {
         return TechStatus::Locked;
     }
-    // Research-paid tiers need a lab; the minerals-paid Foundation tier does not.
+    // Research-paid tiers need a lab; the money-paid Foundation tier does not.
     if def.tier > 0 && !has_lab {
         return TechStatus::NoLab;
     }
@@ -1451,8 +1451,7 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     centered("ASCENDANCY DOCTRINES", py + 32.0, 24.0, GOLD, fb);
     draw_rectangle(px + 12.0, py + head_h - 4.0, pw - 24.0, 1.0, OLIVE);
 
-    let minerals = sim.minerals(HUMAN).to_bits() / 65536;
-    let research = sim.research(HUMAN).to_bits() / 65536;
+    let money = sim.money(HUMAN).to_bits() / 65536;
     let has_lab = sim.has_research_lab(HUMAN);
 
     for track in 0..4usize {
@@ -1495,7 +1494,8 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         let rc_i = rc.to_bits() / 65536;
         let is_forge = track == 3;
         let lab_ok = is_forge || has_lab;
-        let afford = lab_ok && minerals >= mc_i && research >= rc_i;
+        // Doctrines are paid entirely from Money now (money + research folded).
+        let afford = lab_ok && money >= mc_i + rc_i;
 
         // Name + current level.
         draw_text_ex(
@@ -2166,7 +2166,7 @@ fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32
         .map()
         .tile(i32::from(col), i32::from(row))
         .is_some_and(|t| t.buildable);
-    let affordable = sim.minerals(HUMAN) >= sim.building_cost(kind);
+    let affordable = sim.money(HUMAN) >= sim.building_cost(kind);
     let is_extractor = matches!(kind, BuildingKind::Refinery | BuildingKind::AntimatterPlant);
 
     // For extractors: outline all deposit tiles in cyan so the player sees where to place.
@@ -2245,7 +2245,7 @@ mod tests {
 
     // Heavy Chassis (id 1) is a research-paid tier-1 tech with prereq [10].
     const T1: u32 = 1;
-    // Mobilization (id 6) is the minerals-paid root (no prereqs, no lab needed).
+    // Mobilization (id 6) is the money-paid root (no prereqs, no lab needed).
     const ROOT: u32 = 6;
 
     #[test]

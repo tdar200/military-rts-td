@@ -30,44 +30,46 @@
         attack: (damage: 40, damage_type: Explosive, range: 6, period: 18),
         speed_milli: 40, cost: 500, build_time: 600,
     ),
+    // Buildings. `cost` is Money; `energy_output`/`labour_output` feed the
+    // Energy/Labour stockpiles; `mine_rate` mines Money from a deposit.
     command_center: (
-        max_hp: 1000, power_produced: 0, power_consumed: 0, credit_income: 0,
+        max_hp: 1000, labour_output: 2,
         produces_units: false, attack: None, cost: 0,
     ),
     power_plant: (
-        max_hp: 300, power_produced: 100, power_consumed: 0, credit_income: 0,
+        max_hp: 300, energy_output: 100,
         produces_units: false, attack: None, cost: 100,
     ),
     refinery: (
-        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 0, mine_rate: 2,
+        max_hp: 300, mine_rate: 2,
         produces_units: false, attack: None, cost: 150,
     ),
     barracks: (
-        max_hp: 400, power_produced: 0, power_consumed: 30, credit_income: 0,
+        max_hp: 400, labour_output: 1,
         produces_units: true, attack: None, cost: 200,
     ),
     gun_turret: (
-        max_hp: 250, power_produced: 0, power_consumed: 25, credit_income: 0,
+        max_hp: 250,
         produces_units: false,
         attack: Some((damage: 10, damage_type: Ballistic, range: 5, period: 10)),
         cost: 120,
     ),
     aa_turret: (
-        max_hp: 220, power_produced: 0, power_consumed: 30, credit_income: 0,
+        max_hp: 220,
         produces_units: false,
         attack: Some((damage: 20, damage_type: AntiArmor, range: 6, period: 8, targets_ground: false, targets_air: true)),
         cost: 140,
     ),
     wall: (
-        max_hp: 200, power_produced: 0, power_consumed: 0, credit_income: 0,
+        max_hp: 200,
         produces_units: false, attack: None, cost: 20,
     ),
     research_lab: (
-        max_hp: 300, power_produced: 0, power_consumed: 25, credit_income: 0, research_income: 2,
+        max_hp: 300,
         produces_units: false, attack: None, cost: 250,
     ),
     antimatter_plant: (
-        max_hp: 300, power_produced: 0, power_consumed: 20, credit_income: 0, antimatter_income: 0, mine_rate: 2,
+        max_hp: 300, mine_rate: 2,
         produces_units: false, attack: None, cost: 200,
     ),
 )

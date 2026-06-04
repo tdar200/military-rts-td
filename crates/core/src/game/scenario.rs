@@ -725,11 +725,13 @@ mod tests {
             if w != last_waves {
                 last_waves = w;
                 std::eprintln!(
-                    "wave {} @ t={} ({}s): minerals={} research={} alloys={} units(P0)={} units(P1)={}",
-                    w, t, t / 30,
-                    s.minerals(PlayerId(0)).to_bits() / 65536,
-                    s.research(PlayerId(0)).to_bits() / 65536,
-                    s.alloys(PlayerId(0)).to_bits() / 65536,
+                    "wave {} @ t={} ({}s): money={} energy={} labour={} units(P0)={} units(P1)={}",
+                    w,
+                    t,
+                    t / 30,
+                    s.money(PlayerId(0)).to_bits() / 65536,
+                    s.energy(PlayerId(0)).to_bits() / 65536,
+                    s.labour(PlayerId(0)).to_bits() / 65536,
                     s.unit_count(PlayerId(0)),
                     s.unit_count(PlayerId(1)),
                 );
@@ -747,10 +749,10 @@ mod tests {
             }
         }
         std::eprintln!(
-            "END: winner={:?}, waves_survived={}, final minerals={}",
+            "END: winner={:?}, waves_survived={}, final money={}",
             winner,
             s.waves_survived(),
-            s.minerals(PlayerId(0)).to_bits() / 65536
+            s.money(PlayerId(0)).to_bits() / 65536
         );
     }
 
@@ -762,14 +764,14 @@ mod tests {
         let mut s = survival(3);
         let cmds = s.ai_commands(PlayerId(0)); // founds
         s.step(&cmds);
-        let start = s.minerals(PlayerId(0)).to_bits();
+        let start = s.money(PlayerId(0)).to_bits();
         for _ in 0..3000 {
             let c = s.ai_commands(PlayerId(0));
             s.step(&c);
         }
         assert!(
-            s.minerals(PlayerId(0)).to_bits() > start,
-            "post-founding economy should mine minerals"
+            s.money(PlayerId(0)).to_bits() > start,
+            "post-founding economy should mine money"
         );
         assert_eq!(
             s.unit_count(PlayerId(1)),

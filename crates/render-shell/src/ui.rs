@@ -2,7 +2,7 @@
 //! buttons, in the "HOLOGRAPHIC TACTICAL COMMAND" theme (see [`crate::theme`]).
 //!
 //! The HUD is dark holographic glass: translucent panels with cool dim borders,
-//! cyan glow reserved for live/important elements (minerals, active build), a warm
+//! cyan glow reserved for live/important elements (money, active build), a warm
 //! amber/red for alerts, and button states that read by hue (cyan-saturated
 //! active vs cool rest/hover) rather than brightness alone. Buttons emit the same
 //! `Command`s as the hotkeys, so the UI is just another input source.
@@ -598,44 +598,33 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     let mut x = 14.0;
     icon_coin(x + 7.0, 18.0, 8.0);
     x += 22.0;
-    let minerals = (sim.minerals(HUMAN).to_bits() / 65536).to_string();
+    let money = (sim.money(HUMAN).to_bits() / 65536).to_string();
     text(
-        &minerals,
+        &money,
         x,
         26.0,
         22.0,
         with_alpha(GOLD_HI, holo_flicker()),
         fb,
     );
-    x += text_width(&minerals, 22.0, fb) + 18.0;
+    x += text_width(&money, 22.0, fb) + 18.0;
     ribbon_divider(x - 9.0);
 
-    // ENERGY — bolt + produced/consumed colored GOOD/BAD.
+    // ENERGY — bolt + spendable stockpile.
     icon_bolt(x + 5.0, 19.0, 8.0, WARN);
     x += 16.0;
-    let (produced, consumed) = sim.power_balance(HUMAN);
-    let power_color = if produced >= consumed { GOOD } else { BAD };
-    let power = format!("{produced}/{consumed}");
-    text(&power, x, 25.0, 18.0, power_color, fb);
-    x += text_width(&power, 18.0, fb) + 18.0;
+    let energy = (sim.energy(HUMAN).to_bits() / 65536).to_string();
+    text(&energy, x, 25.0, 18.0, WARN, fb);
+    x += text_width(&energy, 18.0, fb) + 18.0;
     ribbon_divider(x - 9.0);
 
-    // RESEARCH — "RES" label in shield-teal so it's distinct from the gold coin.
-    let res_label = "RES";
-    text(res_label, x, 25.0, 15.0, SHIELD, fb);
-    x += text_width(res_label, 15.0, fb) + 4.0;
-    let res_val = (sim.research(HUMAN).to_bits() / 65536).to_string();
-    text(&res_val, x, 25.0, 18.0, SHIELD, fb);
-    x += text_width(&res_val, 18.0, fb) + 18.0;
-    ribbon_divider(x - 9.0);
-
-    // ALLOYS — "ALY" label in amber (WARN) to distinguish from research (teal).
-    let aly_label = "ALY";
-    text(aly_label, x, 25.0, 15.0, WARN, fb);
-    x += text_width(aly_label, 15.0, fb) + 4.0;
-    let aly_val = (sim.alloys(HUMAN).to_bits() / 65536).to_string();
-    text(&aly_val, x, 25.0, 18.0, WARN, fb);
-    x += text_width(&aly_val, 18.0, fb) + 18.0;
+    // LABOUR — "LAB" label in shield-teal: the population/workforce stockpile.
+    let lab_label = "LAB";
+    text(lab_label, x, 25.0, 15.0, SHIELD, fb);
+    x += text_width(lab_label, 15.0, fb) + 4.0;
+    let lab_val = (sim.labour(HUMAN).to_bits() / 65536).to_string();
+    text(&lab_val, x, 25.0, 18.0, SHIELD, fb);
+    x += text_width(&lab_val, 18.0, fb) + 18.0;
     ribbon_divider(x - 9.0);
 
     // UNITS — rank chevrons + count / supply cap (amber when at the cap).
@@ -711,7 +700,7 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
             Action::Build(k) => sim.building_unlocked(HUMAN, k),
             Action::Train(k) => sim.unit_unlocked(HUMAN, k),
         };
-        let affordable = sim.minerals(HUMAN) >= price;
+        let affordable = sim.money(HUMAN) >= price;
         let active = build_active(b.action, build_mode);
         let hover = b.rect.contains(pointer);
         let price_int = price.to_bits() / 65536;

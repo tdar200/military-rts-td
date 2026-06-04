@@ -107,9 +107,6 @@ const fn veterancy_factor(rank: u8) -> Fixed {
     }
 }
 
-/// Antimatter cost to train a Capital Ship.
-const CAPITAL_ANTIMATTER_COST: Fixed = Fixed::from_int(100);
-
 /// Base population allowance before any production buildings.
 const SUPPLY_BASE: u32 = 10;
 /// Extra population headroom per Command Center.
@@ -150,17 +147,17 @@ const DOC_WEAPONS: usize = 0;
 const DOC_ARMOR: usize = 1;
 /// Track index: army-wide shield-max (research-heavy survivability).
 const DOC_VITALITY: usize = 2;
-/// Track index: the minerals-only bank-drainer (steep escalating lump cost).
+/// Track index: the money-only bank-drainer (steep escalating lump cost).
 const DOC_FORGE: usize = 3;
 /// Per-track cost ramp: cost(level L→L+1) = base + step * L. Minerals component.
 const DOCTRINE_MIN_BASE: [i32; DOCTRINE_TRACKS] = [300, 300, 300, 2000];
 const DOCTRINE_MIN_STEP: [i32; DOCTRINE_TRACKS] = [120, 120, 120, 900];
-/// Research component of the cost ramp (FORGE is minerals-only ⇒ 0).
+/// Research component of the cost ramp (FORGE is money-only ⇒ 0).
 const DOCTRINE_RES_BASE: [i32; DOCTRINE_TRACKS] = [500, 500, 400, 0];
 const DOCTRINE_RES_STEP: [i32; DOCTRINE_TRACKS] = [180, 180, 150, 0];
 /// Per-level effect of the WEAPONS track: +1 flat damage. The effect is endless
 /// by design (capped only at `DOCTRINE_LEVEL_CAP`); the steeply escalating
-/// per-level research+minerals cost (see `ascend_cost`) is the sole brake — by the
+/// per-level research+money cost (see `ascend_cost`) is the sole brake — by the
 /// time a level is cheap relative to income, the wave curve has long outgrown it.
 const WEAPON_STEP: Fixed = Fixed::from_int(1);
 /// Per-level effect of the ARMOR track: +0.5 flat mitigation (half-steps blunt
@@ -169,7 +166,7 @@ const ARMOR_STEP: Fixed = Fixed::from_ratio(1, 2);
 /// Per-level effect of the VITALITY track: +8 shield-max.
 const VITALITY_STEP: Fixed = Fixed::from_int(8);
 /// Per-level FORGE bonuses: a small flat weapon AND armor buff, so a FORGE level
-/// is a real purchase — and its steep, escalating minerals-only lump cost is the
+/// is a real purchase — and its steep, escalating money-only lump cost is the
 /// bank-drainer. The AI keeps `ASCEND_MIN_RESERVE` in hand, so the surplus churns
 /// down to a low equilibrium (continually buying levels) instead of sitting idle,
 /// while never starving unit retraining.
@@ -178,7 +175,7 @@ const FORGE_ARMOR_STEP: Fixed = Fixed::from_ratio(1, 4);
 /// Minerals granted for founding the Command Center adjacent to an Ore deposit —
 /// the survey phase's premium-site payoff.
 const FOUNDING_ORE_BONUS: Fixed = Fixed::from_int(200);
-/// The AI only ascends with at least this much minerals in reserve (and era ≥ 1),
+/// The AI only ascends with at least this much money in reserve (and era ≥ 1),
 /// so the 120-tick golden run — which never reaches era 1 — never emits an Ascend
 /// and the golden hash stays stable across future balance tuning of the sink.
 const ASCEND_MIN_RESERVE: Fixed = Fixed::from_int(2000);
@@ -186,17 +183,18 @@ const ASCEND_MIN_RESERVE: Fixed = Fixed::from_int(2000);
 /// Per-player resources.
 #[derive(Clone, Copy, Debug)]
 struct Player {
-    minerals: Fixed,
+    /// Primary currency (the "Money" resource).
+    money: Fixed,
     /// Bitmask of researched tech ids (bit i = tech i complete).
     researched_techs: u32,
     /// In-progress research: (tech id, ticks remaining). One at a time.
     active_research: Option<(u32, u32)>,
     /// Current era index (0=Modern..3=Interstellar).
     era: u8,
-    /// Accumulated alloys (third resource).
-    alloys: Fixed,
-    /// Accumulated Research pool (funds the tech tree).
-    research: Fixed,
+    /// Spendable Energy stockpile (produced by power buildings).
+    energy: Fixed,
+    /// Labour (population capacity) stockpile.
+    labour: Fixed,
     /// Bitmask of chosen survival perks (bit i = perk i active).
     active_perks: u32,
     /// Level bought on each endless Ascendancy Doctrine track (see `DOC_*`).
@@ -211,7 +209,7 @@ struct Player {
 /// A player or AI input, applied at a tick boundary.
 #[derive(Clone, Debug)]
 pub enum Command {
-    /// Construct a building on a tile (costs minerals; tile must be buildable).
+    /// Construct a building on a tile (costs money; tile must be buildable).
     Build {
         /// Owning player.
         owner: PlayerId,
@@ -222,7 +220,7 @@ pub enum Command {
         /// Tile row.
         y: u16,
     },
-    /// Queue a unit for training at a barracks (costs minerals).
+    /// Queue a unit for training at a barracks (costs money).
     Train {
         /// Owning player.
         owner: PlayerId,
@@ -240,7 +238,7 @@ pub enum Command {
         /// Destination.
         target: Vec2,
     },
-    /// Begin researching a tech (costs minerals; needs a research lab; powered to progress).
+    /// Begin researching a tech (costs money; needs a research lab; powered to progress).
     Research {
         /// Owning player.
         owner: PlayerId,
@@ -372,16 +370,16 @@ const fn escalating_unit(wave: u32, i: u32) -> UnitKind {
     }
 }
 
-/// Cost in `(minerals, research)` to buy the next level of doctrine `track` when
+/// Cost in `(money, research)` to buy the next level of doctrine `track` when
 /// the current level is `level`. Linear ramp `base + step * level` — exact in
 /// fixed-point, no float, so it stays clippy-clean and bit-identical everywhere.
 fn ascend_cost(track: usize, level: u16) -> (Fixed, Fixed) {
     let l = Fixed::from_int(i32::from(level));
-    let minerals =
+    let money =
         Fixed::from_int(DOCTRINE_MIN_BASE[track]) + Fixed::from_int(DOCTRINE_MIN_STEP[track]) * l;
     let research =
         Fixed::from_int(DOCTRINE_RES_BASE[track]) + Fixed::from_int(DOCTRINE_RES_STEP[track]) * l;
-    (minerals, research)
+    (money, research)
 }
 
 /// The high-level game phase: surveying (choosing where to found the base)
@@ -514,12 +512,12 @@ impl Sim {
             rng: Rng::from_seed(seed),
             map,
             players: [Player {
-                minerals: starting_credits,
+                money: starting_credits,
                 researched_techs: 0,
                 active_research: None,
                 era: 0,
-                alloys: Fixed::ZERO,
-                research: Fixed::ZERO,
+                energy: Fixed::ZERO,
+                labour: Fixed::ZERO,
                 active_perks: 0,
                 doctrine_levels: [0; DOCTRINE_TRACKS],
                 unlocked_buildings: u16::MAX,
@@ -552,12 +550,7 @@ impl Sim {
         clippy::cast_possible_truncation,
         reason = "colony index fits u32 for any real game (mirrors alloc_slot)"
     )]
-    pub fn add_colony(
-        &mut self,
-        owner: PlayerId,
-        seat: EntityId,
-        autonomy_level: u8,
-    ) -> ColonyId {
+    pub fn add_colony(&mut self, owner: PlayerId, seat: EntityId, autonomy_level: u8) -> ColonyId {
         let colony = Colony {
             alive: true,
             owner,
@@ -719,22 +712,22 @@ impl Sim {
         &self.map
     }
 
-    /// A player's current minerals balance.
+    /// A player's current money balance.
     #[must_use]
-    pub fn minerals(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].minerals
+    pub fn money(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].money
     }
 
-    /// A player's current alloys balance.
+    /// A player's current Energy stockpile.
     #[must_use]
-    pub fn alloys(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].alloys
+    pub fn energy(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].energy
     }
 
-    /// The player's accumulated Research pool (funds the tech tree).
+    /// A player's current Labour (population) stockpile.
     #[must_use]
-    pub fn research(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].research
+    pub fn labour(&self, player: PlayerId) -> Fixed {
+        self.players[usize::from(player.0)].labour
     }
 
     /// A player's current level on Ascendancy Doctrine `track` (for the UI).
@@ -748,7 +741,7 @@ impl Sim {
         self.players[usize::from(player.0)].doctrine_levels[t]
     }
 
-    /// The `(minerals, research)` cost for `player` to buy the next level of
+    /// The `(money, research)` cost for `player` to buy the next level of
     /// doctrine `track` (for UI affordability hints). Out-of-range ⇒ zero.
     #[must_use]
     pub fn doctrine_cost(&self, player: PlayerId, track: u8) -> (Fixed, Fixed) {
@@ -759,16 +752,16 @@ impl Sim {
         ascend_cost(t, self.doctrine_level(player, track))
     }
 
-    /// Mineral cost to construct a building (for UI affordability hints).
+    /// Money cost to construct a building (for UI affordability hints).
     #[must_use]
     pub const fn building_cost(&self, kind: BuildingKind) -> Fixed {
-        self.balance.building(kind).cost
+        self.balance.building(kind).money_cost
     }
 
-    /// Mineral cost to train a unit (for UI affordability hints).
+    /// Money cost to train a unit (for UI affordability hints).
     #[must_use]
     pub const fn unit_cost(&self, kind: UnitKind) -> Fixed {
-        self.balance.unit(kind).cost
+        self.balance.unit(kind).money_cost
     }
 
     /// Per-player research state: (researched bitmask, optional (tech id, ticks left)).
@@ -792,24 +785,6 @@ impl Sim {
                 && e.owner == player
                 && matches!(e.kind, Kind::Building(BuildingKind::ResearchLab))
         })
-    }
-
-    /// A player's `(produced, consumed)` power from living buildings. The player
-    /// is in deficit (slowed economy/production) when consumed exceeds produced.
-    #[must_use]
-    pub fn power_balance(&self, player: PlayerId) -> (i32, i32) {
-        let mut produced = 0;
-        let mut consumed = 0;
-        for e in &self.entities {
-            if e.alive && e.owner == player {
-                if let Kind::Building(b) = e.kind {
-                    let st = self.balance.building(b);
-                    produced += st.power_produced;
-                    consumed += st.power_consumed;
-                }
-            }
-        }
-        (produced, consumed)
     }
 
     /// How many living buildings of `kind` a player owns. Used by the AI to bound
@@ -1030,11 +1005,11 @@ impl Sim {
             GamePhase::Active => 1,
         });
         h.write_u64(self.phase_started);
-        // Per-player fields: minerals, researched_techs, active_research,
+        // Per-player fields: money, researched_techs, active_research,
         // era, alloys, research, active_perks, doctrine_levels — in this stable
         // order. Never reorder; appending is fine (and re-pins the golden hash).
         for p in &self.players {
-            h.write_i64(p.minerals.to_bits());
+            h.write_i64(p.money.to_bits());
             h.write_u64(u64::from(p.researched_techs));
             match p.active_research {
                 Some((id, ticks)) => {
@@ -1045,8 +1020,8 @@ impl Sim {
                 None => h.write_u64(0),
             }
             h.write_u64(u64::from(p.era));
-            h.write_i64(p.alloys.to_bits());
-            h.write_i64(p.research.to_bits());
+            h.write_i64(p.energy.to_bits());
+            h.write_i64(p.labour.to_bits());
             h.write_u64(u64::from(p.active_perks));
             for t in 0..DOCTRINE_TRACKS {
                 h.write_u64(u64::from(p.doctrine_levels[t]));
@@ -1190,9 +1165,9 @@ impl Sim {
         for command in commands {
             self.apply_command(command);
         }
-        let powered = self.run_economy();
-        self.run_research(powered);
-        self.run_production(powered);
+        self.run_economy();
+        self.run_research();
+        self.run_production();
         self.run_waves();
         self.run_movement();
         self.run_shields();
@@ -1363,11 +1338,18 @@ impl Sim {
                     .map
                     .tile(i32::from(x), i32::from(y))
                     .is_some_and(|t| t.buildable);
-                let cost = self.balance.building(kind).cost;
+                let st = self.balance.building(kind);
                 let p = usize::from(owner.0);
                 let unlocked = self.players[p].unlocked_buildings & (1 << kind.index()) != 0;
-                if unlocked && buildable && self.players[p].minerals >= cost {
-                    self.players[p].minerals = self.players[p].minerals - cost;
+                if unlocked
+                    && buildable
+                    && self.players[p].money >= st.money_cost
+                    && self.players[p].energy >= st.energy_cost
+                    && self.players[p].labour >= st.labour_cost
+                {
+                    self.players[p].money = self.players[p].money - st.money_cost;
+                    self.players[p].energy = self.players[p].energy - st.energy_cost;
+                    self.players[p].labour = self.players[p].labour - st.labour_cost;
                     self.add_building(owner, kind, x, y);
                 }
             }
@@ -1379,12 +1361,7 @@ impl Sim {
                 if matches!(kind, UnitKind::Capital) && self.players[usize::from(owner.0)].era < 3 {
                     return;
                 }
-                let cost = self.balance.unit(kind).cost;
-                let am_cost = if matches!(kind, UnitKind::Capital) {
-                    CAPITAL_ANTIMATTER_COST
-                } else {
-                    Fixed::ZERO
-                };
+                let st = self.balance.unit(kind);
                 let p = usize::from(owner.0);
                 let ok = self.entity(barracks).is_some_and(|e| {
                     e.alive
@@ -1396,11 +1373,13 @@ impl Sim {
                 if ok
                     && unlocked
                     && has_supply
-                    && self.players[p].minerals >= cost
-                    && self.players[p].alloys >= am_cost
+                    && self.players[p].money >= st.money_cost
+                    && self.players[p].energy >= st.energy_cost
+                    && self.players[p].labour >= st.labour_cost
                 {
-                    self.players[p].minerals = self.players[p].minerals - cost;
-                    self.players[p].alloys = self.players[p].alloys - am_cost;
+                    self.players[p].money = self.players[p].money - st.money_cost;
+                    self.players[p].energy = self.players[p].energy - st.energy_cost;
+                    self.players[p].labour = self.players[p].labour - st.labour_cost;
                     if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
                         e.build_queue.push(kind);
                     }
@@ -1545,18 +1524,12 @@ impl Sim {
         let prereq_ok = def.prereqs.iter().all(|&r| mask & (1u32 << r) != 0);
         let fork_ok =
             crate::game::tech::excludes(tech_id).is_none_or(|other| mask & (1u32 << other) == 0);
-        let mineral_paid = def.tier == 0;
-        let affordable = if mineral_paid {
-            self.players[p].minerals >= def.cost
-        } else {
-            self.has_research_lab(owner) && self.players[p].research >= def.cost
-        };
+        // All research is now paid from Money; tier 0 is the bootstrap (no lab),
+        // every later tier needs a Research Lab.
+        let lab_ok = def.tier == 0 || self.has_research_lab(owner);
+        let affordable = lab_ok && self.players[p].money >= def.cost;
         if !already && !busy && prereq_ok && fork_ok && affordable {
-            if mineral_paid {
-                self.players[p].minerals = self.players[p].minerals - def.cost;
-            } else {
-                self.players[p].research = self.players[p].research - def.cost;
-            }
+            self.players[p].money = self.players[p].money - def.cost;
             self.players[p].active_research = Some((tech_id, def.duration));
         }
     }
@@ -1584,12 +1557,12 @@ impl Sim {
         });
         if near_ore {
             let p = usize::from(owner.0);
-            self.players[p].minerals = self.players[p].minerals + FOUNDING_ORE_BONUS;
+            self.players[p].money = self.players[p].money + FOUNDING_ORE_BONUS;
         }
     }
 
     /// Buys the next level of doctrine `track` for `owner`, if unlocked and
-    /// affordable. FORGE (the minerals-only track) needs no lab; the research
+    /// affordable. FORGE (the money-only track) needs no lab; the research
     /// tracks require a Research Lab. Validate-then-spend, mirroring `Research`.
     fn apply_ascend(&mut self, owner: PlayerId, track: u8) {
         let t = usize::from(track);
@@ -1601,11 +1574,13 @@ impl Sim {
         if level >= DOCTRINE_LEVEL_CAP {
             return;
         }
+        // Doctrines are now paid entirely from Money (the old research portion is
+        // folded into the Money cost). FORGE needs no lab; the rest do.
         let (min_cost, res_cost) = ascend_cost(t, level);
+        let total = min_cost + res_cost;
         let lab_ok = t == DOC_FORGE || self.has_research_lab(owner);
-        if lab_ok && self.players[p].minerals >= min_cost && self.players[p].research >= res_cost {
-            self.players[p].minerals = self.players[p].minerals - min_cost;
-            self.players[p].research = self.players[p].research - res_cost;
+        if lab_ok && self.players[p].money >= total {
+            self.players[p].money = self.players[p].money - total;
             self.players[p].doctrine_levels[t] = (level + 1).min(DOCTRINE_LEVEL_CAP);
         }
     }
@@ -1710,12 +1685,14 @@ impl Sim {
         }
     }
 
-    fn run_economy(&mut self) -> [bool; PLAYER_COUNT] {
-        let mut produced = [0i32; PLAYER_COUNT];
-        let mut consumed = [0i32; PLAYER_COUNT];
-        let mut income = [Fixed::ZERO; PLAYER_COUNT];
-        let mut am_income = [Fixed::ZERO; PLAYER_COUNT];
-        let mut research = [Fixed::ZERO; PLAYER_COUNT];
+    /// Produces the three resources for every player: Energy and Labour
+    /// stockpiles from buildings' per-tick output, and Money from extractor
+    /// mining plus the Economy tech bonus and the Logistics perk. The old
+    /// power-balance gradient is gone — Energy is a spendable stockpile now, not a
+    /// throughput gate, so production is unconditional.
+    fn run_economy(&mut self) {
+        let mut energy_out = [0i32; PLAYER_COUNT];
+        let mut labour_out = [0i32; PLAYER_COUNT];
         for e in &self.entities {
             if !e.alive {
                 continue;
@@ -1723,41 +1700,22 @@ impl Sim {
             if let Kind::Building(b) = e.kind {
                 let st = self.balance.building(b);
                 let p = usize::from(e.owner.0);
-                produced[p] += st.power_produced;
-                consumed[p] += st.power_consumed;
-                income[p] = income[p] + st.credit_income;
-                am_income[p] = am_income[p] + st.antimatter_income;
-                research[p] = research[p] + st.research_income;
+                energy_out[p] += st.energy_output;
+                labour_out[p] += st.labour_output;
             }
         }
-        let mut powered = [false; PLAYER_COUNT];
         for p in 0..PLAYER_COUNT {
-            powered[p] = produced[p] >= consumed[p];
-            // Power is a gradient, not a switch: a deficit scales income by the
-            // fraction of demand actually met, floored at 1/2. Meeting more of
-            // your demand is rewarded smoothly instead of an all-or-nothing cliff.
-            let half = Fixed::from_ratio(1, 2);
-            let factor = if powered[p] || consumed[p] <= 0 {
-                Fixed::ONE
-            } else {
-                let frac = Fixed::from_ratio(i64::from(produced[p]), i64::from(consumed[p]));
-                if frac < half {
-                    half
-                } else {
-                    frac
-                }
-            };
+            self.players[p].energy = self.players[p].energy + Fixed::from_int(energy_out[p]);
+            self.players[p].labour = self.players[p].labour + Fixed::from_int(labour_out[p]);
+            // Money income: the Economy tech rider, scaled by the Logistics perk.
             let econ = self.player_economy_bonus(PlayerId(u8::try_from(p).unwrap()));
-            // Logistics perk: +50% credit income.
-            let mut credit_income = income[p] + econ;
+            let mut money_income = econ;
             if self.players[p].active_perks & (1 << crate::game::perk::LOGISTICS) != 0 {
-                credit_income = credit_income * Fixed::from_ratio(3, 2);
+                money_income = money_income * Fixed::from_ratio(3, 2);
             }
-            self.players[p].minerals = self.players[p].minerals + credit_income * factor;
-            self.players[p].alloys = self.players[p].alloys + am_income[p] * factor;
-            self.players[p].research = self.players[p].research + research[p] * factor;
+            self.players[p].money = self.players[p].money + money_income;
         }
-        // Extractors mine the deposit they stand on (throttled by power like income).
+        // Extractors mine the deposit they stand on — all deposits yield Money.
         let mut to_mine: alloc::vec::Vec<(u16, u16, u8, i32)> = alloc::vec::Vec::new();
         for e in &self.entities {
             if !e.alive {
@@ -1773,41 +1731,28 @@ impl Sim {
             }
         }
         for (tx, ty, owner, rate) in to_mine {
-            let Some(dep) = self.map.deposit(tx, ty) else {
+            if self.map.deposit(tx, ty).is_none() {
                 continue;
-            };
+            }
             let p = usize::from(owner);
-            let throttle = if powered[p] { rate } else { rate / 2 };
-            let want = u32::try_from(throttle.max(0)).unwrap_or(0);
+            let want = u32::try_from(rate.max(0)).unwrap_or(0);
             let mined = self.map.mine(tx, ty, want);
             let amount = Fixed::from_int(i32::try_from(mined).unwrap_or(0));
-            match dep.kind {
-                crate::game::map::DepositKind::Ore => {
-                    self.players[p].minerals = self.players[p].minerals + amount;
-                }
-                crate::game::map::DepositKind::Alloy => {
-                    self.players[p].alloys = self.players[p].alloys + amount;
-                }
-            }
+            self.players[p].money = self.players[p].money + amount;
         }
-        powered
     }
 
-    /// Advances each player's in-progress research, but only while powered.
+    /// Advances each player's in-progress research one tick.
     ///
     /// Runs every tick after `run_economy`, so the tick on which a research is
     /// started also counts as its first tick of progress: a `duration`-tick tech
-    /// completes after `duration` powered ticks counting the start tick.
-    fn run_research(&mut self, powered: [bool; PLAYER_COUNT]) {
-        // No research before a base is founded (a base-less player reads as
-        // "powered" since 0 >= 0, so guard the phase explicitly).
+    /// completes after `duration` ticks counting the start tick.
+    fn run_research(&mut self) {
+        // No research before a base is founded.
         if matches!(self.phase, GamePhase::Survey) {
             return;
         }
-        for (player, &is_powered) in self.players.iter_mut().zip(powered.iter()) {
-            if !is_powered {
-                continue;
-            }
+        for player in &mut self.players {
             if let Some((id, ticks)) = player.active_research {
                 if ticks <= 1 {
                     player.researched_techs |= 1u32 << id;
@@ -1835,13 +1780,10 @@ impl Sim {
         }
     }
 
-    fn run_production(&mut self, powered: [bool; PLAYER_COUNT]) {
+    fn run_production(&mut self) {
         let mut spawns: Vec<(PlayerId, UnitKind, Vec2)> = Vec::new();
         for e in &mut self.entities {
             if !e.alive || !matches!(e.kind, Kind::Building(BuildingKind::Barracks)) {
-                continue;
-            }
-            if !powered[usize::from(e.owner.0)] {
                 continue;
             }
             if let Some(&front) = e.build_queue.first() {
@@ -2247,7 +2189,7 @@ impl Sim {
             // its abilities, so a razed-beachhead wave keeps fighting smart.
             return cmds;
         };
-        let minerals = self.minerals(player);
+        let money = self.money(player);
         let enemy_cc = self.command_center_tile(PlayerId(1 - player.0));
 
         // Build order: act on the first missing essential, then build no more
@@ -2275,7 +2217,7 @@ impl Sim {
                             .is_some_and(|t| t.buildable)
                     });
                     if let Some((dx, dy, _)) = deposit_tile {
-                        if minerals >= self.building_cost(kind) {
+                        if money >= self.building_cost(kind) {
                             cmds.push(Command::Build {
                                 owner: player,
                                 kind,
@@ -2288,7 +2230,7 @@ impl Sim {
                     }
                     // No buildable deposit: skip Refinery, continue the build order.
                 } else {
-                    if minerals >= self.building_cost(kind) {
+                    if money >= self.building_cost(kind) {
                         if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                             cmds.push(Command::Build {
                                 owner: player,
@@ -2310,7 +2252,7 @@ impl Sim {
             && self.building_unlocked(player, BuildingKind::AaTurret)
             && self.enemy_has_air(player)
             && !self.has_building(player, BuildingKind::AaTurret)
-            && minerals >= self.building_cost(BuildingKind::AaTurret)
+            && money >= self.building_cost(BuildingKind::AaTurret)
         {
             if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
@@ -2330,7 +2272,7 @@ impl Sim {
         if !building_this_tick
             && self.building_unlocked(player, BuildingKind::AntimatterPlant)
             && !self.has_building(player, BuildingKind::AntimatterPlant)
-            && minerals >= self.building_cost(BuildingKind::AntimatterPlant)
+            && money >= self.building_cost(BuildingKind::AntimatterPlant)
         {
             if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
@@ -2353,19 +2295,17 @@ impl Sim {
         // Barracks, then Reactors as a pure supply sink. Every type is bounded, so
         // the AI fields a healthy army without carpeting the map. Deterministic
         // (row-major scans, no RNG); the flag is set only when a build is queued.
-        if !building_this_tick && minerals >= Fixed::from_int(500) {
+        if !building_this_tick && money >= Fixed::from_int(500) {
             use crate::game::map::DepositKind;
-            let (produced, consumed) = self.power_balance(player);
             let reactors = self.count_alive_buildings(player, BuildingKind::PowerPlant);
             let barracks = self.count_alive_buildings(player, BuildingKind::Barracks);
             let ore_extractors = self.active_extractors_on(player, DepositKind::Ore);
             let alloy_extractors = self.active_extractors_on(player, DepositKind::Alloy);
             let at_cap = self.supply_used(player) + 2 >= self.supply_cap(player);
             let near = self.find_buildable_near(cc_tile, enemy_cc);
-            let afford = |k| minerals >= self.building_cost(k);
+            let afford = |k| money >= self.building_cost(k);
 
-            let action: Option<(BuildingKind, u16, u16)> = (produced <= consumed
-                && reactors < MAX_AI_REACTORS
+            let action: Option<(BuildingKind, u16, u16)> = (reactors == 0
                 && afford(BuildingKind::PowerPlant))
             .then(|| near.map(|(x, y)| (BuildingKind::PowerPlant, x, y)))
             .flatten()
@@ -2413,14 +2353,13 @@ impl Sim {
         if !building_this_tick {
             if let Some(barracks) = self.idle_barracks(player) {
                 let kind = if self.player_era(player) >= 3
-                    && minerals >= self.balance.unit(UnitKind::Capital).cost
-                    && self.alloys(player) >= CAPITAL_ANTIMATTER_COST
+                    && money >= self.balance.unit(UnitKind::Capital).money_cost
                 {
                     UnitKind::Capital
                 } else {
                     UnitKind::Infantry
                 };
-                if minerals >= self.balance.unit(kind).cost {
+                if money >= self.balance.unit(kind).money_cost {
                     cmds.push(Command::Train {
                         owner: player,
                         barracks,
@@ -2431,22 +2370,22 @@ impl Sim {
         }
 
         // Ascendancy Doctrines: once established (era ≥ 1) and holding a Minerals
-        // reserve, convert the surplus into army QUALITY. The minerals-only Forge
+        // reserve, convert the surplus into army QUALITY. The money-only Forge
         // track always runs (it bleeds the standing Minerals bank); the research-
         // costed quality tracks only run once the finite tech tree is exhausted —
         // era keys and Anti-Grav are worth more than incremental doctrine levels,
         // so research is reserved for them while any finite tech is still pending.
-        // The AI may also Build/Train this tick, so gate on the minerals that would
+        // The AI may also Build/Train this tick, so gate on the money that would
         // be LEFT after those commits (`avail`) — never queueing an Ascend the
         // apply step would drop, while still ascending every tick the surplus
         // allows. The era ≥ 1 gate keeps the era-0 golden run from ever emitting an
         // Ascend. Pure, row-major, no RNG.
         let spent_this_tick = cmds.iter().fold(Fixed::ZERO, |acc, c| match *c {
             Command::Build { kind, .. } => acc + self.building_cost(kind),
-            Command::Train { kind, .. } => acc + self.balance.unit(kind).cost,
+            Command::Train { kind, .. } => acc + self.balance.unit(kind).money_cost,
             _ => acc,
         });
-        let avail = minerals - spent_this_tick;
+        let avail = money - spent_this_tick;
         if self.player_era(player) >= 1 && avail >= ASCEND_MIN_RESERVE {
             let (rmask, active) = self.research_state(player);
             // The tree is "open" while any non-fork tech (tiers 0..=3) is still
@@ -2466,10 +2405,10 @@ impl Sim {
                     continue;
                 }
                 let (min_cost, res_cost) = self.doctrine_cost(player, track_id);
+                let total = min_cost + res_cost;
                 let is_forge = usize::from(track_id) == DOC_FORGE;
                 let lab_ok = is_forge || self.has_research_lab(player);
-                let res_ok = is_forge || self.research(player) >= res_cost;
-                if lab_ok && avail >= min_cost && res_ok {
+                if lab_ok && avail >= total {
                     cmds.push(Command::Ascend {
                         owner: player,
                         track: track_id,
@@ -2482,7 +2421,7 @@ impl Sim {
         // Research: with no active research, start the first eligible + affordable
         // tech in a fixed priority order — the unlock spine first (Mobilization →
         // Directed Energy → era keys), so the AI opens its own kit, then the stat
-        // riders. Tier-0 techs are minerals-paid (no lab); later tiers need a lab
+        // riders. Tier-0 techs are money-paid (no lab); later tiers need a lab
         // and the Research pool. Deterministic, prereq-gated, no RNG.
         let (researched_mask, active_research) = self.research_state(player);
         if active_research.is_none() {
@@ -2498,11 +2437,8 @@ impl Sim {
                     .prereqs
                     .iter()
                     .all(|&r| researched_mask & (1u32 << r) != 0);
-                let affordable = if def.tier == 0 {
-                    self.minerals(player) >= def.cost
-                } else {
-                    self.has_research_lab(player) && self.research(player) >= def.cost
-                };
+                let lab_ok = def.tier == 0 || self.has_research_lab(player);
+                let affordable = lab_ok && self.money(player) >= def.cost;
                 if !researched && prereq_ok && affordable {
                     cmds.push(Command::Research {
                         owner: player,
@@ -2667,14 +2603,14 @@ mod tests {
     #[test]
     fn new_sim_has_starting_credits_and_no_winner() {
         let s = Sim::new(Map::new(16, 16), 1, f(500));
-        assert_eq!(s.minerals(P0), f(500));
-        assert_eq!(s.minerals(P1), f(500));
+        assert_eq!(s.money(P0), f(500));
+        assert_eq!(s.money(P1), f(500));
         assert_eq!(s.winner(), None);
         assert_eq!(s.tick(), 0);
     }
 
     #[test]
-    fn refinery_on_deposit_mines_minerals_when_powered() {
+    fn refinery_on_deposit_mines_money_when_powered() {
         let mut map = Map::new(16, 16);
         map.set_deposit(
             5,
@@ -2688,17 +2624,17 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 1, 1);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 1);
         s.add_building(P0, BuildingKind::Refinery, 5, 1); // ON the ore deposit
-        let before = s.minerals(P0).to_bits();
+        let before = s.money(P0).to_bits();
         s.step(&[]);
         // Refinery mine_rate is 5/tick while powered.
         assert!(
-            s.minerals(P0).to_bits() > before,
-            "refinery should mine minerals from ore deposit"
+            s.money(P0).to_bits() > before,
+            "refinery should mine money from ore deposit"
         );
     }
 
     #[test]
-    fn power_deficit_halves_mining() {
+    fn extractor_mines_at_full_rate() {
         let mut map = Map::new(16, 16);
         map.set_deposit(
             5,
@@ -2709,11 +2645,11 @@ mod tests {
             },
         );
         let mut s = Sim::new(map, 1, f(0));
-        // Refinery consumes 20 but there is no power plant -> deficit -> mine_rate halved.
+        // No power gradient anymore: an extractor mines its full rate.
         s.add_building(P0, BuildingKind::Refinery, 5, 1);
         s.step(&[]);
-        // mine_rate 2, throttled to 2/2 = 1 when unpowered.
-        assert_eq!(s.minerals(P0), f(1));
+        // mine_rate 2 → 2 Money/tick.
+        assert_eq!(s.money(P0), f(2));
     }
 
     #[test]
@@ -2727,7 +2663,7 @@ mod tests {
             y: 5,
         }]);
         assert_eq!(s.entity_count(), before + 1);
-        assert_eq!(s.minerals(P0), f(900)); // 1000 - 100
+        assert_eq!(s.money(P0), f(900)); // 1000 - 100
         assert!(!s.map().tile(5, 5).unwrap().buildable);
     }
 
@@ -2741,7 +2677,7 @@ mod tests {
             y: 5,
         }]);
         assert_eq!(s.entity_count(), 0);
-        assert_eq!(s.minerals(P0), f(50));
+        assert_eq!(s.money(P0), f(50));
         assert!(s.map().tile(5, 5).unwrap().buildable);
     }
 
@@ -2757,8 +2693,8 @@ mod tests {
             barracks,
             kind: UnitKind::Infantry,
         }]);
-        assert_eq!(s.minerals(P0), f(950)); // charged immediately
-                                            // Infantry build time is 90 ticks; not yet spawned at 89.
+        assert_eq!(s.money(P0), f(950)); // charged immediately
+                                         // Infantry build time is 90 ticks; not yet spawned at 89.
         for _ in 0..88 {
             s.step(&[]);
         }
@@ -2943,10 +2879,11 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        // Re-pinned once when the colony layer (M0) was appended to `state_hash`:
-        // the legacy golden run has zero colonies, so the only delta is the two
-        // appended zero-length markers (colonies.len, colony_free.len).
-        assert_eq!(s.state_hash(), 2_655_449_448_163_852_813);
+        // Re-pinned for M2 (Migration K): the 3-resource economy replaced
+        // minerals/alloys/research with Money/Energy/Labour, dropped the power
+        // gradient, and changed `state_hash` (energy/labour now hashed). Energy
+        // accrues from power buildings in the golden run, so the hash shifts.
+        assert_eq!(s.state_hash(), 17_826_879_888_139_392_801);
     }
 
     // ---- M0: autonomous colony prototype ----
@@ -3097,7 +3034,7 @@ mod tests {
 
     #[test]
     fn ascend_cost_ramp_is_linear_and_exact() {
-        // Track 0 (Weapons): minerals 300 + 120*L, research 500 + 180*L.
+        // Track 0 (Weapons): money 300 + 120*L, research 500 + 180*L.
         let (m0, r0) = ascend_cost(0, 0);
         assert_eq!(
             (m0.to_bits(), r0.to_bits()),
@@ -3108,7 +3045,7 @@ mod tests {
             (m1.to_bits(), r1.to_bits()),
             (f(420).to_bits(), f(680).to_bits())
         );
-        // Track 3 (Forge): minerals-only — 2000 + 900*L, research always 0.
+        // Track 3 (Forge): money-only — 2000 + 900*L, research always 0.
         let (m3, r3) = ascend_cost(3, 2);
         assert_eq!(
             (m3.to_bits(), r3.to_bits()),
@@ -3117,45 +3054,42 @@ mod tests {
     }
 
     #[test]
-    fn ascend_charges_pools_and_increments_level() {
+    fn ascend_charges_money_and_increments_level() {
+        // Doctrines are paid entirely from Money now (money + research folded).
         let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
-        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
         s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
-        // Warm the research pool (lab makes 2/tick while powered): two Weapons
-        // levels cost 500 + 680 research, so warm well past that.
-        for _ in 0..800 {
-            s.step(&[]);
-        }
-        // No deposits + CC credit_income 0 ⇒ minerals never grow, so the minerals
-        // delta is exactly the Ascend cost.
-        let m_before = s.minerals(P0);
+        // No deposits ⇒ Money only changes by the Ascend cost.
+        let (mc0, rc0) = s.doctrine_cost(P0, 0);
+        let m_before = s.money(P0);
         s.step(&[Command::Ascend {
             owner: P0,
             track: 0,
         }]);
         assert_eq!(s.doctrine_level(P0, 0), 1);
         assert_eq!(
-            (m_before - s.minerals(P0)).to_bits(),
-            f(300).to_bits(),
-            "first Weapons level should cost 300 minerals"
+            (m_before - s.money(P0)).to_bits(),
+            (mc0 + rc0).to_bits(),
+            "first Weapons level costs money + folded research"
         );
-        let m_before2 = s.minerals(P0);
+        let (mc1, rc1) = s.doctrine_cost(P0, 0);
+        assert!(mc1 + rc1 > mc0 + rc0, "cost ramps with level");
+        let m_before2 = s.money(P0);
         s.step(&[Command::Ascend {
             owner: P0,
             track: 0,
         }]);
         assert_eq!(s.doctrine_level(P0, 0), 2);
         assert_eq!(
-            (m_before2 - s.minerals(P0)).to_bits(),
-            f(420).to_bits(),
-            "second Weapons level should cost 420 minerals (ramp)"
+            (m_before2 - s.money(P0)).to_bits(),
+            (mc1 + rc1).to_bits(),
+            "second Weapons level costs the ramped amount"
         );
     }
 
     #[test]
-    fn ascend_is_gated_by_lab_and_pools() {
-        // No lab + no research ⇒ a research track is a no-op, but Forge still works.
+    fn ascend_research_track_is_gated_by_lab() {
+        // No lab ⇒ a research track (Weapons) is a no-op, but Forge still works.
         let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.step(&[Command::Ascend {
@@ -3170,26 +3104,26 @@ mod tests {
         assert_eq!(
             s.doctrine_level(P0, 3),
             1,
-            "Forge (minerals-only) needs no lab"
+            "Forge (money-only) needs no lab"
         );
-        // A lab but an empty research pool still blocks a research track.
-        let mut poor = Sim::new(Map::new(20, 20), 1, f(100_000));
-        poor.add_building(P0, BuildingKind::ResearchLab, 2, 2);
-        poor.step(&[Command::Ascend {
+        // With a lab and money, the Weapons track proceeds.
+        let mut rich = Sim::new(Map::new(20, 20), 1, f(100_000));
+        rich.add_building(P0, BuildingKind::ResearchLab, 2, 2);
+        rich.step(&[Command::Ascend {
             owner: P0,
             track: 0,
         }]);
         assert_eq!(
-            poor.doctrine_level(P0, 0),
-            0,
-            "no research ⇒ Weapons track blocked even with a lab"
+            rich.doctrine_level(P0, 0),
+            1,
+            "lab + money ⇒ Weapons proceeds"
         );
         // An out-of-range track id is ignored.
-        poor.step(&[Command::Ascend {
+        rich.step(&[Command::Ascend {
             owner: P0,
             track: 99,
         }]);
-        assert_eq!(poor.doctrine_level(P0, 99), 0);
+        assert_eq!(rich.doctrine_level(P0, 99), 0);
     }
 
     #[test]
@@ -3250,38 +3184,32 @@ mod tests {
     }
 
     #[test]
-    fn forge_track_is_minerals_only_and_ramps() {
-        // Forge needs no lab and never touches the research pool; its steep
-        // minerals lump cost (2000, then 2900) is the bank-drainer.
+    fn forge_track_is_money_only_and_ramps() {
+        // Forge needs no lab; its steep money lump cost (2000, then 2900) is the
+        // bank-drainer.
         let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
-        let r_before = s.research(P0);
-        let m0 = s.minerals(P0);
+        let m0 = s.money(P0);
         s.step(&[Command::Ascend {
             owner: P0,
             track: 3,
         }]);
         assert_eq!(s.doctrine_level(P0, 3), 1, "Forge needs no lab");
         assert_eq!(
-            (m0 - s.minerals(P0)).to_bits(),
+            (m0 - s.money(P0)).to_bits(),
             f(2000).to_bits(),
-            "first Forge level costs 2000 minerals"
+            "first Forge level costs 2000 money"
         );
-        assert_eq!(
-            s.research(P0).to_bits(),
-            r_before.to_bits(),
-            "Forge must not spend research"
-        );
-        let m1 = s.minerals(P0);
+        let m1 = s.money(P0);
         s.step(&[Command::Ascend {
             owner: P0,
             track: 3,
         }]);
         assert_eq!(s.doctrine_level(P0, 3), 2);
         assert_eq!(
-            (m1 - s.minerals(P0)).to_bits(),
+            (m1 - s.money(P0)).to_bits(),
             f(2900).to_bits(),
-            "second Forge level costs 2900 minerals (ramp)"
+            "second Forge level costs 2900 money (ramp)"
         );
     }
 
@@ -3323,10 +3251,10 @@ mod tests {
     }
 
     #[test]
-    fn ai_queues_no_unaffordable_minerals_spend() {
+    fn ai_queues_no_unaffordable_money_spend() {
         // Across a full survival run (where the AI reaches era ≥ 1 and ascends), the
         // AI may queue a Build/Train AND an Ascend in one tick, but their combined
-        // minerals cost must never exceed the balance — otherwise the apply step
+        // money cost must never exceed the balance — otherwise the apply step
         // silently drops the later command. The post-build `avail` gate enforces it.
         let mut s = crate::game::scenario::survival(3);
         let mut saw_ascend = false;
@@ -3342,8 +3270,8 @@ mod tests {
                 })
                 .sum();
             assert!(
-                total <= s.minerals(P0).to_bits(),
-                "AI queued minerals-spends ({total} bits) exceeding its balance"
+                total <= s.money(P0).to_bits(),
+                "AI queued money-spends ({total} bits) exceeding its balance"
             );
             saw_ascend |= cmds.iter().any(|c| matches!(c, Command::Ascend { .. }));
             s.step(&cmds);
@@ -3787,12 +3715,13 @@ mod tests {
     }
 
     #[test]
-    fn power_balance_sums_living_buildings() {
+    fn power_plant_feeds_the_energy_stockpile() {
         let mut s = Sim::new(Map::new(16, 16), 1, f(0));
         s.add_building(P0, BuildingKind::PowerPlant, 1, 1);
-        s.add_building(P0, BuildingKind::Refinery, 3, 1);
-        assert_eq!(s.power_balance(P0), (100, 20));
-        assert_eq!(s.power_balance(P1), (0, 0));
+        s.step(&[]);
+        // PowerPlant adds 100 Energy/tick to the owner's stockpile.
+        assert_eq!(s.energy(P0), f(100));
+        assert_eq!(s.energy(P1), f(0));
     }
 
     #[test]
@@ -3948,7 +3877,7 @@ mod tests {
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20); // CC alone is powered
         s.grant_tech(P0, 6); // Mobilization, the prereq of Directed Energy (0)
-                             // Tech 0 is a Foundation tech: minerals-paid, no lab needed.
+                             // Tech 0 is a Foundation tech: money-paid, no lab needed.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 0,
@@ -4031,7 +3960,7 @@ mod tests {
         s.grant_tech(P0, 6);
         s.grant_tech(P0, 0); // prereq chain for Orbital Logistics (10)
         assert_eq!(s.player_era(P0), 0);
-        // Tech 10 is Foundation: minerals-paid, no lab needed.
+        // Tech 10 is Foundation: money-paid, no lab needed.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 10,
@@ -4159,7 +4088,7 @@ mod tests {
     }
 
     #[test]
-    fn antimatter_accrues_and_gates_capital() {
+    fn extractor_mines_money_from_a_deposit() {
         let mut map = Map::new(20, 20);
         map.set_deposit(
             4,
@@ -4171,15 +4100,14 @@ mod tests {
         );
         let mut s = Sim::new(map, 1, f(20_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
-        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
-        s.add_building(P0, BuildingKind::AntimatterPlant, 4, 2); // ON the alloy deposit
-        assert_eq!(s.alloys(P0), crate::fixed::Fixed::ZERO);
+        s.add_building(P0, BuildingKind::AntimatterPlant, 4, 2); // ON the deposit
+        let before = s.money(P0);
         for _ in 0..50 {
             s.step(&[]);
         }
         assert!(
-            s.alloys(P0) > crate::fixed::Fixed::ZERO,
-            "alloys accrue from a powered antimatter plant on an alloy deposit"
+            s.money(P0) > before,
+            "money accrues from an extractor standing on a deposit"
         );
     }
 
@@ -4295,35 +4223,31 @@ mod tests {
     }
 
     #[test]
-    fn lab_funds_tech_from_research_pool() {
+    fn lab_gates_money_paid_tier1_research() {
         let mut s = Sim::new(Map::new(20, 20), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
-        s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
-        s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
-        // Heavy Chassis (1) is a research-paid tier-1 tech; satisfy its prereqs.
+        // Heavy Chassis (1) is a tier-1 tech; satisfy its prereqs.
         s.grant_tech(P0, 6);
         s.grant_tech(P0, 0);
         s.grant_tech(P0, 10);
-        // No research yet -> rejected even though minerals are plentiful.
+        // No Research Lab yet -> a tier-1 tech is rejected even with money to spare.
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 1,
         }]);
         assert!(
             s.research_state(P0).1.is_none(),
-            "tech 1 should be unaffordable at 0 research"
+            "tier-1 tech needs a Research Lab"
         );
-        for _ in 0..400 {
-            s.step(&[]);
-        }
-        assert!(s.research(P0).to_bits() > 0, "lab should produce research");
+        // With a lab and money, it starts immediately (research is money-paid now).
+        s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
         s.step(&[Command::Research {
             owner: P0,
             tech_id: 1,
         }]);
         assert!(
             s.research_state(P0).1.is_some(),
-            "tech 1 should start once research is funded"
+            "tech 1 starts with a lab + money"
         );
     }
 
@@ -4349,7 +4273,7 @@ mod tests {
     }
 
     #[test]
-    fn extractor_on_ore_mines_minerals_and_depletes() {
+    fn extractor_on_ore_mines_money_and_depletes() {
         let mut map = Map::new(20, 20);
         map.set_deposit(
             6,
@@ -4363,11 +4287,11 @@ mod tests {
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
         s.add_building(P0, BuildingKind::Refinery, 6, 2); // ON the ore deposit
-        let before = s.minerals(P0).to_bits();
+        let before = s.money(P0).to_bits();
         s.step(&[]);
         assert!(
-            s.minerals(P0).to_bits() > before,
-            "extractor should mine minerals"
+            s.money(P0).to_bits() > before,
+            "extractor should mine money"
         );
         for _ in 0..10 {
             s.step(&[]);

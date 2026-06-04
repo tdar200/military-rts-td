@@ -538,7 +538,12 @@ mod tests {
     #[test]
     fn every_node_unlocks_something_concrete() {
         for n in &GRID {
-            assert!(!n.unlocks.is_empty(), "node {} ({}) has no unlock", n.id, n.name);
+            assert!(
+                !n.unlocks.is_empty(),
+                "node {} ({}) has no unlock",
+                n.id,
+                n.name
+            );
         }
     }
 
@@ -550,9 +555,17 @@ mod tests {
                 assert!(node(p).is_some(), "node {} prereq {p} out of range", n.id);
             }
             if n.era == 0 && n.step == 0 {
-                assert!(n.prereqs.is_empty(), "era-0 root {} should have no prereq", n.id);
+                assert!(
+                    n.prereqs.is_empty(),
+                    "era-0 root {} should have no prereq",
+                    n.id
+                );
             } else {
-                assert!(!n.prereqs.is_empty(), "non-root {} must have a prereq", n.id);
+                assert!(
+                    !n.prereqs.is_empty(),
+                    "non-root {} must have a prereq",
+                    n.id
+                );
             }
         }
     }
@@ -564,7 +577,10 @@ mod tests {
                 assert!(
                     !matches!(n.reality, RealityClass::Achieved | RealityClass::Emerging),
                     "node {} ({}) is {:?} past the frontier (era {})",
-                    n.id, n.name, n.reality, n.era
+                    n.id,
+                    n.name,
+                    n.reality,
+                    n.era
                 );
             }
         }

@@ -56,7 +56,7 @@ pub struct TechDef {
     /// Display name.
     pub name: &'static str,
     /// Tier (0..=4), the era/column this node sits in — drives the graph layout
-    /// and the cost currency (tier 0 is minerals-paid).
+    /// and the cost currency (tier 0 is money-paid).
     pub tier: u8,
     /// Which branch the stat rider improves.
     pub branch: TechBranch,
@@ -106,7 +106,7 @@ use TechUnlock::{Building as B, Unit as U};
 /// The full tech tree. Ids are kept stable across the redesign (so saves/forks
 /// and `excludes` ids don't shift); prereqs form the DAG independent of id order.
 // Ordered by id (index == id). Tiers/eras are encoded by the `tier` field, not
-// array position: Foundation(0, minerals-paid) → Expansion(1) → Industrial(2) →
+// array position: Foundation(0, money-paid) → Expansion(1) → Industrial(2) →
 // Energy(3) → Ascendancy(4). The single root is Mobilization (id 6).
 pub const TECHS: [TechDef; TECH_COUNT] = [
     t(
@@ -175,7 +175,7 @@ pub const TECHS: [TechDef; TECH_COUNT] = [
         &[],
         Fixed::from_int(2),
     ),
-    // The single root: your first research builds your army (minerals-paid).
+    // The single root: your first research builds your army (money-paid).
     t(
         6,
         "Mobilization",
@@ -220,7 +220,7 @@ pub const TECHS: [TechDef; TECH_COUNT] = [
         &[],
         Fixed::from_ratio(2, 100),
     ),
-    // Era key -> Expansion; unlocks the Research Lab, ending the minerals bootstrap.
+    // Era key -> Expansion; unlocks the Research Lab, ending the money bootstrap.
     t(
         10,
         "Orbital Logistics",

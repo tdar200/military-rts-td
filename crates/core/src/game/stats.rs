@@ -150,8 +150,12 @@ pub struct UnitStats {
     pub attack: AttackProfile,
     /// Movement speed in world units per tick.
     pub speed: Fixed,
-    /// Credit cost to train.
-    pub cost: Fixed,
+    /// Money cost to train.
+    pub money_cost: Fixed,
+    /// Energy cost to train (first-pass 0 for legacy units; priced with grid content).
+    pub energy_cost: Fixed,
+    /// Labour (population) cost to train.
+    pub labour_cost: Fixed,
     /// Ticks to train.
     pub build_time: u32,
     /// Whether this unit flies — only attackable by anti-air, and ignores terrain.
@@ -165,24 +169,22 @@ pub struct BuildingStats {
     pub max_hp: Fixed,
     /// Armour class (always [`ArmorType::Structure`]).
     pub armor: ArmorType,
-    /// Power produced per tick.
-    pub power_produced: i32,
-    /// Power consumed per tick.
-    pub power_consumed: i32,
-    /// Credits generated per tick while powered (refineries).
-    pub credit_income: Fixed,
-    /// Antimatter generated per tick while powered (Antimatter Plant only).
-    pub antimatter_income: Fixed,
+    /// Energy added to the owner's stockpile per tick (power buildings).
+    pub energy_output: i32,
+    /// Labour (population) produced per tick (housing / civic buildings).
+    pub labour_output: i32,
     /// Whether this building can train units (barracks).
     pub produces_units: bool,
     /// Attack profile, if this building is a defensive tower.
     pub attack: Option<AttackProfile>,
-    /// Credit cost to construct.
-    pub cost: Fixed,
-    /// Resource/tick this building mines from a deposit it stands on (Extractors).
+    /// Money cost to construct.
+    pub money_cost: Fixed,
+    /// Energy cost to construct (first-pass 0 for legacy buildings).
+    pub energy_cost: Fixed,
+    /// Labour cost to construct (first-pass 0 for legacy buildings).
+    pub labour_cost: Fixed,
+    /// Money/tick this building mines from a deposit it stands on (Extractors).
     pub mine_rate: i32,
-    /// Research/tick this building produces while powered (Research Labs).
-    pub research_income: Fixed,
 }
 
 /// The kinds of mobile unit.
@@ -203,13 +205,13 @@ pub enum UnitKind {
 /// The kinds of building.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum BuildingKind {
-    /// The base; destroying the enemy's wins the game.
+    /// The base; destroying the enemy's wins the game. Produces base Labour.
     CommandCenter,
-    /// Produces power.
+    /// Feeds the spendable Energy stockpile.
     PowerPlant,
-    /// Generates credit income while powered.
+    /// Mines Money from a deposit it stands on.
     Refinery,
-    /// Trains units.
+    /// Trains units; also produces a little Labour.
     Barracks,
     /// Defensive anti-ground tower.
     GunTurret,
@@ -217,9 +219,9 @@ pub enum BuildingKind {
     AaTurret,
     /// Cheap blocker.
     Wall,
-    /// Enables research (consumes power; no attack, no production).
+    /// Enables research (gates tier-1+ tech; no attack, no production).
     ResearchLab,
-    /// Produces antimatter while powered (the third resource).
+    /// A second Money extractor (repurposed; mines deposits).
     AntimatterPlant,
 }
 
@@ -265,7 +267,9 @@ impl UnitKind {
                     8,
                 ),
                 speed: Fixed::from_ratio(15, 200),
-                cost: Fixed::from_int(50),
+                money_cost: Fixed::from_int(50),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::ZERO,
                 build_time: 90,
                 is_air: false,
             },
@@ -279,7 +283,9 @@ impl UnitKind {
                     20,
                 ),
                 speed: Fixed::from_ratio(10, 200),
-                cost: Fixed::from_int(200),
+                money_cost: Fixed::from_int(200),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::ZERO,
                 build_time: 270,
                 is_air: false,
             },
@@ -293,7 +299,9 @@ impl UnitKind {
                     16,
                 ),
                 speed: Fixed::from_ratio(12, 200),
-                cost: Fixed::from_int(110),
+                money_cost: Fixed::from_int(110),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::ZERO,
                 build_time: 150,
                 is_air: false,
             },
@@ -307,7 +315,9 @@ impl UnitKind {
                     9,
                 ),
                 speed: Fixed::from_ratio(20, 200),
-                cost: Fixed::from_int(160),
+                money_cost: Fixed::from_int(160),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::ZERO,
                 build_time: 210,
                 is_air: true,
             },
@@ -321,7 +331,9 @@ impl UnitKind {
                     18,
                 ),
                 speed: Fixed::from_ratio(8, 200),
-                cost: Fixed::from_int(500),
+                money_cost: Fixed::from_int(500),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::ZERO,
                 build_time: 600,
                 is_air: false,
             },
@@ -350,40 +362,41 @@ impl BuildingKind {
     #[must_use]
     pub const fn stats(self) -> BuildingStats {
         // Defaults shared by most structures; overridden per kind below.
-        const fn base(max_hp: i32, cost: i32) -> BuildingStats {
+        const fn base(max_hp: i32, money_cost: i32) -> BuildingStats {
             BuildingStats {
                 max_hp: Fixed::from_int(max_hp),
                 armor: ArmorType::Structure,
-                power_produced: 0,
-                power_consumed: 0,
-                credit_income: Fixed::ZERO,
-                antimatter_income: Fixed::ZERO,
+                energy_output: 0,
+                labour_output: 0,
                 produces_units: false,
                 attack: None,
-                cost: Fixed::from_int(cost),
+                money_cost: Fixed::from_int(money_cost),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::ZERO,
                 mine_rate: 0,
-                research_income: Fixed::ZERO,
             }
         }
         match self {
-            Self::CommandCenter => base(1000, 0),
+            // The HQ produces base population (Labour) every tick.
+            Self::CommandCenter => BuildingStats {
+                labour_output: 2,
+                ..base(1000, 0)
+            },
+            // The power building now feeds the spendable Energy stockpile.
             Self::PowerPlant => BuildingStats {
-                power_produced: 100,
+                energy_output: 100,
                 ..base(300, 100)
             },
             Self::Refinery => BuildingStats {
-                power_consumed: 20,
-                credit_income: Fixed::ZERO,
                 mine_rate: 2,
                 ..base(300, 150)
             },
             Self::Barracks => BuildingStats {
-                power_consumed: 30,
                 produces_units: true,
+                labour_output: 1,
                 ..base(400, 200)
             },
             Self::GunTurret => BuildingStats {
-                power_consumed: 25,
                 attack: Some(AttackProfile::ground(
                     Fixed::from_int(10),
                     DamageType::Ballistic,
@@ -393,7 +406,6 @@ impl BuildingKind {
                 ..base(250, 120)
             },
             Self::AaTurret => BuildingStats {
-                power_consumed: 30,
                 attack: Some(AttackProfile::anti_air(
                     Fixed::from_int(20),
                     DamageType::AntiArmor,
@@ -403,14 +415,10 @@ impl BuildingKind {
                 ..base(220, 140)
             },
             Self::Wall => base(200, 20),
-            Self::ResearchLab => BuildingStats {
-                power_consumed: 25,
-                research_income: Fixed::from_int(2),
-                ..base(300, 250)
-            },
+            // The lab is now just a research prerequisite building.
+            Self::ResearchLab => base(300, 250),
+            // Repurposed as a plain money extractor (mines deposits).
             Self::AntimatterPlant => BuildingStats {
-                power_consumed: 20,
-                antimatter_income: Fixed::ZERO,
                 mine_rate: 2,
                 ..base(300, 200)
             },
@@ -452,16 +460,16 @@ mod tests {
         let inf = UnitKind::Infantry.stats();
         let tank = UnitKind::Tank.stats();
         assert!(tank.max_hp > inf.max_hp);
-        assert!(tank.cost > inf.cost);
+        assert!(tank.money_cost > inf.money_cost);
         assert!(inf.speed > tank.speed); // infantry is faster
     }
 
     #[test]
-    fn power_plant_produces_and_refinery_mines() {
-        assert!(BuildingKind::PowerPlant.stats().power_produced > 0);
-        // Refinery is now an extractor: mines deposits instead of passive income.
-        assert_eq!(BuildingKind::Refinery.stats().credit_income, Fixed::ZERO);
+    fn power_plant_outputs_energy_and_refinery_mines() {
+        assert!(BuildingKind::PowerPlant.stats().energy_output > 0);
         assert!(BuildingKind::Refinery.stats().mine_rate > 0);
+        // The HQ produces base population (Labour).
+        assert!(BuildingKind::CommandCenter.stats().labour_output > 0);
         assert!(BuildingKind::CommandCenter.stats().max_hp > Fixed::from_int(500));
     }
 
@@ -483,4 +491,3 @@ mod tests {
         assert!(Faction::Alien.index() < FACTION_COUNT);
     }
 }
-

@@ -172,24 +172,21 @@ mod tests {
     }
 
     #[test]
-    fn research_lab_exists_and_is_a_powered_structure() {
+    fn research_lab_exists_and_costs_money() {
         use crate::game::stats::BuildingKind;
         let b = Balance::default();
         let st = b.building(BuildingKind::ResearchLab);
-        assert!(st.power_consumed > 0, "research lab draws power");
         assert!(!st.produces_units);
         assert!(st.attack.is_none());
-        assert!(st.cost > crate::fixed::Fixed::ZERO);
+        assert!(st.money_cost > crate::fixed::Fixed::ZERO);
     }
 
     #[test]
-    fn antimatter_plant_is_an_extractor_and_draws_power() {
+    fn antimatter_plant_is_a_money_extractor() {
         use crate::game::stats::BuildingKind;
         let st = BuildingKind::AntimatterPlant.stats();
-        // AntimatterPlant is now an extractor: mines deposits instead of passive income.
-        assert_eq!(st.antimatter_income, crate::fixed::Fixed::ZERO);
+        // Repurposed as a plain money extractor: mines deposits, no passive income.
         assert!(st.mine_rate > 0);
-        assert!(st.power_consumed > 0);
         assert!(!st.produces_units && st.attack.is_none());
     }
 
