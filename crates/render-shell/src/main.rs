@@ -28,6 +28,7 @@ mod view;
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
+use rts_core::game::civ::ColonyId;
 use rts_core::game::hex;
 use rts_core::game::map::DepositKind;
 use rts_core::game::perk;
@@ -338,6 +339,27 @@ async fn main() {
             let i = GEARS.iter().position(|&g| g == game_speed).unwrap_or(0);
             game_speed = GEARS[i.saturating_sub(1)];
         }
+        // Colony autonomy: ] delegates more (the colony self-runs via the AI
+        // brain), [ takes back control. Affects the founded colony (id 0).
+        if !surveying && !over {
+            let delta: i32 = if is_key_pressed(KeyCode::RightBracket) {
+                1
+            } else if is_key_pressed(KeyCode::LeftBracket) {
+                -1
+            } else {
+                0
+            };
+            if delta != 0 {
+                if let Some(c) = sim.colony(ColonyId(0)) {
+                    let lvl = (i32::from(c.autonomy_level) + delta).clamp(0, 9);
+                    pending.push(Command::SetColonyAutonomy {
+                        owner: HUMAN,
+                        colony: ColonyId(0),
+                        level: u8::try_from(lvl).unwrap_or(0),
+                    });
+                }
+            }
+        }
         // Toggle research modal with Y (only while playing, not paused/surveying).
         if !over && !paused && !surveying && !doctrine_open && is_key_pressed(KeyCode::Y) {
             research_open = !research_open;
@@ -491,6 +513,9 @@ async fn main() {
             if !survival_run || sim.waves_survived() > 0 {
                 commands.extend(sim.ai_commands(ENEMY));
             }
+            // Autonomous colonies execute their owners' policy each tick (empty
+            // while every colony is at manual autonomy 0 — the default).
+            commands.extend(sim.colony_commands());
             sim.step(&commands);
             view.on_tick(&sim);
             accumulator -= TICK_DT;
@@ -620,6 +645,32 @@ async fn main() {
             draw_survey_overlay(&sim, cell, &sprites);
         }
         ui::draw(&sim, build_mode, paused, game_speed, selected, &sprites);
+        // Colony autonomy readout (the player's delegation dial).
+        if !surveying {
+            if let Some(c) = sim.colony(ColonyId(0)) {
+                let s = format!(
+                    "COLONY AUTONOMY  {}/{}   [ / ] delegate",
+                    c.effective_autonomy(),
+                    c.autonomy_level
+                );
+                let col = if c.effective_autonomy() == 0 {
+                    TEXT_DIM
+                } else {
+                    GOLD_HI
+                };
+                draw_text_ex(
+                    &s,
+                    14.0,
+                    ui::TOP_BAR_H + 18.0,
+                    TextParams {
+                        font: sprites.font(),
+                        font_size: 14,
+                        color: col,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
         if survival_run && !surveying {
             draw_survival_hud(&sim, &sprites);
             if milestone_flash > 0.0 {

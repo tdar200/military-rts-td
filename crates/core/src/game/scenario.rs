@@ -311,10 +311,26 @@ impl Scenario {
 #[cfg(test)]
 mod tests {
     use super::{crossroads, lane_defense, open_clash, survival, Scenario};
+    use crate::game::civ::ColonyId;
     use crate::game::map::Map;
     use crate::game::path::find_path;
     use crate::game::sim::PlayerId;
     use alloc::vec::Vec;
+
+    #[test]
+    fn survival_founding_registers_a_manual_colony() {
+        let mut s = survival(7);
+        assert_eq!(s.colony_count_for(PlayerId(0)), 0);
+        let cmds = s.ai_commands(PlayerId(0)); // survey AI founds the base
+        s.step(&cmds);
+        assert_eq!(
+            s.colony_count_for(PlayerId(0)),
+            1,
+            "founding registers the owner's first colony"
+        );
+        // It starts fully manual — the player opts into delegation.
+        assert_eq!(s.colony(ColonyId(0)).unwrap().autonomy_level, 0);
+    }
 
     /// The first passable tile scanning from one corner — used to prove the open
     /// area of a map is a single connected region (no base sealed off).

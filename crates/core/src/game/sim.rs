@@ -1886,9 +1886,14 @@ impl Sim {
         if !buildable {
             return;
         }
-        self.add_building(owner, BuildingKind::CommandCenter, x, y);
+        let cc = self.add_building(owner, BuildingKind::CommandCenter, x, y);
         self.phase = GamePhase::Active;
         self.phase_started = self.tick;
+        // Register the founded base as the owner's first colony. It starts fully
+        // MANUAL (autonomy 0) — the player drives it directly and opts into
+        // delegation by raising its autonomy; this makes the autonomous-colony
+        // layer reachable in a normal Survival run.
+        self.add_colony(owner, cc, 0);
         let near_ore = self.map.deposits().any(|(dx, dy, d)| {
             d.kind == crate::game::map::DepositKind::Ore
                 && crate::game::hex::distance((x, y), (dx, dy)) <= 1
