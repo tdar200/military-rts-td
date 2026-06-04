@@ -15,7 +15,11 @@
 //! category unlocked per level). Later milestones grow [`Colony`] with the civ
 //! scalars, scoring, adoption, and LOD, and add the sector / empire hierarchy.
 
+pub mod special;
+
+use crate::fixed::Fixed;
 use crate::game::sim::{EntityId, PlayerId};
+use special::{Knowledge, SPECIAL_COUNT};
 
 /// Stable handle for a colony.
 ///
@@ -238,7 +242,8 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         // player→colony configuration commands are never colony-emitted.
         Command::SetColonyAutonomy { .. }
         | Command::SetColonyPolicy { .. }
-        | Command::DirectColony { .. } => u8::MAX,
+        | Command::DirectColony { .. }
+        | Command::SurveySpecial { .. } => u8::MAX,
     }
 }
 
@@ -260,6 +265,10 @@ pub struct Colony {
     pub policy: ColonyPolicy,
     /// A direct player override taking precedence over `policy`.
     pub directive: ColonyIntent,
+    /// Per-special accumulated stockpile (indexed by `SpecialKind::index`).
+    pub stockpile: [Fixed; SPECIAL_COUNT],
+    /// Per-special awareness/capability (Unknown → Detected → Extractable).
+    pub knowledge_of: [Knowledge; SPECIAL_COUNT],
 }
 
 impl Colony {

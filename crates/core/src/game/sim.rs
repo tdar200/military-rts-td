@@ -308,6 +308,16 @@ pub enum Command {
         /// The override intent (`Auto` clears it).
         intent: ColonyIntent,
     },
+    /// Survey a special resource at a colony — marks it Extractable so it starts
+    /// accruing into the colony's stockpile. (Tech adoption drives this later.)
+    SurveySpecial {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target colony.
+        colony: ColonyId,
+        /// Which special resource to survey.
+        kind: crate::game::civ::special::SpecialKind,
+    },
 }
 
 /// Building or unit, for the render/UI layer (public projection of the internal
@@ -455,6 +465,9 @@ pub struct Sim {
     colonies: Vec<Colony>,
     /// Recycled colony slots (LIFO), mirroring [`Sim::free`] for entities.
     colony_free: Vec<u32>,
+    /// World seed for sampling static special-resource fields (see
+    /// [`crate::game::civ::special`]). Immutable; sampled without touching `rng`.
+    field_seed: u64,
 }
 
 const fn armor_of(balance: &Balance, kind: Kind) -> ArmorType {
@@ -562,6 +575,7 @@ impl Sim {
             attacks: Vec::new(),
             colonies: Vec::new(),
             colony_free: Vec::new(),
+            field_seed: seed,
         }
     }
 
@@ -587,6 +601,9 @@ impl Sim {
             autonomy_progress: 0,
             policy: ColonyPolicy::default(),
             directive: ColonyIntent::Auto,
+            stockpile: [Fixed::ZERO; crate::game::civ::special::SPECIAL_COUNT],
+            knowledge_of: [crate::game::civ::special::Knowledge::Unknown;
+                crate::game::civ::special::SPECIAL_COUNT],
         };
         if let Some(index) = self.colony_free.pop() {
             self.colonies[index as usize] = colony;
@@ -1124,7 +1141,15 @@ impl Sim {
             h.write_u64(u64::from(dep.remaining));
         }
         // Colony layer — appended last (per the stable-order rule above). Empty in
-        // legacy scenarios, so the only effect there is two zero-length markers.
+        // legacy scenarios, so the only effect there is field_seed + zero markers.
+        self.hash_colony_layer(&mut h);
+        h.finish()
+    }
+
+    /// Folds the autonomous-civilization layer into the state hash, in a stable
+    /// append-only order (see [`Sim::state_hash`]).
+    fn hash_colony_layer(&self, h: &mut Fnv) {
+        h.write_u64(self.field_seed);
         h.write_u64(self.colonies.len() as u64);
         for c in &self.colonies {
             h.write_u64(u64::from(c.alive));
@@ -1136,12 +1161,17 @@ impl Sim {
                 h.write_u64(u64::from(d));
             }
             h.write_u64(c.directive as u64);
+            for s in c.stockpile {
+                h.write_i64(s.to_bits());
+            }
+            for k in c.knowledge_of {
+                h.write_u64(k as u64);
+            }
         }
         h.write_u64(self.colony_free.len() as u64);
         for &slot in &self.colony_free {
             h.write_u64(u64::from(slot));
         }
-        h.finish()
     }
 
     /// Places a building for free (scenario setup), blocking its tile.
@@ -1219,6 +1249,7 @@ impl Sim {
         }
         self.run_economy();
         self.run_autonomy();
+        self.run_special_extraction();
         self.run_research();
         self.run_production();
         self.run_waves();
@@ -1500,6 +1531,18 @@ impl Sim {
                 if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
                     if c.alive && c.owner == owner {
                         c.directive = intent;
+                    }
+                }
+            }
+            Command::SurveySpecial {
+                owner,
+                colony,
+                kind,
+            } => {
+                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+                    if c.alive && c.owner == owner {
+                        c.knowledge_of[kind.index()] =
+                            crate::game::civ::special::Knowledge::Extractable;
                     }
                 }
             }
@@ -1841,6 +1884,37 @@ impl Sim {
         for c in &mut self.colonies {
             if c.alive {
                 c.autonomy_progress = c.autonomy_progress.saturating_add(1);
+            }
+        }
+    }
+
+    /// Accrues extractable **Field** special resources into each colony's
+    /// stockpile, sampling the static field at the colony's seat tile. Pure and
+    /// deterministic — [`field_intensity`](crate::game::civ::special::field_intensity)
+    /// never touches `rng` (determinism rule D1). Finite specials live in map
+    /// deposits and are wired separately.
+    fn run_special_extraction(&mut self) {
+        use crate::game::civ::special::{field_intensity, Knowledge, SpecialClass, SpecialKind};
+        for ci in 0..self.colonies.len() {
+            if !self.colonies[ci].alive {
+                continue;
+            }
+            let Some((tx, ty)) = self
+                .entities
+                .get(self.colonies[ci].seat.0 as usize)
+                .filter(|e| e.alive)
+                .and_then(|e| e.tile)
+            else {
+                continue;
+            };
+            for kind in SpecialKind::ALL {
+                let k = kind.index();
+                if self.colonies[ci].knowledge_of[k] == Knowledge::Extractable
+                    && matches!(kind.class(), SpecialClass::Field)
+                {
+                    let amount = field_intensity(self.field_seed, tx, ty, kind);
+                    self.colonies[ci].stockpile[k] = self.colonies[ci].stockpile[k] + amount;
+                }
             }
         }
     }
@@ -2982,11 +3056,10 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        // Re-pinned for M2 (Migration K): the 3-resource economy replaced
-        // minerals/alloys/research with Money/Energy/Labour, dropped the power
-        // gradient, and changed `state_hash` (energy/labour now hashed). Energy
-        // accrues from power buildings in the golden run, so the hash shifts.
-        assert_eq!(s.state_hash(), 17_826_879_888_139_392_801);
+        // Re-pinned for M4: `field_seed` (the static special-resource field seed)
+        // is now folded into `state_hash`. The golden run has no colonies, so the
+        // per-colony special fields contribute nothing — only field_seed shifts it.
+        assert_eq!(s.state_hash(), 5_824_780_097_646_105_832);
     }
 
     // ---- M0: autonomous colony prototype ----
@@ -3128,6 +3201,56 @@ mod tests {
             level: 9,
         }]);
         assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
+    }
+
+    // ---- M4: special-resource discovery ----
+
+    #[test]
+    fn field_intensity_is_deterministic_and_finite_is_zero() {
+        use crate::game::civ::special::{field_intensity, SpecialKind};
+        let a = field_intensity(12_345, 5, 10, SpecialKind::SolarFlux);
+        let b = field_intensity(12_345, 5, 10, SpecialKind::SolarFlux);
+        assert_eq!(a, b, "same inputs ⇒ same intensity");
+        // Finite kinds have no field intensity (they live in deposits).
+        assert_eq!(
+            field_intensity(12_345, 5, 10, SpecialKind::Antimatter),
+            Fixed::ZERO
+        );
+    }
+
+    #[test]
+    fn surveyed_field_special_accrues_into_the_stockpile() {
+        use crate::game::civ::special::{field_intensity, Knowledge, SpecialKind};
+        let mut s = Sim::new(Map::new(20, 20), 12_345, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 10);
+        let col = s.add_colony(P0, cc, 0);
+        let solar = SpecialKind::SolarFlux.index();
+        let grav = SpecialKind::GravGradient.index();
+        // Unsurveyed: nothing accrues.
+        s.step(&[]);
+        assert_eq!(s.colony(col).unwrap().stockpile[solar], Fixed::ZERO);
+        // Survey Solar Flux, then accrue over ten ticks total (the survey tick
+        // itself extracts once, after the knowledge flips Extractable).
+        s.step(&[Command::SurveySpecial {
+            owner: P0,
+            colony: col,
+            kind: SpecialKind::SolarFlux,
+        }]);
+        for _ in 0..9 {
+            s.step(&[]);
+        }
+        let intensity = field_intensity(12_345, 5, 10, SpecialKind::SolarFlux);
+        assert_eq!(
+            s.colony(col).unwrap().stockpile[solar].to_bits(),
+            intensity.to_bits() * 10,
+            "ten ticks of extraction accrue 10× the field intensity"
+        );
+        assert_eq!(
+            s.colony(col).unwrap().knowledge_of[solar],
+            Knowledge::Extractable
+        );
+        // An unsurveyed special stays at zero.
+        assert_eq!(s.colony(col).unwrap().stockpile[grav], Fixed::ZERO);
     }
 
     #[test]
