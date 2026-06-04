@@ -10,7 +10,8 @@
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
 use crate::game::civ::{
-    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, Species, AUTONOMY_FULL,
+    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, SectorDoctrine, SimDetail,
+    Species, AUTONOMY_FULL,
 };
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
@@ -341,6 +342,15 @@ pub enum Command {
         /// Tile row for the new Command Center.
         y: u16,
     },
+    /// Set the governance doctrine of a colony's sector.
+    SetColonyDoctrine {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target colony.
+        colony: ColonyId,
+        /// The sector doctrine to apply.
+        doctrine: SectorDoctrine,
+    },
 }
 
 /// Building or unit, for the render/UI layer (public projection of the internal
@@ -628,6 +638,8 @@ impl Sim {
             knowledge_of: [crate::game::civ::special::Knowledge::Unknown;
                 crate::game::civ::special::SPECIAL_COUNT],
             species: Species::Standard,
+            detail: SimDetail::Active,
+            sector_doctrine: SectorDoctrine::Balanced,
         };
         if let Some(index) = self.colony_free.pop() {
             self.colonies[index as usize] = colony;
@@ -1224,6 +1236,8 @@ impl Sim {
             }
             h.write_u64(c.directive as u64);
             h.write_u64(c.species as u64);
+            h.write_u64(c.detail as u64);
+            h.write_u64(c.sector_doctrine as u64);
             for s in c.stockpile {
                 h.write_i64(s.to_bits());
             }
@@ -1313,6 +1327,7 @@ impl Sim {
         self.run_economy();
         self.run_autonomy();
         self.run_special_extraction();
+        self.run_lod();
         self.run_research();
         self.run_production();
         self.run_waves();
@@ -1610,6 +1625,17 @@ impl Sim {
                 }
             }
             Command::FoundColony { owner, x, y, .. } => self.apply_found_colony(owner, x, y),
+            Command::SetColonyDoctrine {
+                owner,
+                colony,
+                doctrine,
+            } => {
+                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+                    if c.alive && c.owner == owner {
+                        c.sector_doctrine = doctrine;
+                    }
+                }
+            }
         }
     }
 
@@ -2043,6 +2069,44 @@ impl Sim {
                     let amount = field_intensity(self.field_seed, tx, ty, kind);
                     self.colonies[ci].stockpile[k] = self.colonies[ci].stockpile[k] + amount;
                 }
+            }
+        }
+    }
+
+    /// The determinism-safe LOD class for colony `ci`: a pure function of hashed
+    /// state — Tactical when an enemy unit is within range of the seat, Dormant
+    /// once the colony is mature and quiet, else Active. Never reads view state.
+    fn colony_lod(&self, ci: usize) -> SimDetail {
+        const TACTICAL_RANGE_SQ: Fixed = Fixed::from_int(64); // 8 tiles, squared
+        let c = &self.colonies[ci];
+        if let Some(seat) = self.entities.get(c.seat.0 as usize).filter(|e| e.alive) {
+            let pos = seat.pos;
+            let threatened = self.entities.iter().any(|e| {
+                if !e.alive || e.owner == c.owner || !matches!(e.kind, Kind::Unit(_)) {
+                    return false;
+                }
+                let dx = e.pos.x - pos.x;
+                let dy = e.pos.y - pos.y;
+                dx * dx + dy * dy <= TACTICAL_RANGE_SQ
+            });
+            if threatened {
+                return SimDetail::Tactical;
+            }
+        }
+        if c.earned_autonomy() >= AUTONOMY_FULL {
+            SimDetail::Dormant
+        } else {
+            SimDetail::Active
+        }
+    }
+
+    /// Recomputes every living colony's LOD class (deterministic; see
+    /// [`Sim::colony_lod`]). The sim runs full fidelity regardless — the class is
+    /// a render/CPU hint, so it cannot perturb results.
+    fn run_lod(&mut self) {
+        for ci in 0..self.colonies.len() {
+            if self.colonies[ci].alive {
+                self.colonies[ci].detail = self.colony_lod(ci);
             }
         }
     }
@@ -3330,6 +3394,79 @@ mod tests {
             level: 9,
         }]);
         assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
+    }
+
+    // ---- M7: sector governance + LOD ----
+
+    #[test]
+    fn colony_lod_is_state_driven_and_deterministic() {
+        use crate::game::civ::{SimDetail, AUTONOMY_HOLD_TICKS};
+        // A young colony is Active; a mature, unthreatened one goes Dormant.
+        let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
+        let col = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        s.step(&[]);
+        assert_eq!(s.colony(col).unwrap().detail, SimDetail::Active);
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 10) {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.colony(col).unwrap().detail,
+            SimDetail::Dormant,
+            "a mature, quiet colony drops to Dormant"
+        );
+    }
+
+    #[test]
+    fn colony_goes_tactical_under_threat() {
+        use crate::game::civ::SimDetail;
+        let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
+        let col = s.add_colony(P0, cc, 0);
+        // Drop an enemy unit right next to the colony seat.
+        s.add_unit(P1, UnitKind::Infantry, v(5, 6));
+        s.step(&[]);
+        assert_eq!(
+            s.colony(col).unwrap().detail,
+            SimDetail::Tactical,
+            "an enemy beside the seat forces Tactical detail"
+        );
+    }
+
+    #[test]
+    fn lod_classification_does_not_perturb_results() {
+        // Detail is a hint: a colonied run is bit-identical across two passes,
+        // proving LOD classification is deterministic and side-effect-free.
+        fn run() -> u64 {
+            let mut s = Sim::new(Map::new(30, 30), 9, f(5000));
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
+            s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+            s.add_building(P1, BuildingKind::CommandCenter, 24, 24);
+            for _ in 0..400 {
+                let mut cmds = s.colony_commands();
+                cmds.extend(s.ai_commands(P1));
+                s.step(&cmds);
+            }
+            s.state_hash()
+        }
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn sector_doctrine_command_applies() {
+        use crate::game::civ::SectorDoctrine;
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
+        let col = s.add_colony(P0, cc, 0);
+        s.step(&[Command::SetColonyDoctrine {
+            owner: P0,
+            colony: col,
+            doctrine: SectorDoctrine::Fortress,
+        }]);
+        assert_eq!(
+            s.colony(col).unwrap().sector_doctrine,
+            SectorDoctrine::Fortress
+        );
     }
 
     // ---- M6: species biases + emergent conflict ----

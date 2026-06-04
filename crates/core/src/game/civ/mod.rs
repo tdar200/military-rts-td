@@ -212,6 +212,45 @@ impl Species {
     }
 }
 
+/// A colony's simulation detail level — a determinism-safe LOD.
+///
+/// Computed every tick as a pure function of *hashed game state* (never the
+/// camera or selection), so it is identical on every client. In M7 the sim runs
+/// full fidelity regardless; `SimDetail` is a hint the render shell uses to
+/// throttle drawing/CPU and that later milestones use to skip work via
+/// provably-equal closed-form catch-up.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SimDetail {
+    /// Quiet and mature — minimum detail.
+    #[default]
+    Dormant = 0,
+    /// Growing / active — full scalar updates.
+    Active = 1,
+    /// Combat imminent — full entity-level simulation.
+    Tactical = 2,
+}
+
+/// A governance doctrine applied to a sector (a grouping of colonies); biases
+/// what its colonies emphasize.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SectorDoctrine {
+    /// No special emphasis.
+    #[default]
+    Balanced = 0,
+    /// Research focus.
+    Research = 1,
+    /// Resource extraction focus.
+    Mining = 2,
+    /// Defensive focus.
+    Fortress = 3,
+    /// Shipyard / production focus.
+    Shipyard = 4,
+    /// Expansion frontier.
+    Frontier = 5,
+}
+
 /// A direct, one-shot override the player issues to a single colony, taking
 /// precedence over its standing policy until cleared.
 #[repr(u8)]
@@ -292,7 +331,8 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         Command::SetColonyAutonomy { .. }
         | Command::SetColonyPolicy { .. }
         | Command::DirectColony { .. }
-        | Command::SurveySpecial { .. } => u8::MAX,
+        | Command::SurveySpecial { .. }
+        | Command::SetColonyDoctrine { .. } => u8::MAX,
     }
 }
 
@@ -320,6 +360,10 @@ pub struct Colony {
     pub knowledge_of: [Knowledge; SPECIAL_COUNT],
     /// The civilization archetype, which biases autonomous behaviour.
     pub species: Species,
+    /// Current simulation detail level (a determinism-safe render/CPU hint).
+    pub detail: SimDetail,
+    /// The governance doctrine of the sector this colony belongs to.
+    pub sector_doctrine: SectorDoctrine,
 }
 
 impl Colony {
