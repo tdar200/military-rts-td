@@ -19,6 +19,7 @@ use crate::game::path::find_path;
 use crate::game::stats::{
     damage_multiplier, ArmorType, AttackProfile, BuildingKind, DamageType, UnitKind,
 };
+use crate::game::tech_grid::{self, TechBitset};
 use crate::hash::Fnv;
 use crate::rng::Rng;
 use crate::vec::Vec2;
@@ -189,6 +190,13 @@ const DOCTRINE_RES_STEP: [i32; DOCTRINE_TRACKS] = [180, 180, 150, 0];
 /// per-level research+money cost (see `ascend_cost`) is the sole brake — by the
 /// time a level is cheap relative to income, the wave curve has long outgrown it.
 const WEAPON_STEP: Fixed = Fixed::from_int(1);
+/// Per researched grid node, the flat rider to its branch's combat/economy effect
+/// (Weapons→dmg, Defense→armor+shield, Energy→income, Propulsion→speed).
+const GRID_WEAPON_PER_NODE: Fixed = Fixed::from_ratio(1, 2);
+const GRID_ARMOR_PER_NODE: Fixed = Fixed::from_ratio(1, 4);
+const GRID_SHIELD_PER_NODE: Fixed = Fixed::from_int(4);
+const GRID_ECON_PER_NODE: Fixed = Fixed::from_ratio(1, 2);
+const GRID_MOB_PER_NODE: Fixed = Fixed::from_ratio(1, 100);
 /// Per-level effect of the ARMOR track: +0.5 flat mitigation (half-steps blunt
 /// swarms without granting immunity — the ≥1-damage clamp still applies).
 const ARMOR_STEP: Fixed = Fixed::from_ratio(1, 2);
@@ -214,8 +222,8 @@ const ASCEND_MIN_RESERVE: Fixed = Fixed::from_int(2000);
 struct Player {
     /// Primary currency (the "Money" resource).
     money: Fixed,
-    /// Bitmask of researched tech ids (bit i = tech i complete).
-    researched_techs: u32,
+    /// Researched grid-node set (the 500-slot Ascension capability grid).
+    researched_techs: TechBitset,
     /// In-progress research: (tech id, ticks remaining). One at a time.
     active_research: Option<(u32, u32)>,
     /// Current era index (0=Modern..3=Interstellar).
@@ -605,7 +613,7 @@ impl Sim {
             map,
             players: [Player {
                 money: starting_credits,
-                researched_techs: 0,
+                researched_techs: TechBitset::empty(),
                 active_research: None,
                 era: 0,
                 energy: Fixed::ZERO,
@@ -799,21 +807,22 @@ impl Sim {
     #[cfg(test)]
     fn grant_tech(&mut self, player: PlayerId, id: u32) {
         let p = usize::from(player.0);
-        self.players[p].researched_techs |= 1u32 << id;
-        if crate::game::tech::is_era_key(id) {
-            self.players[p].era = (self.players[p].era + 1).min(3);
+        self.players[p].researched_techs.set(id);
+        self.apply_grid_unlocks(p, id);
+    }
+
+    /// Applies a completed grid node's effects for player slot `p`: an era bump if
+    /// it is an era key, plus any real building/unit it makes buildable. (The
+    /// researched bit itself is set by the caller.)
+    fn apply_grid_unlocks(&mut self, p: usize, id: u32) {
+        if tech_grid::is_era_key(id) {
+            self.players[p].era = (self.players[p].era + 1).min(9);
         }
-        if let Some(def) = crate::game::tech::tech(id) {
-            for unlock in def.unlocks {
-                match *unlock {
-                    crate::game::tech::TechUnlock::Building(b) => {
-                        self.players[p].unlocked_buildings |= 1 << b.index();
-                    }
-                    crate::game::tech::TechUnlock::Unit(u) => {
-                        self.players[p].unlocked_units |= 1 << u.index();
-                    }
-                }
-            }
+        if let Some(b) = tech_grid::real_building(id) {
+            self.players[p].unlocked_buildings |= 1 << b.index();
+        }
+        if let Some(u) = tech_grid::real_unit(id) {
+            self.players[p].unlocked_units |= 1 << u.index();
         }
     }
 
@@ -947,9 +956,9 @@ impl Sim {
             && self.players[p].labour >= st.labour_cost
     }
 
-    /// Per-player research state: (researched bitmask, optional (tech id, ticks left)).
+    /// Per-player research state: (researched grid set, optional (node id, ticks left)).
     #[must_use]
-    pub fn research_state(&self, player: PlayerId) -> (u32, Option<(u32, u32)>) {
+    pub fn research_state(&self, player: PlayerId) -> (TechBitset, Option<(u32, u32)>) {
         let p = &self.players[usize::from(player.0)];
         (p.researched_techs, p.active_research)
     }
@@ -1193,7 +1202,7 @@ impl Sim {
         // order. Never reorder; appending is fine (and re-pins the golden hash).
         for p in &self.players {
             h.write_i64(p.money.to_bits());
-            h.write_u64(u64::from(p.researched_techs));
+            p.researched_techs.hash_into(&mut h);
             match p.active_research {
                 Some((id, ticks)) => {
                     h.write_u64(1);
@@ -1853,22 +1862,30 @@ impl Sim {
             return; // can't research before founding a base
         }
         let p = usize::from(owner.0);
-        let Some(def) = crate::game::tech::tech(tech_id) else {
+        let Some(node) = tech_grid::node(tech_id) else {
             return;
         };
-        let mask = self.players[p].researched_techs;
-        let already = mask & (1u32 << tech_id) != 0;
+        let set = self.players[p].researched_techs;
+        let already = set.get(tech_id);
         let busy = self.players[p].active_research.is_some();
-        let prereq_ok = def.prereqs.iter().all(|&r| mask & (1u32 << r) != 0);
-        let fork_ok =
-            crate::game::tech::excludes(tech_id).is_none_or(|other| mask & (1u32 << other) == 0);
-        // All research is now paid from Money; tier 0 is the bootstrap (no lab),
-        // every later tier needs a Research Lab.
-        let lab_ok = def.tier == 0 || self.has_research_lab(owner);
-        let affordable = lab_ok && self.players[p].money >= def.cost;
-        if !already && !busy && prereq_ok && fork_ok && affordable {
-            self.players[p].money = self.players[p].money - def.cost;
-            self.players[p].active_research = Some((tech_id, def.duration));
+        let prereq_ok = node.prereqs.iter().all(|&r| set.get(r));
+        // Era 0 is the bootstrap (researchable with no lab); every later era needs
+        // a Research Lab. Paid in all three resources from the node's costs.
+        let lab_ok = node.era == 0 || self.has_research_lab(owner);
+        let (mc, ec, lc) = (
+            Fixed::from_int(i32::try_from(node.money).unwrap_or(i32::MAX)),
+            Fixed::from_int(i32::try_from(node.energy).unwrap_or(i32::MAX)),
+            Fixed::from_int(i32::try_from(node.labour).unwrap_or(i32::MAX)),
+        );
+        let affordable = lab_ok
+            && self.players[p].money >= mc
+            && self.players[p].energy >= ec
+            && self.players[p].labour >= lc;
+        if !already && !busy && prereq_ok && affordable {
+            self.players[p].money = self.players[p].money - mc;
+            self.players[p].energy = self.players[p].energy - ec;
+            self.players[p].labour = self.players[p].labour - lc;
+            self.players[p].active_research = Some((tech_id, node.duration));
         }
     }
 
@@ -1932,36 +1949,87 @@ impl Sim {
         crate::game::hex::from_world(p, self.map.width(), self.map.height())
     }
 
-    /// Sum of researched-tech bonuses for `player` in `branch`.
-    fn branch_bonus(&self, player: PlayerId, branch: crate::game::tech::TechBranch) -> Fixed {
-        let mask = self.players[usize::from(player.0)].researched_techs;
-        let mut total = Fixed::ZERO;
-        let mut i = 0u32;
-        while (i as usize) < crate::game::tech::TECH_COUNT {
-            if mask & (1u32 << i) != 0 {
-                let t = crate::game::tech::TECHS[i as usize];
-                if t.branch == branch {
-                    total = total + t.bonus;
-                }
+    /// The next grid node the AI should research.
+    ///
+    /// Scans every eligible (prereqs met, lab available past era 0) + affordable
+    /// (all three resources) node and picks the best by priority: era keys first
+    /// (they advance the era), then nodes that unlock a real building/unit (the
+    /// lab, army, and defenses that give the AI breadth), then the Energy spine
+    /// that leads to the next key, then everything else, with the lowest id
+    /// breaking ties. `&self`, RNG-free, row-major — fully replayable.
+    fn ai_next_research(&self, player: PlayerId) -> Option<u32> {
+        let p = usize::from(player.0);
+        let set = self.players[p].researched_techs;
+        let mut best: Option<(u8, u32)> = None; // (priority, id); lower wins
+        for node in &crate::game::tech_grid_table::GRID {
+            if set.get(node.id) || !node.prereqs.iter().all(|&r| set.get(r)) {
+                continue;
             }
-            i += 1;
+            let lab_ok = node.era == 0 || self.has_research_lab(player);
+            if !lab_ok {
+                continue;
+            }
+            let (mc, ec, lc) = (
+                Fixed::from_int(i32::try_from(node.money).unwrap_or(i32::MAX)),
+                Fixed::from_int(i32::try_from(node.energy).unwrap_or(i32::MAX)),
+                Fixed::from_int(i32::try_from(node.labour).unwrap_or(i32::MAX)),
+            );
+            if self.players[p].money < mc
+                || self.players[p].energy < ec
+                || self.players[p].labour < lc
+            {
+                continue;
+            }
+            let priority = if tech_grid::is_era_key(node.id) {
+                0
+            } else if tech_grid::real_building(node.id).is_some()
+                || tech_grid::real_unit(node.id).is_some()
+            {
+                1
+            } else if node.branch == 1 {
+                2
+            } else {
+                3
+            };
+            let cand = (priority, node.id);
+            match best {
+                Some(b) if b <= cand => {}
+                _ => best = Some(cand),
+            }
         }
-        total
+        best.map(|(_, id)| id)
+    }
+
+    /// How many researched grid nodes `player` holds in branch index `branch`
+    /// (C=0,E=1,M=2,P=3,W=4,D=5,B=6,S=7,X=8,G=9). Each researched node grants a
+    /// small flat rider to its branch's effect — research strengthens the army.
+    fn grid_branch_count(&self, player: PlayerId, branch: u8) -> u32 {
+        let set = &self.players[usize::from(player.0)].researched_techs;
+        let mut n = 0u32;
+        for node in &crate::game::tech_grid_table::GRID {
+            if node.branch == branch && set.get(node.id) {
+                n += 1;
+            }
+        }
+        n
+    }
+    fn branch_rider(&self, p: PlayerId, branch: u8, per_node: Fixed) -> Fixed {
+        per_node * Fixed::from_int(i32::try_from(self.grid_branch_count(p, branch)).unwrap_or(0))
     }
     fn player_weapon_bonus(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Weapons) + self.doctrine_weapon_bonus(p)
+        self.branch_rider(p, 4, GRID_WEAPON_PER_NODE) + self.doctrine_weapon_bonus(p)
     }
     fn player_armor_bonus(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Armor) + self.doctrine_armor_bonus(p)
+        self.branch_rider(p, 5, GRID_ARMOR_PER_NODE) + self.doctrine_armor_bonus(p)
     }
     fn player_economy_bonus(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Economy)
+        self.branch_rider(p, 1, GRID_ECON_PER_NODE)
     }
     fn player_mobility_bonus(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Mobility)
+        self.branch_rider(p, 3, GRID_MOB_PER_NODE)
     }
     fn player_shield_max(&self, p: PlayerId) -> Fixed {
-        self.branch_bonus(p, crate::game::tech::TechBranch::Shields) + self.doctrine_shield_bonus(p)
+        self.branch_rider(p, 5, GRID_SHIELD_PER_NODE) + self.doctrine_shield_bonus(p)
     }
     /// Flat weapon-damage bonus from the doctrine tracks (Weapons + Forge).
     fn doctrine_weapon_bonus(&self, p: PlayerId) -> Fixed {
@@ -1986,14 +2054,8 @@ impl Sim {
         self.player_shield_max(player)
     }
     fn player_has_antigrav(&self, p: PlayerId) -> bool {
-        let mask = self.players[usize::from(p.0)].researched_techs;
-        (0..crate::game::tech::TECH_COUNT).any(|i| {
-            mask & (1u32 << i) != 0
-                && matches!(
-                    crate::game::tech::TECHS[i].branch,
-                    crate::game::tech::TechBranch::AntiGrav
-                )
-        })
+        // Any researched Gravity-branch (9) node grants terrain-ignoring movement.
+        self.grid_branch_count(p, 9) > 0
     }
     /// Returns `true` if the player has researched an Anti-Grav Drives tech.
     #[must_use]
@@ -2183,31 +2245,23 @@ impl Sim {
         if matches!(self.phase, GamePhase::Survey) {
             return;
         }
-        for player in &mut self.players {
+        // Tick each player's research; collect completions, then apply their grid
+        // unlocks (era bump + real building/unit) through the shared helper so the
+        // live completion path and the test-only `grant_tech` stay in lockstep.
+        let mut completed: Vec<(usize, u32)> = Vec::new();
+        for (p, player) in self.players.iter_mut().enumerate() {
             if let Some((id, ticks)) = player.active_research {
                 if ticks <= 1 {
-                    player.researched_techs |= 1u32 << id;
+                    player.researched_techs.set(id);
                     player.active_research = None;
-                    if crate::game::tech::is_era_key(id) {
-                        player.era = (player.era + 1).min(3);
-                    }
-                    // Research opens doors: flip on the buildings/units it unlocks.
-                    if let Some(def) = crate::game::tech::tech(id) {
-                        for unlock in def.unlocks {
-                            match *unlock {
-                                crate::game::tech::TechUnlock::Building(b) => {
-                                    player.unlocked_buildings |= 1 << b.index();
-                                }
-                                crate::game::tech::TechUnlock::Unit(u) => {
-                                    player.unlocked_units |= 1 << u.index();
-                                }
-                            }
-                        }
-                    }
+                    completed.push((p, id));
                 } else {
                     player.active_research = Some((id, ticks - 1));
                 }
             }
+        }
+        for (p, id) in completed {
+            self.apply_grid_unlocks(p, id);
         }
     }
 
@@ -2818,15 +2872,18 @@ impl Sim {
         });
         let avail = money - spent_this_tick;
         if self.player_era(player) >= 1 && avail >= ASCEND_MIN_RESERVE {
-            let (rmask, active) = self.research_state(player);
-            // The tree is "open" while any non-fork tech (tiers 0..=3) is still
-            // eligible+unbought — research stays reserved for the finite tree until
-            // it is exhausted, then funds the endless doctrines.
+            let active = self.research_state(player).1;
+            // Research stays reserved for still-useful grid nodes (those that
+            // unlock a real building/unit or advance the era); once they're
+            // exhausted, the surplus also funds the endless doctrine tracks.
+            let set = self.players[usize::from(player.0)].researched_techs;
             let tree_open = active.is_some()
-                || crate::game::tech::TECHS.iter().any(|def| {
-                    let done = rmask & (1u32 << def.id) != 0;
-                    let prereq_ok = def.prereqs.iter().all(|&r| rmask & (1u32 << r) != 0);
-                    def.tier < 4 && !done && prereq_ok
+                || crate::game::tech_grid_table::GRID.iter().any(|node| {
+                    !set.get(node.id)
+                        && node.prereqs.iter().all(|&r| set.get(r))
+                        && (tech_grid::real_building(node.id).is_some()
+                            || tech_grid::real_unit(node.id).is_some()
+                            || tech_grid::is_era_key(node.id))
                 });
             // Track order: Forge (3) first to drain Minerals, then the research
             // tracks Weapons(0)/Armor(1)/Vitality(2). u8 ids avoid a fallible cast.
@@ -2849,34 +2906,17 @@ impl Sim {
             }
         }
 
-        // Research: with no active research, start the first eligible + affordable
-        // tech in a fixed priority order — the unlock spine first (Mobilization →
-        // Directed Energy → era keys), so the AI opens its own kit, then the stat
-        // riders. Tier-0 techs are money-paid (no lab); later tiers need a lab
-        // and the Research pool. Deterministic, prereq-gated, no RNG.
-        let (researched_mask, active_research) = self.research_state(player);
+        // Research: with no active research, start the next grid node the AI wants
+        // (see `ai_next_research`) — eligible + affordable, preferring nodes that
+        // unlock a real building/unit or advance the era, falling back to the
+        // lowest-id eligible node. Deterministic, prereq-gated, no RNG.
+        let active_research = self.research_state(player).1;
         if active_research.is_none() {
-            // Spine (6,0,10 unlock army/turret/lab + era 1) → expansion unlocks
-            // (1,8 = Tank/Lancer) → era 2 (11) → Heli(2) → econ/defense riders →
-            // era 3 (12 = Antimatter+Capital) → late riders → Anti-Grav(16).
-            const RESEARCH_PRIORITY: [u32; 17] =
-                [6, 0, 10, 1, 8, 11, 2, 7, 3, 13, 4, 14, 12, 5, 15, 9, 16];
-            for tech_id in RESEARCH_PRIORITY {
-                let def = crate::game::tech::TECHS[tech_id as usize];
-                let researched = researched_mask & (1u32 << tech_id) != 0;
-                let prereq_ok = def
-                    .prereqs
-                    .iter()
-                    .all(|&r| researched_mask & (1u32 << r) != 0);
-                let lab_ok = def.tier == 0 || self.has_research_lab(player);
-                let affordable = lab_ok && self.money(player) >= def.cost;
-                if !researched && prereq_ok && affordable {
-                    cmds.push(Command::Research {
-                        owner: player,
-                        tech_id,
-                    });
-                    break;
-                }
+            if let Some(tech_id) = self.ai_next_research(player) {
+                cmds.push(Command::Research {
+                    owner: player,
+                    tech_id,
+                });
             }
         }
 
@@ -3315,9 +3355,11 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        // Re-pinned for F2: units/buildings now cost Energy + Labour, so the AI's
-        // (3-resource-gated) build/train cadence in the golden run shifts.
-        assert_eq!(s.state_hash(), 15_475_327_264_270_273_244);
+        // Re-pinned for F5 (Migration J): `researched_techs` is now a 500-slot
+        // `TechBitset` hashed as eight u64 words, and the AI researches the live
+        // grid (era keys + real unlocks first), so its golden-run research cadence
+        // and hashed state both shift.
+        assert_eq!(s.state_hash(), 8_327_741_210_316_343_940);
     }
 
     // ---- M0: autonomous colony prototype ----
@@ -3795,40 +3837,30 @@ mod tests {
     }
 
     #[test]
-    fn doctrine_fork_locks_out_the_counterpart() {
+    fn research_rejects_already_researched_and_unmet_prereqs() {
         let mut s = Sim::new(Map::new(20, 20), 1, f(100_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
-        s.add_building(P0, BuildingKind::PowerPlant, 4, 2);
-        s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
-        for id in [6u32, 0, 10, 1, 3, 13, 14, 11, 12] {
-            s.grant_tech(P0, id); // satisfy Assault Doctrine (17)'s prereq [12]
-        }
-        // Warm up the research pool: Assault Doctrine costs 900, lab makes 2/tick => 450 ticks.
-        for _ in 0..500 {
-            s.step(&[]);
-        }
-        // Research Assault Doctrine (17) to completion.
+        // Granting the Weapons root (20) then re-researching it is a no-op.
+        s.grant_tech(P0, 20);
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 17,
-        }]);
-        for _ in 0..1900 {
-            s.step(&[]);
-        }
-        assert!(
-            s.research_state(P0).0 & (1 << 17) != 0,
-            "assault doctrine should be researched"
-        );
-        // Fortress Doctrine (18) is now permanently locked out.
-        s.step(&[Command::Research {
-            owner: P0,
-            tech_id: 18,
+            tech_id: 20,
         }]);
         assert!(
             s.research_state(P0).1.is_none(),
-            "fortress doctrine should be rejected (fork already chosen)"
+            "an already-researched node is rejected"
         );
-        assert!(s.research_state(P0).0 & (1 << 18) == 0);
+        // Electromagnetic Railgun (71) needs prereq 70 (and a lab past era 0):
+        // with neither, the request is rejected and nothing starts.
+        s.step(&[Command::Research {
+            owner: P0,
+            tech_id: 71,
+        }]);
+        assert!(
+            s.research_state(P0).1.is_none(),
+            "a node with unmet prereqs is rejected"
+        );
+        assert!(!s.research_state(P0).0.get(71));
     }
 
     #[test]
@@ -4720,38 +4752,48 @@ mod tests {
 
     #[test]
     fn research_completes_after_its_duration_and_sets_the_bit() {
-        use crate::game::tech::tech;
+        use crate::game::tech_grid::node;
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
-        s.add_building(P0, BuildingKind::CommandCenter, 5, 20); // CC alone is powered
-        s.grant_tech(P0, 6); // Mobilization, the prereq of Directed Energy (0)
-                             // Tech 0 is a Foundation tech: money-paid, no lab needed.
+        s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
+        s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
+        // Node 20 (Combined-Arms Doctrine) is an era-0 root: money-paid, no lab,
+        // no prereq. Warm up first so its Energy + Labour cost is covered.
+        for _ in 0..120 {
+            s.step(&[]);
+        }
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 0,
+            tech_id: 20,
         }]);
-        let (mask, active) = s.research_state(P0);
-        assert_eq!(mask & 1, 0);
+        let (set, active) = s.research_state(P0);
+        assert!(!set.get(20));
         assert!(active.is_some());
-        let dur = tech(0).unwrap().duration;
+        let dur = node(20).unwrap().duration;
         for _ in 0..dur {
             s.step(&[]);
         }
-        let (mask, active) = s.research_state(P0);
-        assert_eq!(mask & 1, 1, "Weapons I bit set after duration");
+        let (set, active) = s.research_state(P0);
+        assert!(set.get(20), "node 20 bit set after duration");
         assert!(active.is_none());
     }
 
     #[test]
-    fn research_bonus_helpers_start_at_zero_and_tech_bonuses_are_positive() {
-        use crate::game::tech::TECHS;
-        assert!(TECHS[0].bonus > Fixed::ZERO); // Weapons I
-        assert!(TECHS[3].bonus > Fixed::ZERO); // Armor I
-        let s = Sim::new(Map::new(10, 10), 1, f(0));
-        // No research yet → every branch bonus is zero.
+    fn research_bonus_helpers_start_at_zero_then_grid_nodes_raise_them() {
+        let mut s = Sim::new(Map::new(10, 10), 1, f(0));
+        // No research yet → every branch rider is zero.
         assert_eq!(s.player_weapon_bonus(P0), Fixed::ZERO);
         assert_eq!(s.player_armor_bonus(P0), Fixed::ZERO);
         assert_eq!(s.player_economy_bonus(P0), Fixed::ZERO);
         assert_eq!(s.player_mobility_bonus(P0), Fixed::ZERO);
+        // Granting a node in each rider's branch lifts it above zero: Weapons(20),
+        // Defense(25), Energy(5), Propulsion(15).
+        for id in [20u32, 25, 5, 15] {
+            s.grant_tech(P0, id);
+        }
+        assert!(s.player_weapon_bonus(P0) > Fixed::ZERO);
+        assert!(s.player_armor_bonus(P0) > Fixed::ZERO);
+        assert!(s.player_economy_bonus(P0) > Fixed::ZERO);
+        assert!(s.player_mobility_bonus(P0) > Fixed::ZERO);
     }
 
     #[test]
@@ -4759,21 +4801,23 @@ mod tests {
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
-        // Satisfy Heavy Chassis (1)'s prereq so the ONLY blocker is the missing lab.
-        s.grant_tech(P0, 6);
-        s.grant_tech(P0, 0);
-        s.grant_tech(P0, 10);
-        // No ResearchLab yet → a research-paid tech is rejected.
+        // Satisfy Solid-State Laser (70)'s prereqs [24, 9] so the ONLY blocker is
+        // the missing lab. Granting era key 9 advances P0 into era 1.
+        for id in [5u32, 6, 7, 8, 9, 20, 21, 22, 23, 24] {
+            s.grant_tech(P0, id);
+        }
+        assert_eq!(s.player_era(P0), 1);
+        // No ResearchLab yet → an era-1 node is rejected.
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 1,
+            tech_id: 70,
         }]);
         assert!(s.research_state(P0).1.is_none());
         s.add_building(P0, BuildingKind::ResearchLab, 7, 20);
-        // Rotorcraft (2) needs prereqs [1, 11], neither researched → rejected.
+        // Railgun (71) needs prereq 70, not researched → still rejected.
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 2,
+            tech_id: 71,
         }]);
         assert!(s.research_state(P0).1.is_none());
     }
@@ -4792,7 +4836,7 @@ mod tests {
             if s.has_research_lab(P0) {
                 lab_seen = true;
             }
-            if s.research_state(P0).1.is_some() || s.research_state(P0).0 != 0 {
+            if s.research_state(P0).1.is_some() || !s.research_state(P0).0.is_empty() {
                 research_seen = true;
             }
         }
@@ -4802,21 +4846,28 @@ mod tests {
 
     #[test]
     fn researching_an_era_key_tech_advances_the_era() {
+        use crate::game::tech_grid::node;
         let mut s = Sim::new(Map::new(40, 40), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
-        s.grant_tech(P0, 6);
-        s.grant_tech(P0, 0); // prereq chain for Orbital Logistics (10)
+        s.add_building(P0, BuildingKind::PowerPlant, 6, 20);
+        // Node 9 is the era-0 key (Energy spine, step 4). Grant its prereq chain.
+        for id in [5u32, 6, 7, 8] {
+            s.grant_tech(P0, id);
+        }
         assert_eq!(s.player_era(P0), 0);
-        // Tech 10 is Foundation: money-paid, no lab needed.
+        // Warm up so the key's Energy + Labour cost is covered (era 0 needs no lab).
+        for _ in 0..150 {
+            s.step(&[]);
+        }
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 10,
+            tech_id: 9,
         }]);
-        let dur = crate::game::tech::tech(10).unwrap().duration;
+        let dur = node(9).unwrap().duration;
         for _ in 0..dur {
             s.step(&[]);
         }
-        assert_eq!(s.player_era(P0), 1, "advanced to Orbital");
+        assert_eq!(s.player_era(P0), 1, "advanced an era");
     }
 
     #[test]
@@ -4859,23 +4910,21 @@ mod tests {
 
     #[test]
     fn shields_absorb_then_regen_and_antiarmor_pierces() {
+        use crate::game::tech_grid::node;
         let mut s = Sim::new(Map::new(20, 20), 1, f(20_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
-        s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
-        s.grant_tech(P0, 6);
-        s.grant_tech(P0, 0);
-        s.grant_tech(P0, 10); // prereq of Deflector Fields (13)
-                              // Warm up the research pool: Shield I costs 300, lab produces 2/tick => 150 ticks.
-        for _ in 0..160 {
+        // Node 25 (Defense root) is era-0: money-paid, no lab, no prereq. A Defense
+        // node raises the shield ceiling. Warm up so its cost is covered first.
+        for _ in 0..120 {
             s.step(&[]);
         }
-        // Research Deflector Fields (id 13) to completion.
+        // Research Spaced & Sloped Armor Theory (id 25) to completion.
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 13,
+            tech_id: 25,
         }]);
-        let dur = crate::game::tech::tech(13).unwrap().duration;
+        let dur = node(25).unwrap().duration;
         for _ in 0..dur {
             s.step(&[]);
         }
@@ -4960,32 +5009,21 @@ mod tests {
 
     #[test]
     fn antigrav_research_makes_owner_units_ignore_terrain() {
+        use crate::game::tech_grid::node;
         let mut s = Sim::new(Map::new(20, 20), 1, f(50_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
         s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
-        s.add_building(P0, BuildingKind::ResearchLab, 4, 2);
-        let agid = (0..crate::game::tech::TECH_COUNT)
-            .find(|&i| {
-                matches!(
-                    crate::game::tech::TECHS[i].branch,
-                    crate::game::tech::TechBranch::AntiGrav
-                )
-            })
-            .map(|i| u32::try_from(i).unwrap())
-            .unwrap();
         assert!(!s.has_antigrav(P0));
-        for id in [6u32, 0, 10, 1, 3, 8, 9, 13, 14, 11, 12] {
-            s.grant_tech(P0, id); // satisfy Anti-Grav Drives (16)'s prereqs [9, 12]
-        }
-        // Warm up the research pool: Anti-Grav Drives costs 700, lab makes 2/tick => 350 ticks.
-        for _ in 0..400 {
+        // Node 45 (Gravity branch root) grants terrain-ignoring movement. Era-0
+        // root: money-paid, no lab, no prereq. Warm up to cover its cost.
+        for _ in 0..150 {
             s.step(&[]);
         }
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: agid,
+            tech_id: 45,
         }]);
-        for _ in 0..crate::game::tech::tech(agid).unwrap().duration {
+        for _ in 0..node(45).unwrap().duration {
             s.step(&[]);
         }
         assert!(s.has_antigrav(P0), "anti-grav researched");
@@ -5070,31 +5108,37 @@ mod tests {
     }
 
     #[test]
-    fn lab_gates_money_paid_tier1_research() {
+    fn lab_gates_research_past_era_zero() {
         let mut s = Sim::new(Map::new(20, 20), 1, f(10_000));
         s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
-        // Heavy Chassis (1) is a tier-1 tech; satisfy its prereqs.
-        s.grant_tech(P0, 6);
-        s.grant_tech(P0, 0);
-        s.grant_tech(P0, 10);
-        // No Research Lab yet -> a tier-1 tech is rejected even with money to spare.
+        s.add_building(P0, BuildingKind::PowerPlant, 3, 2);
+        // Solid-State Laser (70) is an era-1 node (prereqs [24, 9]); granting key 9
+        // advances P0 to era 1, where research needs a lab.
+        for id in [5u32, 6, 7, 8, 9, 20, 21, 22, 23, 24] {
+            s.grant_tech(P0, id);
+        }
+        // Warm up so Energy + Labour are not the blocker — only the lab is.
+        for _ in 0..150 {
+            s.step(&[]);
+        }
+        // No Research Lab yet -> rejected even with resources to spare.
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 1,
+            tech_id: 70,
         }]);
         assert!(
             s.research_state(P0).1.is_none(),
-            "tier-1 tech needs a Research Lab"
+            "era-1 research needs a Research Lab"
         );
-        // With a lab and money, it starts immediately (research is money-paid now).
+        // With a lab it starts immediately.
         s.add_building(P0, BuildingKind::ResearchLab, 6, 2);
         s.step(&[Command::Research {
             owner: P0,
-            tech_id: 1,
+            tech_id: 70,
         }]);
         assert!(
             s.research_state(P0).1.is_some(),
-            "tech 1 starts with a lab + money"
+            "node 70 starts with a lab + resources"
         );
     }
 

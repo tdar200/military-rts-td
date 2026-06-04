@@ -16,6 +16,5 @@ pub mod procgen;
 pub mod scenario;
 pub mod sim;
 pub mod stats;
-pub mod tech;
 pub mod tech_grid;
 pub mod tech_grid_table;

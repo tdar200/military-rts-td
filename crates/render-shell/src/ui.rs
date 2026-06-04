@@ -563,20 +563,17 @@ fn draw_tooltip(button: Rect, action: Action, price: i64, unlocked: bool, sprite
     text(&cost_s, tip_x + 10.0, tip_y + 53.0, 14.0, cost_col, font);
 }
 
-/// The name of the tech that unlocks `action`, if any (for locked tooltips).
+/// The name of the grid node that unlocks `action`, if any (for locked tooltips).
 fn gating_tech(action: Action) -> Option<&'static str> {
-    use rts_core::game::tech::{TechUnlock, TECHS};
+    use rts_core::game::tech_grid::{real_building, real_unit};
+    use rts_core::game::tech_grid_table::GRID;
     let want = action_kind(action);
-    TECHS
-        .iter()
-        .find(|t| {
-            t.unlocks.iter().any(|u| match (u, want) {
-                (TechUnlock::Building(b), EntityKindView::Building(k)) => *b == k,
-                (TechUnlock::Unit(u), EntityKindView::Unit(k)) => *u == k,
-                _ => false,
-            })
+    GRID.iter()
+        .find(|n| match want {
+            EntityKindView::Building(k) => real_building(n.id) == Some(k),
+            EntityKindView::Unit(k) => real_unit(n.id) == Some(k),
         })
-        .map(|t| t.name)
+        .map(|n| n.name)
 }
 
 /// A thin neutral divider between ribbon yields (gold is reserved for values).

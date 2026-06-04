@@ -15,6 +15,7 @@
 //! the per-player researched set onto [`TechBitset`] land in the following steps,
 //! each as its own golden-hash re-pin (never two hash rewrites in one commit).
 
+use crate::game::stats::{BuildingKind, UnitKind};
 use crate::hash::Fnv;
 
 /// Number of eras (Kardashev/theme columns), 0..=9.
@@ -301,6 +302,44 @@ pub struct GridNode {
 #[must_use]
 pub fn node(id: u32) -> Option<&'static GridNode> {
     crate::game::tech_grid_table::GRID.get(id as usize)
+}
+
+/// Whether `id` is one of the era-key nodes (completing it advances the era).
+#[must_use]
+pub fn is_era_key(id: u32) -> bool {
+    ERA_KEYS.contains(&id)
+}
+
+/// Bridge: the real, implemented [`BuildingKind`] a grid node unlocks.
+///
+/// The grid is mostly aspirational — only a handful of nodes map to entities that
+/// exist today; the rest unlock flavour/“coming soon” capabilities (`None` here).
+/// These mappings are what keep a Survival run winnable (the human researches
+/// these to get an economy, an army, and defenses).
+#[must_use]
+pub const fn real_building(id: u32) -> Option<BuildingKind> {
+    match id {
+        0 => Some(BuildingKind::ResearchLab), // Compute e0s0 (root)
+        20 => Some(BuildingKind::Barracks),   // Weapons e0s0 (root)
+        25 => Some(BuildingKind::GunTurret),  // Defense e0s0 (root)
+        75 => Some(BuildingKind::AaTurret),   // Defense e1s0
+        105 => Some(BuildingKind::AntimatterPlant), // Energy e2s0
+        _ => None,
+    }
+}
+
+/// Bridge: the real, implemented [`UnitKind`] a grid node unlocks (see
+/// [`real_building`]).
+#[must_use]
+pub const fn real_unit(id: u32) -> Option<UnitKind> {
+    match id {
+        20 => Some(UnitKind::Infantry),    // Weapons e0s0 (with Barracks)
+        70 => Some(UnitKind::AntiArmor),   // Weapons e1s0
+        71 => Some(UnitKind::Tank),        // Weapons e1s1
+        115 => Some(UnitKind::Helicopter), // Propulsion e2s0
+        270 => Some(UnitKind::Capital),    // Weapons e5s0
+        _ => None,
+    }
 }
 
 #[cfg(test)]
