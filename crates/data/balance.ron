@@ -8,27 +8,27 @@
     infantry: (
         max_hp: 50, armor: Flesh,
         attack: (damage: 6, damage_type: Ballistic, range: 3, period: 8),
-        speed_milli: 75, cost: 50, build_time: 90,
+        speed_milli: 75, cost: 50, labour_cost: 1, build_time: 90,
     ),
     tank: (
         max_hp: 220, armor: Plated,
         attack: (damage: 30, damage_type: Explosive, range: 4, period: 20),
-        speed_milli: 50, cost: 200, build_time: 270,
+        speed_milli: 50, cost: 200, energy_cost: 12, labour_cost: 2, build_time: 270,
     ),
     anti_armor: (
         max_hp: 70, armor: Flesh,
         attack: (damage: 22, damage_type: AntiArmor, range: 4, period: 16),
-        speed_milli: 60, cost: 110, build_time: 150,
+        speed_milli: 60, cost: 110, energy_cost: 4, labour_cost: 1, build_time: 150,
     ),
     helicopter: (
         max_hp: 90, armor: Plated,
         attack: (damage: 16, damage_type: Ballistic, range: 4, period: 9),
-        speed_milli: 100, cost: 160, build_time: 210, is_air: true,
+        speed_milli: 100, cost: 160, energy_cost: 16, labour_cost: 2, build_time: 210, is_air: true,
     ),
     capital: (
         max_hp: 600, armor: Plated,
         attack: (damage: 40, damage_type: Explosive, range: 6, period: 18),
-        speed_milli: 40, cost: 500, build_time: 600,
+        speed_milli: 40, cost: 500, energy_cost: 40, labour_cost: 5, build_time: 600,
     ),
     // Buildings. `cost` is Money; `energy_output`/`labour_output` feed the
     // Energy/Labour stockpiles; `mine_rate` mines Money from a deposit.
@@ -37,25 +37,25 @@
         produces_units: false, attack: None, cost: 0,
     ),
     power_plant: (
-        max_hp: 300, energy_output: 100,
+        max_hp: 300, energy_output: 40,
         produces_units: false, attack: None, cost: 100,
     ),
     refinery: (
-        max_hp: 300, mine_rate: 2,
+        max_hp: 300, mine_rate: 2, energy_cost: 8,
         produces_units: false, attack: None, cost: 150,
     ),
     barracks: (
-        max_hp: 400, labour_output: 1,
+        max_hp: 400, labour_output: 1, energy_cost: 15,
         produces_units: true, attack: None, cost: 200,
     ),
     gun_turret: (
-        max_hp: 250,
+        max_hp: 250, energy_cost: 10,
         produces_units: false,
         attack: Some((damage: 10, damage_type: Ballistic, range: 5, period: 10)),
         cost: 120,
     ),
     aa_turret: (
-        max_hp: 220,
+        max_hp: 220, energy_cost: 12,
         produces_units: false,
         attack: Some((damage: 20, damage_type: AntiArmor, range: 6, period: 8, targets_ground: false, targets_air: true)),
         cost: 140,
@@ -65,11 +65,11 @@
         produces_units: false, attack: None, cost: 20,
     ),
     research_lab: (
-        max_hp: 300,
+        max_hp: 300, energy_cost: 20,
         produces_units: false, attack: None, cost: 250,
     ),
     antimatter_plant: (
-        max_hp: 300, mine_rate: 2,
+        max_hp: 300, mine_rate: 2, energy_cost: 12,
         produces_units: false, attack: None, cost: 200,
     ),
 )

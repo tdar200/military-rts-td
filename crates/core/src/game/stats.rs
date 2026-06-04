@@ -269,7 +269,7 @@ impl UnitKind {
                 speed: Fixed::from_ratio(15, 200),
                 money_cost: Fixed::from_int(50),
                 energy_cost: Fixed::ZERO,
-                labour_cost: Fixed::ZERO,
+                labour_cost: Fixed::from_int(1),
                 build_time: 90,
                 is_air: false,
             },
@@ -284,8 +284,8 @@ impl UnitKind {
                 ),
                 speed: Fixed::from_ratio(10, 200),
                 money_cost: Fixed::from_int(200),
-                energy_cost: Fixed::ZERO,
-                labour_cost: Fixed::ZERO,
+                energy_cost: Fixed::from_int(12),
+                labour_cost: Fixed::from_int(2),
                 build_time: 270,
                 is_air: false,
             },
@@ -300,8 +300,8 @@ impl UnitKind {
                 ),
                 speed: Fixed::from_ratio(12, 200),
                 money_cost: Fixed::from_int(110),
-                energy_cost: Fixed::ZERO,
-                labour_cost: Fixed::ZERO,
+                energy_cost: Fixed::from_int(4),
+                labour_cost: Fixed::from_int(1),
                 build_time: 150,
                 is_air: false,
             },
@@ -316,8 +316,8 @@ impl UnitKind {
                 ),
                 speed: Fixed::from_ratio(20, 200),
                 money_cost: Fixed::from_int(160),
-                energy_cost: Fixed::ZERO,
-                labour_cost: Fixed::ZERO,
+                energy_cost: Fixed::from_int(16),
+                labour_cost: Fixed::from_int(2),
                 build_time: 210,
                 is_air: true,
             },
@@ -332,8 +332,8 @@ impl UnitKind {
                 ),
                 speed: Fixed::from_ratio(8, 200),
                 money_cost: Fixed::from_int(500),
-                energy_cost: Fixed::ZERO,
-                labour_cost: Fixed::ZERO,
+                energy_cost: Fixed::from_int(40),
+                labour_cost: Fixed::from_int(5),
                 build_time: 600,
                 is_air: false,
             },
@@ -382,18 +382,21 @@ impl BuildingKind {
                 labour_output: 2,
                 ..base(1000, 0)
             },
-            // The power building now feeds the spendable Energy stockpile.
+            // The power building feeds the spendable Energy stockpile (the bite
+            // comes from a moderate flow that production/expansion can outrun).
             Self::PowerPlant => BuildingStats {
-                energy_output: 100,
+                energy_output: 40,
                 ..base(300, 100)
             },
             Self::Refinery => BuildingStats {
                 mine_rate: 2,
+                energy_cost: Fixed::from_int(8),
                 ..base(300, 150)
             },
             Self::Barracks => BuildingStats {
                 produces_units: true,
                 labour_output: 1,
+                energy_cost: Fixed::from_int(15),
                 ..base(400, 200)
             },
             Self::GunTurret => BuildingStats {
@@ -403,6 +406,7 @@ impl BuildingKind {
                     Fixed::from_int(5),
                     10,
                 )),
+                energy_cost: Fixed::from_int(10),
                 ..base(250, 120)
             },
             Self::AaTurret => BuildingStats {
@@ -412,14 +416,19 @@ impl BuildingKind {
                     Fixed::from_int(6),
                     8,
                 )),
+                energy_cost: Fixed::from_int(12),
                 ..base(220, 140)
             },
             Self::Wall => base(200, 20),
             // The lab is now just a research prerequisite building.
-            Self::ResearchLab => base(300, 250),
+            Self::ResearchLab => BuildingStats {
+                energy_cost: Fixed::from_int(20),
+                ..base(300, 250)
+            },
             // Repurposed as a plain money extractor (mines deposits).
             Self::AntimatterPlant => BuildingStats {
                 mine_rate: 2,
+                energy_cost: Fixed::from_int(12),
                 ..base(300, 200)
             },
         }

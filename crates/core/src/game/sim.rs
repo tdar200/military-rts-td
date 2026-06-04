@@ -144,6 +144,20 @@ const MIN_COLONY_SPACING: u16 = 6;
 /// that makes a bigger empire face proportionally harder sieges (scale forces
 /// the strategic layer). Zero colonies ⇒ legacy waves are unchanged.
 const EMPIRE_WAVE_PRESSURE: u32 = 2;
+/// Ceiling on the Energy stockpile — a bounded, spend-it-or-cap-it resource
+/// rather than a runaway counter.
+const ENERGY_CAP: Fixed = Fixed::from_int(8000);
+/// Ceiling on the Labour (population) stockpile.
+const LABOUR_CAP: Fixed = Fixed::from_int(800);
+
+/// Clamps `v` to at most `max` (non-const: `Fixed`'s `Ord` isn't usable in const).
+fn cap_at(v: Fixed, max: Fixed) -> Fixed {
+    if v > max {
+        max
+    } else {
+        v
+    }
+}
 
 // === Ascendancy Doctrines ===
 // Endless, escalating-cost upgrade tracks that turn a late-game resource surplus
@@ -910,6 +924,27 @@ impl Sim {
     #[must_use]
     pub const fn unit_cost(&self, kind: UnitKind) -> Fixed {
         self.balance.unit(kind).money_cost
+    }
+
+    /// Whether `player` can afford `kind` in all three resources (Money, Energy,
+    /// Labour). The AI uses this so it paces production instead of queueing
+    /// commands `apply_build` would reject.
+    fn can_afford_building(&self, player: PlayerId, kind: BuildingKind) -> bool {
+        let p = usize::from(player.0);
+        let st = self.balance.building(kind);
+        self.players[p].money >= st.money_cost
+            && self.players[p].energy >= st.energy_cost
+            && self.players[p].labour >= st.labour_cost
+    }
+
+    /// Whether `player` can afford `kind` in all three resources (see
+    /// [`Sim::can_afford_building`]).
+    fn can_afford_unit(&self, player: PlayerId, kind: UnitKind) -> bool {
+        let p = usize::from(player.0);
+        let st = self.balance.unit(kind);
+        self.players[p].money >= st.money_cost
+            && self.players[p].energy >= st.energy_cost
+            && self.players[p].labour >= st.labour_cost
     }
 
     /// Per-player research state: (researched bitmask, optional (tech id, ticks left)).
@@ -2008,8 +2043,16 @@ impl Sim {
             }
         }
         for p in 0..PLAYER_COUNT {
-            self.players[p].energy = self.players[p].energy + Fixed::from_int(energy_out[p]);
-            self.players[p].labour = self.players[p].labour + Fixed::from_int(labour_out[p]);
+            // Energy and Labour are bounded stockpiles: they fill toward a ceiling
+            // (use-it-or-bank-it tempo) rather than running away to millions.
+            self.players[p].energy = cap_at(
+                self.players[p].energy + Fixed::from_int(energy_out[p]),
+                ENERGY_CAP,
+            );
+            self.players[p].labour = cap_at(
+                self.players[p].labour + Fixed::from_int(labour_out[p]),
+                LABOUR_CAP,
+            );
             // Money income: the Economy tech rider, scaled by the Logistics perk.
             let econ = self.player_economy_bonus(PlayerId(u8::try_from(p).unwrap()));
             let mut money_income = econ;
@@ -2600,7 +2643,7 @@ impl Sim {
                             .is_some_and(|t| t.buildable)
                     });
                     if let Some((dx, dy, _)) = deposit_tile {
-                        if money >= self.building_cost(kind) {
+                        if self.can_afford_building(player, kind) {
                             cmds.push(Command::Build {
                                 owner: player,
                                 kind,
@@ -2613,7 +2656,7 @@ impl Sim {
                     }
                     // No buildable deposit: skip Refinery, continue the build order.
                 } else {
-                    if money >= self.building_cost(kind) {
+                    if self.can_afford_building(player, kind) {
                         if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                             cmds.push(Command::Build {
                                 owner: player,
@@ -2635,7 +2678,7 @@ impl Sim {
             && self.building_unlocked(player, BuildingKind::AaTurret)
             && self.enemy_has_air(player)
             && !self.has_building(player, BuildingKind::AaTurret)
-            && money >= self.building_cost(BuildingKind::AaTurret)
+            && self.can_afford_building(player, BuildingKind::AaTurret)
         {
             if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
@@ -2655,7 +2698,7 @@ impl Sim {
         if !building_this_tick
             && self.building_unlocked(player, BuildingKind::AntimatterPlant)
             && !self.has_building(player, BuildingKind::AntimatterPlant)
-            && money >= self.building_cost(BuildingKind::AntimatterPlant)
+            && self.can_afford_building(player, BuildingKind::AntimatterPlant)
         {
             if let Some((x, y)) = self.find_buildable_near(cc_tile, enemy_cc) {
                 cmds.push(Command::Build {
@@ -2686,7 +2729,7 @@ impl Sim {
             let alloy_extractors = self.active_extractors_on(player, DepositKind::Alloy);
             let at_cap = self.supply_used(player) + 2 >= self.supply_cap(player);
             let near = self.find_buildable_near(cc_tile, enemy_cc);
-            let afford = |k| money >= self.building_cost(k);
+            let afford = |k| self.can_afford_building(player, k);
 
             let action: Option<(BuildingKind, u16, u16)> = (reactors == 0
                 && afford(BuildingKind::PowerPlant))
@@ -2736,13 +2779,13 @@ impl Sim {
         if !building_this_tick {
             if let Some(barracks) = self.idle_barracks(player) {
                 let kind = if self.player_era(player) >= 3
-                    && money >= self.balance.unit(UnitKind::Capital).money_cost
+                    && self.can_afford_unit(player, UnitKind::Capital)
                 {
                     UnitKind::Capital
                 } else {
                     UnitKind::Infantry
                 };
-                if money >= self.balance.unit(kind).money_cost {
+                if self.can_afford_unit(player, kind) {
                     cmds.push(Command::Train {
                         owner: player,
                         barracks,
@@ -2985,77 +3028,6 @@ mod tests {
     const P1: PlayerId = PlayerId(1);
 
     #[test]
-    fn probe_wave_spawn_offboard() {
-        use crate::game::scenario::survival;
-        let mut s = survival(7);
-        // Found the base (survey AI emits FoundBase).
-        let cmds = s.ai_commands(P0);
-        s.step(&cmds);
-        let h = i64::from(s.map().height());
-        let w = i64::from(s.map().width());
-        std::eprintln!("MAP {w}x{h}");
-        // Run through several waves; after each tick, report any enemy units whose
-        // world-y rounds to an off-board tile, and what tile from_world clamps to.
-        let mut max_seen_y_bits: i64 = i64::MIN;
-        let mut max_wave_size = 0usize;
-        let mut last_wc = s.wave_count;
-        for _ in 0..120_000u64 {
-            s.step(&[]);
-            if s.wave_count != last_wc {
-                last_wc = s.wave_count;
-                // count alive enemy units & inspect their spawn tiles right after spawn
-                let mut count = 0usize;
-                let mut offboard = 0usize;
-                let mut maxy = i64::MIN;
-                for e in &s.entities {
-                    if !e.alive || e.owner != P1 {
-                        continue;
-                    }
-                    if !matches!(e.kind, super::Kind::Unit(_)) {
-                        continue;
-                    }
-                    count += 1;
-                    let yb = e.pos.y.to_bits();
-                    if yb > maxy {
-                        maxy = yb;
-                    }
-                    if yb > max_seen_y_bits {
-                        max_seen_y_bits = yb;
-                    }
-                    let (tc, tr) =
-                        crate::game::hex::from_world(e.pos, s.map().width(), s.map().height());
-                    if i64::from(tr) >= h - 1 || e.pos.y.round_to_int() >= h {
-                        offboard += 1;
-                        if offboard <= 3 {
-                            std::eprintln!(
-                                "  wave#{} unit pos.y={} (tile r={}, clamped) col={}",
-                                s.wave_count,
-                                yb / 65536,
-                                tr,
-                                tc
-                            );
-                        }
-                    }
-                }
-                if count > max_wave_size {
-                    max_wave_size = count;
-                }
-                std::eprintln!(
-                    "WAVE_COUNT={} alive_enemy_units={} max_pos_y={} offboard(>=h-1 or >=h)={}",
-                    s.wave_count,
-                    count,
-                    maxy / 65536,
-                    offboard
-                );
-            }
-            if s.wave_count >= 8 {
-                break;
-            }
-        }
-        std::eprintln!("MAX_SEEN_POS_Y={} (height={})", max_seen_y_bits / 65536, h);
-    }
-
-    #[test]
     fn new_sim_has_starting_credits_and_no_winner() {
         let s = Sim::new(Map::new(16, 16), 1, f(500));
         assert_eq!(s.money(P0), f(500));
@@ -3143,6 +3115,10 @@ mod tests {
         s.add_building(P0, BuildingKind::PowerPlant, 3, 1);
         let barracks = s.add_building(P0, BuildingKind::Barracks, 5, 1);
         let units_before = s.unit_count(P0);
+        // Let the HQ accrue a little Labour first (Infantry now costs 1 Labour).
+        for _ in 0..2 {
+            s.step(&[]);
+        }
         s.step(&[Command::Train {
             owner: P0,
             barracks,
@@ -3334,10 +3310,9 @@ mod tests {
             cmds.extend(s.ai_commands(P1));
             s.step(&cmds);
         }
-        // Re-pinned for M4: `field_seed` (the static special-resource field seed)
-        // is now folded into `state_hash`. The golden run has no colonies, so the
-        // per-colony special fields contribute nothing — only field_seed shifts it.
-        assert_eq!(s.state_hash(), 5_824_780_097_646_105_832);
+        // Re-pinned for F2: units/buildings now cost Energy + Labour, so the AI's
+        // (3-resource-gated) build/train cadence in the golden run shifts.
+        assert_eq!(s.state_hash(), 15_475_327_264_270_273_244);
     }
 
     // ---- M0: autonomous colony prototype ----
@@ -3858,6 +3833,11 @@ mod tests {
         let b = s.add_building(P0, BuildingKind::Barracks, 4, 2);
         let cap = s.supply_cap(P0); // 10 base + 6 CC + 5 barracks
         assert_eq!(cap, 21);
+        // Accrue enough Labour (CC+Barracks ~3/tick) that supply, not Labour, is
+        // the binding limit when we over-queue.
+        for _ in 0..16 {
+            s.step(&[]);
+        }
         // Queue far more than the cap in a single tick; the cap must hold.
         let mut cmds = alloc::vec::Vec::new();
         for _ in 0..(cap + 8) {
@@ -4581,8 +4561,8 @@ mod tests {
         let mut s = Sim::new(Map::new(16, 16), 1, f(0));
         s.add_building(P0, BuildingKind::PowerPlant, 1, 1);
         s.step(&[]);
-        // PowerPlant adds 100 Energy/tick to the owner's stockpile.
-        assert_eq!(s.energy(P0), f(100));
+        // PowerPlant adds 40 Energy/tick to the owner's stockpile.
+        assert_eq!(s.energy(P0), f(40));
         assert_eq!(s.energy(P1), f(0));
     }
 
