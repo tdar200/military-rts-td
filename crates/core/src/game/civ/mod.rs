@@ -234,7 +234,7 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         // training (defensive at 3, offensive folds in by 5)
         Command::Train { .. } => 5,
         // expansion
-        Command::FoundBase { .. } => 6,
+        Command::FoundBase { .. } | Command::FoundColony { .. } => 6,
         // movement / initiative
         Command::Move { .. } | Command::UseAbility { .. } => 7,
         // institution-level spend

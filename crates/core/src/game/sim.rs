@@ -9,7 +9,9 @@
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
-use crate::game::civ::{Colony, ColonyId, ColonyIntent, ColonyPolicy, AUTONOMY_FULL};
+use crate::game::civ::{
+    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, AUTONOMY_FULL,
+};
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
@@ -129,6 +131,14 @@ const MAX_AI_ALLOY_EXTRACTORS: usize = 2;
 /// map-carpeting one that wrecks its own defensive footprint.
 const MAX_AI_BARRACKS: usize = 4;
 const MAX_AI_REACTORS: usize = 8;
+/// Money an autonomous colony spends to found a new colony.
+const FOUND_COLONY_COST: Fixed = Fixed::from_int(800);
+/// Most colonies one owner will auto-found (bounds runaway expansion).
+const MAX_COLONIES_PER_OWNER: usize = 4;
+/// Ticks between a colony's auto-expansion attempts.
+const EXPAND_PERIOD: u64 = 240;
+/// Minimum tile spacing between a new colony and every existing Command Center.
+const MIN_COLONY_SPACING: u16 = 6;
 
 // === Ascendancy Doctrines ===
 // Endless, escalating-cost upgrade tracks that turn a late-game resource surplus
@@ -317,6 +327,19 @@ pub enum Command {
         colony: ColonyId,
         /// Which special resource to survey.
         kind: crate::game::civ::special::SpecialKind,
+    },
+    /// Found a new colony for `owner` on a surveyed buildable tile — places a
+    /// Command Center and registers a [`Colony`] on it. Costs Money; the engine
+    /// of empire growth. (`parent` is informational: who initiated it.)
+    FoundColony {
+        /// Owning player.
+        owner: PlayerId,
+        /// The colony that initiated the expansion (informational).
+        parent: ColonyId,
+        /// Tile column for the new Command Center.
+        x: u16,
+        /// Tile row for the new Command Center.
+        y: u16,
     },
 }
 
@@ -621,6 +644,12 @@ impl Sim {
         self.colonies.get(id.0 as usize).filter(|c| c.alive)
     }
 
+    /// How many living colonies `owner` holds (for the UI and tests).
+    #[must_use]
+    pub fn colony_count_for(&self, owner: PlayerId) -> usize {
+        self.count_owner_colonies(owner)
+    }
+
     /// Razes a colony, freeing its slot for reuse. Idempotent: freeing an already
     /// dead (or out-of-range) colony is a no-op, and a slot is never pushed twice.
     pub fn free_colony(&mut self, colony: ColonyId) {
@@ -646,7 +675,9 @@ impl Sim {
     #[must_use]
     pub fn colony_commands(&self) -> Vec<Command> {
         let mut cmds = Vec::new();
-        for c in &self.colonies {
+        // Sites already planned this tick, so two colonies don't target one tile.
+        let mut planned: Vec<(u16, u16)> = Vec::new();
+        for (idx, c) in self.colonies.iter().enumerate() {
             if !c.alive {
                 continue;
             }
@@ -657,6 +688,29 @@ impl Sim {
             for cmd in self.ai_commands(c.owner) {
                 if crate::game::civ::command_min_autonomy(&cmd) <= level {
                     cmds.push(cmd);
+                }
+            }
+            // Auto-expansion: a sufficiently-autonomous colony with an active
+            // expansion stance founds a new colony toward the first viable site,
+            // throttled and bounded so growth never runs away. Deterministic.
+            let expanding = !matches!(
+                c.policy.expansion,
+                ExpansionIntent::None | ExpansionIntent::SuggestOnly
+            );
+            if level >= 6
+                && expanding
+                && self.tick.is_multiple_of(EXPAND_PERIOD)
+                && self.count_owner_colonies(c.owner) < MAX_COLONIES_PER_OWNER
+                && self.money(c.owner) >= FOUND_COLONY_COST
+            {
+                if let Some(site) = self.first_colony_site(&planned) {
+                    planned.push(site);
+                    cmds.push(Command::FoundColony {
+                        owner: c.owner,
+                        parent: ColonyId(u32::try_from(idx).unwrap_or(0)),
+                        x: site.0,
+                        y: site.1,
+                    });
                 }
             }
         }
@@ -1546,7 +1600,72 @@ impl Sim {
                     }
                 }
             }
+            Command::FoundColony { owner, x, y, .. } => self.apply_found_colony(owner, x, y),
         }
+    }
+
+    /// Founds a new colony for `owner` at `(x, y)`: validate (buildable tile,
+    /// affordable, under the per-owner cap), spend [`FOUND_COLONY_COST`], place a
+    /// Command Center, and register a [`Colony`] on it (requested full autonomy,
+    /// earned from zero). The new colony's spacing is enforced by the caller.
+    fn apply_found_colony(&mut self, owner: PlayerId, x: u16, y: u16) {
+        let p = usize::from(owner.0);
+        let buildable = self
+            .map
+            .tile(i32::from(x), i32::from(y))
+            .is_some_and(|t| t.buildable);
+        if !buildable
+            || self.players[p].money < FOUND_COLONY_COST
+            || self.count_owner_colonies(owner) >= MAX_COLONIES_PER_OWNER
+        {
+            return;
+        }
+        self.players[p].money = self.players[p].money - FOUND_COLONY_COST;
+        let cc = self.add_building(owner, BuildingKind::CommandCenter, x, y);
+        self.add_colony(owner, cc, AUTONOMY_FULL);
+    }
+
+    /// How many living colonies `owner` holds.
+    fn count_owner_colonies(&self, owner: PlayerId) -> usize {
+        self.colonies
+            .iter()
+            .filter(|c| c.alive && c.owner == owner)
+            .count()
+    }
+
+    /// The first row-major buildable tile at least [`MIN_COLONY_SPACING`] from
+    /// every existing Command Center and from every `exclude` tile (sites already
+    /// planned this tick). Deterministic; `None` if the map is too crowded.
+    fn first_colony_site(&self, exclude: &[(u16, u16)]) -> Option<(u16, u16)> {
+        let ccs: Vec<(u16, u16)> = self
+            .entities
+            .iter()
+            .filter(|e| e.alive && matches!(e.kind, Kind::Building(BuildingKind::CommandCenter)))
+            .filter_map(|e| e.tile)
+            .collect();
+        let spacing = i32::from(MIN_COLONY_SPACING);
+        for y in 0..self.map.height() {
+            for x in 0..self.map.width() {
+                if !self
+                    .map
+                    .tile(i32::from(x), i32::from(y))
+                    .is_some_and(|t| t.buildable)
+                {
+                    continue;
+                }
+                if exclude.contains(&(x, y)) {
+                    continue;
+                }
+                let clear = ccs.iter().all(|&(cx, cy)| {
+                    (i32::from(cx) - i32::from(x)).abs() + (i32::from(cy) - i32::from(y)).abs()
+                        >= spacing
+                });
+                if clear {
+                    return Some((x, y));
+                }
+            }
+        }
+        None
     }
 
     /// Casts `unit`'s ability at `target`: validate (alive, owned, carries an
@@ -2765,6 +2884,7 @@ mod tests {
         WaveConfig,
     };
     use crate::fixed::Fixed;
+    use crate::game::civ::ColonyId;
     use crate::game::map::Map;
     use crate::vec::Vec2;
 
@@ -3201,6 +3321,74 @@ mod tests {
             level: 9,
         }]);
         assert_eq!(s.colony(col).unwrap().autonomy_level, 4);
+    }
+
+    // ---- M5: planetary expansion ----
+
+    #[test]
+    fn found_colony_places_a_base_and_registers_a_colony() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 3, 3);
+        let parent = s.add_colony(P0, cc, 0);
+        let entities_before = s.entity_count();
+        s.step(&[Command::FoundColony {
+            owner: P0,
+            parent,
+            x: 12,
+            y: 12,
+        }]);
+        // A second Command Center exists and a second colony is registered.
+        assert_eq!(s.entity_count(), entities_before + 1);
+        assert_eq!(s.colony(ColonyId(1)).unwrap().owner, P0);
+        assert!(s.money(P0) < f(5000), "founding spent Money");
+    }
+
+    #[test]
+    fn found_colony_respects_the_per_owner_cap() {
+        let mut s = Sim::new(Map::new(40, 40), 1, f(100_000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_colony(P0, cc, 0);
+        // Try to found many; only up to the cap (incl. the starting one) take.
+        let mut x = 10;
+        for _ in 0..8 {
+            s.step(&[Command::FoundColony {
+                owner: P0,
+                parent: ColonyId(0),
+                x,
+                y: 20,
+            }]);
+            x += 7;
+        }
+        assert_eq!(
+            s.colony_count_for(P0),
+            super::MAX_COLONIES_PER_OWNER,
+            "expansion is bounded by the per-owner cap"
+        );
+    }
+
+    #[test]
+    fn autonomous_colony_expands_when_policy_allows() {
+        use crate::game::civ::{ColonyPolicy, ExpansionIntent, AUTONOMY_HOLD_TICKS};
+        let mut s = Sim::new(Map::new(40, 40), 1, f(100_000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 3, 3);
+        let col = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
+        s.step(&[Command::SetColonyPolicy {
+            owner: P0,
+            colony: col,
+            policy: ColonyPolicy {
+                expansion: ExpansionIntent::AutoSafe,
+                ..ColonyPolicy::default()
+            },
+        }]);
+        // Earn past level 6 and cross an expansion window.
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 7) {
+            let cmds = s.colony_commands();
+            s.step(&cmds);
+        }
+        assert!(
+            s.colony_count_for(P0) > 1,
+            "an autonomous colony with AutoSafe expansion founds new colonies"
+        );
     }
 
     // ---- M4: special-resource discovery ----
