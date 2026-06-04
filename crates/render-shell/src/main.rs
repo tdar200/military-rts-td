@@ -817,7 +817,7 @@ fn draw_title(sprites: &Sprites) {
         sprites.font_regal(),
     );
     centered_shadow(
-        "STELLAR FRONT",
+        "ASCENSION",
         c.y - 80.0,
         62.0,
         with_alpha(DECO_GOLD_HI, holo_flicker()),
@@ -1520,12 +1520,9 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
             },
         );
 
-        // Cost (right-aligned), tinted by affordability.
-        let cost_s = if rc_i > 0 {
-            format!("{mc_i}M  {rc_i}R")
-        } else {
-            format!("{mc_i}M")
-        };
+        // Cost (right-aligned), tinted by affordability. Doctrines are Money-only
+        // now (the old research portion is folded in).
+        let cost_s = format!("${}", mc_i + rc_i);
         let col = if afford {
             GOOD
         } else if lab_ok {
@@ -1723,7 +1720,8 @@ fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
                 format!("{pct}%")
             }
             TechStatus::Locked => "\u{1f512}".to_owned(),
-            _ => format!("{cost}{}", if t.tier == 0 { "M" } else { "R" }),
+            // All research is paid from Money now.
+            _ => format!("${cost}"),
         };
         let lw = measure_text(&label, font, 11, 1.0).width;
         draw_text_ex(

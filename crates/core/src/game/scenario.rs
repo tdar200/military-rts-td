@@ -232,18 +232,16 @@ pub fn survival(seed: u64) -> Sim {
 
     // Escalating waves from the beachhead toward the player.
     sim.set_waves(WaveConfig {
-        // Civ pace: ~6 peaceful minutes to found the colony, then a TELEGRAPHED
-        // siege every ~10 minutes. Long build/expand/tech stretches punctuated by
-        // a handful of discrete, escalating assaults — building is the game,
-        // defense is the punctuation.
-        first_delay: 10_800,
-        interval: 18_000,
-        // Few-but-huge sieges: with ~10 min to fully retrain, tech, and stack
-        // doctrines between them, each must be a wall. `size = base_size +
-        // growth * wave`, plus a Capital boss every 5th wave, plus the adapting
-        // swarm (each wave hardens the attacker — see `run_waves`).
-        base_size: 10,
-        growth: 8,
+        // Tighter pace so the run has real stakes: ~90s to found and build an
+        // opening, then a TELEGRAPHED siege roughly every ~3 minutes. Each siege
+        // escalates hard (size + an adapting, doctrine-stacking swarm) so a
+        // teched army is genuinely tested rather than coasting.
+        first_delay: 2_700,
+        interval: 5_400,
+        // `size = base_size + growth * wave`, plus a Capital boss every 5th wave,
+        // plus the adapting swarm (each wave hardens the attacker — run_waves).
+        base_size: 12,
+        growth: 6,
         spawn: Vec2::new(
             Fixed::from_int(i32::from(w) - 5),
             Fixed::from_int(i32::from(mid)),
@@ -686,8 +684,8 @@ mod tests {
         let mut s = survival(7);
         let cmds = s.ai_commands(PlayerId(0)); // found, starting the wave clock
         s.step(&cmds);
-        // 30 Hz -> 6 minutes = 10_800 ticks from founding. No enemy units before.
-        for _ in 0..10_000 {
+        // 30 Hz -> first_delay 2_700 ticks (~90s) from founding. None before.
+        for _ in 0..2_500 {
             s.step(&[]);
         }
         assert_eq!(
@@ -695,7 +693,7 @@ mod tests {
             0,
             "no waves should spawn during the grace period"
         );
-        for _ in 0..1500 {
+        for _ in 0..600 {
             s.step(&[]);
         }
         assert!(
@@ -759,13 +757,13 @@ mod tests {
     #[test]
     fn survival_economy_flows_after_founding_and_stays_peaceful() {
         // The survey-AI founds then builds an Extractor on the home deposit, so the
-        // economy mines; the build-up stays peaceful (first wave is 6 min AFTER
+        // economy mines; the build-up stays peaceful (first wave is ~90s AFTER
         // founding, not from map load).
         let mut s = survival(3);
         let cmds = s.ai_commands(PlayerId(0)); // founds
         s.step(&cmds);
         let start = s.money(PlayerId(0)).to_bits();
-        for _ in 0..3000 {
+        for _ in 0..2400 {
             let c = s.ai_commands(PlayerId(0));
             s.step(&c);
         }
