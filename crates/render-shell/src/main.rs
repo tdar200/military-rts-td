@@ -238,6 +238,8 @@ async fn main() {
     let mut research_cursor: usize = 0;
     let mut doctrine_open = false;
     let mut doctrine_cursor: usize = 0;
+    // Read-only viewer for the 500-slot Ascension capability grid (toggle: G).
+    let mut grid_open = false;
     let mut phase = Phase::Title;
     // Shell-side animated view layer (interpolation, bars, FX events) + particle
     // pool. Pure view state — never feeds back into the deterministic sim.
@@ -308,6 +310,7 @@ async fn main() {
                 accumulator = 0.0;
                 research_open = false;
                 doctrine_open = false;
+                grid_open = false;
             }
             draw_title(&sprites, scenario);
             next_frame().await;
@@ -425,6 +428,20 @@ async fn main() {
             && is_key_pressed(KeyCode::U)
         {
             doctrine_open = !doctrine_open;
+        }
+        // Toggle the read-only capability-grid viewer with G.
+        if !over
+            && !paused
+            && !surveying
+            && !research_open
+            && !doctrine_open
+            && !perk_open
+            && is_key_pressed(KeyCode::G)
+        {
+            grid_open = !grid_open;
+        }
+        if grid_open && is_key_pressed(KeyCode::Escape) {
+            grid_open = false;
         }
         if doctrine_open {
             let n = 4usize;
@@ -703,6 +720,9 @@ async fn main() {
         }
         if doctrine_open {
             draw_doctrine_modal(&sim, doctrine_cursor, &sprites);
+        }
+        if grid_open {
+            draw_grid_viewer(&sprites);
         }
         if perk_open {
             draw_perk_modal(&sim, &sprites);
@@ -1423,6 +1443,107 @@ fn tech_node_rect(id: u32) -> Rect {
 /// upgrade tracks that spend the late-game Minerals/Research surplus on permanent
 /// army-wide quality. Unlike research it does not freeze time, so the overlay is
 /// kept light and the player can buy several levels between waves.
+/// A read-only viewer for the 500-slot Ascension capability grid: 10 era columns
+/// × 10 branch lanes, each cell's 5 steps coloured by reality class, with the
+/// "Frontier of Known Physics" divider after era 4. Toggle with G; Esc closes.
+fn draw_grid_viewer(sprites: &Sprites) {
+    use rts_core::game::tech_grid::RealityClass;
+    use rts_core::game::tech_grid_table::GRID;
+
+    const BRANCHES: [&str; 10] = ["C", "E", "M", "P", "W", "D", "B", "S", "X", "G"];
+    const ERAS: [&str; 10] = [
+        "FND", "QNT", "RNW", "FUS", "SPC", "ST2", "GAL", "DRK", "HiD", "CSM",
+    ];
+
+    const fn reality_color(r: RealityClass) -> Color {
+        match r {
+            RealityClass::Achieved => GOOD,
+            RealityClass::Emerging => GRID_HOT,
+            RealityClass::Theoretical => SHIELD,
+            RealityClass::Speculative => WARN,
+            RealityClass::Lore => TEXT_DIM,
+        }
+    }
+
+    let (w, h) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 180));
+    let fb = sprites.font_bold();
+    let f = sprites.font();
+
+    centered("ASCENSION — CAPABILITY GRID", 38.0, 24.0, GOLD, fb);
+    centered(
+        "10 eras × 10 branches × 5 steps   •   G / Esc to close",
+        60.0,
+        14.0,
+        TEXT_DIM,
+        f,
+    );
+
+    let label_w = 26.0;
+    let pad = 20.0;
+    let cell_w = ((w - pad * 2.0 - label_w) / 10.0).min(96.0);
+    let cell_h = ((h - 130.0) / 10.0).min(40.0);
+    let grid_w = cell_w * 10.0;
+    let ox = (w - grid_w - label_w) / 2.0 + label_w;
+    let oy = 92.0;
+    let gap = 2.0;
+    let pip_w = (cell_w - gap * 6.0) / 5.0;
+
+    for (e, name) in ERAS.iter().enumerate() {
+        let cx = ox + e as f32 * cell_w;
+        let tw = measure_text(name, f, 12, 1.0).width;
+        draw_text_ex(
+            name,
+            cx + (cell_w - tw) / 2.0,
+            oy - 6.0,
+            TextParams {
+                font: f,
+                font_size: 12,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+    }
+    for (b, code) in BRANCHES.iter().enumerate() {
+        let ry = oy + b as f32 * cell_h;
+        draw_text_ex(
+            code,
+            ox - label_w + 6.0,
+            ry + cell_h / 2.0 + 4.0,
+            TextParams {
+                font: fb,
+                font_size: 14,
+                color: GOLD,
+                ..Default::default()
+            },
+        );
+        for e in 0..10u32 {
+            let cx = ox + e as f32 * cell_w;
+            draw_rectangle_lines(cx, ry, cell_w, cell_h, 1.0, BORDER_NEUTRAL);
+            for step in 0..5u32 {
+                let id = e * 50 + b as u32 * 5 + step;
+                let col = reality_color(GRID[id as usize].reality);
+                let px = cx + gap + step as f32 * (pip_w + gap);
+                draw_rectangle(px, ry + 4.0, pip_w, cell_h - 8.0, col);
+            }
+        }
+    }
+    // The "Frontier of Known Physics" divider after era 4.
+    let fx = ox + 5.0 * cell_w;
+    draw_rectangle(fx - 1.5, oy, 3.0, cell_h * 10.0, WARN);
+    draw_text_ex(
+        "FRONTIER OF KNOWN PHYSICS",
+        ox + cell_w,
+        oy + cell_h * 10.0 + 18.0,
+        TextParams {
+            font: f,
+            font_size: 12,
+            color: WARN,
+            ..Default::default()
+        },
+    );
+}
+
 fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     const NAMES: [&str; 4] = ["WEAPONS", "ARMOR", "VITALITY", "FORGE"];
     const DESCS: [&str; 4] = [
