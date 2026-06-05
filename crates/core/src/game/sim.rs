@@ -10,8 +10,8 @@
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
 use crate::game::civ::{
-    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, KardashevTier, SectorDoctrine,
-    SimDetail, Species, AUTONOMY_FULL,
+    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, KardashevTier, Sector,
+    SectorDoctrine, SectorId, SimDetail, Species, AUTONOMY_FULL,
 };
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
@@ -368,13 +368,32 @@ pub enum Command {
         /// Tile row for the new Command Center.
         y: u16,
     },
-    /// Set the governance doctrine of a colony's sector.
-    SetColonyDoctrine {
+    /// Create a new governance sector for `owner` with the given doctrine. The
+    /// new sector takes the lowest free slot; the UI finds it by scanning.
+    FoundSector {
+        /// Owning player.
+        owner: PlayerId,
+        /// The doctrine the new sector starts with.
+        doctrine: SectorDoctrine,
+    },
+    /// Place `colony` under `sector`'s governance (both must belong to `owner`).
+    /// The sector's doctrine then supplies the colony's standing policy.
+    AssignColonyToSector {
         /// Owning player.
         owner: PlayerId,
         /// Target colony.
         colony: ColonyId,
-        /// The sector doctrine to apply.
+        /// The sector to join.
+        sector: SectorId,
+    },
+    /// Change a sector's governance doctrine; its member colonies re-sync their
+    /// policy to it on the following ticks.
+    SetSectorDoctrine {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target sector.
+        sector: SectorId,
+        /// The doctrine to apply.
         doctrine: SectorDoctrine,
     },
 }
@@ -524,6 +543,11 @@ pub struct Sim {
     colonies: Vec<Colony>,
     /// Recycled colony slots (LIFO), mirroring [`Sim::free`] for entities.
     colony_free: Vec<u32>,
+    /// The governance layer: sectors grouping colonies under a doctrine (see
+    /// [`crate::game::civ::Sector`]). Hashed; empty in the legacy scenarios.
+    sectors: Vec<Sector>,
+    /// Recycled sector slots (LIFO), mirroring [`Sim::colony_free`].
+    sector_free: Vec<u32>,
     /// World seed for sampling static special-resource fields (see
     /// [`crate::game::civ::special`]). Immutable; sampled without touching `rng`.
     field_seed: u64,
@@ -656,6 +680,8 @@ impl Sim {
             attacks: Vec::new(),
             colonies: Vec::new(),
             colony_free: Vec::new(),
+            sectors: Vec::new(),
+            sector_free: Vec::new(),
             field_seed: seed,
             lod_skip: true,
         }
@@ -688,7 +714,7 @@ impl Sim {
                 crate::game::civ::special::SPECIAL_COUNT],
             species: Species::Standard,
             detail: SimDetail::Active,
-            sector_doctrine: SectorDoctrine::Balanced,
+            sector: None,
             // Synced as of its birth tick: its first per-tick pass materializes it.
             last_sync_tick: self.tick,
         };
@@ -738,6 +764,90 @@ impl Sim {
             self.colonies[index].alive = false;
             self.colony_free.push(colony.0);
         }
+    }
+
+    /// Creates a governance [`Sector`] for `owner`, reusing the lowest free slot
+    /// (LIFO) exactly like [`add_colony`](Self::add_colony) (determinism rule D5).
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "sector index fits u32 for any real game (mirrors add_colony)"
+    )]
+    pub fn add_sector(&mut self, owner: PlayerId, doctrine: SectorDoctrine) -> SectorId {
+        let sector = Sector {
+            alive: true,
+            owner,
+            doctrine,
+        };
+        if let Some(index) = self.sector_free.pop() {
+            self.sectors[index as usize] = sector;
+            SectorId(index)
+        } else {
+            let index = self.sectors.len() as u32;
+            self.sectors.push(sector);
+            SectorId(index)
+        }
+    }
+
+    /// Disbands a sector, freeing its slot and unassigning its member colonies.
+    /// Idempotent; a slot is never pushed twice.
+    pub fn free_sector(&mut self, sector: SectorId) {
+        let index = sector.0 as usize;
+        if self.sectors.get(index).is_some_and(|s| s.alive) {
+            self.sectors[index].alive = false;
+            self.sector_free.push(sector.0);
+            for c in &mut self.colonies {
+                if c.sector == Some(sector) {
+                    c.sector = None;
+                }
+            }
+        }
+    }
+
+    /// Read access to a living sector by id (for the UI and tests).
+    #[must_use]
+    pub fn sector(&self, id: SectorId) -> Option<&Sector> {
+        self.sectors.get(id.0 as usize).filter(|s| s.alive)
+    }
+
+    /// The effective governance doctrine of a colony: its sector's doctrine, or
+    /// [`Balanced`](SectorDoctrine::Balanced) when ungoverned.
+    #[must_use]
+    pub fn colony_doctrine(&self, colony: ColonyId) -> SectorDoctrine {
+        self.colonies
+            .get(colony.0 as usize)
+            .filter(|c| c.alive)
+            .and_then(|c| c.sector)
+            .and_then(|s| self.sector(s))
+            .map_or(SectorDoctrine::Balanced, |s| s.doctrine)
+    }
+
+    /// The governance commands every living sector emits this tick, in ascending
+    /// sector-id order. A **pure function of hashed state** (no RNG, no floats) —
+    /// the same lockstep-safe contract as [`colony_commands`](Self::colony_commands).
+    ///
+    /// A sector governs by pushing its doctrine's [`policy`](SectorDoctrine::policy)
+    /// onto each member colony whose policy does not already match — so it is
+    /// **idempotent**: once the colonies are in sync the sector emits nothing.
+    #[must_use]
+    pub fn sector_commands(&self) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        for (si, s) in self.sectors.iter().enumerate() {
+            if !s.alive {
+                continue;
+            }
+            let sid = SectorId(u32::try_from(si).unwrap_or(0));
+            let target = s.doctrine.policy();
+            for (ci, c) in self.colonies.iter().enumerate() {
+                if c.alive && c.sector == Some(sid) && c.owner == s.owner && c.policy != target {
+                    cmds.push(Command::SetColonyPolicy {
+                        owner: s.owner,
+                        colony: ColonyId(u32::try_from(ci).unwrap_or(0)),
+                        policy: target,
+                    });
+                }
+            }
+        }
+        cmds
     }
 
     /// The autonomous commands of every living colony this tick, gathered in
@@ -1331,7 +1441,8 @@ impl Sim {
             h.write_u64(c.directive as u64);
             h.write_u64(c.species as u64);
             h.write_u64(c.detail as u64);
-            h.write_u64(c.sector_doctrine as u64);
+            // Sector membership: 0 = ungoverned, else sector id + 1.
+            h.write_u64(c.sector.map_or(0, |s| u64::from(s.0) + 1));
             for kind in crate::game::civ::special::SpecialKind::ALL {
                 let k = kind.index();
                 let rate = self.colony_special_rate(ci, kind);
@@ -1347,6 +1458,17 @@ impl Sim {
         }
         h.write_u64(self.colony_free.len() as u64);
         for &slot in &self.colony_free {
+            h.write_u64(u64::from(slot));
+        }
+        // The sector (governance) arena, appended in stable order.
+        h.write_u64(self.sectors.len() as u64);
+        for s in &self.sectors {
+            h.write_u64(u64::from(s.alive));
+            h.write_u64(u64::from(s.owner.0));
+            h.write_u64(s.doctrine as u64);
+        }
+        h.write_u64(self.sector_free.len() as u64);
+        for &slot in &self.sector_free {
             h.write_u64(u64::from(slot));
         }
     }
@@ -1735,16 +1857,45 @@ impl Sim {
                 }
             }
             Command::FoundColony { owner, x, y, .. } => self.apply_found_colony(owner, x, y),
-            Command::SetColonyDoctrine {
+            Command::FoundSector { owner, doctrine } => {
+                self.add_sector(owner, doctrine);
+            }
+            Command::AssignColonyToSector {
                 owner,
                 colony,
+                sector,
+            } => self.apply_assign_sector(owner, colony, sector),
+            Command::SetSectorDoctrine {
+                owner,
+                sector,
                 doctrine,
-            } => {
-                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
-                    if c.alive && c.owner == owner {
-                        c.sector_doctrine = doctrine;
-                    }
-                }
+            } => self.apply_set_sector_doctrine(owner, sector, doctrine),
+        }
+    }
+
+    /// Places `colony` under `sector` when both belong to `owner` (the
+    /// `AssignColonyToSector` resolution). Factored out, with the doctrine setter
+    /// below, to keep `apply_command` within its line budget.
+    fn apply_assign_sector(&mut self, owner: PlayerId, colony: ColonyId, sector: SectorId) {
+        let sector_ok = self.sector(sector).is_some_and(|s| s.owner == owner);
+        if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
+            if c.alive && c.owner == owner && sector_ok {
+                c.sector = Some(sector);
+            }
+        }
+    }
+
+    /// Re-doctrines `sector` when it belongs to `owner` (the `SetSectorDoctrine`
+    /// resolution).
+    fn apply_set_sector_doctrine(
+        &mut self,
+        owner: PlayerId,
+        sector: SectorId,
+        doctrine: SectorDoctrine,
+    ) {
+        if let Some(s) = self.sectors.get_mut(sector.0 as usize) {
+            if s.alive && s.owner == owner {
+                s.doctrine = doctrine;
             }
         }
     }
@@ -3448,7 +3599,12 @@ mod tests {
         // `TechBitset` hashed as eight u64 words, and the AI researches the live
         // grid (era keys + real unlocks first), so its golden-run research cadence
         // and hashed state both shift.
-        assert_eq!(s.state_hash(), 8_327_741_210_316_343_940);
+        //
+        // Re-pinned again for M7 (sector arena): the state hash now appends the
+        // sector (governance) arena. This run has no sectors, so the only delta is
+        // two appended zero-length markers (`sectors.len()` + `sector_free.len()`);
+        // the simulation itself is unchanged.
+        assert_eq!(s.state_hash(), 4_245_124_049_375_366_020);
     }
 
     // ---- M0: autonomous colony prototype ----
@@ -3701,20 +3857,144 @@ mod tests {
     }
 
     #[test]
-    fn sector_doctrine_command_applies() {
-        use crate::game::civ::SectorDoctrine;
+    fn assigning_a_colony_to_a_sector_sets_its_doctrine() {
+        use crate::game::civ::{SectorDoctrine, SectorId};
         let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
         let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
         let col = s.add_colony(P0, cc, 0);
-        s.step(&[Command::SetColonyDoctrine {
+        // Ungoverned colonies report the Balanced default.
+        assert_eq!(s.colony_doctrine(col), SectorDoctrine::Balanced);
+        s.step(&[Command::FoundSector {
             owner: P0,
-            colony: col,
             doctrine: SectorDoctrine::Fortress,
         }]);
-        assert_eq!(
-            s.colony(col).unwrap().sector_doctrine,
-            SectorDoctrine::Fortress
+        s.step(&[Command::AssignColonyToSector {
+            owner: P0,
+            colony: col,
+            sector: SectorId(0),
+        }]);
+        assert_eq!(s.colony_doctrine(col), SectorDoctrine::Fortress);
+        // A foreign owner cannot poach the colony into its sector.
+        s.step(&[Command::AssignColonyToSector {
+            owner: P1,
+            colony: col,
+            sector: SectorId(0),
+        }]);
+        assert_eq!(s.colony(col).unwrap().sector, Some(SectorId(0)));
+    }
+
+    #[test]
+    fn a_sector_governs_its_member_colonies_policy() {
+        use crate::game::civ::{SectorDoctrine, SectorId};
+        let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        let cc1 = s.add_building(P0, BuildingKind::CommandCenter, 4, 4);
+        let cc2 = s.add_building(P0, BuildingKind::CommandCenter, 20, 20);
+        let c1 = s.add_colony(P0, cc1, 0);
+        let c2 = s.add_colony(P0, cc2, 0);
+        s.step(&[Command::FoundSector {
+            owner: P0,
+            doctrine: SectorDoctrine::Fortress,
+        }]);
+        s.step(&[
+            Command::AssignColonyToSector {
+                owner: P0,
+                colony: c1,
+                sector: SectorId(0),
+            },
+            Command::AssignColonyToSector {
+                owner: P0,
+                colony: c2,
+                sector: SectorId(0),
+            },
+        ]);
+        // The sector pushes its doctrine policy onto both members.
+        let target = SectorDoctrine::Fortress.policy();
+        for _ in 0..3 {
+            let cmds = s.sector_commands();
+            s.step(&cmds);
+        }
+        assert_eq!(s.colony(c1).unwrap().policy, target);
+        assert_eq!(s.colony(c2).unwrap().policy, target);
+        // Idempotent: once synced, the sector emits nothing further.
+        assert!(
+            s.sector_commands().is_empty(),
+            "a synced sector issues no governance commands"
         );
+    }
+
+    #[test]
+    fn changing_a_sectors_doctrine_repropagates_to_members() {
+        use crate::game::civ::{SectorDoctrine, SectorId};
+        let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 4, 4);
+        let col = s.add_colony(P0, cc, 0);
+        s.step(&[Command::FoundSector {
+            owner: P0,
+            doctrine: SectorDoctrine::Fortress,
+        }]);
+        s.step(&[Command::AssignColonyToSector {
+            owner: P0,
+            colony: col,
+            sector: SectorId(0),
+        }]);
+        for _ in 0..2 {
+            let cmds = s.sector_commands();
+            s.step(&cmds);
+        }
+        assert_eq!(
+            s.colony(col).unwrap().policy,
+            SectorDoctrine::Fortress.policy()
+        );
+        // Re-doctrine the sector: the member converges on the new policy.
+        s.step(&[Command::SetSectorDoctrine {
+            owner: P0,
+            sector: SectorId(0),
+            doctrine: SectorDoctrine::Research,
+        }]);
+        for _ in 0..2 {
+            let cmds = s.sector_commands();
+            s.step(&cmds);
+        }
+        assert_eq!(
+            s.colony(col).unwrap().policy,
+            SectorDoctrine::Research.policy()
+        );
+    }
+
+    #[test]
+    fn sector_slots_are_recycled_lifo() {
+        use crate::game::civ::{SectorDoctrine, SectorId};
+        let mut s = Sim::new(Map::new(10, 10), 1, f(5000));
+        let a = s.add_sector(P0, SectorDoctrine::Mining);
+        let b = s.add_sector(P0, SectorDoctrine::Fortress);
+        assert_eq!((a, b), (SectorId(0), SectorId(1)));
+        s.free_sector(a);
+        // The freed slot is reused before the vector grows (LIFO, rule D5).
+        let c = s.add_sector(P0, SectorDoctrine::Research);
+        assert_eq!(c, SectorId(0));
+        assert_eq!(
+            s.sector(SectorId(0)).unwrap().doctrine,
+            SectorDoctrine::Research
+        );
+        assert!(s.sector(b).is_some());
+    }
+
+    #[test]
+    fn disbanding_a_sector_unassigns_its_colonies() {
+        use crate::game::civ::{SectorDoctrine, SectorId};
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
+        let col = s.add_colony(P0, cc, 0);
+        let sec = s.add_sector(P0, SectorDoctrine::Fortress);
+        s.step(&[Command::AssignColonyToSector {
+            owner: P0,
+            colony: col,
+            sector: sec,
+        }]);
+        assert_eq!(s.colony(col).unwrap().sector, Some(SectorId(0)));
+        s.free_sector(sec);
+        assert_eq!(s.colony(col).unwrap().sector, None);
+        assert_eq!(s.colony_doctrine(col), SectorDoctrine::Balanced);
     }
 
     // ---- M7 (cont.): Dormant closed-form work-skip ----

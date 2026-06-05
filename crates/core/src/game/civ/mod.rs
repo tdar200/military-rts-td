@@ -28,6 +28,13 @@ use special::{Knowledge, SPECIAL_COUNT};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct ColonyId(pub u32);
 
+/// Stable handle for a sector — a governance grouping of colonies.
+///
+/// An index into `Sim`'s sector arena; slots are recycled (LIFO) through the
+/// sector free-list, mirroring the colony and entity arenas (determinism rule D5).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SectorId(pub u32);
+
 /// Full autonomy — the colony runs itself entirely.
 ///
 /// The "automated at maturity" pole and the maximum [`Colony::autonomy_level`].
@@ -285,6 +292,73 @@ pub enum SectorDoctrine {
     Frontier = 5,
 }
 
+impl SectorDoctrine {
+    /// The standing [`ColonyPolicy`] this doctrine pushes onto its member
+    /// colonies. A pure mapping — the governance verb is "a sector translates one
+    /// doctrine choice into the policy its colonies execute" (coherence rule R2:
+    /// policy inherits down). Returning a full policy keeps the propagation
+    /// idempotent: once a colony matches, the sector emits nothing further.
+    #[must_use]
+    pub const fn policy(self) -> ColonyPolicy {
+        let base = ColonyPolicy {
+            expansion: ExpansionIntent::None,
+            economic: EconomicIntent::Balanced,
+            military: MilitaryIntent::DefensiveOnly,
+            research: ResearchIntent::Balanced,
+            resource: ResourcePolicy::LocalFirst,
+            build: BuildPolicy::Balanced,
+            export: ExportIntent::Hold,
+        };
+        match self {
+            Self::Balanced => base,
+            Self::Research => ColonyPolicy {
+                economic: EconomicIntent::Research,
+                build: BuildPolicy::EconomyFirst,
+                ..base
+            },
+            Self::Mining => ColonyPolicy {
+                economic: EconomicIntent::Money,
+                resource: ResourcePolicy::ExportSurplus,
+                build: BuildPolicy::EconomyFirst,
+                export: ExportIntent::ExportSurplus,
+                ..base
+            },
+            Self::Fortress => ColonyPolicy {
+                military: MilitaryIntent::DefensiveOnly,
+                build: BuildPolicy::MilitaryFirst,
+                ..base
+            },
+            Self::Shipyard => ColonyPolicy {
+                economic: EconomicIntent::Military,
+                military: MilitaryIntent::ProtectRoutes,
+                build: BuildPolicy::MilitaryFirst,
+                ..base
+            },
+            Self::Frontier => ColonyPolicy {
+                expansion: ExpansionIntent::AutoStrategic,
+                build: BuildPolicy::InfrastructureFirst,
+                ..base
+            },
+        }
+    }
+}
+
+/// A governance grouping of colonies under one [`SectorDoctrine`].
+///
+/// The net-new strategic layer between the empire and its colonies. Lives in
+/// `Sim`'s sector arena with LIFO slot recycling (determinism rule D5). Aggregate
+/// readings (colony count, flows) are computed on demand from members, never
+/// stored, so there is no second source of truth to drift (rule D4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sector {
+    /// `false` once disbanded; the slot is then recycled.
+    pub alive: bool,
+    /// Owning player/faction (a [`PlayerId`] for now; M6 generalizes to `Vec<Civ>`).
+    pub owner: PlayerId,
+    /// The governance doctrine its member colonies inherit.
+    pub doctrine: SectorDoctrine,
+}
+
 /// A direct, one-shot override the player issues to a single colony, taking
 /// precedence over its standing policy until cleared.
 #[repr(u8)]
@@ -361,12 +435,16 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         Command::Move { .. } | Command::UseAbility { .. } => 7,
         // institution-level spend
         Command::Ascend { .. } | Command::ChoosePerk { .. } => 8,
-        // player→colony configuration commands are never colony-emitted.
+        // player→colony / player→sector configuration commands are never
+        // colony-emitted (the sector layer emits SetColonyPolicy on the colonies'
+        // behalf, which is already covered above).
         Command::SetColonyAutonomy { .. }
         | Command::SetColonyPolicy { .. }
         | Command::DirectColony { .. }
         | Command::SurveySpecial { .. }
-        | Command::SetColonyDoctrine { .. } => u8::MAX,
+        | Command::FoundSector { .. }
+        | Command::AssignColonyToSector { .. }
+        | Command::SetSectorDoctrine { .. } => u8::MAX,
     }
 }
 
@@ -396,8 +474,10 @@ pub struct Colony {
     pub species: Species,
     /// Current simulation detail level (a determinism-safe render/CPU hint).
     pub detail: SimDetail,
-    /// The governance doctrine of the sector this colony belongs to.
-    pub sector_doctrine: SectorDoctrine,
+    /// The sector governing this colony, if any. Its [`SectorDoctrine`] supplies
+    /// the colony's standing policy (see [`SectorDoctrine::policy`]); `None` means
+    /// the colony is ungoverned and keeps whatever policy it was last set.
+    pub sector: Option<SectorId>,
     /// The tick through which the per-tick scalar accumulators
     /// ([`autonomy_progress`](Self::autonomy_progress) and the Field-class
     /// entries of [`stockpile`](Self::stockpile)) have been materialized into
