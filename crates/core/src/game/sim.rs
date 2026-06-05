@@ -396,6 +396,18 @@ pub enum Command {
         /// The doctrine to apply.
         doctrine: SectorDoctrine,
     },
+    /// One-shot governance: place `colony` under one of `owner`'s sectors with the
+    /// given doctrine, reusing an existing such sector or founding one. A
+    /// convenience composite of [`FoundSector`](Self::FoundSector) +
+    /// [`AssignColonyToSector`](Self::AssignColonyToSector) for one-press UI.
+    GovernColony {
+        /// Owning player.
+        owner: PlayerId,
+        /// Target colony.
+        colony: ColonyId,
+        /// The doctrine to govern it with.
+        doctrine: SectorDoctrine,
+    },
 }
 
 /// Building or unit, for the render/UI layer (public projection of the internal
@@ -807,6 +819,20 @@ impl Sim {
     #[must_use]
     pub fn sector(&self, id: SectorId) -> Option<&Sector> {
         self.sectors.get(id.0 as usize).filter(|s| s.alive)
+    }
+
+    /// Length of the colony arena, including dead slots (for UI enumeration:
+    /// scan `0..colonies_len()` and filter via [`colony`](Self::colony)).
+    #[must_use]
+    pub const fn colonies_len(&self) -> usize {
+        self.colonies.len()
+    }
+
+    /// Length of the sector arena, including dead slots (for UI enumeration:
+    /// scan `0..sectors_len()` and filter via [`sector`](Self::sector)).
+    #[must_use]
+    pub const fn sectors_len(&self) -> usize {
+        self.sectors.len()
     }
 
     /// The effective governance doctrine of a colony: its sector's doctrine, or
@@ -1770,6 +1796,10 @@ impl Sim {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "a flat one-arm-per-Command dispatch match; splitting it would hurt clarity"
+    )]
     fn apply_command(&mut self, command: &Command) {
         match *command {
             Command::Build { owner, kind, x, y } => self.apply_build(owner, kind, x, y),
@@ -1870,7 +1900,30 @@ impl Sim {
                 sector,
                 doctrine,
             } => self.apply_set_sector_doctrine(owner, sector, doctrine),
+            Command::GovernColony {
+                owner,
+                colony,
+                doctrine,
+            } => self.apply_govern_colony(owner, colony, doctrine),
         }
+    }
+
+    /// Resolves [`Command::GovernColony`]: assigns `colony` to `owner`'s sector of
+    /// `doctrine`, reusing the lowest-id matching sector or founding a new one.
+    fn apply_govern_colony(&mut self, owner: PlayerId, colony: ColonyId, doctrine: SectorDoctrine) {
+        let valid_target = self
+            .colonies
+            .get(colony.0 as usize)
+            .is_some_and(|c| c.alive && c.owner == owner);
+        if !valid_target {
+            return;
+        }
+        let existing = self.sectors.iter().enumerate().find_map(|(si, s)| {
+            (s.alive && s.owner == owner && s.doctrine == doctrine)
+                .then(|| SectorId(u32::try_from(si).unwrap_or(0)))
+        });
+        let sector = existing.unwrap_or_else(|| self.add_sector(owner, doctrine));
+        self.colonies[colony.0 as usize].sector = Some(sector);
     }
 
     /// Places `colony` under `sector` when both belong to `owner` (the
@@ -3977,6 +4030,46 @@ mod tests {
             SectorDoctrine::Research
         );
         assert!(s.sector(b).is_some());
+    }
+
+    #[test]
+    fn govern_colony_reuses_or_founds_a_sector() {
+        use crate::game::civ::SectorDoctrine;
+        let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        let cc1 = s.add_building(P0, BuildingKind::CommandCenter, 4, 4);
+        let cc2 = s.add_building(P0, BuildingKind::CommandCenter, 20, 20);
+        let c1 = s.add_colony(P0, cc1, 0);
+        let c2 = s.add_colony(P0, cc2, 0);
+        // Governing two colonies with the same doctrine groups them in ONE sector.
+        s.step(&[
+            Command::GovernColony {
+                owner: P0,
+                colony: c1,
+                doctrine: SectorDoctrine::Fortress,
+            },
+            Command::GovernColony {
+                owner: P0,
+                colony: c2,
+                doctrine: SectorDoctrine::Fortress,
+            },
+        ]);
+        assert_eq!(s.colony_doctrine(c1), SectorDoctrine::Fortress);
+        assert_eq!(s.colony_doctrine(c2), SectorDoctrine::Fortress);
+        assert_eq!(s.colony(c1).unwrap().sector, s.colony(c2).unwrap().sector);
+        assert_eq!(
+            s.sectors_len(),
+            1,
+            "the second govern reused the first sector"
+        );
+        // A different doctrine founds a second sector and moves the colony into it.
+        s.step(&[Command::GovernColony {
+            owner: P0,
+            colony: c1,
+            doctrine: SectorDoctrine::Research,
+        }]);
+        assert_eq!(s.colony_doctrine(c1), SectorDoctrine::Research);
+        assert_eq!(s.colony_doctrine(c2), SectorDoctrine::Fortress);
+        assert_eq!(s.sectors_len(), 2);
     }
 
     #[test]

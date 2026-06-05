@@ -444,7 +444,8 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         | Command::SurveySpecial { .. }
         | Command::FoundSector { .. }
         | Command::AssignColonyToSector { .. }
-        | Command::SetSectorDoctrine { .. } => u8::MAX,
+        | Command::SetSectorDoctrine { .. }
+        | Command::GovernColony { .. } => u8::MAX,
     }
 }
 

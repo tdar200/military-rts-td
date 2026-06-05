@@ -28,7 +28,7 @@ mod view;
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
-use rts_core::game::civ::ColonyId;
+use rts_core::game::civ::{ColonyId, SectorDoctrine};
 use rts_core::game::hex;
 use rts_core::game::map::DepositKind;
 use rts_core::game::perk;
@@ -72,6 +72,19 @@ const GRID_BRANCH_NAMES: [&str; 10] = [
     "Sensors",
     "Exotic",
     "Gravity",
+];
+// The six sector doctrines, in the order the governance overlay's number keys
+// (1..=6) select them, with display names.
+const SECTOR_DOCTRINES: [SectorDoctrine; 6] = [
+    SectorDoctrine::Balanced,
+    SectorDoctrine::Research,
+    SectorDoctrine::Mining,
+    SectorDoctrine::Fortress,
+    SectorDoctrine::Shipyard,
+    SectorDoctrine::Frontier,
+];
+const SECTOR_DOCTRINE_NAMES: [&str; 6] = [
+    "Balanced", "Research", "Mining", "Fortress", "Shipyard", "Frontier",
 ];
 const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
@@ -191,6 +204,9 @@ async fn main() {
     let mut doctrine_cursor: usize = 0;
     // Read-only viewer for the 500-slot Ascension capability grid (toggle: G).
     let mut grid_open = false;
+    // Sector governance overlay (toggle: K) — assign colonies a doctrine.
+    let mut sector_open = false;
+    let mut sector_cursor: usize = 0;
     let mut phase = Phase::Title;
     // Shell-side animated view layer (interpolation, bars, FX events) + particle
     // pool. Pure view state — never feeds back into the deterministic sim.
@@ -322,7 +338,7 @@ async fn main() {
                     audio.play(audio::Sfx::Build);
                 }
             }
-        } else if !research_open && !perk_open && !doctrine_open {
+        } else if !research_open && !perk_open && !doctrine_open && !sector_open {
             // Input: UI command bar first, then map (suppressed while over the UI
             // or a modal).
             if is_mouse_button_pressed(MouseButton::Left) && ui::pointer_over_ui() {
@@ -353,7 +369,7 @@ async fn main() {
         }
         // Colony autonomy: ] delegates more (the colony self-runs via the AI
         // brain), [ takes back control. Affects the founded colony (id 0).
-        if !surveying && !over {
+        if !surveying && !over && !sector_open {
             let delta: i32 = if is_key_pressed(KeyCode::RightBracket) {
                 1
             } else if is_key_pressed(KeyCode::LeftBracket) {
@@ -373,7 +389,13 @@ async fn main() {
             }
         }
         // Toggle research modal with Y (only while playing, not paused/surveying).
-        if !over && !paused && !surveying && !doctrine_open && is_key_pressed(KeyCode::Y) {
+        if !over
+            && !paused
+            && !surveying
+            && !doctrine_open
+            && !sector_open
+            && is_key_pressed(KeyCode::Y)
+        {
             research_open = !research_open;
         }
         // Toggle the Ascendancy Doctrines modal with U (Upgrades). Mutually
@@ -384,6 +406,7 @@ async fn main() {
             && !surveying
             && !research_open
             && !perk_open
+            && !sector_open
             && is_key_pressed(KeyCode::U)
         {
             doctrine_open = !doctrine_open;
@@ -395,12 +418,63 @@ async fn main() {
             && !research_open
             && !doctrine_open
             && !perk_open
+            && !sector_open
             && is_key_pressed(KeyCode::G)
         {
             grid_open = !grid_open;
         }
         if grid_open && is_key_pressed(KeyCode::Escape) {
             grid_open = false;
+        }
+        // Toggle the sector governance overlay with K (only while playing). It
+        // freezes nothing; the player assigns colonies a doctrine on the fly.
+        if !over
+            && !paused
+            && !surveying
+            && !research_open
+            && !doctrine_open
+            && !perk_open
+            && !grid_open
+            && is_key_pressed(KeyCode::K)
+        {
+            sector_open = !sector_open;
+        }
+        if sector_open {
+            // The human's living colonies, in id order, are the cursor targets.
+            let cols: Vec<ColonyId> = (0..sim.colonies_len())
+                .map(|i| ColonyId(u32::try_from(i).unwrap_or(0)))
+                .filter(|&id| sim.colony(id).is_some_and(|c| c.owner == HUMAN))
+                .collect();
+            if !cols.is_empty() {
+                if is_key_pressed(KeyCode::Down) {
+                    sector_cursor = (sector_cursor + 1) % cols.len();
+                }
+                if is_key_pressed(KeyCode::Up) {
+                    sector_cursor = (sector_cursor + cols.len() - 1) % cols.len();
+                }
+                let colony = cols[sector_cursor.min(cols.len() - 1)];
+                // 1..=6 govern the selected colony with that doctrine (1 = Balanced).
+                let keys = [
+                    KeyCode::Key1,
+                    KeyCode::Key2,
+                    KeyCode::Key3,
+                    KeyCode::Key4,
+                    KeyCode::Key5,
+                    KeyCode::Key6,
+                ];
+                for (i, key) in keys.into_iter().enumerate() {
+                    if is_key_pressed(key) {
+                        pending.push(Command::GovernColony {
+                            owner: HUMAN,
+                            colony,
+                            doctrine: SECTOR_DOCTRINES[i],
+                        });
+                    }
+                }
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                sector_open = false;
+            }
         }
         if doctrine_open {
             let n = 4usize;
@@ -727,6 +801,9 @@ async fn main() {
         if grid_open {
             draw_grid_viewer(&sprites);
         }
+        if sector_open {
+            draw_sector_modal(&sim, sector_cursor, &sprites);
+        }
         if perk_open {
             draw_perk_modal(&sim, &sprites);
         }
@@ -935,7 +1012,7 @@ fn draw_title(sprites: &Sprites) {
         sprites.font_bold(),
     );
     centered(
-        "Y tech tree  \u{2022}  U doctrines  \u{2022}  Q ability  \u{2022}  G grid  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
+        "Y tech tree  \u{2022}  U doctrines  \u{2022}  K sectors  \u{2022}  Q ability  \u{2022}  G grid  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
         c.y + c.h + 70.0,
         13.0,
         INK_DIM,
@@ -1507,6 +1584,114 @@ fn draw_grid_viewer(sprites: &Sprites) {
     draw_grid_backdrop(&l, sprites, |id| {
         reality_color(TECH_GRID[id as usize].reality)
     });
+}
+
+/// The display name of a sector doctrine (index into [`SECTOR_DOCTRINE_NAMES`]).
+fn doctrine_name(d: SectorDoctrine) -> &'static str {
+    let idx = SECTOR_DOCTRINES.iter().position(|&x| x == d).unwrap_or(0);
+    SECTOR_DOCTRINE_NAMES[idx]
+}
+
+/// The sector governance overlay (toggle: K). Lists the player's colonies and the
+/// doctrine governing each; number keys 1..=6 govern the highlighted colony.
+fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
+    let cols: Vec<ColonyId> = (0..sim.colonies_len())
+        .map(|i| ColonyId(u32::try_from(i).unwrap_or(0)))
+        .filter(|&id| sim.colony(id).is_some_and(|c| c.owner == HUMAN))
+        .collect();
+
+    let (w, h) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 120));
+
+    let pw = 560.0_f32.min(w - 40.0);
+    let row_h = 30.0;
+    let head_h = 50.0;
+    let foot_h = 56.0;
+    let rows = cols.len().max(1) as f32;
+    let ph = head_h + rows * row_h + foot_h + 16.0;
+    let px = (w - pw) / 2.0;
+    let py = (h - ph) / 2.0;
+
+    draw_rectangle(px, py, pw, ph, PANEL);
+    draw_rectangle(px, py, pw, 4.0, GOLD);
+    draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
+
+    let fb = sprites.font_bold();
+    let f = sprites.font();
+    centered("SECTOR GOVERNANCE", py + 32.0, 24.0, GOLD, fb);
+    draw_rectangle(px + 12.0, py + head_h - 4.0, pw - 24.0, 1.0, OLIVE);
+
+    if cols.is_empty() {
+        centered(
+            "No colonies yet \u{2014} found a base first.",
+            py + head_h + 28.0,
+            16.0,
+            TEXT_DIM,
+            f,
+        );
+    }
+    for (i, &id) in cols.iter().enumerate() {
+        let Some(c) = sim.colony(id) else { continue };
+        let ry = py + head_h + i as f32 * row_h + 8.0;
+        if i == cursor.min(cols.len().saturating_sub(1)) {
+            draw_rectangle(
+                px + 8.0,
+                ry - 4.0,
+                pw - 16.0,
+                row_h - 2.0,
+                with_alpha(GOLD, 0.16),
+            );
+            draw_rectangle_lines(px + 8.0, ry - 4.0, pw - 16.0, row_h - 2.0, 1.5, GOLD_HI);
+        }
+        let label = format!("Colony #{}", id.0);
+        draw_text_ex(
+            &label,
+            px + 18.0,
+            ry + 16.0,
+            TextParams {
+                font: fb,
+                font_size: 16,
+                color: TEXT,
+                ..Default::default()
+            },
+        );
+        let auto = format!("auto {}/{}", c.effective_autonomy(), c.autonomy_level);
+        draw_text_ex(
+            &auto,
+            px + 180.0,
+            ry + 16.0,
+            TextParams {
+                font: f,
+                font_size: 14,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+        let doc = sim.colony_doctrine(id);
+        let governed = c.sector.is_some();
+        draw_text_ex(
+            doctrine_name(doc),
+            px + 300.0,
+            ry + 16.0,
+            TextParams {
+                font: fb,
+                font_size: 15,
+                color: if governed { GOOD } else { TEXT_DIM },
+                ..Default::default()
+            },
+        );
+    }
+
+    // Footer: the doctrine legend (number keys) + controls.
+    let legend = "1 Balanced   2 Research   3 Mining   4 Fortress   5 Shipyard   6 Frontier";
+    centered(legend, py + ph - 34.0, 13.0, GOLD_HI, f);
+    centered(
+        "\u{2191}/\u{2193} select colony   \u{2022}   1\u{2013}6 set doctrine   \u{2022}   Esc close",
+        py + ph - 14.0,
+        13.0,
+        TEXT_DIM,
+        f,
+    );
 }
 
 fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
