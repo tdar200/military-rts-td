@@ -28,7 +28,9 @@ mod view;
 
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
-use rts_core::game::civ::{ColonyId, SectorDoctrine};
+use rts_core::game::civ::{
+    ColonyId, ColonyIntent, SectorDoctrine, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS,
+};
 use rts_core::game::hex;
 use rts_core::game::map::DepositKind;
 use rts_core::game::perk;
@@ -104,7 +106,7 @@ enum Phase {
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Stellar Front".to_owned(),
+        window_title: "Ascension".to_owned(),
         window_width: 1024,
         window_height: 768,
         high_dpi: true,
@@ -750,19 +752,17 @@ async fn main() {
             draw_survey_overlay(&sim, cell, &sprites);
         }
         ui::draw(&sim, build_mode, paused, game_speed, selected, &sprites);
-        // Colony autonomy readout (the player's delegation dial).
+        // Colony autonomy readout (the player's delegation dial) — shows the
+        // effective/requested level, *why* it sits there (the binding constraint),
+        // and, while still earning, progress toward the next level.
         if !surveying {
             if let Some(c) = sim.colony(ColonyId(0)) {
-                let s = format!(
-                    "COLONY AUTONOMY  {}/{}   [ / ] delegate",
-                    c.effective_autonomy(),
-                    c.autonomy_level
-                );
-                let col = if c.effective_autonomy() == 0 {
-                    TEXT_DIM
-                } else {
-                    GOLD_HI
-                };
+                let eff = c.effective_autonomy();
+                let requested = c.autonomy_level;
+                let earned = c.earned_autonomy();
+                let frozen = matches!(c.directive, ColonyIntent::Hold | ColonyIntent::Evacuate);
+                let s = format!("COLONY AUTONOMY  {eff}/{requested}   [ / ] delegate");
+                let col = if eff == 0 { TEXT_DIM } else { GOLD_HI };
                 draw_text_ex(
                     &s,
                     14.0,
@@ -774,6 +774,50 @@ async fn main() {
                         ..Default::default()
                     },
                 );
+                // The binding constraint on the effective level — actionable, not a
+                // raw number (coherence rule R4).
+                let earning = !frozen && earned < requested && earned < AUTONOMY_FULL;
+                let (why, why_col) = if frozen {
+                    (
+                        "\u{2022} frozen by Hold/Evacuate directive".to_owned(),
+                        WARN,
+                    )
+                } else if eff >= AUTONOMY_FULL {
+                    ("\u{2022} fully autonomous".to_owned(), GOOD)
+                } else if earning {
+                    let into = c.autonomy_progress % AUTONOMY_HOLD_TICKS;
+                    (
+                        format!(
+                            "\u{2022} earning L{}: {into}/{AUTONOMY_HOLD_TICKS}",
+                            earned + 1
+                        ),
+                        TEXT_DIM,
+                    )
+                } else {
+                    (
+                        format!("\u{2022} running at requested L{requested}"),
+                        TEXT_DIM,
+                    )
+                };
+                let wy = ui::TOP_BAR_H + 34.0;
+                draw_text_ex(
+                    &why,
+                    14.0,
+                    wy,
+                    TextParams {
+                        font: sprites.font(),
+                        font_size: 12,
+                        color: why_col,
+                        ..Default::default()
+                    },
+                );
+                if earning {
+                    let into = c.autonomy_progress % AUTONOMY_HOLD_TICKS;
+                    let frac = into as f32 / AUTONOMY_HOLD_TICKS as f32;
+                    let (bx, by, bw, bh) = (14.0, wy + 6.0, 150.0, 4.0);
+                    draw_rectangle(bx, by, bw, bh, with_alpha(GOLD, 0.18));
+                    draw_rectangle(bx, by, bw * frac, bh, GOLD_HI);
+                }
             }
         }
         if survival_run && !surveying {
