@@ -33,6 +33,18 @@ const ICON_DISABLED: Color = color_u8!(106, 101, 90, 255);
 /// Era name labels for the HUD indicator, indexed by era number (0–3).
 const ERA_NAMES: [&str; 4] = ["Modern", "Orbital", "Interplanetary", "Interstellar"];
 
+/// Short HUD label for an empire's Kardashev tier.
+const fn kardashev_name(tier: rts_core::game::civ::KardashevTier) -> &'static str {
+    use rts_core::game::civ::KardashevTier as K;
+    match tier {
+        K::Planetary => "PLANETARY",
+        K::Interplanetary => "INTERPLANETARY",
+        K::Interstellar => "INTERSTELLAR",
+        K::Galactic => "GALACTIC",
+        K::Transcendent => "TRANSCENDENT",
+    }
+}
+
 fn text(s: &str, x: f32, y: f32, size: f32, color: Color, font: Option<&Font>) {
     draw_text_ex(
         s,
@@ -638,6 +650,15 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     // ERA indicator — shows the human player's current era name.
     let era = ERA_NAMES[(sim.player_era(HUMAN) as usize).min(3)];
     text(era, x, 25.0, 18.0, DECO_GOLD, fb);
+    x += text_width(era, 18.0, fb) + 18.0;
+    ribbon_divider(x - 9.0);
+
+    // KARDASHEV tier + colony count — the empire's civilization-scale progress.
+    let tier = kardashev_name(sim.kardashev_tier(HUMAN));
+    text(tier, x, 25.0, 14.0, SHIELD, fb);
+    x += text_width(tier, 14.0, fb) + 6.0;
+    let colonies = format!("{}c", sim.colony_count_for(HUMAN));
+    text(&colonies, x, 25.0, 14.0, TEXT_DIM, fb);
 
     // Incoming-wave alert pill (right).
     if let Some(ticks) = sim.ticks_until_next_wave() {
