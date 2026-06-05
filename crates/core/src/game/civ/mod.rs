@@ -398,6 +398,16 @@ pub struct Colony {
     pub detail: SimDetail,
     /// The governance doctrine of the sector this colony belongs to.
     pub sector_doctrine: SectorDoctrine,
+    /// The tick through which the per-tick scalar accumulators
+    /// ([`autonomy_progress`](Self::autonomy_progress) and the Field-class
+    /// entries of [`stockpile`](Self::stockpile)) have been materialized into
+    /// stored form. While the colony is [`Dormant`](SimDetail::Dormant) its
+    /// per-tick passes are skipped, so this clock lags the world clock; the gap is
+    /// the number of skipped ticks, applied in one exact closed-form step on wake
+    /// (or read closed-form by the state hash). It is *not* hashed directly — the
+    /// hash folds in the reconstructed (caught-up) values, so the lazy
+    /// representation is invisible to determinism (rule D3).
+    pub last_sync_tick: u64,
 }
 
 impl Colony {

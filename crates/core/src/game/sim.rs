@@ -527,6 +527,28 @@ pub struct Sim {
     /// World seed for sampling static special-resource fields (see
     /// [`crate::game::civ::special`]). Immutable; sampled without touching `rng`.
     field_seed: u64,
+    /// Whether [`Dormant`](crate::game::civ::SimDetail::Dormant) colonies skip
+    /// their per-tick scalar passes and catch up in closed form. Always `true` in
+    /// real play; tests flip it off to assert the skip path is bit-identical to a
+    /// full-fidelity run every tick (determinism rule D3). Not hashed — it changes
+    /// *how* the same hashed state is produced, never the state itself.
+    lod_skip: bool,
+}
+
+/// Narrows an `i128` accumulator to `i64`, saturating at the bounds rather than
+/// wrapping (determinism rule D6: identical in debug and release).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the else branch only casts when v is within i64 range"
+)]
+const fn saturate_i64(v: i128) -> i64 {
+    if v > i64::MAX as i128 {
+        i64::MAX
+    } else if v < i64::MIN as i128 {
+        i64::MIN
+    } else {
+        v as i64
+    }
 }
 
 const fn armor_of(balance: &Balance, kind: Kind) -> ArmorType {
@@ -635,6 +657,7 @@ impl Sim {
             colonies: Vec::new(),
             colony_free: Vec::new(),
             field_seed: seed,
+            lod_skip: true,
         }
     }
 
@@ -666,6 +689,8 @@ impl Sim {
             species: Species::Standard,
             detail: SimDetail::Active,
             sector_doctrine: SectorDoctrine::Balanced,
+            // Synced as of its birth tick: its first per-tick pass materializes it.
+            last_sync_tick: self.tick,
         };
         if let Some(index) = self.colony_free.pop() {
             self.colonies[index as usize] = colony;
@@ -706,11 +731,12 @@ impl Sim {
     /// dead (or out-of-range) colony is a no-op, and a slot is never pushed twice.
     pub fn free_colony(&mut self, colony: ColonyId) {
         let index = colony.0 as usize;
-        if let Some(c) = self.colonies.get_mut(index) {
-            if c.alive {
-                c.alive = false;
-                self.colony_free.push(colony.0);
-            }
+        if self.colonies.get(index).is_some_and(|c| c.alive) {
+            // Settle any skipped accrual so the dead colony's stored accumulators
+            // match a full-fidelity run (the hash stops reconstructing once dead).
+            self.materialize_colony(index, self.tick);
+            self.colonies[index].alive = false;
+            self.colony_free.push(colony.0);
         }
     }
 
@@ -1279,12 +1305,26 @@ impl Sim {
     fn hash_colony_layer(&self, h: &mut Fnv) {
         h.write_u64(self.field_seed);
         h.write_u64(self.colonies.len() as u64);
-        for c in &self.colonies {
+        for (ci, c) in self.colonies.iter().enumerate() {
+            // A Dormant colony skips its per-tick passes, so its stored
+            // accumulators lag by `elapsed` ticks. Fold in the closed-form
+            // caught-up values, never the lazy stored ones, so the hash is a pure
+            // function of the *logical* state — independent of whether the colony
+            // was simulated tick-by-tick or skipped (determinism rule D3). A dead
+            // colony was settled at `free_colony`, so it never reconstructs.
+            let elapsed = if c.alive {
+                self.tick.saturating_sub(c.last_sync_tick)
+            } else {
+                0
+            };
+            let progress = c
+                .autonomy_progress
+                .saturating_add(u32::try_from(elapsed).unwrap_or(u32::MAX));
             h.write_u64(u64::from(c.alive));
             h.write_u64(u64::from(c.owner.0));
             h.write_u64(u64::from(c.seat.0));
             h.write_u64(u64::from(c.autonomy_level));
-            h.write_u64(u64::from(c.autonomy_progress));
+            h.write_u64(u64::from(progress));
             for d in c.policy.discriminants() {
                 h.write_u64(u64::from(d));
             }
@@ -1292,8 +1332,14 @@ impl Sim {
             h.write_u64(c.species as u64);
             h.write_u64(c.detail as u64);
             h.write_u64(c.sector_doctrine as u64);
-            for s in c.stockpile {
-                h.write_i64(s.to_bits());
+            for kind in crate::game::civ::special::SpecialKind::ALL {
+                let k = kind.index();
+                let rate = self.colony_special_rate(ci, kind);
+                let bits = saturate_i64(
+                    i128::from(c.stockpile[k].to_bits())
+                        + i128::from(rate.to_bits()) * i128::from(elapsed),
+                );
+                h.write_i64(bits);
             }
             for k in c.knowledge_of {
                 h.write_u64(k as u64);
@@ -1379,8 +1425,7 @@ impl Sim {
             self.apply_command(command);
         }
         self.run_economy();
-        self.run_autonomy();
-        self.run_special_extraction();
+        self.run_colony_accrual();
         self.run_lod();
         self.run_research();
         self.run_production();
@@ -1675,11 +1720,18 @@ impl Sim {
                 colony,
                 kind,
             } => {
-                if let Some(c) = self.colonies.get_mut(colony.0 as usize) {
-                    if c.alive && c.owner == owner {
-                        c.knowledge_of[kind.index()] =
-                            crate::game::civ::special::Knowledge::Extractable;
-                    }
+                let ci = colony.0 as usize;
+                if self
+                    .colonies
+                    .get(ci)
+                    .is_some_and(|c| c.alive && c.owner == owner)
+                {
+                    // Settle any skipped accrual at the OLD rate (through last tick)
+                    // before the survey changes this kind's rate, so the new rate
+                    // only applies from the current tick forward.
+                    self.materialize_colony(ci, self.tick);
+                    self.colonies[ci].knowledge_of[kind.index()] =
+                        crate::game::civ::special::Knowledge::Extractable;
                 }
             }
             Command::FoundColony { owner, x, y, .. } => self.apply_found_colony(owner, x, y),
@@ -2155,45 +2207,82 @@ impl Sim {
         }
     }
 
-    /// Advances each colony's earned-autonomy progress. M3 accrues one qualifying
-    /// tick per tick for every living colony; later milestones gate this on the
-    /// colony's stability/growth so higher autonomy must genuinely be earned.
-    fn run_autonomy(&mut self) {
-        for c in &mut self.colonies {
-            if c.alive {
-                c.autonomy_progress = c.autonomy_progress.saturating_add(1);
-            }
+    /// The per-tick accrual rate of special `kind` for colony `ci`: its static
+    /// **Field** intensity once the colony has surveyed it Extractable, otherwise
+    /// zero. A pure, `rng`-free sample of the static field at the seat tile
+    /// (determinism rule D1) — Hazard/Finite kinds never accrue here.
+    fn colony_special_rate(
+        &self,
+        ci: usize,
+        kind: crate::game::civ::special::SpecialKind,
+    ) -> Fixed {
+        use crate::game::civ::special::{field_intensity, Knowledge, SpecialClass};
+        let c = &self.colonies[ci];
+        if c.knowledge_of[kind.index()] != Knowledge::Extractable
+            || !matches!(kind.class(), SpecialClass::Field)
+        {
+            return Fixed::ZERO;
+        }
+        match self
+            .entities
+            .get(c.seat.0 as usize)
+            .filter(|e| e.alive)
+            .and_then(|e| e.tile)
+        {
+            Some((tx, ty)) => field_intensity(self.field_seed, tx, ty, kind),
+            None => Fixed::ZERO,
         }
     }
 
-    /// Accrues extractable **Field** special resources into each colony's
-    /// stockpile, sampling the static field at the colony's seat tile. Pure and
-    /// deterministic — [`field_intensity`](crate::game::civ::special::field_intensity)
-    /// never touches `rng` (determinism rule D1). Finite specials live in map
-    /// deposits and are wired separately.
-    fn run_special_extraction(&mut self) {
-        use crate::game::civ::special::{field_intensity, Knowledge, SpecialClass, SpecialKind};
+    /// Brings colony `ci`'s skipped scalar accumulators up to tick `next` (i.e.
+    /// through tick `next - 1`) with the exact closed form `stored + rate ×
+    /// elapsed` — autonomy progress accrues one qualifying tick per elapsed tick,
+    /// Field stockpiles accrue `rate × elapsed`. The stockpile math widens to
+    /// `i128` and saturates (determinism rules D2/D6), so the single multiply is
+    /// bit-identical to `elapsed` sequential adds. A no-op when already current,
+    /// which keeps non-skipped colonies (materialized every tick) on the same path
+    /// they always took.
+    fn materialize_colony(&mut self, ci: usize, next: u64) {
+        use crate::game::civ::special::SpecialKind;
+        let elapsed = next.saturating_sub(self.colonies[ci].last_sync_tick);
+        if elapsed == 0 {
+            return;
+        }
+        let steps = u32::try_from(elapsed).unwrap_or(u32::MAX);
+        self.colonies[ci].autonomy_progress =
+            self.colonies[ci].autonomy_progress.saturating_add(steps);
+        for kind in SpecialKind::ALL {
+            let rate = self.colony_special_rate(ci, kind);
+            if rate.to_bits() != 0 {
+                let k = kind.index();
+                let acc = i128::from(self.colonies[ci].stockpile[k].to_bits())
+                    + i128::from(rate.to_bits()) * i128::from(elapsed);
+                self.colonies[ci].stockpile[k] = Fixed::from_bits(saturate_i64(acc));
+            }
+        }
+        self.colonies[ci].last_sync_tick = next;
+    }
+
+    /// Advances every colony's per-tick scalar accumulators (earned-autonomy
+    /// progress + extractable Field stockpiles) for this tick. A
+    /// [`Dormant`](crate::game::civ::SimDetail::Dormant) colony skips the work and
+    /// is caught up in closed form when it wakes (or read closed-form by the state
+    /// hash) — so its hashed state is identical to a full-fidelity run every tick
+    /// (rule D3), it just costs less to produce. The detail class read here is the
+    /// previous tick's (set by [`run_lod`](Self::run_lod) after this pass).
+    fn run_colony_accrual(&mut self) {
+        let next = self.tick.saturating_add(1);
         for ci in 0..self.colonies.len() {
             if !self.colonies[ci].alive {
                 continue;
             }
-            let Some((tx, ty)) = self
-                .entities
-                .get(self.colonies[ci].seat.0 as usize)
-                .filter(|e| e.alive)
-                .and_then(|e| e.tile)
-            else {
+            // The work-skip: a Dormant colony is left frozen and caught up later in
+            // closed form. Its hashed state is unchanged (rule D3) — see the hash
+            // reconstruction and the determinism tests in this module.
+            if self.lod_skip && self.colonies[ci].detail == SimDetail::Dormant {
                 continue;
-            };
-            for kind in SpecialKind::ALL {
-                let k = kind.index();
-                if self.colonies[ci].knowledge_of[k] == Knowledge::Extractable
-                    && matches!(kind.class(), SpecialClass::Field)
-                {
-                    let amount = field_intensity(self.field_seed, tx, ty, kind);
-                    self.colonies[ci].stockpile[k] = self.colonies[ci].stockpile[k] + amount;
-                }
             }
+            self.materialize_colony(ci, next);
         }
     }
 
@@ -3625,6 +3714,143 @@ mod tests {
         assert_eq!(
             s.colony(col).unwrap().sector_doctrine,
             SectorDoctrine::Fortress
+        );
+    }
+
+    // ---- M7 (cont.): Dormant closed-form work-skip ----
+
+    /// Scans a small region for a tile whose static `SolarFlux` field is non-zero,
+    /// so a colony seated there actually accrues a stockpile (exercising the
+    /// stockpile closed-form, not just autonomy progress).
+    fn nonzero_flux_tile(seed: u64) -> (u16, u16) {
+        use crate::game::civ::special::{field_intensity, SpecialKind};
+        for y in 0..20u16 {
+            for x in 0..20u16 {
+                if field_intensity(seed, x, y, SpecialKind::SolarFlux).to_bits() > 0 {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("no non-zero SolarFlux tile found for seed {seed}");
+    }
+
+    #[test]
+    fn dormant_colonies_skip_their_per_tick_work() {
+        use crate::game::civ::{SimDetail, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS};
+        let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
+        let col = s.add_colony(P0, cc, AUTONOMY_FULL);
+        // Run until the mature, unthreatened colony drops to Dormant, then keep
+        // stepping so several ticks pass without it being materialized.
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 10 + 50) {
+            s.step(&[]);
+        }
+        let c = s.colony(col).unwrap();
+        assert_eq!(c.detail, SimDetail::Dormant);
+        // The skip leaves the colony's sync clock behind the world clock by
+        // exactly the number of ticks its per-tick passes were skipped.
+        assert!(
+            c.last_sync_tick < s.tick,
+            "a Dormant colony's sync clock must lag the world clock (sync={}, tick={})",
+            c.last_sync_tick,
+            s.tick
+        );
+    }
+
+    #[test]
+    fn dormant_closed_form_matches_full_simulation_every_tick() {
+        use crate::game::civ::special::SpecialKind;
+        use crate::game::civ::{SimDetail, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS};
+        // Two identical worlds: one skips Dormant colonies' per-tick passes and
+        // catches them up in closed form; the other runs every colony at full
+        // fidelity every tick. Their state hashes must agree on EVERY tick
+        // (determinism rule D3) — the closed-form accumulation is exact.
+        let seed = 7;
+        let (sx, sy) = nonzero_flux_tile(seed);
+        let build = || {
+            let mut s = Sim::new(Map::new(30, 30), seed, f(5000));
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, sx, sy);
+            let col = s.add_colony(P0, cc, AUTONOMY_FULL);
+            // Make the Field special extractable so the stockpile keeps accruing
+            // while the colony is Dormant.
+            s.step(&[Command::SurveySpecial {
+                owner: P0,
+                colony: col,
+                kind: SpecialKind::SolarFlux,
+            }]);
+            s
+        };
+        let mut skip = build();
+        let mut full = build();
+        full.lod_skip = false;
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 10 + 200) {
+            skip.step(&[]);
+            full.step(&[]);
+            assert_eq!(
+                skip.state_hash(),
+                full.state_hash(),
+                "closed-form Dormant skip diverged from full simulation at tick {}",
+                skip.tick
+            );
+        }
+        // Confirm the test actually drove the colony Dormant and accrued a stock.
+        let c = skip.colony(ColonyId(0)).unwrap();
+        assert_eq!(c.detail, SimDetail::Dormant, "the colony should be Dormant");
+        assert!(
+            c.stockpile[SpecialKind::SolarFlux.index()].to_bits() > 0,
+            "the Dormant colony should have accrued a SolarFlux stockpile"
+        );
+    }
+
+    #[test]
+    fn waking_a_dormant_colony_recovers_the_full_active_value() {
+        use crate::game::civ::special::SpecialKind;
+        use crate::game::civ::{SimDetail, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS};
+        // Demote(skip)∘promote(wake) == identity (determinism rule D2): a colony
+        // that skipped work while Dormant, then woke, holds the exact same
+        // accumulators as one that never skipped.
+        let seed = 11;
+        let (sx, sy) = nonzero_flux_tile(seed);
+        let build = |skip: bool| {
+            let mut s = Sim::new(Map::new(30, 30), seed, f(5000));
+            s.lod_skip = skip;
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, sx, sy);
+            let col = s.add_colony(P0, cc, AUTONOMY_FULL);
+            s.step(&[Command::SurveySpecial {
+                owner: P0,
+                colony: col,
+                kind: SpecialKind::SolarFlux,
+            }]);
+            (s, col)
+        };
+        let (mut skip, c1) = build(true);
+        let (mut full, c2) = build(false);
+        for _ in 0..(AUTONOMY_HOLD_TICKS * 10 + 100) {
+            skip.step(&[]);
+            full.step(&[]);
+        }
+        assert_eq!(skip.colony(c1).unwrap().detail, SimDetail::Dormant);
+        // Park an enemy beside each seat to force the colony awake, then let the
+        // wake tick land (detail flips this step; the catch-up runs next step).
+        skip.add_unit(P1, UnitKind::Infantry, v(i32::from(sx), i32::from(sy) + 1));
+        full.add_unit(P1, UnitKind::Infantry, v(i32::from(sx), i32::from(sy) + 1));
+        skip.step(&[]);
+        full.step(&[]);
+        skip.step(&[]);
+        full.step(&[]);
+        let a = skip.colony(c1).unwrap();
+        let b = full.colony(c2).unwrap();
+        assert_eq!(
+            a.autonomy_progress, b.autonomy_progress,
+            "woken colony's autonomy progress must equal the never-skipped value"
+        );
+        assert_eq!(
+            a.stockpile, b.stockpile,
+            "woken colony's stockpile must equal the never-skipped value"
+        );
+        assert_eq!(
+            a.last_sync_tick, b.last_sync_tick,
+            "waking fully materializes the colony's sync clock"
         );
     }
 
