@@ -542,8 +542,10 @@ async fn main() {
             if !survival_run || sim.waves_survived() > 0 {
                 commands.extend(sim.ai_commands(ENEMY));
             }
-            // Autonomous colonies execute their owners' policy each tick (empty
-            // while every colony is at manual autonomy 0 — the default).
+            // Sectors govern first: each pushes its doctrine onto member colonies
+            // (empty until the player forms sectors). Then colonies execute their
+            // resulting policy (empty while every colony is at manual autonomy 0).
+            commands.extend(sim.sector_commands());
             commands.extend(sim.colony_commands());
             sim.step(&commands);
             view.on_tick(&sim);
