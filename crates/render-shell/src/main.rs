@@ -473,6 +473,25 @@ async fn main() {
                         });
                     }
                 }
+                // ←/→ adjust the selected colony's requested autonomy, so
+                // the overlay manages every colony, not just colony 0.
+                let adelta: i32 = if is_key_pressed(KeyCode::Right) {
+                    1
+                } else if is_key_pressed(KeyCode::Left) {
+                    -1
+                } else {
+                    0
+                };
+                if adelta != 0 {
+                    if let Some(c) = sim.colony(colony) {
+                        let lvl = (i32::from(c.autonomy_level) + adelta).clamp(0, 9);
+                        pending.push(Command::SetColonyAutonomy {
+                            owner: HUMAN,
+                            colony,
+                            level: u8::try_from(lvl).unwrap_or(0),
+                        });
+                    }
+                }
             }
             if is_key_pressed(KeyCode::Escape) {
                 sector_open = false;
@@ -1647,7 +1666,7 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 120));
 
-    let pw = 560.0_f32.min(w - 40.0);
+    let pw = 600.0_f32.min(w - 40.0);
     let row_h = 30.0;
     let head_h = 50.0;
     let foot_h = 56.0;
@@ -1662,7 +1681,7 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
 
     let fb = sprites.font_bold();
     let f = sprites.font();
-    centered("SECTOR GOVERNANCE", py + 32.0, 24.0, GOLD, fb);
+    centered("COLONY GOVERNANCE", py + 32.0, 24.0, GOLD, fb);
     draw_rectangle(px + 12.0, py + head_h - 4.0, pw - 24.0, 1.0, OLIVE);
 
     if cols.is_empty() {
@@ -1724,13 +1743,36 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
                 ..Default::default()
             },
         );
+        // Per-colony autonomy status — earning/frozen stand out (rules R2/R4).
+        let (st, st_col) = if matches!(c.directive, ColonyIntent::Hold | ColonyIntent::Evacuate) {
+            ("FROZEN", WARN)
+        } else if c.effective_autonomy() >= AUTONOMY_FULL {
+            ("AUTO", GOOD)
+        } else if c.earned_autonomy() < c.autonomy_level {
+            ("EARNING", GOLD_HI)
+        } else if c.autonomy_level == 0 {
+            ("MANUAL", TEXT_DIM)
+        } else {
+            ("ACTIVE", TEXT)
+        };
+        draw_text_ex(
+            st,
+            px + 450.0,
+            ry + 16.0,
+            TextParams {
+                font: f,
+                font_size: 13,
+                color: st_col,
+                ..Default::default()
+            },
+        );
     }
 
     // Footer: the doctrine legend (number keys) + controls.
     let legend = "1 Balanced   2 Research   3 Mining   4 Fortress   5 Shipyard   6 Frontier";
     centered(legend, py + ph - 34.0, 13.0, GOLD_HI, f);
     centered(
-        "\u{2191}/\u{2193} select colony   \u{2022}   1\u{2013}6 set doctrine   \u{2022}   Esc close",
+        "Up/Dn select   \u{2022}   1\u{2013}6 doctrine   \u{2022}   Left/Right autonomy   \u{2022}   Esc close",
         py + ph - 14.0,
         13.0,
         TEXT_DIM,
