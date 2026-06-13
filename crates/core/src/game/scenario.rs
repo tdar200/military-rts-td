@@ -314,39 +314,36 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     };
 
     // Planet ids are assigned in push order: homes first (0..civ_count), then the
-    // neutral planets. `push_planet` returns the id but we mark tiles first, so the
-    // index is computed up-front from the deterministic ordering.
-    let mut next_planet = 0u16;
+    // neutral planets. To keep a SINGLE source of truth for the id, we push each
+    // planet first and mark its tile block using the `PlanetId` `push_planet`
+    // returns — no parallel counter to desync from the planet arena.
 
-    // Lay each civ's home planet: mark its 3x3 block, seat a CommandCenter at the
-    // centre, register the planet (owned) and a fully-autonomous colony.
+    // Lay each civ's home planet: seat a CommandCenter at the centre, register the
+    // planet (owned), mark its 3x3 block with the returned id, and add a
+    // fully-autonomous colony.
     for (id, &(cx, cy)) in HOME_CENTERS.iter().enumerate().take(civ_count) {
         let pid = PlayerId(u16::try_from(id).unwrap_or(0));
-        let planet_id = PlanetId(next_planet);
-        next_planet += 1;
-        mark_block(&mut sim, cx, cy, planet_id);
         let cc = sim.add_building(pid, BuildingKind::CommandCenter, cx, cy);
-        sim.push_planet(Planet {
+        let planet_id = sim.push_planet(Planet {
             owner: Some(pid),
             seat: Some(cc),
             center: hex::center(cx, cy),
             radius: Fixed::from_int(PLANET_RADIUS),
         });
+        mark_block(&mut sim, cx, cy, planet_id);
         sim.add_colony(pid, cc, AUTONOMY_FULL);
     }
 
     // Lay the neutral expansion planets: marked blocks with a centre but no owner
     // or seat, so any civ may settle them.
     for &(cx, cy) in &NEUTRAL_CENTERS {
-        let planet_id = PlanetId(next_planet);
-        next_planet += 1;
-        mark_block(&mut sim, cx, cy, planet_id);
-        sim.push_planet(Planet {
+        let planet_id = sim.push_planet(Planet {
             owner: None,
             seat: None,
             center: hex::center(cx, cy),
             radius: Fixed::from_int(PLANET_RADIUS),
         });
+        mark_block(&mut sim, cx, cy, planet_id);
     }
 
     sim
@@ -411,6 +408,7 @@ mod tests {
     use crate::game::civ::ColonyId;
     use crate::game::map::Map;
     use crate::game::path::find_path;
+    use crate::game::planet::PlanetId;
     use crate::game::sim::{Command, PlayerId};
     use alloc::vec::Vec;
 
@@ -431,6 +429,31 @@ mod tests {
             run(),
             run(),
             "conquest scenario must be bit-identical across runs"
+        );
+
+        // Resolution: at least one initially-neutral planet is claimed by the AI by
+        // the end of a run. Guards against a regression that silently makes
+        // `ai_conquest_commands` a no-op (which determinism alone would not catch).
+        let mut s = conquest(12_345, 4);
+        let planet_count = u16::try_from(s.planets_len()).unwrap();
+        let neutrals: Vec<PlanetId> = (0..planet_count)
+            .map(PlanetId)
+            .filter(|&p| s.planet_owner(p).is_none())
+            .collect();
+        assert!(
+            !neutrals.is_empty(),
+            "scenario must start with neutral planets"
+        );
+        for _ in 0..400 {
+            let cmds: Vec<Command> = (0..4u16)
+                .filter(|&id| s.civ_alive(PlayerId(id)))
+                .flat_map(|id| s.ai_commands(PlayerId(id)))
+                .collect();
+            s.step(&cmds);
+        }
+        assert!(
+            neutrals.iter().any(|&p| s.planet_owner(p).is_some()),
+            "conquest-expansion AI must claim at least one neutral planet"
         );
     }
 

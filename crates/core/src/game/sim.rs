@@ -1078,6 +1078,12 @@ impl Sim {
         self.planets.get(id.0 as usize).and_then(|pl| pl.owner)
     }
 
+    /// The number of planets registered in the control arena (tests and UI).
+    #[must_use]
+    pub const fn planets_len(&self) -> usize {
+        self.planets.len()
+    }
+
     /// Sets an entity's current HP (scenario setup / tests; e.g. to bring a seat
     /// near death). No-op if the id is out of range.
     pub fn debug_set_hp(&mut self, e: EntityId, hp: Fixed) {
@@ -3498,7 +3504,10 @@ impl Sim {
             return Vec::new();
         }
         // Mirror `apply_found_colony`'s own guards so we don't spam unappliable
-        // commands (the apply step re-validates anyway).
+        // commands (the apply step re-validates anyway). NOTE: this caps at the
+        // global `MAX_COLONIES_PER_OWNER` (matching `apply_found_colony`), which can
+        // exceed a species' `colony_cap()` used by the auto-expansion path —
+        // intentional, since the apply-time guard is the global cap.
         if self.money(player) < FOUND_COLONY_COST
             || self.count_owner_colonies(player) >= MAX_COLONIES_PER_OWNER
         {
