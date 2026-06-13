@@ -953,6 +953,40 @@ fn centered_shadow(s: &str, y: f32, size: f32, color: Color, font: Option<&Font>
     );
 }
 
+/// A compact horizontal color legend (swatch + label pairs), centered at `y`.
+/// Used by the capability-grid overlays so players can decode the pip colours.
+/// Each entry's swatch reuses the exact colour the cells draw with.
+fn color_legend(entries: &[(Color, &str)], y: f32, font: Option<&Font>) {
+    const SW: f32 = 11.0;
+    const PAD: f32 = 6.0;
+    const GAP: f32 = 18.0;
+    let fs = 13u16;
+    // Total width to center the whole row.
+    let total: f32 = entries
+        .iter()
+        .map(|(_, label)| SW + PAD + measure_text(label, font, fs, 1.0).width + GAP)
+        .sum::<f32>()
+        - GAP;
+    let mut x = (screen_width() - total) / 2.0;
+    for (col, label) in entries {
+        draw_rectangle(x, y - SW + 1.0, SW, SW, *col);
+        draw_rectangle_lines(x, y - SW + 1.0, SW, SW, 1.0, BORDER_NEUTRAL);
+        let lx = x + SW + PAD;
+        draw_text_ex(
+            label,
+            lx,
+            y,
+            TextParams {
+                font,
+                font_size: fs,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
+        x = lx + measure_text(label, font, fs, 1.0).width + GAP;
+    }
+}
+
 /// A four-sided beveled border (lit top+left, shadowed bottom+right).
 fn beveled_frame(r: Rect, th: f32, lit: Color, shade: Color) {
     draw_rectangle(r.x, r.y, r.w, th, lit);
@@ -1205,7 +1239,7 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
         );
     }
     centered(
-        "R to restart    •    M for map select",
+        "Press R to restart",
         py + ph - 36.0,
         20.0,
         TEXT,
@@ -1687,6 +1721,17 @@ fn draw_grid_viewer(sprites: &Sprites) {
         TEXT_DIM,
         sprites.font(),
     );
+    // Legend: pips here are coloured by reality class (see `reality_color`).
+    color_legend(
+        &[
+            (reality_color(RealityClass::Achieved), "Researched"),
+            (reality_color(RealityClass::Emerging), "Available"),
+            (reality_color(RealityClass::Speculative), "Frontier"),
+            (reality_color(RealityClass::Lore), "Locked"),
+        ],
+        82.0,
+        sprites.font(),
+    );
     let l = grid_layout();
     draw_grid_backdrop(&l, sprites, |id| {
         reality_color(TECH_GRID[id as usize].reality)
@@ -1848,7 +1893,7 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         "+1 damage / level",
         "+0.5 armor / level",
         "+8 shield / level",
-        "+0.25 damage & armor / level  \u{2022}  Minerals only",
+        "+0.25 damage & armor / level  \u{2022}  Money only",
     ];
     let (w, h) = (screen_width(), screen_height());
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 120));
@@ -2001,7 +2046,7 @@ fn draw_doctrine_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         OLIVE,
     );
     centered(
-        "\u{2191}\u{2193} select  \u{2022}  Enter / 1-4 ascend  \u{2022}  Esc close",
+        "Up/Dn select  \u{2022}  Enter / 1-4 ascend  \u{2022}  Esc close",
         footer_y,
         15.0,
         TEXT_DIM,
@@ -2040,6 +2085,18 @@ fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         24.0,
         GOLD,
         font_bold,
+    );
+    // Legend: pips here are coloured by research status (see `status_color`).
+    // "Locked" mirrors the muted reality tint cells use for unreachable nodes.
+    color_legend(
+        &[
+            (GOOD, "Researched"),
+            (GOLD_HI, "Available"),
+            (WARN, "Frontier"),
+            (with_alpha(SHIELD, 0.3), "Locked"),
+        ],
+        62.0,
+        font,
     );
 
     let (set, active) = sim.research_state(HUMAN);
@@ -2156,7 +2213,7 @@ fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     }
 
     centered(
-        "\u{2190}\u{2192} era  \u{2191}\u{2193} branch  [ ] step  \u{2022}  Enter / click to research  \u{2022}  Y / Esc close",
+        "Left/Right era  \u{2022}  Up/Dn branch  \u{2022}  [ ] step  \u{2022}  Enter/click research  \u{2022}  Y / Esc close",
         screen_height() - 14.0,
         13.0,
         TEXT_DIM,
