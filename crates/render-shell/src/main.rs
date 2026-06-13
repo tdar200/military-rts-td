@@ -752,7 +752,10 @@ async fn main() {
         }
         // Commanded-time auto-pause edges (skip while a modal already holds time):
         // siege warning (30 s out), an era advance, and research completing.
-        if !over && !paused && !research_open && !doctrine_open && !perk_open {
+        // Survival-only: the commanded-time auto-pause (never be ambushed
+        // mid-menu). Conquest is real-time grand strategy — auto-pausing on every
+        // AI research/era event would be maddening, so it's suppressed there.
+        if survival_run && !over && !paused && !research_open && !doctrine_open && !perk_open {
             let era = sim.player_era(HUMAN);
             let researching = sim.research_state(HUMAN).1.is_some();
             let mut event: Option<&'static str> = None;
