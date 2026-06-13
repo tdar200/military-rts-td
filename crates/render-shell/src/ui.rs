@@ -26,6 +26,9 @@ pub const TOP_BAR_H: f32 = 38.0;
 pub const CMD_BAR_H: f32 = 76.0;
 /// Gap separating the build-button group from the unit-button group.
 const GROUP_GAP: f32 = 22.0;
+/// Minimap width — single source of truth for both the minimap itself and the
+/// civ roster docked beneath it (their heights derive from this via map aspect).
+const MM_W: f32 = 188.0;
 
 /// Desaturated tint for an unaffordable build icon.
 const ICON_DISABLED: Color = color_u8!(106, 101, 90, 255);
@@ -207,16 +210,17 @@ pub fn draw(
 /// Compact N-civ roster, docked under the minimap (top-right). One row per civ:
 /// an identity-colour swatch, the civ label, its colony count, and live/dead
 /// state — so a multi-civ conquest board shows every faction at a glance rather
-/// than just the human player. Eliminated civs are dimmed and struck out.
+/// than just the human player. Eliminated civs are dimmed, with an "out" marker.
 fn draw_civ_roster(sim: &Sim, sprites: &Sprites) {
     let n = sim.civ_count();
-    // A 2-civ game is the classic survival layout; the roster is for 3+ civ
-    // conquest where the old us-vs-them HUD no longer describes the board.
+    // A 2-civ game is the classic survival layout already covered by the
+    // resource ribbon / us-vs-them HUD; the roster is for 3+ civ conquest where
+    // that HUD no longer describes the board.
     if n < 3 {
         return;
     }
     let font = sprites.font();
-    let mm_w = 188.0;
+    let mm_w = MM_W;
     let map_w = f32::from(sim.map().width());
     let map_h = f32::from(sim.map().height());
     let mm_h = mm_w * map_h / map_w;
@@ -518,7 +522,7 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
 fn draw_minimap(sim: &Sim) {
     let map_w = f32::from(sim.map().width());
     let map_h = f32::from(sim.map().height());
-    let mm_w = 188.0;
+    let mm_w = MM_W;
     let mm_h = mm_w * map_h / map_w;
     let origin_x = screen_width() - mm_w - 12.0;
     let origin_y = TOP_BAR_H + 10.0;
