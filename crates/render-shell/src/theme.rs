@@ -226,6 +226,15 @@ pub fn glow_rect(x: f32, y: f32, w: f32, h: f32, color: Color, layers: u8) {
     }
 }
 
+/// Draws a framed "pill" chip: a dark inset well, a bloom halo, and a 1.5px
+/// outline in `outline`. Used for HUD readout chips (alert pill, ribbon group
+/// backings) so they share one seated-glass look.
+pub fn pill(x: f32, y: f32, w: f32, h: f32, glow: Color, outline: Color) {
+    draw_rectangle(x, y, w, h, WELL);
+    glow_rect(x, y, w, h, glow, 3);
+    draw_rectangle_lines(x, y, w, h, 1.5, outline);
+}
+
 /// Draws a single horizontal scanline sweeping down the rectangle over time.
 pub fn scanline(x: f32, y: f32, w: f32, h: f32) {
     #[allow(

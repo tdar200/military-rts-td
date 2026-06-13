@@ -9,7 +9,7 @@
 
 use crate::sprites::Sprites;
 use crate::theme::{
-    civ_color, glow_rect, holo_flicker, hp_color, scanline, with_alpha, ALERT_GLOW, BAD,
+    civ_color, glow_rect, holo_flicker, hp_color, pill, scanline, with_alpha, ALERT_GLOW, BAD,
     BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD, GROUND_ALT,
     HOLO_GLOW, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD, TEAM_ENEMY,
     TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
@@ -20,8 +20,9 @@ use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 
 const HUMAN: PlayerId = PlayerId(0);
-/// Height of the top resource bar.
-pub const TOP_BAR_H: f32 = 38.0;
+/// Height of the top resource bar. Tall enough to stack a small uppercase
+/// label over each yield's value so the ribbon reads without a legend.
+pub const TOP_BAR_H: f32 = 50.0;
 /// Height of the bottom command bar.
 pub const CMD_BAR_H: f32 = 76.0;
 /// Gap separating the build-button group from the unit-button group.
@@ -64,6 +65,29 @@ fn text(s: &str, x: f32, y: f32, size: f32, color: Color, font: Option<&Font>) {
 
 fn text_width(s: &str, size: f32, font: Option<&Font>) -> f32 {
     measure_text(s, font, size as u16, 1.0).width
+}
+
+/// Draws `s` centered in a `w`-wide column starting at `x`, shrinking the font
+/// from `max_size` (down to a 9px floor) until it fits with a small horizontal
+/// pad. Keeps the command-bar labels legible without overflowing narrow buttons
+/// on small windows.
+fn text_centered_fit(
+    s: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    max_size: f32,
+    color: Color,
+    font: Option<&Font>,
+) {
+    const MIN_SIZE: f32 = 9.0;
+    const PAD: f32 = 4.0;
+    let mut size = max_size;
+    while size > MIN_SIZE && text_width(s, size, font) > w - PAD * 2.0 {
+        size -= 1.0;
+    }
+    let tw = text_width(s, size, font);
+    text(s, x + (w - tw) / 2.0, y, size, color, font);
 }
 
 #[derive(Clone, Copy)]
@@ -654,11 +678,25 @@ fn gating_tech(action: Action) -> Option<&'static str> {
 
 /// A thin neutral divider between ribbon yields (gold is reserved for values).
 fn ribbon_divider(x: f32) {
-    draw_rectangle(x, 11.0, 1.0, TOP_BAR_H - 22.0, BORDER_NEUTRAL);
+    draw_rectangle(x, 9.0, 1.0, TOP_BAR_H - 16.0, BORDER_NEUTRAL);
 }
 
-/// Civ-style yield ribbon: a gilded strip of icon+number pairs, with a framed
-/// alert pill for the incoming wave.
+// Baselines for the stacked ribbon layout: a small dim uppercase caption sits on
+// the LABEL_Y row, the live value reads large on the VALUE_Y row below it.
+const RIBBON_LABEL_Y: f32 = 19.0;
+const RIBBON_VALUE_Y: f32 = 40.0;
+const RIBBON_LABEL_SIZE: f32 = 10.0;
+
+/// Draws a small dim uppercase caption at the label baseline and returns the
+/// caption width (so the caller can right-pad against it when needed).
+fn ribbon_label(label: &str, x: f32, font: Option<&Font>) -> f32 {
+    text(label, x, RIBBON_LABEL_Y, RIBBON_LABEL_SIZE, TEXT_DIM, font);
+    text_width(label, RIBBON_LABEL_SIZE, font)
+}
+
+/// Civ-style yield ribbon: each yield shows a small dim uppercase LABEL stacked
+/// over its live value, separated by thin neutral rules, with a framed alert
+/// pill for the incoming wave docked on the right.
 fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     let fb = sprites.font_bold();
     draw_rectangle(0.0, 0.0, screen_width(), TOP_BAR_H, PANEL);
@@ -667,62 +705,65 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     draw_rectangle(0.0, TOP_BAR_H - 4.0, screen_width(), 1.0, DECO_GOLD_HI);
     draw_rectangle(0.0, TOP_BAR_H - 1.0, screen_width(), 1.0, WELL);
 
-    // MINERALS — the headline yield: gold coin + large gold value.
+    // MONEY — the headline yield: "MONEY" caption + gold coin + large gold value.
     let mut x = 14.0;
-    icon_coin(x + 7.0, 18.0, 8.0);
-    x += 22.0;
+    let lw = ribbon_label("MONEY", x, fb);
+    icon_coin(x + 7.0, RIBBON_VALUE_Y - 7.0, 8.0);
     let money = (sim.money(HUMAN).to_bits() / 65536).to_string();
     text(
         &money,
-        x,
-        26.0,
+        x + 22.0,
+        RIBBON_VALUE_Y,
         22.0,
         with_alpha(GOLD_HI, holo_flicker()),
         fb,
     );
-    x += text_width(&money, 22.0, fb) + 18.0;
+    let money_w = 22.0 + text_width(&money, 22.0, fb);
+    x += lw.max(money_w) + 18.0;
     ribbon_divider(x - 9.0);
 
-    // ENERGY — bolt + spendable stockpile.
-    icon_bolt(x + 5.0, 19.0, 8.0, WARN);
-    x += 16.0;
+    // ENERGY — bolt + spendable stockpile (warm amber).
+    let lw = ribbon_label("ENERGY", x, fb);
+    icon_bolt(x + 5.0, RIBBON_VALUE_Y - 6.0, 8.0, WARN);
     let energy = (sim.energy(HUMAN).to_bits() / 65536).to_string();
-    text(&energy, x, 25.0, 18.0, WARN, fb);
-    x += text_width(&energy, 18.0, fb) + 18.0;
+    text(&energy, x + 16.0, RIBBON_VALUE_Y, 18.0, WARN, fb);
+    let energy_w = 16.0 + text_width(&energy, 18.0, fb);
+    x += lw.max(energy_w) + 18.0;
     ribbon_divider(x - 9.0);
 
-    // LABOUR — "LAB" label in shield-teal: the population/workforce stockpile.
-    let lab_label = "LAB";
-    text(lab_label, x, 25.0, 15.0, SHIELD, fb);
-    x += text_width(lab_label, 15.0, fb) + 4.0;
+    // LABOUR — the population/workforce stockpile (shield-teal).
+    let lw = ribbon_label("LABOUR", x, fb);
     let lab_val = (sim.labour(HUMAN).to_bits() / 65536).to_string();
-    text(&lab_val, x, 25.0, 18.0, SHIELD, fb);
-    x += text_width(&lab_val, 18.0, fb) + 18.0;
+    text(&lab_val, x, RIBBON_VALUE_Y, 18.0, SHIELD, fb);
+    x += lw.max(text_width(&lab_val, 18.0, fb)) + 18.0;
     ribbon_divider(x - 9.0);
 
     // UNITS — rank chevrons + count / supply cap (amber when at the cap).
-    icon_chevrons(x + 7.0, 19.0, 8.0, TEXT_DIM);
-    x += 20.0;
+    let lw = ribbon_label("UNITS", x, fb);
+    icon_chevrons(x + 7.0, RIBBON_VALUE_Y - 6.0, 8.0, TEXT_DIM);
     let used = sim.unit_count(HUMAN);
     let cap = sim.supply_cap(HUMAN);
     let units = format!("{used}/{cap}");
     let units_col = if used as u32 >= cap { WARN } else { TEXT };
-    text(&units, x, 25.0, 18.0, units_col, fb);
-    x += text_width(&units, 18.0, fb) + 18.0;
+    text(&units, x + 20.0, RIBBON_VALUE_Y, 18.0, units_col, fb);
+    let units_w = 20.0 + text_width(&units, 18.0, fb);
+    x += lw.max(units_w) + 18.0;
     ribbon_divider(x - 9.0);
 
     // ERA indicator — shows the human player's current era name.
+    let lw = ribbon_label("ERA", x, fb);
     let era = ERA_NAMES[(sim.player_era(HUMAN) as usize).min(3)];
-    text(era, x, 25.0, 18.0, DECO_GOLD, fb);
-    x += text_width(era, 18.0, fb) + 18.0;
+    text(era, x, RIBBON_VALUE_Y, 18.0, DECO_GOLD, fb);
+    x += lw.max(text_width(era, 18.0, fb)) + 18.0;
     ribbon_divider(x - 9.0);
 
     // KARDASHEV tier + colony count — the empire's civilization-scale progress.
+    ribbon_label("KARDASHEV", x, fb);
     let tier = kardashev_name(sim.kardashev_tier(HUMAN));
-    text(tier, x, 25.0, 14.0, SHIELD, fb);
-    x += text_width(tier, 14.0, fb) + 6.0;
+    text(tier, x, RIBBON_VALUE_Y, 14.0, SHIELD, fb);
+    let tier_x = x + text_width(tier, 14.0, fb) + 6.0;
     let colonies = format!("{}c", sim.colony_count_for(HUMAN));
-    text(&colonies, x, 25.0, 14.0, TEXT_DIM, fb);
+    text(&colonies, tier_x, RIBBON_VALUE_Y, 14.0, TEXT_DIM, fb);
 
     // Incoming-wave alert pill (right).
     if let Some(ticks) = sim.ticks_until_next_wave() {
@@ -736,25 +777,31 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
         let tw = text_width(&s, 20.0, fb);
         let pill_w = tw + 22.0;
         let px = screen_width() - pill_w - 10.0;
-        draw_rectangle(px, 5.0, pill_w, TOP_BAR_H - 12.0, WELL);
+        let py = (TOP_BAR_H - 28.0) / 2.0;
         // Alert bloom: red when imminent, cyan-tinted otherwise.
         let glow = if secs <= 5 { ALERT_GLOW } else { HOLO_GLOW };
-        glow_rect(px, 5.0, pill_w, TOP_BAR_H - 12.0, glow, 3);
-        draw_rectangle_lines(px, 5.0, pill_w, TOP_BAR_H - 12.0, 1.5, col);
-        text(&s, px + 11.0, 25.0, 20.0, col, fb);
+        pill(px, py, pill_w, 28.0, glow, col);
+        text(&s, px + 11.0, py + 20.0, 20.0, col, fb);
     }
     if game_speed > 1 {
-        let s = format!("\u{25b6}\u{25b6} {game_speed}\u{00d7}");
+        let s = format!("{game_speed}\u{00d7} SPEED");
         let fb2 = sprites.font_bold();
         let tw = text_width(&s, 16.0, fb2);
-        text(&s, screen_width() - tw - 220.0, 25.0, 16.0, GOOD, fb2);
+        text(
+            &s,
+            screen_width() - tw - 220.0,
+            RIBBON_VALUE_Y,
+            16.0,
+            GOOD,
+            fb2,
+        );
     }
     if paused {
         let s = "PAUSED";
         text(
             s,
             (screen_width() - text_width(s, 22.0, fb)) / 2.0,
-            26.0,
+            RIBBON_VALUE_Y,
             22.0,
             WARN,
             fb,
@@ -814,15 +861,9 @@ fn draw_button(
         draw_rectangle(r.x, r.y, r.w, r.h, PANEL);
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, BORDER_NEUTRAL);
         let f = sprites.font();
-        let nw = text_width(b.label, 13.0, f);
-        text(
-            b.label,
-            r.x + (r.w - nw) / 2.0,
-            r.y + 26.0,
-            13.0,
-            TEXT_DIM,
-            f,
-        );
+        // "<key> · <name>" so the hotkey↔action pairing reads even while locked.
+        let named = format!("{} \u{00b7} {}", b.key, b.label);
+        text_centered_fit(&named, r.x, r.y + 26.0, r.w, 13.0, TEXT_DIM, f);
         let lock = "\u{1f512}";
         let lw = text_width(lock, 16.0, f);
         text(lock, r.x + (r.w - lw) / 2.0, r.y + 48.0, 16.0, TEXT_DIM, f);
@@ -866,15 +907,10 @@ fn draw_button(
 
     let f = sprites.font();
     let name_color = if affordable { TEXT } else { TEXT_DIM };
-    let nw = text_width(b.label, 15.0, f);
-    text(
-        b.label,
-        r.x + (r.w - nw) / 2.0,
-        r.y + r.h - 18.0,
-        15.0,
-        name_color,
-        f,
-    );
+    // Name row pairs the hotkey with the action ("P · Reactor"), auto-shrinking
+    // to fit narrow buttons so the label is never cryptic or clipped.
+    let named = format!("{} \u{00b7} {}", b.key, b.label);
+    text_centered_fit(&named, r.x, r.y + r.h - 18.0, r.w, 15.0, name_color, f);
 
     let price_s = format!("${price}");
     let pw = text_width(&price_s, 15.0, f);
