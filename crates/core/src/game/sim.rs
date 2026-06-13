@@ -736,6 +736,9 @@ impl Sim {
             sector: None,
             // Synced as of its birth tick: its first per-tick pass materializes it.
             last_sync_tick: self.tick,
+            population: 1,
+            food: Fixed::ZERO,
+            treasury: [Fixed::ZERO; 3],
         };
         if let Some(index) = self.colony_free.pop() {
             self.colonies[index as usize] = colony;
@@ -1654,6 +1657,22 @@ impl Sim {
             }
             for k in c.knowledge_of {
                 h.write_u64(k as u64);
+            }
+            // City state. population/food are frozen while mature (only mature
+            // colonies go Dormant), so they hash as stored. The treasury accrues at
+            // a constant rate while Dormant, so fold in the closed-form caught-up
+            // value (rule D3) exactly like the Field stockpiles above. For an
+            // immature colony `elapsed` is 0 (always Active, never skipped) and the
+            // treasury stays zero, so this is a no-op there.
+            h.write_u64(u64::from(c.population));
+            h.write_i64(c.food.to_bits());
+            for k in 0..3 {
+                let rate = self.colony_output_rate(ci, k);
+                let bits = saturate_i64(
+                    i128::from(c.treasury[k].to_bits())
+                        + i128::from(rate.to_bits()) * i128::from(elapsed),
+                );
+                h.write_i64(bits);
             }
         }
         h.write_u64(self.colony_free.len() as u64);
@@ -2656,6 +2675,17 @@ impl Sim {
             Some((tx, ty)) => field_intensity(self.field_seed, tx, ty, kind),
             None => Fixed::ZERO,
         }
+    }
+
+    /// TEMPORARY stub (replaced in the next task by the real terrain x population
+    /// output rate). Returns zero so the treasury reconstruction is a no-op for now.
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        reason = "keeps the real method's signature (Task 3 reads self/terrain/population, is non-const)"
+    )]
+    fn colony_output_rate(&self, _ci: usize, _k: usize) -> Fixed {
+        Fixed::ZERO
     }
 
     /// Brings colony `ci`'s skipped scalar accumulators up to tick `next` (i.e.
@@ -4103,6 +4133,17 @@ mod tests {
         // Re-pinned for planetary territory: state hash now appends each civ's `alive`
         // byte and the planets arena (this run has no planets -> one zero-length marker).
         assert_eq!(s.state_hash(), 17_495_389_389_365_438_884);
+    }
+
+    #[test]
+    fn colony_growth_fields_hash_is_stable_and_golden_neutral() {
+        fn build() -> Sim {
+            let mut s = Sim::new(Map::new(12, 12), 4, f(100));
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, 3, 3);
+            s.add_colony(P0, cc, 0);
+            s
+        }
+        assert_eq!(build().state_hash(), build().state_hash());
     }
 
     #[test]

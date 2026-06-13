@@ -519,6 +519,14 @@ pub struct Colony {
     /// hash folds in the reconstructed (caught-up) values, so the lazy
     /// representation is invisible to determinism (rule D3).
     pub last_sync_tick: u64,
+    /// City size. Starts at 1; grows from food while Active; capped at `colony_cap`.
+    pub population: u32,
+    /// Food box: accumulates the colony's food rate; on crossing the population
+    /// threshold, increments `population` and subtracts the threshold.
+    pub food: crate::fixed::Fixed,
+    /// Banked Money/Energy/Labour for a *mature* (self-funding) colony. Accrues at a
+    /// constant rate (closed-form, D2). Index 0=Money, 1=Energy, 2=Labour.
+    pub treasury: [crate::fixed::Fixed; 3],
 }
 
 impl Colony {
