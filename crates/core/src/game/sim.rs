@@ -2958,8 +2958,12 @@ impl Sim {
                         .iter()
                         .any(|pl| pl.seat == Some(EntityId(j as u32)));
                 if is_seat {
-                    let attacker_owner = self.entities[attacker].owner;
-                    captures.push((j, attacker_owner));
+                    // Capturing a planet seat is INTENTIONALLY not a kill: no kill
+                    // credit and no veterancy rank bump for the attacker. It's a
+                    // capture, not a destruction — the missing credit is by design,
+                    // not a bug to "fix".
+                    let capturing_owner = self.entities[attacker].owner;
+                    captures.push((j, capturing_owner));
                 } else {
                     let a = &mut self.entities[attacker];
                     a.kills += 1;
@@ -2968,8 +2972,13 @@ impl Sim {
             }
         }
         self.attacks = lines;
-        for (seat_idx, attacker) in captures {
-            self.apply_seat_capture(seat_idx, attacker);
+        // Captures are applied here, at the end of `run_combat`, BEFORE `clear_dead`
+        // runs in `step()`. `apply_seat_capture` restores the seat's HP to a positive
+        // fraction of max, so the captured seat is no longer at hp <= 0 and is NOT
+        // reaped by `clear_dead`. Do not reorder this relative to `clear_dead` — doing
+        // so would silently destroy captured seats instead of transferring them.
+        for (seat_idx, capturing_owner) in captures {
+            self.apply_seat_capture(seat_idx, capturing_owner);
         }
     }
 
@@ -3003,7 +3012,7 @@ impl Sim {
         clippy::cast_possible_truncation,
         reason = "entity/colony indices fit u32 for any real game"
     )]
-    fn apply_seat_capture(&mut self, seat_idx: usize, attacker: PlayerId) {
+    fn apply_seat_capture(&mut self, seat_idx: usize, capturing_owner: PlayerId) {
         let seat_id = EntityId(seat_idx as u32);
         let Some(pidx) = self.planets.iter().position(|pl| pl.seat == Some(seat_id)) else {
             return;
@@ -3013,8 +3022,8 @@ impl Sim {
         let cc_max = self.balance.building(BuildingKind::CommandCenter).max_hp;
         let frac = self.balance.capture_hp_fraction;
         self.entities[seat_idx].hp = cc_max * frac;
-        self.entities[seat_idx].owner = attacker;
-        self.planets[pidx].owner = Some(attacker);
+        self.entities[seat_idx].owner = capturing_owner;
+        self.planets[pidx].owner = Some(capturing_owner);
 
         // Re-owner surviving buildings whose tile belongs to this planet.
         let Self { entities, map, .. } = self;
@@ -3022,7 +3031,7 @@ impl Sim {
             if e.alive && matches!(e.kind, Kind::Building(_)) {
                 if let Some((tx, ty)) = e.tile {
                     if map.planet_at(i32::from(tx), i32::from(ty)) == Some(pid) {
-                        e.owner = attacker;
+                        e.owner = capturing_owner;
                     }
                 }
             }
@@ -3031,7 +3040,7 @@ impl Sim {
         // Transfer the seated colony; reset earned autonomy/policy under the new owner.
         for c in &mut self.colonies {
             if c.alive && c.seat == seat_id {
-                c.owner = attacker;
+                c.owner = capturing_owner;
                 c.autonomy_level = 0;
                 c.autonomy_progress = 0;
                 c.policy = ColonyPolicy::default();
