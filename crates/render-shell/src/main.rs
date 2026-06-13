@@ -1724,11 +1724,7 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         let (food, threshold) = sim.colony_food_progress(id);
         let food_now = food.to_bits() / 65536;
         let food_next = threshold.to_bits() / 65536;
-        let city = if food_next <= 0 {
-            format!("pop {pop} (max)")
-        } else {
-            format!("pop {pop}  food {food_now}/{food_next}")
-        };
+        let city = format!("pop {pop}  food {food_now}/{food_next}");
         draw_text_ex(
             &city,
             px + 100.0,
