@@ -595,6 +595,17 @@ const fn saturate_i64(v: i128) -> i64 {
     }
 }
 
+/// The D3 closed form: `stored + rate * elapsed`, widened to i128 and saturated
+/// back to a Fixed's i64 bits. This is the SINGLE definition of the per-tick
+/// accumulator catch-up — it MUST be the only place this math lives, because the
+/// hash reconstruction (`hash_colony_layer`) and the banking (`materialize_colony`)
+/// have to be bit-identical or Dormant-skip diverges from full simulation
+/// (determinism rule D3).
+#[inline]
+fn closed_form_bits(stored: Fixed, rate: Fixed, elapsed: u64) -> i64 {
+    saturate_i64(i128::from(stored.to_bits()) + i128::from(rate.to_bits()) * i128::from(elapsed))
+}
+
 const fn armor_of(balance: &Balance, kind: Kind) -> ArmorType {
     match kind {
         Kind::Unit(u) => balance.unit(u).armor,
@@ -1675,11 +1686,7 @@ impl Sim {
             for kind in crate::game::civ::special::SpecialKind::ALL {
                 let k = kind.index();
                 let rate = self.colony_special_rate(ci, kind);
-                let bits = saturate_i64(
-                    i128::from(c.stockpile[k].to_bits())
-                        + i128::from(rate.to_bits()) * i128::from(elapsed),
-                );
-                h.write_i64(bits);
+                h.write_i64(closed_form_bits(c.stockpile[k], rate, elapsed));
             }
             for k in c.knowledge_of {
                 h.write_u64(k as u64);
@@ -1694,11 +1701,7 @@ impl Sim {
             h.write_i64(c.food.to_bits());
             for k in 0..c.treasury.len() {
                 let rate = self.colony_output_rate(ci, k);
-                let bits = saturate_i64(
-                    i128::from(c.treasury[k].to_bits())
-                        + i128::from(rate.to_bits()) * i128::from(elapsed),
-                );
-                h.write_i64(bits);
+                h.write_i64(closed_form_bits(c.treasury[k], rate, elapsed));
             }
         }
         h.write_u64(self.colony_free.len() as u64);
@@ -2789,9 +2792,11 @@ impl Sim {
             let rate = self.colony_special_rate(ci, kind);
             if rate.to_bits() != 0 {
                 let k = kind.index();
-                let acc = i128::from(self.colonies[ci].stockpile[k].to_bits())
-                    + i128::from(rate.to_bits()) * i128::from(elapsed);
-                self.colonies[ci].stockpile[k] = Fixed::from_bits(saturate_i64(acc));
+                self.colonies[ci].stockpile[k] = Fixed::from_bits(closed_form_bits(
+                    self.colonies[ci].stockpile[k],
+                    rate,
+                    elapsed,
+                ));
             }
         }
         // A mature colony banks its per-resource output into its own treasury at the
@@ -2806,9 +2811,11 @@ impl Sim {
             for k in 0..self.colonies[ci].treasury.len() {
                 let rate = self.colony_output_rate(ci, k);
                 if rate.to_bits() != 0 {
-                    let acc = i128::from(self.colonies[ci].treasury[k].to_bits())
-                        + i128::from(rate.to_bits()) * i128::from(elapsed);
-                    self.colonies[ci].treasury[k] = Fixed::from_bits(saturate_i64(acc));
+                    self.colonies[ci].treasury[k] = Fixed::from_bits(closed_form_bits(
+                        self.colonies[ci].treasury[k],
+                        rate,
+                        elapsed,
+                    ));
                 }
             }
         }
