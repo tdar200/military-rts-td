@@ -25,6 +25,9 @@ use special::{Knowledge, SPECIAL_COUNT};
 /// One civilization's empire-wide state (formerly `Player`).
 #[derive(Clone, Copy, Debug)]
 pub struct Civ {
+    /// `false` once this civ is eliminated (loses its last seat). A dead civ is
+    /// skipped by autonomous logic; its slot is never recycled (stable [`CivId`]).
+    pub alive: bool,
     /// Primary currency (the "Money" resource).
     pub money: Fixed,
     /// Researched grid-node set (the 500-slot Ascension capability grid).

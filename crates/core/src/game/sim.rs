@@ -16,6 +16,7 @@ use crate::game::civ::{
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
+use crate::game::planet::Planet;
 use crate::game::stats::{
     damage_multiplier, ArmorType, AttackProfile, BuildingKind, DamageType, UnitKind,
 };
@@ -538,6 +539,10 @@ pub struct Sim {
     sectors: Vec<Sector>,
     /// Recycled sector slots (LIFO), mirroring [`Sim::colony_free`].
     sector_free: Vec<u32>,
+    /// Planetary territory: discrete, event-driven ownership (settle / capture).
+    /// Hashed. Empty in legacy scenarios, so the only delta is a zero-length
+    /// marker. Tile membership is static on the [`Map`]; only control lives here.
+    planets: Vec<Planet>,
     /// World seed for sampling static special-resource fields (see
     /// [`crate::game::civ::special`]). Immutable; sampled without touching `rng`.
     field_seed: u64,
@@ -641,6 +646,7 @@ const fn kind_tag(kind: Kind) -> u64 {
 /// A pristine civ holding `starting_credits` and nothing researched yet.
 const fn default_civ(starting_credits: Fixed) -> Civ {
     Civ {
+        alive: true,
         money: starting_credits,
         researched_techs: TechBitset::empty(),
         active_research: None,
@@ -688,6 +694,7 @@ impl Sim {
             colony_free: Vec::new(),
             sectors: Vec::new(),
             sector_free: Vec::new(),
+            planets: Vec::new(),
             field_seed: seed,
             lod_skip: true,
         }
@@ -1384,6 +1391,7 @@ impl Sim {
             }
             h.write_u64(u64::from(c.unlocked_buildings));
             h.write_u64(u64::from(c.unlocked_units));
+            h.write_u64(u64::from(c.alive));
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -1435,6 +1443,22 @@ impl Sim {
         // Colony layer — appended last (per the stable-order rule above). Empty in
         // legacy scenarios, so the only effect there is field_seed + zero markers.
         self.hash_colony_layer(&mut h);
+        // Planetary control (event-driven; safe to hash directly — no LOD accrual).
+        h.write_u64(self.planets.len() as u64);
+        for pl in &self.planets {
+            // 0 reserved for neutral; an owned planet writes its civ id + 1.
+            h.write_u64(pl.owner.map_or(0, |c| u64::from(c.0) + 1));
+            match pl.seat {
+                Some(e) => {
+                    h.write_u64(1);
+                    h.write_u64(u64::from(e.0));
+                }
+                None => h.write_u64(0),
+            }
+            h.write_i64(pl.center.x.to_bits());
+            h.write_i64(pl.center.y.to_bits());
+            h.write_i64(pl.radius.to_bits());
+        }
         h.finish()
     }
 
@@ -3691,7 +3715,21 @@ mod tests {
         // sector (governance) arena. This run has no sectors, so the only delta is
         // two appended zero-length markers (`sectors.len()` + `sector_free.len()`);
         // the simulation itself is unchanged.
-        assert_eq!(s.state_hash(), 4_245_124_049_375_366_020);
+        //
+        // Re-pinned for planetary territory: state hash now appends each civ's `alive`
+        // byte and the planets arena (this run has no planets -> one zero-length marker).
+        assert_eq!(s.state_hash(), 17_495_389_389_365_438_884);
+    }
+
+    #[test]
+    fn planets_and_alive_hash_is_stable() {
+        fn run() -> u64 {
+            // Exercise the new hashed state without behavior wiring (Task 3 is
+            // data-only): two identical constructions must hash-equal.
+            let s = Sim::with_civ_count(Map::new(20, 20), 5, f(1500), 2);
+            s.state_hash()
+        }
+        assert_eq!(run(), run());
     }
 
     #[test]

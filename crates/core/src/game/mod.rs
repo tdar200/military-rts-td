@@ -12,6 +12,7 @@ pub mod lockstep;
 pub mod map;
 pub mod path;
 pub mod perk;
+pub mod planet;
 pub mod procgen;
 pub mod scenario;
 pub mod sim;

@@ -8,6 +8,8 @@
 
 use alloc::vec::Vec;
 
+use crate::game::planet::PlanetId;
+
 /// A single map cell.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub struct Tile {
@@ -56,6 +58,7 @@ pub struct Map {
     height: u16,
     tiles: Vec<Tile>,
     deposits: Vec<Option<Deposit>>,
+    planet_of: Vec<Option<PlanetId>>,
 }
 
 impl Map {
@@ -70,6 +73,7 @@ impl Map {
             height,
             tiles,
             deposits: alloc::vec![None; count],
+            planet_of: alloc::vec![None; count],
         }
     }
 
@@ -130,6 +134,29 @@ impl Map {
         if x < self.width && y < self.height {
             let index = usize::from(y) * usize::from(self.width) + usize::from(x);
             self.deposits[index] = Some(deposit);
+        }
+    }
+
+    /// The planet owning tile `(x, y)`, or `None` for open space / out of bounds.
+    #[must_use]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "coordinates are bounds-checked non-negative before the cast"
+    )]
+    pub fn planet_at(&self, x: i32, y: i32) -> Option<PlanetId> {
+        if self.in_bounds(x, y) {
+            let idx = (y as usize) * usize::from(self.width) + (x as usize);
+            self.planet_of[idx]
+        } else {
+            None
+        }
+    }
+
+    /// Assigns tile `(x, y)` to a planet (procgen only; static thereafter).
+    pub fn set_planet(&mut self, x: u16, y: u16, planet: PlanetId) {
+        if x < self.width && y < self.height {
+            let idx = usize::from(y) * usize::from(self.width) + usize::from(x);
+            self.planet_of[idx] = Some(planet);
         }
     }
 
