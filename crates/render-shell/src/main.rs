@@ -2392,6 +2392,14 @@ fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
             if (col / 4 + row / 4).is_multiple_of(2) {
                 draw_hex(cx, cy, cell, GROUND_MACRO);
             }
+            // Planetary territory: tint the tile by its owning civ (neutral grey
+            // for unclaimed planets). Open space (no planet) stays untinted.
+            if let Some(pid) = sim.map().planet_at(i32::from(col), i32::from(row)) {
+                let tint = sim
+                    .planet_owner(pid)
+                    .map_or(theme::CIV_NEUTRAL, |owner| theme::civ_color(owner.0));
+                draw_hex(cx, cy, cell, with_alpha(tint, 0.22));
+            }
             let on_band = (i32::from(col) + i32::from(row) - pulse).rem_euclid(14) == 0;
             draw_hex_outline(cx, cy, cell, 1.0, if on_band { GRID_HOT } else { GRID });
         }

@@ -9,10 +9,10 @@
 
 use crate::sprites::Sprites;
 use crate::theme::{
-    glow_rect, holo_flicker, hp_color, scanline, with_alpha, ALERT_GLOW, BAD, BORDER_NEUTRAL,
-    BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD, GROUND_ALT, HOLO_GLOW, HP_TRACK,
-    OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TEXT,
-    TEXT_DIM, WARN, WELL,
+    civ_color, glow_rect, holo_flicker, hp_color, scanline, with_alpha, ALERT_GLOW, BAD,
+    BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD, GROUND_ALT,
+    HOLO_GLOW, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD, TEAM_ENEMY,
+    TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
 };
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
@@ -198,9 +198,71 @@ pub fn draw(
     sprites: &Sprites,
 ) {
     draw_minimap(sim);
+    draw_civ_roster(sim, sprites);
     draw_top_bar(sim, paused, game_speed, sprites);
     draw_selection_panel(sim, selected, sprites);
     draw_command_bar(sim, build_mode, sprites);
+}
+
+/// Compact N-civ roster, docked under the minimap (top-right). One row per civ:
+/// an identity-colour swatch, the civ label, its colony count, and live/dead
+/// state — so a multi-civ conquest board shows every faction at a glance rather
+/// than just the human player. Eliminated civs are dimmed and struck out.
+fn draw_civ_roster(sim: &Sim, sprites: &Sprites) {
+    let n = sim.civ_count();
+    // A 2-civ game is the classic survival layout; the roster is for 3+ civ
+    // conquest where the old us-vs-them HUD no longer describes the board.
+    if n < 3 {
+        return;
+    }
+    let font = sprites.font();
+    let mm_w = 188.0;
+    let map_w = f32::from(sim.map().width());
+    let map_h = f32::from(sim.map().height());
+    let mm_h = mm_w * map_h / map_w;
+    let x = screen_width() - mm_w - 12.0;
+    let row_h = 20.0;
+    let pad = 8.0;
+    let y = TOP_BAR_H + 10.0 + mm_h + 10.0;
+    let panel_h = pad * 2.0 + n as f32 * row_h;
+    fill_panel(x, y, mm_w, panel_h);
+    for i in 0..n {
+        let civ = PlayerId(i as u16);
+        let alive = sim.civ_alive(civ);
+        let ry = y + pad + i as f32 * row_h;
+        let swatch = civ_color(civ.0);
+        // Swatch: bright when alive, dimmed when eliminated.
+        let sw = if alive {
+            swatch
+        } else {
+            with_alpha(swatch, 0.3)
+        };
+        draw_rectangle(x + pad, ry + 3.0, 11.0, 11.0, WELL);
+        draw_rectangle(x + pad + 1.0, ry + 4.0, 9.0, 9.0, sw);
+        let label = if civ == HUMAN {
+            "You".to_owned()
+        } else {
+            format!("Civ {i}")
+        };
+        let txt_col = if alive { TEXT } else { TEXT_DIM };
+        text(&label, x + pad + 18.0, ry + 13.0, 14.0, txt_col, font);
+        // Right-aligned status: colony count when alive, "out" when eliminated.
+        let status = if alive {
+            format!("{}c", sim.colony_count_for(civ))
+        } else {
+            "out".to_owned()
+        };
+        let stat_col = if alive { GOOD } else { BAD };
+        let sw_w = text_width(&status, 14.0, font);
+        text(
+            &status,
+            x + mm_w - pad - sw_w,
+            ry + 13.0,
+            14.0,
+            stat_col,
+            font,
+        );
+    }
 }
 
 /// L-shaped corner brackets — the holographic framed-panel filigree.
@@ -492,11 +554,9 @@ fn draw_minimap(sim: &Sim) {
         }
     }
     for v in sim.views() {
-        let col = if v.owner == HUMAN {
-            TEAM_PLAYER
-        } else {
-            TEAM_ENEMY
-        };
+        // Each civ's units/buildings show in that civ's identity colour, so an
+        // N-civ board reads as distinct factions rather than just us-vs-them.
+        let col = civ_color(v.owner.0);
         let dot_x = field_x + (v.pos.x.to_bits() as f32 / 65536.0) * scale_x;
         let dot_y = field_y + (v.pos.y.to_bits() as f32 / 65536.0) * scale_y;
         // Dark backing makes the faction dot pop against the terrain.

@@ -1084,6 +1084,13 @@ impl Sim {
         self.planets.len()
     }
 
+    /// The number of civilizations in this game (UI iterates `0..civ_count()`).
+    /// Read-only accessor; does not affect the deterministic state hash.
+    #[must_use]
+    pub const fn civ_count(&self) -> usize {
+        self.civs.len()
+    }
+
     /// Sets an entity's current HP (scenario setup / tests; e.g. to bring a seat
     /// near death). No-op if the id is out of range.
     pub fn debug_set_hp(&mut self, e: EntityId, hp: Fixed) {

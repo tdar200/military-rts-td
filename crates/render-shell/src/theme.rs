@@ -93,6 +93,31 @@ pub const TEAM_PLAYER: Color = color_u8!(70, 200, 235, 255);
 /// Alien (enemy) faction tint — a hostile warm red, the standard "incoming
 /// threat" signal in a cyan UI and hue-distinct from `GOOD` and `GRID`.
 pub const TEAM_ENEMY: Color = color_u8!(240, 96, 80, 255);
+/// Neutral / unowned planet tint — a dim steel-grey, distinct from every civ
+/// colour and from open space, so unclaimed territory reads as "up for grabs".
+pub const CIV_NEUTRAL: Color = color_u8!(120, 130, 142, 255);
+/// Per-civ identity palette for N-civ conquest. Index by `CivId.0`; eight
+/// hue-distinct holographic tints so civs 0..7 each read as a separate faction.
+/// Civ 0 keeps the friendly cyan (`TEAM_PLAYER`) and civ 1 the hostile red
+/// (`TEAM_ENEMY`) so existing 2-civ matches look unchanged.
+pub const CIV_COLORS: [Color; 8] = [
+    color_u8!(70, 200, 235, 255),  // 0 cyan (player)
+    color_u8!(240, 96, 80, 255),   // 1 red (classic enemy)
+    color_u8!(120, 230, 140, 255), // 2 green
+    color_u8!(240, 200, 70, 255),  // 3 amber
+    color_u8!(190, 130, 245, 255), // 4 violet
+    color_u8!(245, 150, 70, 255),  // 5 orange
+    color_u8!(245, 130, 200, 255), // 6 magenta
+    color_u8!(130, 245, 230, 255), // 7 teal
+];
+
+/// Resolves the holographic identity colour for civ `id`. Wraps past 8 civs so
+/// it never panics; the engine only spawns up to ~6, well inside the palette.
+#[must_use]
+pub const fn civ_color(id: u16) -> Color {
+    CIV_COLORS[(id as usize) % CIV_COLORS.len()]
+}
+
 /// On-map selection ring — the brightest holo highlight.
 pub const SELECT_RING: Color = GOLD_HI;
 /// Combat tracer line — a bright cyan laser bolt (translucent).
