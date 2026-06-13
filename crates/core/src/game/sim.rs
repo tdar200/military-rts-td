@@ -123,20 +123,15 @@ const SUPPLY_PER_BARRACKS: u32 = 5;
 /// bigger army (build reactors → raise the cap → field more units vs the waves).
 const SUPPLY_PER_REACTOR: u32 = 4;
 /// Army supply each colony population point contributes (city → army coupling).
-#[allow(
-    dead_code,
-    reason = "wired into the supply ceiling in the population-effects task (C7)"
-)]
 const SUPPLY_PER_POP: u32 = 1;
 /// Extra production-building slots each colony population point unlocks.
-#[allow(
-    dead_code,
-    reason = "wired into the build cap in the population-effects task (C7)"
-)]
 const BUILDINGS_PER_POP: u32 = 2;
 /// Population headroom each housing building (the Command Center, in this slice)
 /// adds to a colony's cap.
 const HOUSING_PER_BUILDING: u32 = 2;
+/// Population needed per +1 to a colony's autonomy-earning rate: a colony earns
+/// `1 + population / AUTONOMY_POP_DIVISOR` autonomy progress per qualifying tick.
+const AUTONOMY_POP_DIVISOR: u32 = 4;
 /// How many live Ore Extractors the AI expands to before it stops claiming new
 /// Ore deposits. Bounds map-wide refinery sprawl while still letting the AI
 /// re-claim a fresh deposit when an old one depletes.
@@ -1425,6 +1420,12 @@ impl Sim {
         {
             cap += 8;
         }
+        // Each colony's population contributes army supply (city → army coupling).
+        for c in &self.colonies {
+            if c.alive && c.owner == player {
+                cap += SUPPLY_PER_POP * c.population;
+            }
+        }
         cap
     }
 
@@ -1667,9 +1668,17 @@ impl Sim {
             } else {
                 0
             };
+            // Population-scaled autonomy accrual mirror. Identical formula to
+            // materialize_colony's accrual (rule D3): population is frozen while
+            // Dormant, so this reconstructs the exact caught-up progress whether
+            // the colony was stepped tick-by-tick or skipped. Computed inline from
+            // `c` to avoid re-borrowing `&self` inside the `&self.colonies[ci]`
+            // borrow held by the hash loop.
+            let auto_rate = 1 + c.population / AUTONOMY_POP_DIVISOR;
+            let steps_h = u32::try_from(elapsed).unwrap_or(u32::MAX);
             let progress = c
                 .autonomy_progress
-                .saturating_add(u32::try_from(elapsed).unwrap_or(u32::MAX));
+                .saturating_add(steps_h.saturating_mul(auto_rate));
             h.write_u64(u64::from(c.alive));
             h.write_u64(u64::from(c.owner.0));
             h.write_u64(u64::from(c.seat.0));
@@ -2001,6 +2010,7 @@ impl Sim {
         if unlocked
             && buildable
             && self.can_build_on(owner, x, y)
+            && self.under_building_cap(x, y)
             && self.civs[p].money >= st.money_cost
             && self.civs[p].energy >= st.energy_cost
             && self.civs[p].labour >= st.labour_cost
@@ -2713,6 +2723,45 @@ impl Sim {
         self.map.planet_at(i32::from(x), i32::from(y))
     }
 
+    /// The planet a colony seat entity sits on (its tile → planet id).
+    fn colony_planet_for_seat(&self, seat: EntityId) -> Option<PlanetId> {
+        let (x, y) = self.entities.get(seat.0 as usize)?.tile?;
+        self.map.planet_at(i32::from(x), i32::from(y))
+    }
+
+    /// Whether the colony on planet `(x,y)` can hold another building
+    /// (count of buildings on the planet < `BUILDINGS_PER_POP` × colony
+    /// population). Open space (no planet) is ungated and returns true.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "building count on a single planet fits u32 for any real game"
+    )]
+    fn under_building_cap(&self, x: u16, y: u16) -> bool {
+        let Some(pid) = self.map.planet_at(i32::from(x), i32::from(y)) else {
+            return true;
+        };
+        // Population of the colony seated on this planet (0 if none).
+        let pop = self
+            .colonies
+            .iter()
+            .find(|c| c.alive && self.colony_planet_for_seat(c.seat) == Some(pid))
+            .map_or(0, |c| c.population);
+        let count = self
+            .entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && matches!(e.kind, Kind::Building(_))
+                    && e.tile.is_some_and(|(tx, ty)| {
+                        self.map.planet_at(i32::from(tx), i32::from(ty)) == Some(pid)
+                    })
+            })
+            .count();
+        // pop.max(1) so a colony always holds at least BUILDINGS_PER_POP
+        // buildings (avoids a 0-pop deadlock; population starts at 1 anyway).
+        (count as u32) < BUILDINGS_PER_POP * pop.max(1)
+    }
+
     /// Tiles belonging to the colony's planet (for the housing base). O(1): reads
     /// the [`Sim::planet_tiles`] cache built in `rebuild_planet_yield`.
     fn colony_planet_tiles(&self, ci: usize) -> u32 {
@@ -2771,6 +2820,13 @@ impl Sim {
         Balance::pop_factor(self.colonies[ci].population) * self.planet_yield_of(pid)[k + 1]
     }
 
+    /// Autonomy-earning rate per qualifying tick, scaled by population (bigger
+    /// cities earn autonomy faster). Constant while mature (population frozen),
+    /// so the closed-form hash reconstruction stays exact (rule D3).
+    fn colony_autonomy_rate(&self, ci: usize) -> u32 {
+        1 + self.colonies[ci].population / AUTONOMY_POP_DIVISOR
+    }
+
     /// Brings colony `ci`'s skipped scalar accumulators up to tick `next` (i.e.
     /// through tick `next - 1`) with the exact closed form `stored + rate ×
     /// elapsed` — autonomy progress accrues one qualifying tick per elapsed tick,
@@ -2786,8 +2842,14 @@ impl Sim {
             return;
         }
         let steps = u32::try_from(elapsed).unwrap_or(u32::MAX);
-        self.colonies[ci].autonomy_progress =
-            self.colonies[ci].autonomy_progress.saturating_add(steps);
+        // Population-scaled autonomy accrual. The rate is frozen while the colony
+        // is Dormant (population is frozen at cap), so the hash reconstruction in
+        // hash_colony_layer uses the identical formula over the same elapsed span
+        // (rule D3) — skip == full.
+        let auto_rate = self.colony_autonomy_rate(ci);
+        self.colonies[ci].autonomy_progress = self.colonies[ci]
+            .autonomy_progress
+            .saturating_add(steps.saturating_mul(auto_rate));
         for kind in SpecialKind::ALL {
             let rate = self.colony_special_rate(ci, kind);
             if rate.to_bits() != 0 {
@@ -3926,6 +3988,29 @@ impl Sim {
 }
 
 #[cfg(test)]
+impl Sim {
+    /// Test-only: force a colony's population (drives supply/build-cap/autonomy
+    /// effects without running the growth loop).
+    fn set_population_for_test(&mut self, id: ColonyId, pop: u32) {
+        self.colonies[id.0 as usize].population = pop;
+    }
+
+    /// Test-only: count alive `Building` entities whose tile sits on planet `pid`.
+    fn buildings_on_planet_test(&self, pid: PlanetId) -> usize {
+        self.entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && matches!(e.kind, Kind::Building(_))
+                    && e.tile.is_some_and(|(tx, ty)| {
+                        self.map.planet_at(i32::from(tx), i32::from(ty)) == Some(pid)
+                    })
+            })
+            .count()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         ascend_cost, tile_center, BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim,
@@ -3945,6 +4030,85 @@ mod tests {
     }
     const P0: PlayerId = PlayerId(0);
     const P1: PlayerId = PlayerId(1);
+
+    #[test]
+    #[allow(
+        clippy::identity_op,
+        reason = "the explicit * 1 spells out SUPPLY_PER_POP for clarity"
+    )]
+    fn population_scales_supply_cap() {
+        let mut s = Sim::new(Map::new(8, 8), 1, f(0));
+        let pid = PlanetId(0);
+        s.map_mut().set_planet(0, 0, pid);
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 0, 0);
+        s.push_planet(Planet {
+            owner: Some(P0),
+            seat: Some(cc),
+            center: tile_center(0, 0),
+            radius: f(1),
+        });
+        // Capture the cap before the colony exists, so the full population term
+        // (not just the delta over the birth population of 1) is the measured rise.
+        let before = s.supply_cap(P0);
+        let id = s.add_colony(P0, cc, 0);
+        s.set_population_for_test(id, 5);
+        assert_eq!(
+            s.supply_cap(P0),
+            before + 5 * 1,
+            "supply rises by SUPPLY_PER_POP * population"
+        );
+    }
+
+    #[test]
+    fn population_gates_building_count() {
+        let mut s = Sim::new(Map::new(10, 10), 1, f(100_000));
+        let pid = PlanetId(0);
+        for y in 0..3 {
+            for x in 0..3 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 0, 0);
+        s.push_planet(Planet {
+            owner: Some(P0),
+            seat: Some(cc),
+            center: tile_center(1, 1),
+            radius: f(2),
+        });
+        let id = s.add_colony(P0, cc, 0);
+        // population 1, BUILDINGS_PER_POP 2 -> cap 2 buildings on this planet (CC
+        // counts as 1). A second build succeeds (total 2); a third is rejected
+        // until population rises.
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Wall,
+            x: 1,
+            y: 0,
+        }]);
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Wall,
+            x: 0,
+            y: 1,
+        }]); // would be 3rd building
+        assert_eq!(
+            s.buildings_on_planet_test(pid),
+            2,
+            "building count capped at BUILDINGS_PER_POP*pop"
+        );
+        s.set_population_for_test(id, 3); // cap now 6
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Wall,
+            x: 0,
+            y: 1,
+        }]);
+        assert_eq!(
+            s.buildings_on_planet_test(pid),
+            3,
+            "raising population lifts the cap"
+        );
+    }
 
     #[test]
     fn terrain_layer_and_planet_yield_cache() {
