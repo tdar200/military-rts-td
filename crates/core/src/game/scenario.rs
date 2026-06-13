@@ -255,6 +255,103 @@ pub fn survival(seed: u64) -> Sim {
     sim
 }
 
+/// An N-civ conquest map.
+///
+/// Every civ starts on its own **home planet** (a marked tile block with a
+/// `CommandCenter` seat + fully autonomous colony), spread deterministically
+/// around the field, plus a couple of **neutral planets** in the contested
+/// centre as expansion targets. Wholly index-driven — no RNG — so the layout is
+/// identical for a given `(seed, civ_count)`. AI civs expand to the neutral
+/// planets and assault each other's seats (see `ai_commands`).
+///
+/// `civ_count` is clamped to `1..=HOME_CENTERS.len()` (the number of pre-laid home
+/// regions); the `seed` only feeds `Sim`'s RNG (combat/wave jitter), never layout.
+#[must_use]
+pub fn conquest(seed: u64, civ_count: usize) -> Sim {
+    use crate::game::civ::AUTONOMY_FULL;
+    use crate::game::hex;
+    use crate::game::planet::{Planet, PlanetId};
+
+    const W: u16 = 40;
+    const H: u16 = 40;
+    /// Half-extent (in tiles) of a planet's square tile block: a 3x3 region.
+    const PLANET_HALF: u16 = 1;
+    /// Claim radius in world units (auxiliary; exact membership is the Map layer).
+    const PLANET_RADIUS: i32 = 3;
+
+    // Eight home-region centres spread around the field (corners + edge midpoints),
+    // all clear of the contested centre and ≥ PLANET_HALF from every map edge so the
+    // 3x3 blocks stay in-bounds and never overlap. Index-ordered for determinism.
+    const HOME_CENTERS: [(u16, u16); 8] = [
+        (5, 5),
+        (34, 34),
+        (34, 5),
+        (5, 34),
+        (20, 5),
+        (20, 34),
+        (5, 20),
+        (34, 20),
+    ];
+    // Two neutral expansion planets near the centre, away from every home.
+    const NEUTRAL_CENTERS: [(u16, u16); 2] = [(20, 17), (20, 22)];
+
+    let civ_count = civ_count.clamp(1, HOME_CENTERS.len());
+    let mut sim = Sim::with_civ_count(Map::new(W, H), seed, Fixed::from_int(2000), civ_count);
+
+    // Marks the 3x3 tile block centred on `(cx, cy)` as belonging to `planet_id`.
+    let mark_block = |sim: &mut Sim, cx: u16, cy: u16, planet_id: PlanetId| {
+        for dy in -i32::from(PLANET_HALF)..=i32::from(PLANET_HALF) {
+            for dx in -i32::from(PLANET_HALF)..=i32::from(PLANET_HALF) {
+                let (Ok(tx), Ok(ty)) = (
+                    u16::try_from(i32::from(cx) + dx),
+                    u16::try_from(i32::from(cy) + dy),
+                ) else {
+                    continue;
+                };
+                sim.map_mut().set_planet(tx, ty, planet_id);
+            }
+        }
+    };
+
+    // Planet ids are assigned in push order: homes first (0..civ_count), then the
+    // neutral planets. `push_planet` returns the id but we mark tiles first, so the
+    // index is computed up-front from the deterministic ordering.
+    let mut next_planet = 0u16;
+
+    // Lay each civ's home planet: mark its 3x3 block, seat a CommandCenter at the
+    // centre, register the planet (owned) and a fully-autonomous colony.
+    for (id, &(cx, cy)) in HOME_CENTERS.iter().enumerate().take(civ_count) {
+        let pid = PlayerId(u16::try_from(id).unwrap_or(0));
+        let planet_id = PlanetId(next_planet);
+        next_planet += 1;
+        mark_block(&mut sim, cx, cy, planet_id);
+        let cc = sim.add_building(pid, BuildingKind::CommandCenter, cx, cy);
+        sim.push_planet(Planet {
+            owner: Some(pid),
+            seat: Some(cc),
+            center: hex::center(cx, cy),
+            radius: Fixed::from_int(PLANET_RADIUS),
+        });
+        sim.add_colony(pid, cc, AUTONOMY_FULL);
+    }
+
+    // Lay the neutral expansion planets: marked blocks with a centre but no owner
+    // or seat, so any civ may settle them.
+    for &(cx, cy) in &NEUTRAL_CENTERS {
+        let planet_id = PlanetId(next_planet);
+        next_planet += 1;
+        mark_block(&mut sim, cx, cy, planet_id);
+        sim.push_planet(Planet {
+            owner: None,
+            seat: None,
+            center: hex::center(cx, cy),
+            radius: Fixed::from_int(PLANET_RADIUS),
+        });
+    }
+
+    sim
+}
+
 /// The selectable scenarios — the skirmish map roster shown to the player.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scenario {
@@ -310,12 +407,32 @@ impl Scenario {
 
 #[cfg(test)]
 mod tests {
-    use super::{crossroads, lane_defense, open_clash, survival, Scenario};
+    use super::{conquest, crossroads, lane_defense, open_clash, survival, Scenario};
     use crate::game::civ::ColonyId;
     use crate::game::map::Map;
     use crate::game::path::find_path;
-    use crate::game::sim::PlayerId;
+    use crate::game::sim::{Command, PlayerId};
     use alloc::vec::Vec;
+
+    #[test]
+    fn conquest_scenario_is_deterministic_and_resolves() {
+        fn run() -> u64 {
+            let mut s = conquest(12_345, 4); // 4 civs, generated planets
+            for _ in 0..400 {
+                let cmds: Vec<Command> = (0..4u16)
+                    .filter(|&id| s.civ_alive(PlayerId(id)))
+                    .flat_map(|id| s.ai_commands(PlayerId(id)))
+                    .collect();
+                s.step(&cmds);
+            }
+            s.state_hash()
+        }
+        assert_eq!(
+            run(),
+            run(),
+            "conquest scenario must be bit-identical across runs"
+        );
+    }
 
     #[test]
     fn survival_founding_registers_a_manual_colony() {

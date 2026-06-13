@@ -3478,7 +3478,81 @@ impl Sim {
                 }
             }
         }
+
+        // Conquest expansion: settle the nearest neutral planet when affordable.
+        // A TOTAL NO-OP on planet-free maps (golden / survival / skirmish), so the
+        // existing AI path is byte-identical there.
+        cmds.extend(self.ai_conquest_commands(player));
         cmds
+    }
+
+    /// Conquest-only expansion: if any planet is neutral, the civ has spare money
+    /// and headroom under the colony cap, emit a single `FoundColony` toward the
+    /// **nearest** unowned planet's centre tile. Returns empty (a no-op) whenever
+    /// no planets exist or none are neutral, so the planet-free golden/survival
+    /// AI is unchanged. Deterministic: nearest by `center` distance to the civ's
+    /// seat, lowest-index tiebreak; Fixed math, no RNG, no floats.
+    fn ai_conquest_commands(&self, player: PlayerId) -> Vec<Command> {
+        // Hard gate: nothing to do without planets, or without a neutral target.
+        if self.planets.is_empty() || !self.planets.iter().any(|pl| pl.owner.is_none()) {
+            return Vec::new();
+        }
+        // Mirror `apply_found_colony`'s own guards so we don't spam unappliable
+        // commands (the apply step re-validates anyway).
+        if self.money(player) < FOUND_COLONY_COST
+            || self.count_owner_colonies(player) >= MAX_COLONIES_PER_OWNER
+        {
+            return Vec::new();
+        }
+        // Distance reference: the civ's CommandCenter (its seat). No base → no expand.
+        let Some(from) = self.command_center_pos(player) else {
+            return Vec::new();
+        };
+        // Nearest neutral planet by squared distance; ties broken by lowest index.
+        let mut best: Option<(usize, Fixed)> = None;
+        for (i, pl) in self.planets.iter().enumerate() {
+            if pl.owner.is_some() {
+                continue;
+            }
+            let dx = pl.center.x - from.x;
+            let dy = pl.center.y - from.y;
+            let d2 = dx * dx + dy * dy;
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((i, d2));
+            }
+        }
+        let Some((idx, _)) = best else {
+            return Vec::new();
+        };
+        // Settle a buildable tile of that neutral planet. Map membership (not the
+        // Vec2 centre) is the source of truth, so scan row-major for the first
+        // buildable tile assigned to this planet id — deterministic, lowest-index.
+        let target = PlanetId(u16::try_from(idx).unwrap_or(u16::MAX));
+        let mut site: Option<(u16, u16)> = None;
+        'scan: for ty in 0..self.map.height() {
+            for tx in 0..self.map.width() {
+                if self.map.planet_at(i32::from(tx), i32::from(ty)) == Some(target)
+                    && self
+                        .map
+                        .tile(i32::from(tx), i32::from(ty))
+                        .is_some_and(|t| t.buildable)
+                {
+                    site = Some((tx, ty));
+                    break 'scan;
+                }
+            }
+        }
+        let Some((x, y)) = site else {
+            return Vec::new();
+        };
+        alloc::vec![Command::FoundColony {
+            owner: player,
+            // `parent` is informational/unread by the handler; the civ's own first
+            // colony id is a sensible value.
+            parent: ColonyId(u32::from(player.0)),
+            x,
+            y,
+        }]
     }
 
     fn command_center_tile(&self, player: PlayerId) -> Option<(u16, u16)> {
