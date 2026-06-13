@@ -2743,6 +2743,7 @@ impl Sim {
     }
 
     /// Mature: at population cap AND earned full autonomy.
+    #[allow(dead_code, reason = "wired into colony_lod's maturity rule in C5")]
     fn colony_mature(&self, ci: usize) -> bool {
         let c = &self.colonies[ci];
         c.population >= self.colony_pop_cap(ci) && c.earned_autonomy() >= AUTONOMY_FULL
@@ -2818,22 +2819,29 @@ impl Sim {
             }
             self.materialize_colony(ci, next);
             // Growth + real-time income for DEVELOPING (immature) colonies. Immature
-            // colonies are always Active (never skipped — see colony_lod's maturity
-            // rule), so this is always an elapsed-1 path: no closed form needed (rule
-            // D3). Mature colonies bank their output in `treasury` inside
+            // colonies will be kept Active by colony_lod's maturity rule (C5); the
+            // inlined `population < cap || autonomy < full` gate here is self-sufficient
+            // regardless, so this is always an elapsed-1 path: no closed form needed
+            // (rule D3). Mature colonies bank their output in `treasury` inside
             // materialize_colony instead.
-            if !self.colony_mature(ci) {
+            let cap = self.colony_pop_cap(ci);
+            let mature = self.colonies[ci].population >= cap
+                && self.colonies[ci].earned_autonomy() >= AUTONOMY_FULL;
+            if !mature {
                 let owner = usize::from(self.colonies[ci].owner.0);
-                let food_rate = self.colony_food_rate(ci);
-                self.colonies[ci].food = self.colonies[ci].food + food_rate;
-                let cap = self.colony_pop_cap(ci);
-                while self.colonies[ci].population < cap {
-                    let threshold = Balance::food_threshold(self.colonies[ci].population);
-                    if self.colonies[ci].food < threshold {
-                        break;
+                // Fix 2: only accrue/spend food while there is room to grow (a pop-capped
+                // but not-yet-mature colony must not accumulate food forever -> Fixed
+                // overflow).
+                if self.colonies[ci].population < cap {
+                    self.colonies[ci].food = self.colonies[ci].food + self.colony_food_rate(ci);
+                    while self.colonies[ci].population < cap {
+                        let threshold = Balance::food_threshold(self.colonies[ci].population);
+                        if self.colonies[ci].food < threshold {
+                            break;
+                        }
+                        self.colonies[ci].food = self.colonies[ci].food - threshold;
+                        self.colonies[ci].population += 1;
                     }
-                    self.colonies[ci].food = self.colonies[ci].food - threshold;
-                    self.colonies[ci].population += 1;
                 }
                 // Real-time income to the empire pool (additional to run_economy).
                 let dm = self.colony_output_rate(ci, 0);
