@@ -13,9 +13,14 @@
 //! roadmap. Inputs are delayed by `input_delay` turns so frames have time to
 //! arrive before the turn that needs them.
 
-use crate::game::sim::{Command, PlayerId, Sim, PLAYER_COUNT};
+use crate::game::sim::{Command, PlayerId, Sim};
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+
+/// Number of peers in a lockstep session. The networked protocol is 1v1 for now
+/// (the inbox holds one input slot per peer); `PvP` matchmaking with more peers
+/// would widen this. Distinct from the simulation's civ count, which is dynamic.
+const PEER_COUNT: usize = 2;
 
 /// One player's commands for a specific turn, broadcast between peers.
 #[derive(Clone, Debug)]
@@ -36,7 +41,7 @@ pub struct Lockstep {
     input_delay: u64,
     turn: u64,
     next_input_tick: u64,
-    inbox: BTreeMap<u64, [Option<Vec<Command>>; PLAYER_COUNT]>,
+    inbox: BTreeMap<u64, [Option<Vec<Command>>; PEER_COUNT]>,
 }
 
 impl Lockstep {

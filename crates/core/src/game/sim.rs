@@ -25,9 +25,6 @@ use crate::rng::Rng;
 use crate::vec::Vec2;
 use alloc::vec::Vec;
 
-/// Number of players (single-player vs one AI for now; `PvP` later).
-pub const PLAYER_COUNT: usize = 2;
-
 /// How often (in ticks) the AI re-issues move orders to idle units, throttling
 /// pathfinding work.
 const MOVE_REISSUE_PERIOD: u64 = 20;
@@ -505,7 +502,10 @@ pub struct Sim {
     tick: u64,
     rng: Rng,
     map: Map,
-    players: [Civ; PLAYER_COUNT],
+    civs: Vec<Civ>,
+    /// The human-controlled civ (P0 by convention). Used by [`Sim::winner`] in
+    /// survival mode to decide whose Command Center loss ends the run.
+    human_civ: CivId,
     entities: Vec<Entity>,
     /// Indices of dead entity slots available for reuse, so long matches don't
     /// grow the entity list without bound.
@@ -638,27 +638,43 @@ const fn kind_tag(kind: Kind) -> u64 {
     }
 }
 
+/// A pristine civ holding `starting_credits` and nothing researched yet.
+const fn default_civ(starting_credits: Fixed) -> Civ {
+    Civ {
+        money: starting_credits,
+        researched_techs: TechBitset::empty(),
+        active_research: None,
+        era: 0,
+        energy: Fixed::ZERO,
+        labour: Fixed::ZERO,
+        active_perks: 0,
+        doctrine_levels: [0; DOCTRINE_TRACKS],
+        unlocked_buildings: u16::MAX,
+        unlocked_units: u16::MAX,
+    }
+}
+
 impl Sim {
     /// Creates a fresh world on `map`, with each player holding
     /// `starting_credits`, seeded for deterministic randomness.
     #[must_use]
-    pub const fn new(map: Map, seed: u64, starting_credits: Fixed) -> Self {
+    pub fn new(map: Map, seed: u64, starting_credits: Fixed) -> Self {
+        Self::with_civ_count(map, seed, starting_credits, 2)
+    }
+
+    /// Creates a fresh world with `civ_count` civilizations, each holding
+    /// `starting_credits`. The two-civ case ([`Sim::new`]) is the legacy default.
+    #[must_use]
+    pub fn with_civ_count(map: Map, seed: u64, starting_credits: Fixed, civ_count: usize) -> Self {
+        let civs = (0..civ_count)
+            .map(|_| default_civ(starting_credits))
+            .collect();
         Self {
             tick: 0,
             rng: Rng::from_seed(seed),
             map,
-            players: [Civ {
-                money: starting_credits,
-                researched_techs: TechBitset::empty(),
-                active_research: None,
-                era: 0,
-                energy: Fixed::ZERO,
-                labour: Fixed::ZERO,
-                active_perks: 0,
-                doctrine_levels: [0; DOCTRINE_TRACKS],
-                unlocked_buildings: u16::MAX,
-                unlocked_units: u16::MAX,
-            }; PLAYER_COUNT],
+            civs,
+            human_civ: PlayerId(0),
             entities: Vec::new(),
             free: Vec::new(),
             waves: None,
@@ -919,26 +935,26 @@ impl Sim {
         units: &[UnitKind],
     ) {
         let p = usize::from(player.0);
-        self.players[p].unlocked_buildings = 0;
-        self.players[p].unlocked_units = 0;
+        self.civs[p].unlocked_buildings = 0;
+        self.civs[p].unlocked_units = 0;
         for &b in buildings {
-            self.players[p].unlocked_buildings |= 1 << b.index();
+            self.civs[p].unlocked_buildings |= 1 << b.index();
         }
         for &u in units {
-            self.players[p].unlocked_units |= 1 << u.index();
+            self.civs[p].unlocked_units |= 1 << u.index();
         }
     }
 
     /// Whether `player` may build `kind` yet (for the shell command bar).
     #[must_use]
     pub fn building_unlocked(&self, player: PlayerId, kind: BuildingKind) -> bool {
-        self.players[usize::from(player.0)].unlocked_buildings & (1 << kind.index()) != 0
+        self.civs[usize::from(player.0)].unlocked_buildings & (1 << kind.index()) != 0
     }
 
     /// Whether `player` may train `kind` yet (for the shell command bar).
     #[must_use]
     pub fn unit_unlocked(&self, player: PlayerId, kind: UnitKind) -> bool {
-        self.players[usize::from(player.0)].unlocked_units & (1 << kind.index()) != 0
+        self.civs[usize::from(player.0)].unlocked_units & (1 << kind.index()) != 0
     }
 
     /// Test-only: instantly grant `id` (set the bit, advance era, apply unlocks),
@@ -947,7 +963,7 @@ impl Sim {
     #[cfg(test)]
     fn grant_tech(&mut self, player: PlayerId, id: u32) {
         let p = usize::from(player.0);
-        self.players[p].researched_techs.set(id);
+        self.civs[p].researched_techs.set(id);
         self.apply_grid_unlocks(p, id);
     }
 
@@ -956,13 +972,13 @@ impl Sim {
     /// researched bit itself is set by the caller.)
     fn apply_grid_unlocks(&mut self, p: usize, id: u32) {
         if tech_grid::is_era_key(id) {
-            self.players[p].era = (self.players[p].era + 1).min(9);
+            self.civs[p].era = (self.civs[p].era + 1).min(9);
         }
         if let Some(b) = tech_grid::real_building(id) {
-            self.players[p].unlocked_buildings |= 1 << b.index();
+            self.civs[p].unlocked_buildings |= 1 << b.index();
         }
         if let Some(u) = tech_grid::real_unit(id) {
-            self.players[p].unlocked_units |= 1 << u.index();
+            self.civs[p].unlocked_units |= 1 << u.index();
         }
     }
 
@@ -1026,19 +1042,19 @@ impl Sim {
     /// A player's current money balance.
     #[must_use]
     pub fn money(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].money
+        self.civs[usize::from(player.0)].money
     }
 
     /// A player's current Energy stockpile.
     #[must_use]
     pub fn energy(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].energy
+        self.civs[usize::from(player.0)].energy
     }
 
     /// A player's current Labour (population) stockpile.
     #[must_use]
     pub fn labour(&self, player: PlayerId) -> Fixed {
-        self.players[usize::from(player.0)].labour
+        self.civs[usize::from(player.0)].labour
     }
 
     /// A player's current level on Ascendancy Doctrine `track` (for the UI).
@@ -1049,7 +1065,7 @@ impl Sim {
         if t >= DOCTRINE_TRACKS {
             return 0;
         }
-        self.players[usize::from(player.0)].doctrine_levels[t]
+        self.civs[usize::from(player.0)].doctrine_levels[t]
     }
 
     /// The `(money, research)` cost for `player` to buy the next level of
@@ -1081,9 +1097,9 @@ impl Sim {
     fn can_afford_building(&self, player: PlayerId, kind: BuildingKind) -> bool {
         let p = usize::from(player.0);
         let st = self.balance.building(kind);
-        self.players[p].money >= st.money_cost
-            && self.players[p].energy >= st.energy_cost
-            && self.players[p].labour >= st.labour_cost
+        self.civs[p].money >= st.money_cost
+            && self.civs[p].energy >= st.energy_cost
+            && self.civs[p].labour >= st.labour_cost
     }
 
     /// Whether `player` can afford `kind` in all three resources (see
@@ -1091,22 +1107,22 @@ impl Sim {
     fn can_afford_unit(&self, player: PlayerId, kind: UnitKind) -> bool {
         let p = usize::from(player.0);
         let st = self.balance.unit(kind);
-        self.players[p].money >= st.money_cost
-            && self.players[p].energy >= st.energy_cost
-            && self.players[p].labour >= st.labour_cost
+        self.civs[p].money >= st.money_cost
+            && self.civs[p].energy >= st.energy_cost
+            && self.civs[p].labour >= st.labour_cost
     }
 
     /// Per-player research state: (researched grid set, optional (node id, ticks left)).
     #[must_use]
     pub fn research_state(&self, player: PlayerId) -> (TechBitset, Option<(u32, u32)>) {
-        let p = &self.players[usize::from(player.0)];
+        let p = &self.civs[usize::from(player.0)];
         (p.researched_techs, p.active_research)
     }
 
     /// Current era index for `player` (0 = Modern, 1 = Orbital, 2 = Interplanetary, 3 = Interstellar).
     #[must_use]
     pub fn player_era(&self, player: PlayerId) -> u8 {
-        self.players[usize::from(player.0)].era
+        self.civs[usize::from(player.0)].era
     }
 
     /// Whether the player has at least one alive research lab.
@@ -1215,7 +1231,7 @@ impl Sim {
                 };
             }
         }
-        if self.players[usize::from(player.0)].active_perks & (1 << crate::game::perk::CONSCRIPTION)
+        if self.civs[usize::from(player.0)].active_perks & (1 << crate::game::perk::CONSCRIPTION)
             != 0
         {
             cap += 8;
@@ -1225,8 +1241,8 @@ impl Sim {
 
     /// The player's active survival perks (bitmask).
     #[must_use]
-    pub const fn perks(&self, player: PlayerId) -> u32 {
-        self.players[player.0 as usize].active_perks
+    pub fn perks(&self, player: PlayerId) -> u32 {
+        self.civs[player.0 as usize].active_perks
     }
 
     /// Supply in use: living units plus units still queued for training, so the
@@ -1295,23 +1311,30 @@ impl Sim {
     #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
-        reason = "the index is a player slot < PLAYER_COUNT (2), so it fits u16"
+        reason = "the index is a civ slot < civs.len() (<= ~6), so it fits u16"
     )]
     pub fn winner(&self) -> Option<PlayerId> {
         // Before founding, an absent base is a pending decision, not a defeat.
         if matches!(self.phase, GamePhase::Survey) {
             return None;
         }
-        let mut has_cc = [false; PLAYER_COUNT];
+        let mut has_cc = alloc::vec![false; self.civs.len()];
         for e in &self.entities {
             if e.alive && e.kind == Kind::Building(BuildingKind::CommandCenter) {
-                has_cc[usize::from(e.owner.0)] = true;
+                let i = usize::from(e.owner.0);
+                if i < has_cc.len() {
+                    has_cc[i] = true;
+                }
             }
         }
-        // Endurance mode: only the human (P0) losing their base ends the run —
+        // Endurance mode: only the human losing their base ends the run —
         // razing the alien beachhead is not a win, so the waves are the real test.
         if self.survival {
-            return if has_cc[0] { None } else { Some(PlayerId(1)) };
+            return if has_cc[usize::from(self.human_civ.0)] {
+                None
+            } else {
+                Some(PlayerId(1))
+            };
         }
         let alive: usize = has_cc.iter().filter(|&&b| b).count();
         if alive == 1 {
@@ -1340,10 +1363,10 @@ impl Sim {
         // Per-player fields: money, researched_techs, active_research,
         // era, alloys, research, active_perks, doctrine_levels — in this stable
         // order. Never reorder; appending is fine (and re-pins the golden hash).
-        for p in &self.players {
-            h.write_i64(p.money.to_bits());
-            p.researched_techs.hash_into(&mut h);
-            match p.active_research {
+        for c in &self.civs {
+            h.write_i64(c.money.to_bits());
+            c.researched_techs.hash_into(&mut h);
+            match c.active_research {
                 Some((id, ticks)) => {
                     h.write_u64(1);
                     h.write_u64(u64::from(id));
@@ -1351,15 +1374,15 @@ impl Sim {
                 }
                 None => h.write_u64(0),
             }
-            h.write_u64(u64::from(p.era));
-            h.write_i64(p.energy.to_bits());
-            h.write_i64(p.labour.to_bits());
-            h.write_u64(u64::from(p.active_perks));
+            h.write_u64(u64::from(c.era));
+            h.write_i64(c.energy.to_bits());
+            h.write_i64(c.labour.to_bits());
+            h.write_u64(u64::from(c.active_perks));
             for t in 0..DOCTRINE_TRACKS {
-                h.write_u64(u64::from(p.doctrine_levels[t]));
+                h.write_u64(u64::from(c.doctrine_levels[t]));
             }
-            h.write_u64(u64::from(p.unlocked_buildings));
-            h.write_u64(u64::from(p.unlocked_units));
+            h.write_u64(u64::from(c.unlocked_buildings));
+            h.write_u64(u64::from(c.unlocked_units));
         }
         for e in &self.entities {
             h.write_u64(u64::from(e.alive));
@@ -1635,8 +1658,8 @@ impl Sim {
         if cfg.escalate {
             let p = usize::from(cfg.attacker.0);
             let track = [DOC_WEAPONS, DOC_ARMOR, DOC_VITALITY][(w % 3) as usize];
-            let lv = self.players[p].doctrine_levels[track];
-            self.players[p].doctrine_levels[track] = (lv + 1).min(DOCTRINE_LEVEL_CAP);
+            let lv = self.civs[p].doctrine_levels[track];
+            self.civs[p].doctrine_levels[track] = (lv + 1).min(DOCTRINE_LEVEL_CAP);
         }
         self.wave_count += 1;
     }
@@ -1731,16 +1754,16 @@ impl Sim {
             .is_some_and(|t| t.buildable);
         let st = self.balance.building(kind);
         let p = usize::from(owner.0);
-        let unlocked = self.players[p].unlocked_buildings & (1 << kind.index()) != 0;
+        let unlocked = self.civs[p].unlocked_buildings & (1 << kind.index()) != 0;
         if unlocked
             && buildable
-            && self.players[p].money >= st.money_cost
-            && self.players[p].energy >= st.energy_cost
-            && self.players[p].labour >= st.labour_cost
+            && self.civs[p].money >= st.money_cost
+            && self.civs[p].energy >= st.energy_cost
+            && self.civs[p].labour >= st.labour_cost
         {
-            self.players[p].money = self.players[p].money - st.money_cost;
-            self.players[p].energy = self.players[p].energy - st.energy_cost;
-            self.players[p].labour = self.players[p].labour - st.labour_cost;
+            self.civs[p].money = self.civs[p].money - st.money_cost;
+            self.civs[p].energy = self.civs[p].energy - st.energy_cost;
+            self.civs[p].labour = self.civs[p].labour - st.labour_cost;
             self.add_building(owner, kind, x, y);
         }
     }
@@ -1748,7 +1771,7 @@ impl Sim {
     /// Queues `kind` at `barracks` for `owner` if owned, unlocked, under the
     /// supply cap, era-eligible, and all three resource costs are affordable.
     fn apply_train(&mut self, owner: PlayerId, barracks: EntityId, kind: UnitKind) {
-        if matches!(kind, UnitKind::Capital) && self.players[usize::from(owner.0)].era < 3 {
+        if matches!(kind, UnitKind::Capital) && self.civs[usize::from(owner.0)].era < 3 {
             return;
         }
         let st = self.balance.unit(kind);
@@ -1757,17 +1780,17 @@ impl Sim {
             e.alive && e.owner == owner && matches!(e.kind, Kind::Building(BuildingKind::Barracks))
         });
         let has_supply = self.supply_used(owner) < self.supply_cap(owner);
-        let unlocked = self.players[p].unlocked_units & (1 << kind.index()) != 0;
+        let unlocked = self.civs[p].unlocked_units & (1 << kind.index()) != 0;
         if ok
             && unlocked
             && has_supply
-            && self.players[p].money >= st.money_cost
-            && self.players[p].energy >= st.energy_cost
-            && self.players[p].labour >= st.labour_cost
+            && self.civs[p].money >= st.money_cost
+            && self.civs[p].energy >= st.energy_cost
+            && self.civs[p].labour >= st.labour_cost
         {
-            self.players[p].money = self.players[p].money - st.money_cost;
-            self.players[p].energy = self.players[p].energy - st.energy_cost;
-            self.players[p].labour = self.players[p].labour - st.labour_cost;
+            self.civs[p].money = self.civs[p].money - st.money_cost;
+            self.civs[p].energy = self.civs[p].energy - st.energy_cost;
+            self.civs[p].labour = self.civs[p].labour - st.labour_cost;
             if let Some(e) = self.entities.get_mut(barracks.0 as usize) {
                 e.build_queue.push(kind);
             }
@@ -1802,7 +1825,7 @@ impl Sim {
             Command::Research { owner, tech_id } => self.apply_research(owner, tech_id),
             Command::ChoosePerk { owner, perk } => {
                 if perk < crate::game::perk::PERK_COUNT {
-                    self.players[usize::from(owner.0)].active_perks |= 1u32 << perk;
+                    self.civs[usize::from(owner.0)].active_perks |= 1u32 << perk;
                 }
             }
             Command::Ascend { owner, track } => self.apply_ascend(owner, track),
@@ -1942,12 +1965,12 @@ impl Sim {
             .tile(i32::from(x), i32::from(y))
             .is_some_and(|t| t.buildable);
         if !buildable
-            || self.players[p].money < FOUND_COLONY_COST
+            || self.civs[p].money < FOUND_COLONY_COST
             || self.count_owner_colonies(owner) >= MAX_COLONIES_PER_OWNER
         {
             return;
         }
-        self.players[p].money = self.players[p].money - FOUND_COLONY_COST;
+        self.civs[p].money = self.civs[p].money - FOUND_COLONY_COST;
         let cc = self.add_building(owner, BuildingKind::CommandCenter, x, y);
         self.add_colony(owner, cc, AUTONOMY_FULL);
     }
@@ -2099,9 +2122,9 @@ impl Sim {
         let Some(node) = tech_grid::node(tech_id) else {
             return;
         };
-        let set = self.players[p].researched_techs;
+        let set = self.civs[p].researched_techs;
         let already = set.get(tech_id);
-        let busy = self.players[p].active_research.is_some();
+        let busy = self.civs[p].active_research.is_some();
         let prereq_ok = node.prereqs.iter().all(|&r| set.get(r));
         // Era 0 is the bootstrap (researchable with no lab); every later era needs
         // a Research Lab. Paid in all three resources from the node's costs.
@@ -2112,14 +2135,14 @@ impl Sim {
             Fixed::from_int(i32::try_from(node.labour).unwrap_or(i32::MAX)),
         );
         let affordable = lab_ok
-            && self.players[p].money >= mc
-            && self.players[p].energy >= ec
-            && self.players[p].labour >= lc;
+            && self.civs[p].money >= mc
+            && self.civs[p].energy >= ec
+            && self.civs[p].labour >= lc;
         if !already && !busy && prereq_ok && affordable {
-            self.players[p].money = self.players[p].money - mc;
-            self.players[p].energy = self.players[p].energy - ec;
-            self.players[p].labour = self.players[p].labour - lc;
-            self.players[p].active_research = Some((tech_id, node.duration));
+            self.civs[p].money = self.civs[p].money - mc;
+            self.civs[p].energy = self.civs[p].energy - ec;
+            self.civs[p].labour = self.civs[p].labour - lc;
+            self.civs[p].active_research = Some((tech_id, node.duration));
         }
     }
 
@@ -2151,7 +2174,7 @@ impl Sim {
         });
         if near_ore {
             let p = usize::from(owner.0);
-            self.players[p].money = self.players[p].money + FOUNDING_ORE_BONUS;
+            self.civs[p].money = self.civs[p].money + FOUNDING_ORE_BONUS;
         }
     }
 
@@ -2164,7 +2187,7 @@ impl Sim {
             return;
         }
         let p = usize::from(owner.0);
-        let level = self.players[p].doctrine_levels[t];
+        let level = self.civs[p].doctrine_levels[t];
         if level >= DOCTRINE_LEVEL_CAP {
             return;
         }
@@ -2173,9 +2196,9 @@ impl Sim {
         let (min_cost, res_cost) = ascend_cost(t, level);
         let total = min_cost + res_cost;
         let lab_ok = t == DOC_FORGE || self.has_research_lab(owner);
-        if lab_ok && self.players[p].money >= total {
-            self.players[p].money = self.players[p].money - total;
-            self.players[p].doctrine_levels[t] = (level + 1).min(DOCTRINE_LEVEL_CAP);
+        if lab_ok && self.civs[p].money >= total {
+            self.civs[p].money = self.civs[p].money - total;
+            self.civs[p].doctrine_levels[t] = (level + 1).min(DOCTRINE_LEVEL_CAP);
         }
     }
 
@@ -2193,7 +2216,7 @@ impl Sim {
     /// breaking ties. `&self`, RNG-free, row-major — fully replayable.
     fn ai_next_research(&self, player: PlayerId) -> Option<u32> {
         let p = usize::from(player.0);
-        let set = self.players[p].researched_techs;
+        let set = self.civs[p].researched_techs;
         let mut best: Option<(u8, u32)> = None; // (priority, id); lower wins
         for node in &crate::game::tech_grid_table::GRID {
             if set.get(node.id) || !node.prereqs.iter().all(|&r| set.get(r)) {
@@ -2208,10 +2231,7 @@ impl Sim {
                 Fixed::from_int(i32::try_from(node.energy).unwrap_or(i32::MAX)),
                 Fixed::from_int(i32::try_from(node.labour).unwrap_or(i32::MAX)),
             );
-            if self.players[p].money < mc
-                || self.players[p].energy < ec
-                || self.players[p].labour < lc
-            {
+            if self.civs[p].money < mc || self.civs[p].energy < ec || self.civs[p].labour < lc {
                 continue;
             }
             let priority = if tech_grid::is_era_key(node.id) {
@@ -2238,7 +2258,7 @@ impl Sim {
     /// (C=0,E=1,M=2,P=3,W=4,D=5,B=6,S=7,X=8,G=9). Each researched node grants a
     /// small flat rider to its branch's effect — research strengthens the army.
     fn grid_branch_count(&self, player: PlayerId, branch: u8) -> u32 {
-        let set = &self.players[usize::from(player.0)].researched_techs;
+        let set = &self.civs[usize::from(player.0)].researched_techs;
         let mut n = 0u32;
         for node in &crate::game::tech_grid_table::GRID {
             if node.branch == branch && set.get(node.id) {
@@ -2267,19 +2287,19 @@ impl Sim {
     }
     /// Flat weapon-damage bonus from the doctrine tracks (Weapons + Forge).
     fn doctrine_weapon_bonus(&self, p: PlayerId) -> Fixed {
-        let lv = &self.players[usize::from(p.0)].doctrine_levels;
+        let lv = &self.civs[usize::from(p.0)].doctrine_levels;
         WEAPON_STEP * Fixed::from_int(i32::from(lv[DOC_WEAPONS]))
             + FORGE_WEAPON_STEP * Fixed::from_int(i32::from(lv[DOC_FORGE]))
     }
     /// Flat armor-mitigation bonus from the doctrine tracks (Armor + Forge).
     fn doctrine_armor_bonus(&self, p: PlayerId) -> Fixed {
-        let lv = &self.players[usize::from(p.0)].doctrine_levels;
+        let lv = &self.civs[usize::from(p.0)].doctrine_levels;
         ARMOR_STEP * Fixed::from_int(i32::from(lv[DOC_ARMOR]))
             + FORGE_ARMOR_STEP * Fixed::from_int(i32::from(lv[DOC_FORGE]))
     }
     /// Shield-max bonus from the Vitality doctrine track.
     fn doctrine_shield_bonus(&self, p: PlayerId) -> Fixed {
-        let lv = &self.players[usize::from(p.0)].doctrine_levels;
+        let lv = &self.civs[usize::from(p.0)].doctrine_levels;
         VITALITY_STEP * Fixed::from_int(i32::from(lv[DOC_VITALITY]))
     }
     /// Public accessor for the UI and tests outside the module.
@@ -2307,8 +2327,9 @@ impl Sim {
             reason = "tick fits u32 for any real game"
         )]
         let tick = self.tick as u32;
-        let max: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| self.player_shield_max(PlayerId(u16::try_from(p).unwrap())));
+        let max: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| self.player_shield_max(PlayerId(u16::try_from(p).unwrap())))
+            .collect();
         for e in &mut self.entities {
             if !e.alive {
                 continue;
@@ -2330,8 +2351,8 @@ impl Sim {
     /// power-balance gradient is gone — Energy is a spendable stockpile now, not a
     /// throughput gate, so production is unconditional.
     fn run_economy(&mut self) {
-        let mut energy_out = [0i32; PLAYER_COUNT];
-        let mut labour_out = [0i32; PLAYER_COUNT];
+        let mut energy_out = alloc::vec![0i32; self.civs.len()];
+        let mut labour_out = alloc::vec![0i32; self.civs.len()];
         for e in &self.entities {
             if !e.alive {
                 continue;
@@ -2343,24 +2364,24 @@ impl Sim {
                 labour_out[p] += st.labour_output;
             }
         }
-        for p in 0..PLAYER_COUNT {
+        for p in 0..self.civs.len() {
             // Energy and Labour are bounded stockpiles: they fill toward a ceiling
             // (use-it-or-bank-it tempo) rather than running away to millions.
-            self.players[p].energy = cap_at(
-                self.players[p].energy + Fixed::from_int(energy_out[p]),
+            self.civs[p].energy = cap_at(
+                self.civs[p].energy + Fixed::from_int(energy_out[p]),
                 ENERGY_CAP,
             );
-            self.players[p].labour = cap_at(
-                self.players[p].labour + Fixed::from_int(labour_out[p]),
+            self.civs[p].labour = cap_at(
+                self.civs[p].labour + Fixed::from_int(labour_out[p]),
                 LABOUR_CAP,
             );
             // Money income: the Economy tech rider, scaled by the Logistics perk.
             let econ = self.player_economy_bonus(PlayerId(u16::try_from(p).unwrap()));
             let mut money_income = econ;
-            if self.players[p].active_perks & (1 << crate::game::perk::LOGISTICS) != 0 {
+            if self.civs[p].active_perks & (1 << crate::game::perk::LOGISTICS) != 0 {
                 money_income = money_income * Fixed::from_ratio(3, 2);
             }
-            self.players[p].money = self.players[p].money + money_income;
+            self.civs[p].money = self.civs[p].money + money_income;
         }
         // Extractors mine the deposit they stand on — all deposits yield Money.
         let mut to_mine: alloc::vec::Vec<(u16, u16, u16, i32)> = alloc::vec::Vec::new();
@@ -2385,7 +2406,7 @@ impl Sim {
             let want = u32::try_from(rate.max(0)).unwrap_or(0);
             let mined = self.map.mine(tx, ty, want);
             let amount = Fixed::from_int(i32::try_from(mined).unwrap_or(0));
-            self.players[p].money = self.players[p].money + amount;
+            self.civs[p].money = self.civs[p].money + amount;
         }
     }
 
@@ -2520,7 +2541,7 @@ impl Sim {
         // unlocks (era bump + real building/unit) through the shared helper so the
         // live completion path and the test-only `grant_tech` stay in lockstep.
         let mut completed: Vec<(usize, u32)> = Vec::new();
-        for (p, player) in self.players.iter_mut().enumerate() {
+        for (p, player) in self.civs.iter_mut().enumerate() {
             if let Some((id, ticks)) = player.active_research {
                 if ticks <= 1 {
                     player.researched_techs.set(id);
@@ -2558,9 +2579,9 @@ impl Sim {
     }
 
     fn run_movement(&mut self) {
-        let mobility: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
-            self.player_mobility_bonus(PlayerId(u16::try_from(p).unwrap()))
-        });
+        let mobility: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| self.player_mobility_bonus(PlayerId(u16::try_from(p).unwrap())))
+            .collect();
         for e in &mut self.entities {
             if !e.alive {
                 continue;
@@ -2638,28 +2659,35 @@ impl Sim {
         // Research bonuses apply to ALL of a player's entities, buildings included:
         // armor mitigates damage to structures, and weapon buffs the attacks of
         // armed buildings (turrets / command center). This is intentional.
-        let weapon: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| self.player_weapon_bonus(PlayerId(u16::try_from(p).unwrap())));
-        let armor: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| self.player_armor_bonus(PlayerId(u16::try_from(p).unwrap())));
-        let era_dmg: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| era_damage_factor(self.players[p].era));
+        let weapon: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| self.player_weapon_bonus(PlayerId(u16::try_from(p).unwrap())))
+            .collect();
+        let armor: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| self.player_armor_bonus(PlayerId(u16::try_from(p).unwrap())))
+            .collect();
+        let era_dmg: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| era_damage_factor(self.civs[p].era))
+            .collect();
         // Survival perks: Overcharge scales outgoing damage; Bulwark adds flat
         // mitigation. No perks chosen ⇒ ONE / ZERO ⇒ base combat is unchanged.
-        let perk_dmg: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
-            if self.players[p].active_perks & (1 << crate::game::perk::OVERCHARGE) != 0 {
-                Fixed::from_ratio(5, 4)
-            } else {
-                Fixed::ONE
-            }
-        });
-        let perk_mit: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
-            if self.players[p].active_perks & (1 << crate::game::perk::BULWARK) != 0 {
-                Fixed::from_int(2)
-            } else {
-                Fixed::ZERO
-            }
-        });
+        let perk_dmg: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| {
+                if self.civs[p].active_perks & (1 << crate::game::perk::OVERCHARGE) != 0 {
+                    Fixed::from_ratio(5, 4)
+                } else {
+                    Fixed::ONE
+                }
+            })
+            .collect();
+        let perk_mit: Vec<Fixed> = (0..self.civs.len())
+            .map(|p| {
+                if self.civs[p].active_perks & (1 << crate::game::perk::BULWARK) != 0 {
+                    Fixed::from_int(2)
+                } else {
+                    Fixed::ZERO
+                }
+            })
+            .collect();
 
         // (target index, attacker index, damage, pierces-shields).
         let mut damage: Vec<(usize, usize, Fixed, bool)> = Vec::new();
@@ -2946,7 +2974,7 @@ impl Sim {
             return cmds;
         };
         let money = self.money(player);
-        let enemy_cc = self.command_center_tile(PlayerId(1 - player.0));
+        let enemy_cc = self.nearest_enemy_cc(player).and_then(|e| e.tile);
 
         // Build order: act on the first missing essential, then build no more
         // this tick (keeps spending paced and deterministic).
@@ -3147,7 +3175,7 @@ impl Sim {
             // Research stays reserved for still-useful grid nodes (those that
             // unlock a real building/unit or advance the era); once they're
             // exhausted, the surplus also funds the endless doctrine tracks.
-            let set = self.players[usize::from(player.0)].researched_techs;
+            let set = self.civs[usize::from(player.0)].researched_techs;
             let tree_open = active.is_some()
                 || crate::game::tech_grid_table::GRID.iter().any(|node| {
                     !set.get(node.id)
@@ -3220,8 +3248,36 @@ impl Sim {
             .and_then(|e| e.tile)
     }
 
+    /// The living enemy (any owner != `player`) Command Center nearest to
+    /// `player`'s own base, as `(entity, distance_squared)`. With two civs the
+    /// only candidate is the other civ, so this is identical to the old
+    /// `PlayerId(1 - player.0)` lookup; with N civs it picks the closest threat,
+    /// ties broken by entity order (deterministic).
+    fn nearest_enemy_cc(&self, player: PlayerId) -> Option<&Entity> {
+        let from = self.command_center_pos(player);
+        let mut best: Option<(&Entity, Fixed)> = None;
+        for e in &self.entities {
+            if !e.alive
+                || e.owner == player
+                || e.kind != Kind::Building(BuildingKind::CommandCenter)
+            {
+                continue;
+            }
+            // Distance is only a tie-key; with one enemy (two-civ) it is unused.
+            let d2 = from.map_or(Fixed::ZERO, |f| {
+                let dx = e.pos.x - f.x;
+                let dy = e.pos.y - f.y;
+                dx * dx + dy * dy
+            });
+            if best.is_none_or(|(_, bd)| d2 < bd) {
+                best = Some((e, d2));
+            }
+        }
+        best.map(|(e, _)| e)
+    }
+
     fn enemy_command_center_pos(&self, player: PlayerId) -> Option<Vec2> {
-        self.command_center_pos(PlayerId(1 - player.0))
+        self.nearest_enemy_cc(player).map(|e| e.pos)
     }
 
     fn has_building(&self, player: PlayerId, kind: BuildingKind) -> bool {
@@ -3231,10 +3287,9 @@ impl Sim {
     }
 
     fn enemy_has_air(&self, player: PlayerId) -> bool {
-        let enemy = PlayerId(1 - player.0);
         self.entities
             .iter()
-            .any(|e| e.alive && e.owner == enemy && is_air_of(&self.balance, e.kind))
+            .any(|e| e.alive && e.owner != player && is_air_of(&self.balance, e.kind))
     }
 
     #[allow(
@@ -3636,6 +3691,28 @@ mod tests {
         // two appended zero-length markers (`sectors.len()` + `sector_free.len()`);
         // the simulation itself is unchanged.
         assert_eq!(s.state_hash(), 4_245_124_049_375_366_020);
+    }
+
+    #[test]
+    fn six_civ_game_is_deterministic() {
+        fn run() -> u64 {
+            let mut s = Sim::with_civ_count(Map::new(40, 40), 999, f(1500), 6);
+            for id in 0..6u16 {
+                s.add_building(PlayerId(id), BuildingKind::CommandCenter, 3 + id * 5, 20);
+            }
+            for _ in 0..60 {
+                let cmds: Vec<Command> = (1..6u16)
+                    .flat_map(|id| s.ai_commands(PlayerId(id)))
+                    .collect();
+                s.step(&cmds);
+            }
+            s.state_hash()
+        }
+        assert_eq!(
+            run(),
+            run(),
+            "six-civ run must be bit-identical across runs"
+        );
     }
 
     // ---- M0: autonomous colony prototype ----
@@ -4673,7 +4750,7 @@ mod tests {
     fn doctrine_levels_are_hashed() {
         let a = Sim::new(Map::new(8, 8), 1, f(0));
         let mut b = Sim::new(Map::new(8, 8), 1, f(0));
-        b.players[0].doctrine_levels[2] = 1;
+        b.civs[0].doctrine_levels[2] = 1;
         assert_ne!(
             a.state_hash(),
             b.state_hash(),
