@@ -1666,7 +1666,7 @@ impl Sim {
             // treasury stays zero, so this is a no-op there.
             h.write_u64(u64::from(c.population));
             h.write_i64(c.food.to_bits());
-            for k in 0..3 {
+            for k in 0..c.treasury.len() {
                 let rate = self.colony_output_rate(ci, k);
                 let bits = saturate_i64(
                     i128::from(c.treasury[k].to_bits())
