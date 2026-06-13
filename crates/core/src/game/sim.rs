@@ -122,6 +122,21 @@ const SUPPLY_PER_BARRACKS: u32 = 5;
 /// Extra population headroom per Reactor — so surplus Minerals convert into a
 /// bigger army (build reactors → raise the cap → field more units vs the waves).
 const SUPPLY_PER_REACTOR: u32 = 4;
+/// Army supply each colony population point contributes (city → army coupling).
+#[allow(
+    dead_code,
+    reason = "wired into the supply ceiling in the population-effects task (C7)"
+)]
+const SUPPLY_PER_POP: u32 = 1;
+/// Extra production-building slots each colony population point unlocks.
+#[allow(
+    dead_code,
+    reason = "wired into the build cap in the population-effects task (C7)"
+)]
+const BUILDINGS_PER_POP: u32 = 2;
+/// Population headroom each housing building (the Command Center, in this slice)
+/// adds to a colony's cap.
+const HOUSING_PER_BUILDING: u32 = 2;
 /// How many live Ore Extractors the AI expands to before it stops claiming new
 /// Ore deposits. Bounds map-wide refinery sprawl while still letting the AI
 /// re-claim a fresh deposit when an old one depletes.
@@ -2677,15 +2692,89 @@ impl Sim {
         }
     }
 
-    /// TEMPORARY stub (replaced in the next task by the real terrain x population
-    /// output rate). Returns zero so the treasury reconstruction is a no-op for now.
+    /// The planet a colony sits on (its seat tile → planet id).
+    fn colony_planet(&self, ci: usize) -> Option<PlanetId> {
+        let seat = self.colonies[ci].seat;
+        let (x, y) = self.entities.get(seat.0 as usize)?.tile?;
+        self.map.planet_at(i32::from(x), i32::from(y))
+    }
+
+    /// Tiles belonging to the colony's planet (for the housing base).
     #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        reason = "keeps the real method's signature (Task 3 reads self/terrain/population, is non-const)"
+        dead_code,
+        reason = "derived helper wired into the cap/growth path in later tasks (C4/C7); defined+tested here"
     )]
-    fn colony_output_rate(&self, _ci: usize, _k: usize) -> Fixed {
-        Fixed::ZERO
+    fn colony_planet_tiles(&self, ci: usize) -> u32 {
+        let Some(pid) = self.colony_planet(ci) else {
+            return 0;
+        };
+        let mut n = 0u32;
+        for y in 0..self.map.height() {
+            for x in 0..self.map.width() {
+                if self.map.planet_at(i32::from(x), i32::from(y)) == Some(pid) {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// Population cap = `housing_base(planet tiles)` + housing buildings on the
+    /// planet. The Command Center is the only "housing" building in this slice.
+    #[allow(
+        dead_code,
+        reason = "derived helper wired into the growth/maturity path in later tasks (C4/C5); defined+tested here"
+    )]
+    fn colony_cap(&self, ci: usize) -> u32 {
+        let base = Balance::housing_base(self.colony_planet_tiles(ci));
+        let Some(pid) = self.colony_planet(ci) else {
+            return base;
+        };
+        let mut housing = 0u32;
+        for e in &self.entities {
+            if e.alive && matches!(e.kind, Kind::Building(BuildingKind::CommandCenter)) {
+                if let Some((x, y)) = e.tile {
+                    if self.map.planet_at(i32::from(x), i32::from(y)) == Some(pid) {
+                        housing += HOUSING_PER_BUILDING;
+                    }
+                }
+            }
+        }
+        base + housing
+    }
+
+    /// Mature: at population cap AND earned full autonomy.
+    #[allow(
+        dead_code,
+        reason = "wired into colony_lod's Dormant rule in a later task (C5); defined+tested here"
+    )]
+    fn colony_mature(&self, ci: usize) -> bool {
+        let c = &self.colonies[ci];
+        c.population >= self.colony_cap(ci) && c.earned_autonomy() >= AUTONOMY_FULL
+    }
+
+    /// Per-tick food rate (terrain only) — the planet's aggregate food yield.
+    #[allow(
+        dead_code,
+        reason = "wired into the Active-phase food/growth loop in a later task (C4); defined+tested here"
+    )]
+    fn colony_food_rate(&self, ci: usize) -> Fixed {
+        let Some(pid) = self.colony_planet(ci) else {
+            return Fixed::ZERO;
+        };
+        self.planet_yield_of(pid)[0]
+    }
+
+    /// Per-tick output rate for resource `k` (0=Money, 1=Energy, 2=Labour):
+    /// `pop_factor(population)` × the planet's terrain yield for that resource.
+    /// Independent of live building count, so it is constant during a Dormant
+    /// (mature) window (rule D3). Resource index `k` maps to `planet_yield[k+1]`
+    /// (slot 0 is food).
+    fn colony_output_rate(&self, ci: usize, k: usize) -> Fixed {
+        let Some(pid) = self.colony_planet(ci) else {
+            return Fixed::ZERO;
+        };
+        Balance::pop_factor(self.colonies[ci].population) * self.planet_yield_of(pid)[k + 1]
     }
 
     /// Brings colony `ci`'s skipped scalar accumulators up to tick `next` (i.e.
@@ -3822,6 +3911,32 @@ mod tests {
         // 2 * Fertile.food(1/2) = 1.0
         assert_eq!(s.planet_yield_of(pid)[0], Fixed::from_int(1));
         assert_eq!(s.map().terrain_at(5, 5), TerrainKind::Barren);
+    }
+
+    #[test]
+    fn colony_cap_and_rates_derive_from_planet() {
+        let mut s = Sim::new(Map::new(10, 10), 1, f(0));
+        let pid = PlanetId(0);
+        for y in 0..2 {
+            for x in 0..2 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        s.map_mut().set_terrain(0, 0, TerrainKind::Fertile); // food 1/2, money 1/8
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 0, 0);
+        s.push_planet(Planet {
+            owner: Some(P0),
+            seat: Some(cc),
+            center: tile_center(0, 0),
+            radius: f(2),
+        });
+        let id = s.add_colony(P0, cc, 0);
+        s.rebuild_planet_yield();
+        let ci = id.0 as usize;
+        assert_eq!(s.colony_food_rate(ci), Fixed::from_ratio(1, 2));
+        assert_eq!(s.colony_output_rate(ci, 0), Fixed::from_ratio(1, 8)); // money at pop 1
+        assert_eq!(s.colony_cap(ci), 5); // housing_base(4 tiles)=2+1=3 + 1 CC*2 = 5
+        assert!(!s.colony_mature(ci)); // pop 1 < cap 5
     }
 
     #[test]

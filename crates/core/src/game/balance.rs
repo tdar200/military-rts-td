@@ -124,6 +124,37 @@ impl Balance {
     /// labour)`. These are starting balance values that live in code (not
     /// `balance.ron`) for this slice; they back the per-planet yield cache and
     /// are never folded into `state_hash`.
+    /// A colony's population as a [`Fixed`] multiplier — the per-pop scaling
+    /// applied to a planet's terrain output (see
+    /// [`Sim::colony_output_rate`](crate::game::sim::Sim)). Lives in code (not
+    /// `balance.ron`) for this slice.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "population is a small city size; i32::try_from isn't const, and any real population fits i32"
+    )]
+    pub const fn pop_factor(population: u32) -> Fixed {
+        Fixed::from_int(population as i32)
+    }
+
+    /// Food a colony must bank to grow one more population point, scaling with
+    /// current size so bigger cities cost more per increment (`10 + 5·pop`).
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "population is a small city size; i32::try_from isn't const, and any real population fits i32"
+    )]
+    pub const fn food_threshold(population: u32) -> Fixed {
+        Fixed::from_int(10 + 5 * population as i32)
+    }
+
+    /// Baseline housing (population headroom) a planet provides from its land
+    /// alone, before any housing buildings — `2 + tiles/4`.
+    #[must_use]
+    pub const fn housing_base(tile_count: u32) -> u32 {
+        2 + tile_count / 4
+    }
+
     #[must_use]
     pub const fn terrain_yield(kind: TerrainKind) -> (Fixed, Fixed, Fixed, Fixed) {
         use crate::game::map::TerrainKind as T;
