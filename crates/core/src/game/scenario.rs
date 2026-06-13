@@ -273,28 +273,31 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     use crate::game::map::TerrainKind;
     use crate::game::planet::{Planet, PlanetId};
 
-    const W: u16 = 40;
-    const H: u16 = 40;
+    // Landscape field (~2.4:1) so the hex board fills a 16:9 screen instead of
+    // letterboxing into a tall centred square. Planets spread across the width
+    // like bodies strung along a star system.
+    const W: u16 = 72;
+    const H: u16 = 28;
     /// Half-extent (in tiles) of a planet's square tile block: a 3x3 region.
     const PLANET_HALF: u16 = 1;
     /// Claim radius in world units (auxiliary; exact membership is the Map layer).
     const PLANET_RADIUS: i32 = 3;
 
-    // Eight home-region centres spread around the field (corners + edge midpoints),
-    // all clear of the contested centre and ≥ PLANET_HALF from every map edge so the
-    // 3x3 blocks stay in-bounds and never overlap. Index-ordered for determinism.
+    // Eight home-region centres on a 4x2 grid across the wide field, well clear of
+    // the contested centre column and >= 4 tiles from every map edge so the 3x3
+    // blocks stay in-bounds and never overlap. Index-ordered for determinism.
     const HOME_CENTERS: [(u16, u16); 8] = [
-        (5, 5),
-        (34, 34),
-        (34, 5),
-        (5, 34),
-        (20, 5),
-        (20, 34),
-        (5, 20),
-        (34, 20),
+        (8, 5),
+        (63, 22),
+        (63, 5),
+        (8, 22),
+        (36, 5),
+        (36, 22),
+        (8, 13),
+        (63, 13),
     ];
-    // Two neutral expansion planets near the centre, away from every home.
-    const NEUTRAL_CENTERS: [(u16, u16); 2] = [(20, 17), (20, 22)];
+    // Two neutral expansion planets down the centre column, away from every home.
+    const NEUTRAL_CENTERS: [(u16, u16); 2] = [(36, 11), (36, 16)];
 
     let civ_count = civ_count.clamp(1, HOME_CENTERS.len());
     let mut sim = Sim::with_civ_count(Map::new(W, H), seed, Fixed::from_int(2000), civ_count);
