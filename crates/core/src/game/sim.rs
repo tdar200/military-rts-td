@@ -1061,10 +1061,6 @@ impl Sim {
     /// Recomputes the per-planet terrain-yield cache from the static terrain and
     /// planet-membership map layers. Pure derived data: not hashed, no `rng`, no
     /// floats. Call after painting terrain / planet tiles.
-    #[allow(
-        clippy::cast_sign_loss,
-        reason = "PlanetId is a u16; its widened index is always non-negative"
-    )]
     pub fn rebuild_planet_yield(&mut self) {
         let mut out = alloc::vec![[Fixed::ZERO; 4]; self.planets.len()];
         for y in 0..self.map.height() {
@@ -1072,7 +1068,7 @@ impl Sim {
                 if let Some(pid) = self.map.planet_at(i32::from(x), i32::from(y)) {
                     let (f, m, e, l) =
                         Balance::terrain_yield(self.map.terrain_at(i32::from(x), i32::from(y)));
-                    if let Some(slot) = out.get_mut(pid.0 as usize) {
+                    if let Some(slot) = out.get_mut(usize::from(pid.0)) {
                         slot[0] = slot[0] + f;
                         slot[1] = slot[1] + m;
                         slot[2] = slot[2] + e;
@@ -1089,7 +1085,7 @@ impl Sim {
     #[must_use]
     pub fn planet_yield_of(&self, pid: PlanetId) -> [Fixed; 4] {
         self.planet_yield
-            .get(pid.0 as usize)
+            .get(usize::from(pid.0))
             .copied()
             .unwrap_or([Fixed::ZERO; 4])
     }
