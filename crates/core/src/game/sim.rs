@@ -2712,10 +2712,6 @@ impl Sim {
 
     /// Tiles belonging to the colony's planet (for the housing base). O(1): reads
     /// the [`Sim::planet_tiles`] cache built in `rebuild_planet_yield`.
-    #[allow(
-        dead_code,
-        reason = "derived helper wired into the cap/growth path in later tasks (C4/C7); defined+tested here"
-    )]
     fn colony_planet_tiles(&self, ci: usize) -> u32 {
         let Some(pid) = self.colony_planet(ci) else {
             return 0;
@@ -2728,10 +2724,6 @@ impl Sim {
 
     /// Population cap = `housing_base(planet tiles)` + housing buildings on the
     /// planet. The Command Center is the only "housing" building in this slice.
-    #[allow(
-        dead_code,
-        reason = "derived helper wired into the growth/maturity path in later tasks (C4/C5); defined+tested here"
-    )]
     fn colony_pop_cap(&self, ci: usize) -> u32 {
         let base = Balance::housing_base(self.colony_planet_tiles(ci));
         let Some(pid) = self.colony_planet(ci) else {
@@ -2751,20 +2743,12 @@ impl Sim {
     }
 
     /// Mature: at population cap AND earned full autonomy.
-    #[allow(
-        dead_code,
-        reason = "wired into colony_lod's Dormant rule in a later task (C5); defined+tested here"
-    )]
     fn colony_mature(&self, ci: usize) -> bool {
         let c = &self.colonies[ci];
         c.population >= self.colony_pop_cap(ci) && c.earned_autonomy() >= AUTONOMY_FULL
     }
 
     /// Per-tick food rate (terrain only) — the planet's aggregate food yield.
-    #[allow(
-        dead_code,
-        reason = "wired into the Active-phase food/growth loop in a later task (C4); defined+tested here"
-    )]
     fn colony_food_rate(&self, ci: usize) -> Fixed {
         let Some(pid) = self.colony_planet(ci) else {
             return Fixed::ZERO;
@@ -2833,6 +2817,32 @@ impl Sim {
                 continue;
             }
             self.materialize_colony(ci, next);
+            // Growth + real-time income for DEVELOPING (immature) colonies. Immature
+            // colonies are always Active (never skipped — see colony_lod's maturity
+            // rule), so this is always an elapsed-1 path: no closed form needed (rule
+            // D3). Mature colonies bank their output in `treasury` inside
+            // materialize_colony instead.
+            if !self.colony_mature(ci) {
+                let owner = usize::from(self.colonies[ci].owner.0);
+                let food_rate = self.colony_food_rate(ci);
+                self.colonies[ci].food = self.colonies[ci].food + food_rate;
+                let cap = self.colony_pop_cap(ci);
+                while self.colonies[ci].population < cap {
+                    let threshold = Balance::food_threshold(self.colonies[ci].population);
+                    if self.colonies[ci].food < threshold {
+                        break;
+                    }
+                    self.colonies[ci].food = self.colonies[ci].food - threshold;
+                    self.colonies[ci].population += 1;
+                }
+                // Real-time income to the empire pool (additional to run_economy).
+                let dm = self.colony_output_rate(ci, 0);
+                let de = self.colony_output_rate(ci, 1);
+                let dl = self.colony_output_rate(ci, 2);
+                self.civs[owner].money = self.civs[owner].money + dm;
+                self.civs[owner].energy = cap_at(self.civs[owner].energy + de, ENERGY_CAP);
+                self.civs[owner].labour = cap_at(self.civs[owner].labour + dl, LABOUR_CAP);
+            }
         }
     }
 
@@ -3944,6 +3954,37 @@ mod tests {
         assert_eq!(s.colony_output_rate(ci, 0), Fixed::from_ratio(1, 8)); // money at pop 1
         assert_eq!(s.colony_pop_cap(ci), 5); // housing_base(4 tiles)=2+1=3 + 1 CC*2 = 5
         assert!(!s.colony_mature(ci)); // pop 1 < cap 5
+    }
+
+    #[test]
+    fn active_colony_grows_population_and_halts_at_cap() {
+        let mut s = Sim::new(Map::new(8, 8), 1, f(0));
+        let pid = PlanetId(0);
+        for y in 0..2 {
+            for x in 0..2 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+            s.map_mut().set_terrain(0, y, TerrainKind::Fertile);
+        }
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 0, 0);
+        s.push_planet(Planet {
+            owner: Some(P0),
+            seat: Some(cc),
+            center: tile_center(0, 0),
+            radius: f(2),
+        });
+        let id = s.add_colony(P0, cc, 0);
+        s.rebuild_planet_yield();
+        let cap = s.colony_pop_cap(id.0 as usize);
+        for _ in 0..6000 {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.colony(id).unwrap().population,
+            cap,
+            "growth halts exactly at cap"
+        );
+        assert!(cap > 1, "test planet must allow growth beyond 1");
     }
 
     #[test]
