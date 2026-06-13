@@ -270,6 +270,7 @@ pub fn survival(seed: u64) -> Sim {
 pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     use crate::game::civ::AUTONOMY_FULL;
     use crate::game::hex;
+    use crate::game::map::TerrainKind;
     use crate::game::planet::{Planet, PlanetId};
 
     const W: u16 = 40;
@@ -345,6 +346,29 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
         });
         mark_block(&mut sim, cx, cy, planet_id);
     }
+
+    // Paint deterministic, non-Barren terrain on every planet tile so colonies have
+    // food to grow during real play. The terrain layer defaults to Barren (zero
+    // yield); without this, every colony is stuck at population 1. The scheme is
+    // index-driven (`(x + y) % 3`) for a little texture — Plains/Fertile/Rich —
+    // and never leaves a planet tile Barren. Open space stays Barren (it is never
+    // worked). Terrain is a static, NON-HASHED layer, so this does not touch the
+    // state hash; it only changes colony growth behaviour.
+    for y in 0..H {
+        for x in 0..W {
+            if sim.map().planet_at(i32::from(x), i32::from(y)).is_some() {
+                let kind = match (u32::from(x) + u32::from(y)) % 3 {
+                    0 => TerrainKind::Plains,
+                    1 => TerrainKind::Fertile,
+                    _ => TerrainKind::Rich,
+                };
+                sim.map_mut().set_terrain(x, y, kind);
+            }
+        }
+    }
+    // Recompute the planet-yield cache from the freshly painted terrain (must run
+    // AFTER painting). `conquest` did not previously call this.
+    sim.rebuild_planet_yield();
 
     sim
 }
@@ -455,6 +479,26 @@ mod tests {
             neutrals.iter().any(|&p| s.planet_owner(p).is_some()),
             "conquest-expansion AI must claim at least one neutral planet"
         );
+    }
+
+    #[test]
+    fn conquest_colonies_grow_on_painted_terrain() {
+        let mut s = conquest(2024, 3);
+        // Each home colony's planet now has painted (non-Barren) terrain, so the
+        // colony has a non-zero food rate. Run a while and assert at least one
+        // colony grew beyond its starting population of 1.
+        for _ in 0..3000 {
+            let cmds: Vec<Command> = (0..3u16)
+                .filter(|&i| s.civ_alive(PlayerId(i)))
+                .flat_map(|i| s.ai_commands(PlayerId(i)))
+                .collect();
+            s.step(&cmds);
+        }
+        let grew = (0..s.colonies_len()).any(|i| {
+            s.colony(ColonyId(u32::try_from(i).unwrap()))
+                .is_some_and(|c| c.population > 1)
+        });
+        assert!(grew, "conquest colonies must grow on painted terrain");
     }
 
     #[test]
