@@ -1295,7 +1295,7 @@ impl Sim {
     #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
-        reason = "the index is a player slot < PLAYER_COUNT (2), so it fits u8"
+        reason = "the index is a player slot < PLAYER_COUNT (2), so it fits u16"
     )]
     pub fn winner(&self) -> Option<PlayerId> {
         // Before founding, an absent base is a pending decision, not a defeat.
