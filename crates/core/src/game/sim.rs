@@ -1443,6 +1443,12 @@ impl Sim {
         }
     }
 
+    /// Whether `civ` is still in the game (holds at least one `CommandCenter`).
+    #[must_use]
+    pub fn civ_alive(&self, civ: CivId) -> bool {
+        self.civs.get(usize::from(civ.0)).is_some_and(|c| c.alive)
+    }
+
     /// A deterministic fingerprint of the entire world.
     #[must_use]
     #[allow(
@@ -1700,7 +1706,29 @@ impl Sim {
         self.run_combat();
         self.run_status();
         self.clear_dead();
+        self.run_conquest();
         self.tick += 1;
+    }
+
+    /// Recompute each civ's `alive` flag from `CommandCenter` possession. A civ is
+    /// alive iff it holds >= 1 `CommandCenter` (the concrete form of "owns >= 1
+    /// planet": equivalent in planet scenarios since every planet seat is a CC, and
+    /// the only definition that also works in planet-free scenarios such as the
+    /// golden/survival replays). Runs after `clear_dead` so destroyed/transferred
+    /// seats are reflected. No `rng` (D1); no per-tick accrual (D2/D3 N/A).
+    fn run_conquest(&mut self) {
+        let mut holds_cc = alloc::vec![false; self.civs.len()];
+        for e in &self.entities {
+            if e.alive && e.kind == Kind::Building(BuildingKind::CommandCenter) {
+                let i = usize::from(e.owner.0);
+                if i < holds_cc.len() {
+                    holds_cc[i] = true;
+                }
+            }
+        }
+        for (i, c) in self.civs.iter_mut().enumerate() {
+            c.alive = holds_cc[i];
+        }
     }
 
     /// Ticks down per-entity ability cooldowns and EMP stuns. Runs at the end of
@@ -3622,6 +3650,19 @@ mod tests {
         assert_eq!(s.money(P1), f(500));
         assert_eq!(s.winner(), None);
         assert_eq!(s.tick(), 0);
+    }
+
+    #[test]
+    fn losing_last_command_center_eliminates_and_decides_winner() {
+        let mut s = Sim::new(Map::new(16, 16), 3, f(2000));
+        let a = s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        let _b = s.add_building(P1, BuildingKind::CommandCenter, 13, 13);
+        // Kill P0's only CC outright (no planet -> normal death, not capture).
+        s.debug_set_hp(a, f(0));
+        s.step(&[]);
+        assert!(!s.civ_alive(P0), "civ with no CC is eliminated");
+        assert!(s.civ_alive(P1));
+        assert_eq!(s.winner(), Some(P1), "sole survivor wins");
     }
 
     #[test]
