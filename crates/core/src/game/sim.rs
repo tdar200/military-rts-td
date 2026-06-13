@@ -1322,6 +1322,7 @@ impl Sim {
         for e in &self.entities {
             if e.alive && e.kind == Kind::Building(BuildingKind::CommandCenter) {
                 let i = usize::from(e.owner.0);
+                // An owner id could in principle exceed the current civ count, so skip it defensively rather than panic.
                 if i < has_cc.len() {
                     has_cc[i] = true;
                 }
