@@ -4608,6 +4608,11 @@ mod tests {
         }]);
         assert_eq!(s.planet_owner(pid), Some(P0)); // still P0's
         assert_eq!(s.buildings_owned_by(P0), before);
+        assert_eq!(
+            s.buildings_owned_by(P1),
+            0,
+            "P1 cannot found on a planet P0 already owns"
+        );
     }
 
     #[test]
