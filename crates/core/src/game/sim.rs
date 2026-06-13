@@ -5011,6 +5011,136 @@ mod tests {
         );
     }
 
+    /// Paints every planet tile in a [`scenario::conquest`] world Fertile so the
+    /// seated colonies actually grow to their population cap, mature, and go
+    /// Dormant during a long run — the precondition for the skip path to engage.
+    /// (The default conquest planets are Barren ⇒ zero food ⇒ population pinned at
+    /// 1 ⇒ never mature ⇒ the skip path would never fire, making the oracle below
+    /// vacuous.) Rebuilds the planet-yield cache so the new rates are live.
+    fn fertilize_all_planets(s: &mut Sim) {
+        let (w, h) = (s.map().width(), s.map().height());
+        for y in 0..h {
+            for x in 0..w {
+                if s.map().planet_at(i32::from(x), i32::from(y)).is_some() {
+                    s.map_mut().set_terrain(x, y, TerrainKind::Fertile);
+                }
+            }
+        }
+        s.rebuild_planet_yield();
+    }
+
+    #[test]
+    fn lod_skip_matches_full_with_growing_and_mature_colonies() {
+        use crate::game::civ::SimDetail;
+        use crate::game::scenario;
+        // Strongest D3 oracle: a real multi-civ conquest world (planets + colonies)
+        // run for 1500 ticks with the Dormant-skip path ON vs OFF must produce the
+        // SAME state hash on every tick. This proves treasury + population growth +
+        // autonomy + stockpile all reconstruct exactly whether or not Dormant
+        // colonies skip their per-tick passes.
+        let run = |lod_skip: bool| {
+            let mut s = scenario::conquest(2024, 3);
+            // Make the colonies maturable so the skip path actually engages.
+            fertilize_all_planets(&mut s);
+            s.lod_skip = lod_skip;
+            let mut hashes = alloc::vec::Vec::new();
+            let mut ever_dormant = false;
+            for _ in 0..1500 {
+                let cmds: alloc::vec::Vec<Command> = (0..3u16)
+                    .filter(|&i| s.civ_alive(PlayerId(i)))
+                    .flat_map(|i| s.ai_commands(PlayerId(i)))
+                    .collect();
+                s.step(&cmds);
+                for ci in 0..s.colonies_len() {
+                    let id = ColonyId(u32::try_from(ci).unwrap_or(u32::MAX));
+                    if s.colony(id).map(|c| c.detail) == Some(SimDetail::Dormant) {
+                        ever_dormant = true;
+                    }
+                }
+                hashes.push(s.state_hash());
+            }
+            (hashes, ever_dormant)
+        };
+        let (skip_hashes, skip_dormant) = run(true);
+        let (full_hashes, _) = run(false);
+        // Guard against a vacuous pass: at least one colony must have gone Dormant
+        // on the skip run, otherwise the skip path was never exercised.
+        assert!(
+            skip_dormant,
+            "no colony reached Dormant — the skip path was never exercised, oracle is vacuous"
+        );
+        // Pinpoint the first diverging tick if they disagree (a real D3 bug).
+        if let Some(tick) = skip_hashes
+            .iter()
+            .zip(full_hashes.iter())
+            .position(|(a, b)| a != b)
+        {
+            panic!(
+                "skip path diverged from full path at tick index {tick}: skip={} full={}",
+                skip_hashes[tick], full_hashes[tick]
+            );
+        }
+        assert_eq!(
+            skip_hashes, full_hashes,
+            "skip path must match full path every tick"
+        );
+    }
+
+    #[test]
+    fn mature_colony_treasury_wakes_to_exact_value() {
+        use crate::game::civ::{SimDetail, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS};
+        // A single colony forced to maturity on Fertile terrain: after it has gone
+        // Dormant for thousands of ticks and is then WOKEN, its banked treasury must
+        // be byte-equal to one that was simulated at full fidelity the whole time.
+        // This proves the closed-form wake (materialize_colony's `stored + rate·elapsed`)
+        // recovers exactly the value the never-skipped accrual produces — the treasury
+        // analogue of the C5 `waking_a_dormant_colony_recovers_the_full_active_value`
+        // test (mirroring its enemy-park wake protocol below).
+        //
+        // NB: a Dormant colony's STORED `treasury` field deliberately lags by design
+        // (the per-tick banking is skipped; the logical value is reconstructed in the
+        // hash and only materialized on wake). So we must wake the skip colony before
+        // reading the field — reading it mid-Dormancy would compare the lazy lagging
+        // value against the eager one, which is expected to differ.
+        let seed = 7;
+        let (sx, sy) = nonzero_flux_tile(seed);
+        let treasury_after = |lod_skip: bool, ticks: usize| -> [Fixed; 3] {
+            let mut s = Sim::new(Map::new(30, 30), seed, f(5000));
+            fertile_planet_around(&mut s, sx, sy);
+            let cc = s.add_building(P0, BuildingKind::CommandCenter, sx, sy);
+            let col = s.add_colony(P0, cc, AUTONOMY_FULL);
+            s.lod_skip = lod_skip;
+            for _ in 0..ticks {
+                s.step(&[]);
+            }
+            // The colony must actually have matured and gone Dormant for this to test
+            // the closed-form wake rather than the always-Active path.
+            assert_eq!(
+                s.colony(col).unwrap().detail,
+                SimDetail::Dormant,
+                "colony should be mature/Dormant after {ticks} ticks"
+            );
+            // Wake it: park an enemy beside the seat (flips detail to Tactical), let the
+            // wake tick land, then a second step runs the catch-up that banks treasury.
+            s.add_unit(P1, UnitKind::Infantry, v(i32::from(sx), i32::from(sy) + 1));
+            s.step(&[]);
+            s.step(&[]);
+            s.colony(col).unwrap().treasury
+        };
+        // Long enough that the colony is mature and has banked treasury for a while.
+        let n = AUTONOMY_HOLD_TICKS as usize * 10 + 3000;
+        let banked = treasury_after(true, n);
+        assert!(
+            banked.iter().any(|t| t.to_bits() != 0),
+            "test must actually bank nonzero treasury to be meaningful"
+        );
+        assert_eq!(
+            banked,
+            treasury_after(false, n),
+            "mature colony treasury must be identical whether Dormant-skipped or fully simulated"
+        );
+    }
+
     // ---- M6: species biases + emergent conflict ----
 
     #[test]
