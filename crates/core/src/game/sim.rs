@@ -2743,7 +2743,6 @@ impl Sim {
     }
 
     /// Mature: at population cap AND earned full autonomy.
-    #[allow(dead_code, reason = "wired into colony_lod's maturity rule in C5")]
     fn colony_mature(&self, ci: usize) -> bool {
         let c = &self.colonies[ci];
         c.population >= self.colony_pop_cap(ci) && c.earned_autonomy() >= AUTONOMY_FULL
@@ -2793,6 +2792,24 @@ impl Sim {
                 let acc = i128::from(self.colonies[ci].stockpile[k].to_bits())
                     + i128::from(rate.to_bits()) * i128::from(elapsed);
                 self.colonies[ci].stockpile[k] = Fixed::from_bits(saturate_i64(acc));
+            }
+        }
+        // A mature colony banks its per-resource output into its own treasury at the
+        // constant Dormant rate (its population is frozen at cap, so the rate is
+        // fixed over the whole window). This mirrors, byte-for-byte, the closed-form
+        // term folded into the state hash (rule D3): stored + rate·elapsed, i128
+        // saturating. An immature (Active, growing) colony never reaches this line
+        // with elapsed>0 — it is materialized every tick (elapsed==1, returns above
+        // only when 0) and feeds the empire pool instead, never its treasury — so
+        // gating on maturity keeps the two banking paths disjoint and exact.
+        if self.colony_mature(ci) {
+            for k in 0..self.colonies[ci].treasury.len() {
+                let rate = self.colony_output_rate(ci, k);
+                if rate.to_bits() != 0 {
+                    let acc = i128::from(self.colonies[ci].treasury[k].to_bits())
+                        + i128::from(rate.to_bits()) * i128::from(elapsed);
+                    self.colonies[ci].treasury[k] = Fixed::from_bits(saturate_i64(acc));
+                }
             }
         }
         self.colonies[ci].last_sync_tick = next;
@@ -2858,7 +2875,11 @@ impl Sim {
     /// state — Tactical when an enemy unit is within range of the seat, Dormant
     /// once the colony is mature and quiet, else Active. Never reads view state.
     fn colony_lod(&self, ci: usize) -> SimDetail {
-        const TACTICAL_RANGE_SQ: Fixed = Fixed::from_int(64); // 8 tiles, squared
+        // 8 tiles, squared.
+        const TACTICAL_RANGE_SQ: Fixed = Fixed::from_int(64);
+        // Maturity (population at cap AND full autonomy) is the Dormant precondition;
+        // compute it up front (a plain &self read, coexists with the `c` borrow below).
+        let mature = self.colony_mature(ci);
         let c = &self.colonies[ci];
         if let Some(seat) = self.entities.get(c.seat.0 as usize).filter(|e| e.alive) {
             let pos = seat.pos;
@@ -2874,7 +2895,10 @@ impl Sim {
                 return SimDetail::Tactical;
             }
         }
-        if c.earned_autonomy() >= AUTONOMY_FULL {
+        // Dormant ONLY when mature. An immature colony stays Active so its non-linear
+        // growth always runs full-fidelity and is never caught up by the closed form
+        // (rule D3).
+        if mature {
             SimDetail::Dormant
         } else {
             SimDetail::Active
@@ -4548,8 +4572,11 @@ mod tests {
     #[test]
     fn colony_lod_is_state_driven_and_deterministic() {
         use crate::game::civ::{SimDetail, AUTONOMY_HOLD_TICKS};
-        // A young colony is Active; a mature, unthreatened one goes Dormant.
+        // A young colony is Active; a mature, unthreatened one goes Dormant. Mature
+        // now means population at cap AND full autonomy (rule D3), so seat the colony
+        // on a fertile planet that lets its population grow to cap.
         let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        fertile_planet_around(&mut s, 5, 5);
         let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
         let col = s.add_colony(P0, cc, crate::game::civ::AUTONOMY_FULL);
         s.step(&[]);
@@ -4561,6 +4588,41 @@ mod tests {
             s.colony(col).unwrap().detail,
             SimDetail::Dormant,
             "a mature, quiet colony drops to Dormant"
+        );
+    }
+
+    #[test]
+    fn dormant_requires_maturity_not_just_autonomy() {
+        use crate::game::civ::{SimDetail, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS};
+        let mut s = Sim::new(Map::new(8, 8), 1, f(0));
+        let pid = PlanetId(0);
+        for y in 0..2 {
+            for x in 0..2 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 0, 0);
+        s.push_planet(Planet {
+            owner: Some(P0),
+            seat: Some(cc),
+            center: tile_center(0, 0),
+            radius: f(2),
+        });
+        let id = s.add_colony(P0, cc, AUTONOMY_FULL); // requested full autonomy, but population 1 < cap
+        s.rebuild_planet_yield();
+        // Step long enough for earned_autonomy to reach AUTONOMY_FULL (it rises one
+        // step per Active tick; full needs AUTONOMY_HOLD_TICKS·(FULL+1) ticks). The
+        // planet is all-Barren so food rate is 0 and population stays at 1 < cap, i.e.
+        // the colony is immature. Under the OLD rule it would now be Dormant
+        // (earned autonomy full); under the new D3 rule it must stay Active — so this
+        // loop count makes the test fail pre-fix and pass post-fix.
+        for _ in 0..(AUTONOMY_HOLD_TICKS * (u32::from(AUTONOMY_FULL) + 1)) {
+            s.step(&[]); // run_lod recomputes detail
+        }
+        assert_eq!(
+            s.colony(id).unwrap().detail,
+            SimDetail::Active,
+            "an autonomy-full but immature colony must stay Active, not Dormant"
         );
     }
 
@@ -4780,6 +4842,28 @@ mod tests {
         assert_eq!(s.colony_doctrine(col), SectorDoctrine::Balanced);
     }
 
+    /// Registers a small fertile planet covering the 3×3 block around (cx, cy) and
+    /// returns its id. A colony seated on it accrues food and grows to its
+    /// population cap, so it can become *mature* — the precondition for Dormant
+    /// under rule D3. Rebuilds the planet-yield cache before returning, so the
+    /// colony's food/output rates are live from its first `step`.
+    fn fertile_planet_around(s: &mut Sim, cx: u16, cy: u16) -> PlanetId {
+        let pid = s.push_planet(Planet {
+            owner: Some(P0),
+            seat: None,
+            center: tile_center(cx, cy),
+            radius: f(2),
+        });
+        for x in cx.saturating_sub(1)..=cx.saturating_add(1) {
+            for y in cy.saturating_sub(1)..=cy.saturating_add(1) {
+                s.map_mut().set_planet(x, y, pid);
+                s.map_mut().set_terrain(x, y, TerrainKind::Fertile);
+            }
+        }
+        s.rebuild_planet_yield();
+        pid
+    }
+
     // ---- M7 (cont.): Dormant closed-form work-skip ----
 
     /// Scans a small region for a tile whose static `SolarFlux` field is non-zero,
@@ -4801,6 +4885,7 @@ mod tests {
     fn dormant_colonies_skip_their_per_tick_work() {
         use crate::game::civ::{SimDetail, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS};
         let mut s = Sim::new(Map::new(30, 30), 1, f(5000));
+        fertile_planet_around(&mut s, 5, 5);
         let cc = s.add_building(P0, BuildingKind::CommandCenter, 5, 5);
         let col = s.add_colony(P0, cc, AUTONOMY_FULL);
         // Run until the mature, unthreatened colony drops to Dormant, then keep
@@ -4832,6 +4917,7 @@ mod tests {
         let (sx, sy) = nonzero_flux_tile(seed);
         let build = || {
             let mut s = Sim::new(Map::new(30, 30), seed, f(5000));
+            fertile_planet_around(&mut s, sx, sy);
             let cc = s.add_building(P0, BuildingKind::CommandCenter, sx, sy);
             let col = s.add_colony(P0, cc, AUTONOMY_FULL);
             // Make the Field special extractable so the stockpile keeps accruing
@@ -4877,6 +4963,7 @@ mod tests {
         let build = |skip: bool| {
             let mut s = Sim::new(Map::new(30, 30), seed, f(5000));
             s.lod_skip = skip;
+            fertile_planet_around(&mut s, sx, sy);
             let cc = s.add_building(P0, BuildingKind::CommandCenter, sx, sy);
             let col = s.add_colony(P0, cc, AUTONOMY_FULL);
             s.step(&[Command::SurveySpecial {
