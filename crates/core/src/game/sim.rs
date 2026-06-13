@@ -1671,10 +1671,9 @@ impl Sim {
             // Population-scaled autonomy accrual mirror. Identical formula to
             // materialize_colony's accrual (rule D3): population is frozen while
             // Dormant, so this reconstructs the exact caught-up progress whether
-            // the colony was stepped tick-by-tick or skipped. Computed inline from
-            // `c` to avoid re-borrowing `&self` inside the `&self.colonies[ci]`
-            // borrow held by the hash loop.
-            let auto_rate = 1 + c.population / AUTONOMY_POP_DIVISOR;
+            // the colony was stepped tick-by-tick or skipped. Same population-scaled
+            // rate materialize_colony banks (single source: colony_autonomy_rate).
+            let auto_rate = self.colony_autonomy_rate(ci);
             let steps_h = u32::try_from(elapsed).unwrap_or(u32::MAX);
             let progress = c
                 .autonomy_progress
@@ -2718,9 +2717,7 @@ impl Sim {
 
     /// The planet a colony sits on (its seat tile → planet id).
     fn colony_planet(&self, ci: usize) -> Option<PlanetId> {
-        let seat = self.colonies[ci].seat;
-        let (x, y) = self.entities.get(seat.0 as usize)?.tile?;
-        self.map.planet_at(i32::from(x), i32::from(y))
+        self.colony_planet_for_seat(self.colonies[ci].seat)
     }
 
     /// The planet a colony seat entity sits on (its tile → planet id).
