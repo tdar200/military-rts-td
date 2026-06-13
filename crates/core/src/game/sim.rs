@@ -16,7 +16,7 @@ use crate::game::civ::{
 use crate::game::hex;
 use crate::game::map::{Map, Tile};
 use crate::game::path::find_path;
-use crate::game::planet::Planet;
+use crate::game::planet::{Planet, PlanetId};
 use crate::game::stats::{
     damage_multiplier, ArmorType, AttackProfile, BuildingKind, DamageType, UnitKind,
 };
@@ -1046,6 +1046,65 @@ impl Sim {
         &self.map
     }
 
+    /// Mutable access to the map (scenario setup and tests: e.g. painting the
+    /// tile→planet membership layer via [`Map::set_planet`]).
+    pub const fn map_mut(&mut self) -> &mut Map {
+        &mut self.map
+    }
+
+    /// Registers a [`Planet`] in the control arena and returns its stable
+    /// [`PlanetId`] (its index). Scenario setup and tests.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "planet index fits u16 for any real game"
+    )]
+    pub fn push_planet(&mut self, p: Planet) -> PlanetId {
+        let id = PlanetId(self.planets.len() as u16);
+        self.planets.push(p);
+        id
+    }
+
+    /// Sets a planet's owning civ (scenario setup and tests). No-op if the id is
+    /// out of range.
+    pub fn set_planet_owner(&mut self, id: PlanetId, owner: Option<CivId>) {
+        if let Some(pl) = self.planets.get_mut(id.0 as usize) {
+            pl.owner = owner;
+        }
+    }
+
+    /// A planet's current owning civ, if the planet exists (tests and UI).
+    #[must_use]
+    pub fn planet_owner(&self, id: PlanetId) -> Option<CivId> {
+        self.planets.get(id.0 as usize).and_then(|pl| pl.owner)
+    }
+
+    /// How many living [`Building`](Kind::Building) entities `civ` owns (tests/UI).
+    #[must_use]
+    pub fn buildings_owned_by(&self, civ: CivId) -> usize {
+        self.entities
+            .iter()
+            .filter(|e| e.alive && e.owner == civ && matches!(e.kind, Kind::Building(_)))
+            .count()
+    }
+
+    /// Whether `civ` may build on tile `(x, y)`: the tile must belong to a planet
+    /// this civ owns. Open space (no planet) is never buildable — EXCEPT that when
+    /// the map has zero planets assigned anywhere, building is ungated (legacy /
+    /// planet-free scenarios behave exactly as before).
+    #[must_use]
+    pub fn can_build_on(&self, civ: CivId, x: u16, y: u16) -> bool {
+        if self.planets.is_empty() {
+            return true; // legacy / planet-free scenarios are ungated
+        }
+        self.map
+            .planet_at(i32::from(x), i32::from(y))
+            .is_some_and(|pid| {
+                self.planets
+                    .get(pid.0 as usize)
+                    .is_some_and(|pl| pl.owner == Some(civ))
+            })
+    }
+
     /// A player's current money balance.
     #[must_use]
     pub fn money(&self, player: PlayerId) -> Fixed {
@@ -1782,6 +1841,7 @@ impl Sim {
         let unlocked = self.civs[p].unlocked_buildings & (1 << kind.index()) != 0;
         if unlocked
             && buildable
+            && self.can_build_on(owner, x, y)
             && self.civs[p].money >= st.money_cost
             && self.civs[p].energy >= st.energy_cost
             && self.civs[p].labour >= st.labour_cost
@@ -1989,6 +2049,25 @@ impl Sim {
             .map
             .tile(i32::from(x), i32::from(y))
             .is_some_and(|t| t.buildable);
+        // Planet gate: settling requires an UNOWNED planet and claims it. When the
+        // map has zero planets assigned anywhere, founding is ungated (legacy /
+        // planet-free scenarios behave exactly as before) and claims nothing.
+        let target = if self.planets.is_empty() {
+            None
+        } else {
+            match self.map.planet_at(i32::from(x), i32::from(y)) {
+                Some(pid)
+                    if self
+                        .planets
+                        .get(pid.0 as usize)
+                        .is_some_and(|pl| pl.owner.is_none()) =>
+                {
+                    Some(pid)
+                }
+                // A planet that is missing or already owned blocks the founding.
+                _ => return,
+            }
+        };
         if !buildable
             || self.civs[p].money < FOUND_COLONY_COST
             || self.count_owner_colonies(owner) >= MAX_COLONIES_PER_OWNER
@@ -1997,6 +2076,12 @@ impl Sim {
         }
         self.civs[p].money = self.civs[p].money - FOUND_COLONY_COST;
         let cc = self.add_building(owner, BuildingKind::CommandCenter, x, y);
+        if let Some(pid) = target {
+            if let Some(pl) = self.planets.get_mut(pid.0 as usize) {
+                pl.owner = Some(owner);
+                pl.seat = Some(cc);
+            }
+        }
         self.add_colony(owner, cc, AUTONOMY_FULL);
     }
 
@@ -3406,12 +3491,13 @@ impl Sim {
 #[cfg(test)]
 mod tests {
     use super::{
-        ascend_cost, BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim, UnitKind,
-        WaveConfig,
+        ascend_cost, tile_center, BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim,
+        UnitKind, WaveConfig,
     };
     use crate::fixed::Fixed;
     use crate::game::civ::ColonyId;
     use crate::game::map::Map;
+    use crate::game::planet::{Planet, PlanetId};
     use crate::vec::Vec2;
 
     fn f(n: i32) -> Fixed {
@@ -4440,6 +4526,88 @@ mod tests {
             super::MAX_COLONIES_PER_OWNER,
             "expansion is bounded by the per-owner cap"
         );
+    }
+
+    #[test]
+    fn build_requires_owning_the_planet() {
+        let mut s = Sim::new(Map::new(20, 20), 1, f(5000));
+        let pid = PlanetId(0);
+        for y in 0..4 {
+            for x in 0..4 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        s.push_planet(Planet {
+            owner: None,
+            seat: None,
+            center: tile_center(2, 2),
+            radius: f(3),
+        });
+
+        // Build on the unowned planet is rejected (no building appears). Wall is
+        // a money-only building (no energy/labour cost), so the only thing that
+        // can block it here is the planet-ownership gate.
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Wall,
+            x: 1,
+            y: 1,
+        }]);
+        assert_eq!(s.buildings_owned_by(P0), 0);
+
+        // After P0 owns the planet, the same build succeeds.
+        s.set_planet_owner(pid, Some(P0));
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Wall,
+            x: 1,
+            y: 1,
+        }]);
+        assert_eq!(s.buildings_owned_by(P0), 1);
+
+        // Open space (no planet id) stays unbuildable.
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Wall,
+            x: 10,
+            y: 10,
+        }]);
+        assert_eq!(s.buildings_owned_by(P0), 1);
+    }
+
+    #[test]
+    fn found_colony_claims_only_unowned_planets() {
+        let mut s = Sim::new(Map::new(20, 20), 2, f(5000));
+        let pid = PlanetId(0);
+        for y in 0..4 {
+            for x in 0..4 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        s.push_planet(Planet {
+            owner: None,
+            seat: None,
+            center: tile_center(2, 2),
+            radius: f(3),
+        });
+        // (FOUND_COLONY_COST is paid from money; 5000 is plenty.)
+        s.step(&[Command::FoundColony {
+            owner: P0,
+            parent: ColonyId(0),
+            x: 1,
+            y: 1,
+        }]);
+        assert_eq!(s.planet_owner(pid), Some(P0));
+        // founding again on the now-owned planet does nothing new
+        let before = s.buildings_owned_by(P0);
+        s.step(&[Command::FoundColony {
+            owner: P1,
+            parent: ColonyId(0),
+            x: 2,
+            y: 2,
+        }]);
+        assert_eq!(s.planet_owner(pid), Some(P0)); // still P0's
+        assert_eq!(s.buildings_owned_by(P0), before);
     }
 
     #[test]
