@@ -42,6 +42,17 @@ pub enum DepositKind {
     Alloy,
 }
 
+/// Terrain class of a tile. Carries static per-tile yields (food/money/energy/
+/// labour). A new, static map layer — NOT part of `state_hash` (like `deposits`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default)]
+pub enum TerrainKind {
+    #[default]
+    Barren,
+    Plains,
+    Fertile,
+    Rich,
+}
+
 /// A finite resource deposit on a map tile.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct Deposit {
@@ -59,6 +70,9 @@ pub struct Map {
     tiles: Vec<Tile>,
     deposits: Vec<Option<Deposit>>,
     planet_of: Vec<Option<PlanetId>>,
+    /// Static per-tile terrain class. A new map layer — NOT folded into
+    /// `state_hash` (like `deposits` / `planet_of`).
+    terrain: Vec<TerrainKind>,
 }
 
 impl Map {
@@ -74,6 +88,7 @@ impl Map {
             tiles,
             deposits: alloc::vec![None; count],
             planet_of: alloc::vec![None; count],
+            terrain: alloc::vec![TerrainKind::Barren; count],
         }
     }
 
@@ -157,6 +172,29 @@ impl Map {
         if x < self.width && y < self.height {
             let idx = usize::from(y) * usize::from(self.width) + usize::from(x);
             self.planet_of[idx] = Some(planet);
+        }
+    }
+
+    /// The terrain class at `(x, y)`, or [`TerrainKind::Barren`] if out of bounds.
+    #[must_use]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "coordinates are bounds-checked non-negative before the cast"
+    )]
+    pub fn terrain_at(&self, x: i32, y: i32) -> TerrainKind {
+        if self.in_bounds(x, y) {
+            let index = (y as usize) * usize::from(self.width) + (x as usize);
+            self.terrain[index]
+        } else {
+            TerrainKind::Barren
+        }
+    }
+
+    /// Sets the terrain class at `(x, y)`. Out-of-bounds coordinates are ignored.
+    pub fn set_terrain(&mut self, x: u16, y: u16, kind: TerrainKind) {
+        if x < self.width && y < self.height {
+            let index = usize::from(y) * usize::from(self.width) + usize::from(x);
+            self.terrain[index] = kind;
         }
     }
 

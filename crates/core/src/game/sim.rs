@@ -552,6 +552,11 @@ pub struct Sim {
     /// full-fidelity run every tick (determinism rule D3). Not hashed — it changes
     /// *how* the same hashed state is produced, never the state itself.
     lod_skip: bool,
+    /// Per-planet aggregate terrain yield (`[food, money, energy, labour]`),
+    /// indexed by [`PlanetId`]. A derived cache over the static terrain layer;
+    /// rebuilt via [`Sim::rebuild_planet_yield`] and never folded into
+    /// `state_hash` (like the terrain layer it summarizes).
+    planet_yield: Vec<[Fixed; 4]>,
 }
 
 /// Narrows an `i128` accumulator to `i64`, saturating at the bounds rather than
@@ -697,6 +702,7 @@ impl Sim {
             planets: Vec::new(),
             field_seed: seed,
             lod_skip: true,
+            planet_yield: Vec::new(),
         }
     }
 
@@ -1050,6 +1056,42 @@ impl Sim {
     /// tile→planet membership layer via [`Map::set_planet`]).
     pub const fn map_mut(&mut self) -> &mut Map {
         &mut self.map
+    }
+
+    /// Recomputes the per-planet terrain-yield cache from the static terrain and
+    /// planet-membership map layers. Pure derived data: not hashed, no `rng`, no
+    /// floats. Call after painting terrain / planet tiles.
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "PlanetId is a u16; its widened index is always non-negative"
+    )]
+    pub fn rebuild_planet_yield(&mut self) {
+        let mut out = alloc::vec![[Fixed::ZERO; 4]; self.planets.len()];
+        for y in 0..self.map.height() {
+            for x in 0..self.map.width() {
+                if let Some(pid) = self.map.planet_at(i32::from(x), i32::from(y)) {
+                    let (f, m, e, l) =
+                        Balance::terrain_yield(self.map.terrain_at(i32::from(x), i32::from(y)));
+                    if let Some(slot) = out.get_mut(pid.0 as usize) {
+                        slot[0] = slot[0] + f;
+                        slot[1] = slot[1] + m;
+                        slot[2] = slot[2] + e;
+                        slot[3] = slot[3] + l;
+                    }
+                }
+            }
+        }
+        self.planet_yield = out;
+    }
+
+    /// The cached aggregate terrain yield (`[food, money, energy, labour]`) for a
+    /// planet, or all-zero if `pid` is out of range or the cache is unbuilt.
+    #[must_use]
+    pub fn planet_yield_of(&self, pid: PlanetId) -> [Fixed; 4] {
+        self.planet_yield
+            .get(pid.0 as usize)
+            .copied()
+            .unwrap_or([Fixed::ZERO; 4])
     }
 
     /// Registers a [`Planet`] in the control arena and returns its stable
@@ -3720,7 +3762,7 @@ mod tests {
     };
     use crate::fixed::Fixed;
     use crate::game::civ::ColonyId;
-    use crate::game::map::Map;
+    use crate::game::map::{Map, TerrainKind};
     use crate::game::planet::{Planet, PlanetId};
     use crate::vec::Vec2;
 
@@ -3732,6 +3774,29 @@ mod tests {
     }
     const P0: PlayerId = PlayerId(0);
     const P1: PlayerId = PlayerId(1);
+
+    #[test]
+    fn terrain_layer_and_planet_yield_cache() {
+        let mut s = Sim::new(Map::new(10, 10), 1, f(0));
+        let pid = PlanetId(0);
+        s.push_planet(Planet {
+            owner: None,
+            seat: None,
+            center: tile_center(1, 1),
+            radius: f(2),
+        });
+        for y in 0..2 {
+            for x in 0..2 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        s.map_mut().set_terrain(0, 0, TerrainKind::Fertile);
+        s.map_mut().set_terrain(1, 0, TerrainKind::Fertile);
+        s.rebuild_planet_yield();
+        // 2 * Fertile.food(1/2) = 1.0
+        assert_eq!(s.planet_yield_of(pid)[0], Fixed::from_int(1));
+        assert_eq!(s.map().terrain_at(5, 5), TerrainKind::Barren);
+    }
 
     #[test]
     fn new_sim_has_starting_credits_and_no_winner() {

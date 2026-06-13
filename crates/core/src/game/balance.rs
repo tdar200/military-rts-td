@@ -7,6 +7,7 @@
 //! editing a table, not recompiling.
 
 use crate::fixed::Fixed;
+use crate::game::map::TerrainKind;
 use crate::game::stats::{
     BuildingKind, BuildingStats, Era, Faction, UnitKind, UnitStats, ERA_COUNT, FACTION_COUNT,
 };
@@ -117,6 +118,27 @@ impl Balance {
     #[must_use]
     pub const fn building(&self, kind: BuildingKind) -> BuildingStats {
         self.building_in(Era::Modern, Faction::Human, kind)
+    }
+
+    /// Static per-tile yield for a terrain class, as `(food, money, energy,
+    /// labour)`. These are starting balance values that live in code (not
+    /// `balance.ron`) for this slice; they back the per-planet yield cache and
+    /// are never folded into `state_hash`.
+    #[must_use]
+    pub const fn terrain_yield(kind: TerrainKind) -> (Fixed, Fixed, Fixed, Fixed) {
+        use crate::game::map::TerrainKind as T;
+        let z = Fixed::ZERO;
+        match kind {
+            T::Barren => (z, z, z, z),
+            T::Plains => (Fixed::from_ratio(1, 4), Fixed::from_ratio(1, 8), z, z),
+            T::Fertile => (Fixed::from_ratio(1, 2), Fixed::from_ratio(1, 8), z, z),
+            T::Rich => (
+                Fixed::from_ratio(1, 4),
+                Fixed::from_ratio(1, 2),
+                Fixed::from_ratio(1, 4),
+                z,
+            ),
+        }
     }
 }
 
