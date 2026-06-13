@@ -572,6 +572,11 @@ pub struct Sim {
     /// rebuilt via [`Sim::rebuild_planet_yield`] and never folded into
     /// `state_hash` (like the terrain layer it summarizes).
     planet_yield: Vec<[Fixed; 4]>,
+    /// Per-planet tile count, indexed by [`PlanetId`]. A derived cache over the
+    /// static planet-membership layer; rebuilt via [`Sim::rebuild_planet_yield`]
+    /// in the same tile scan and never folded into `state_hash` (like
+    /// `planet_yield`).
+    planet_tiles: Vec<u32>,
 }
 
 /// Narrows an `i128` accumulator to `i64`, saturating at the bounds rather than
@@ -718,6 +723,7 @@ impl Sim {
             field_seed: seed,
             lod_skip: true,
             planet_yield: Vec::new(),
+            planet_tiles: Vec::new(),
         }
     }
 
@@ -1081,6 +1087,7 @@ impl Sim {
     /// floats. Call after painting terrain / planet tiles.
     pub fn rebuild_planet_yield(&mut self) {
         let mut out = alloc::vec![[Fixed::ZERO; 4]; self.planets.len()];
+        let mut tiles = alloc::vec![0u32; self.planets.len()];
         for y in 0..self.map.height() {
             for x in 0..self.map.width() {
                 if let Some(pid) = self.map.planet_at(i32::from(x), i32::from(y)) {
@@ -1092,10 +1099,14 @@ impl Sim {
                         slot[2] = slot[2] + e;
                         slot[3] = slot[3] + l;
                     }
+                    if let Some(n) = tiles.get_mut(usize::from(pid.0)) {
+                        *n += 1;
+                    }
                 }
             }
         }
         self.planet_yield = out;
+        self.planet_tiles = tiles;
     }
 
     /// The cached aggregate terrain yield (`[food, money, energy, labour]`) for a
@@ -2699,7 +2710,8 @@ impl Sim {
         self.map.planet_at(i32::from(x), i32::from(y))
     }
 
-    /// Tiles belonging to the colony's planet (for the housing base).
+    /// Tiles belonging to the colony's planet (for the housing base). O(1): reads
+    /// the [`Sim::planet_tiles`] cache built in `rebuild_planet_yield`.
     #[allow(
         dead_code,
         reason = "derived helper wired into the cap/growth path in later tasks (C4/C7); defined+tested here"
@@ -2708,15 +2720,10 @@ impl Sim {
         let Some(pid) = self.colony_planet(ci) else {
             return 0;
         };
-        let mut n = 0u32;
-        for y in 0..self.map.height() {
-            for x in 0..self.map.width() {
-                if self.map.planet_at(i32::from(x), i32::from(y)) == Some(pid) {
-                    n += 1;
-                }
-            }
-        }
-        n
+        self.planet_tiles
+            .get(usize::from(pid.0))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Population cap = `housing_base(planet tiles)` + housing buildings on the
@@ -2725,7 +2732,7 @@ impl Sim {
         dead_code,
         reason = "derived helper wired into the growth/maturity path in later tasks (C4/C5); defined+tested here"
     )]
-    fn colony_cap(&self, ci: usize) -> u32 {
+    fn colony_pop_cap(&self, ci: usize) -> u32 {
         let base = Balance::housing_base(self.colony_planet_tiles(ci));
         let Some(pid) = self.colony_planet(ci) else {
             return base;
@@ -2750,7 +2757,7 @@ impl Sim {
     )]
     fn colony_mature(&self, ci: usize) -> bool {
         let c = &self.colonies[ci];
-        c.population >= self.colony_cap(ci) && c.earned_autonomy() >= AUTONOMY_FULL
+        c.population >= self.colony_pop_cap(ci) && c.earned_autonomy() >= AUTONOMY_FULL
     }
 
     /// Per-tick food rate (terrain only) — the planet's aggregate food yield.
@@ -3935,7 +3942,7 @@ mod tests {
         let ci = id.0 as usize;
         assert_eq!(s.colony_food_rate(ci), Fixed::from_ratio(1, 2));
         assert_eq!(s.colony_output_rate(ci, 0), Fixed::from_ratio(1, 8)); // money at pop 1
-        assert_eq!(s.colony_cap(ci), 5); // housing_base(4 tiles)=2+1=3 + 1 CC*2 = 5
+        assert_eq!(s.colony_pop_cap(ci), 5); // housing_base(4 tiles)=2+1=3 + 1 CC*2 = 5
         assert!(!s.colony_mature(ci)); // pop 1 < cap 5
     }
 
