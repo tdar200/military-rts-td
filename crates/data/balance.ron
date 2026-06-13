@@ -72,4 +72,7 @@
         max_hp: 300, mine_rate: 2, energy_cost: 12,
         produces_units: false, attack: None, cost: 200,
     ),
+    // Seat-capture: a conquered planet seat is left at this fraction (×1000) of
+    // the CommandCenter's max HP. 250 = 0.25. Config only, not hashed.
+    capture_hp_fraction: 250,
 )

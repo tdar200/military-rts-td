@@ -96,6 +96,16 @@ struct BalanceData {
     wall: BuildingData,
     research_lab: BuildingData,
     antimatter_plant: BuildingData,
+    /// Fraction (× 1000) of a `CommandCenter`'s max HP a captured seat is left at.
+    /// `250` = 0.25. Config only; not part of `state_hash`. Defaults to 250 so
+    /// older RON without the key still parses.
+    #[serde(default = "default_capture_hp_milli")]
+    capture_hp_fraction: i64,
+}
+
+#[must_use]
+const fn default_capture_hp_milli() -> i64 {
+    250
 }
 
 const fn to_armor(a: ArmorKind) -> ArmorType {
@@ -179,6 +189,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_building(&data.research_lab),
             to_building(&data.antimatter_plant),
         ],
+        Fixed::from_ratio(data.capture_hp_fraction, 1000),
     ))
 }
 

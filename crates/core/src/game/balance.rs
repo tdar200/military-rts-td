@@ -6,6 +6,7 @@
 //! data (see the `rts-data` crate, which loads one from RON) so balancing is
 //! editing a table, not recompiling.
 
+use crate::fixed::Fixed;
 use crate::game::stats::{
     BuildingKind, BuildingStats, Era, Faction, UnitKind, UnitStats, ERA_COUNT, FACTION_COUNT,
 };
@@ -21,6 +22,10 @@ use crate::game::stats::{
 pub struct Balance {
     units: [[[UnitStats; 5]; FACTION_COUNT]; ERA_COUNT],
     buildings: [[[BuildingStats; 9]; FACTION_COUNT]; ERA_COUNT],
+    /// Fraction of a `CommandCenter`'s max HP that a captured planet seat is left
+    /// at when conquered (Civ-style intact capture). Config only — read during a
+    /// seat capture, never folded into `state_hash`.
+    pub capture_hp_fraction: Fixed,
 }
 
 impl Balance {
@@ -47,6 +52,7 @@ impl Balance {
                 BuildingKind::ResearchLab.stats(),
                 BuildingKind::AntimatterPlant.stats(),
             ],
+            Fixed::from_ratio(1, 4),
         )
     }
 
@@ -54,10 +60,15 @@ impl Balance {
     /// every era and faction. Used by data loaders; per-era/faction divergence is
     /// introduced in a later phase.
     #[must_use]
-    pub const fn from_tables(units: [UnitStats; 5], buildings: [BuildingStats; 9]) -> Self {
+    pub const fn from_tables(
+        units: [UnitStats; 5],
+        buildings: [BuildingStats; 9],
+        capture_hp_fraction: Fixed,
+    ) -> Self {
         Self {
             units: [[units; FACTION_COUNT]; ERA_COUNT],
             buildings: [[buildings; FACTION_COUNT]; ERA_COUNT],
+            capture_hp_fraction,
         }
     }
 

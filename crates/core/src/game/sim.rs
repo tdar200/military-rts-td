@@ -1078,6 +1078,38 @@ impl Sim {
         self.planets.get(id.0 as usize).and_then(|pl| pl.owner)
     }
 
+    /// Sets an entity's current HP (scenario setup / tests; e.g. to bring a seat
+    /// near death). No-op if the id is out of range.
+    pub fn debug_set_hp(&mut self, e: EntityId, hp: Fixed) {
+        if let Some(ent) = self.entities.get_mut(e.0 as usize) {
+            ent.hp = hp;
+        }
+    }
+
+    /// Whether the entity with this id is currently alive (tests/UI).
+    #[must_use]
+    pub fn entity_alive(&self, e: EntityId) -> bool {
+        self.entities.get(e.0 as usize).is_some_and(|ent| ent.alive)
+    }
+
+    /// The owning civ of a living entity, if it exists (tests/UI).
+    #[must_use]
+    pub fn entity_owner(&self, e: EntityId) -> Option<CivId> {
+        self.entities
+            .get(e.0 as usize)
+            .filter(|ent| ent.alive)
+            .map(|ent| ent.owner)
+    }
+
+    /// The owner of the living colony seated on `seat`, if any (tests/UI).
+    #[must_use]
+    pub fn colony_owner_of_seat(&self, seat: EntityId) -> Option<CivId> {
+        self.colonies
+            .iter()
+            .find(|c| c.alive && c.seat == seat)
+            .map(|c| c.owner)
+    }
+
     /// How many living [`Building`](Kind::Building) entities `civ` owns (tests/UI).
     #[must_use]
     pub fn buildings_owned_by(&self, civ: CivId) -> usize {
@@ -2801,6 +2833,9 @@ impl Sim {
 
         // (target index, attacker index, damage, pierces-shields).
         let mut damage: Vec<(usize, usize, Fixed, bool)> = Vec::new();
+        // Seats whose lethal blow this tick captures (not destroys) them:
+        // (seat entity index, capturing player). Applied after the damage loop.
+        let mut captures: Vec<(usize, PlayerId)> = Vec::new();
         let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
         let mut candidates: Vec<usize> = Vec::new();
         for (i, e) in self.entities.iter_mut().enumerate() {
@@ -2913,12 +2948,29 @@ impl Sim {
                 was_alive && e.hp <= Fixed::ZERO
             };
             if killed {
-                let a = &mut self.entities[attacker];
-                a.kills += 1;
-                a.rank = rank_for_kills(a.kills);
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "entity index fits u32 for any real game"
+                )]
+                let is_seat = self.entities[j].kind == Kind::Building(BuildingKind::CommandCenter)
+                    && self
+                        .planets
+                        .iter()
+                        .any(|pl| pl.seat == Some(EntityId(j as u32)));
+                if is_seat {
+                    let attacker_owner = self.entities[attacker].owner;
+                    captures.push((j, attacker_owner));
+                } else {
+                    let a = &mut self.entities[attacker];
+                    a.kills += 1;
+                    a.rank = rank_for_kills(a.kills);
+                }
             }
         }
         self.attacks = lines;
+        for (seat_idx, attacker) in captures {
+            self.apply_seat_capture(seat_idx, attacker);
+        }
     }
 
     #[allow(
@@ -2941,6 +2993,51 @@ impl Sim {
             self.map.set_tile(x, y, Tile::OPEN);
         }
         self.free.extend(freed_slots);
+    }
+
+    /// Capture (not destroy) a planet seat: flip the seat + planet to `attacker`,
+    /// restore the seat to a fraction of max HP, re-owner the planet's surviving
+    /// buildings, and transfer the seated colony (autonomy/policy reset). The
+    /// capturer is the owner of the lethal blow (deterministic combat order; no rng).
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity/colony indices fit u32 for any real game"
+    )]
+    fn apply_seat_capture(&mut self, seat_idx: usize, attacker: PlayerId) {
+        let seat_id = EntityId(seat_idx as u32);
+        let Some(pidx) = self.planets.iter().position(|pl| pl.seat == Some(seat_id)) else {
+            return;
+        };
+        let pid = PlanetId(u16::try_from(pidx).unwrap_or(u16::MAX));
+
+        let cc_max = self.balance.building(BuildingKind::CommandCenter).max_hp;
+        let frac = self.balance.capture_hp_fraction;
+        self.entities[seat_idx].hp = cc_max * frac;
+        self.entities[seat_idx].owner = attacker;
+        self.planets[pidx].owner = Some(attacker);
+
+        // Re-owner surviving buildings whose tile belongs to this planet.
+        let Self { entities, map, .. } = self;
+        for e in entities.iter_mut() {
+            if e.alive && matches!(e.kind, Kind::Building(_)) {
+                if let Some((tx, ty)) = e.tile {
+                    if map.planet_at(i32::from(tx), i32::from(ty)) == Some(pid) {
+                        e.owner = attacker;
+                    }
+                }
+            }
+        }
+
+        // Transfer the seated colony; reset earned autonomy/policy under the new owner.
+        for c in &mut self.colonies {
+            if c.alive && c.seat == seat_id {
+                c.owner = attacker;
+                c.autonomy_level = 0;
+                c.autonomy_progress = 0;
+                c.policy = ColonyPolicy::default();
+                c.sector = None;
+            }
+        }
     }
 }
 
@@ -6054,5 +6151,50 @@ mod tests {
             s.step(&[]);
         }
         assert_eq!(s.map().deposit(6, 2), None, "deposit should be exhausted");
+    }
+
+    #[test]
+    fn capturing_a_seat_transfers_the_planet() {
+        use crate::game::civ::AUTONOMY_FULL;
+        let mut s = Sim::new(Map::new(12, 12), 7, f(9000));
+        let pid = PlanetId(0);
+        for y in 0..3 {
+            for x in 0..3 {
+                s.map_mut().set_planet(x, y, pid);
+            }
+        }
+        // P1 owns the planet; its CC seat at (1,1), a Barracks at (0,0).
+        let seat = s.add_building(P1, BuildingKind::CommandCenter, 1, 1);
+        let bks = s.add_building(P1, BuildingKind::Barracks, 0, 0);
+        s.push_planet(Planet {
+            owner: Some(P1),
+            seat: Some(seat),
+            center: tile_center(1, 1),
+            radius: f(2),
+        });
+        s.add_colony(P1, seat, AUTONOMY_FULL);
+        // Bring the seat to near-death, then let a P0 attacker land the lethal blow.
+        s.debug_set_hp(seat, f(1));
+        s.add_unit(P0, UnitKind::Tank, tile_center(1, 1)); // adjacent/overlapping attacker
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+
+        assert_eq!(
+            s.planet_owner(pid),
+            Some(P0),
+            "planet transfers to attacker"
+        );
+        assert!(
+            s.entity_alive(seat),
+            "seat is captured intact, not destroyed"
+        );
+        assert_eq!(s.entity_owner(seat), Some(P0));
+        assert_eq!(
+            s.entity_owner(bks),
+            Some(P0),
+            "surviving buildings transfer"
+        );
+        assert_eq!(s.colony_owner_of_seat(seat), Some(P0), "colony transfers");
     }
 }
