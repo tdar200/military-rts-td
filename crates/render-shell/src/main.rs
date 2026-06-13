@@ -227,6 +227,9 @@ async fn main() {
     let mut prev_researching = false;
     // Whether the current match is a survival run (drives the score HUD + summary).
     let mut survival_run = true;
+    // Title-screen mode selection: false = Survival, true = Conquest (N-civ
+    // planetary war with growing cities). Toggled with Left/Right on the title.
+    let mut selected_conquest = false;
     // Survival perk draft: a modal opens each new wave until all perks are taken.
     let mut perk_open = false;
     let mut prev_waves = 0_u32;
@@ -236,16 +239,26 @@ async fn main() {
 
     loop {
         if phase == Phase::Title {
-            // Survival is the only mode: any start input (Enter / Space / click /
-            // legacy 'S') begins a fresh procedural Survival run.
+            // Two modes: Survival (procedural siege) and Conquest (N-civ
+            // planetary war with growing cities). Left/Right/Tab switches the
+            // selection; Enter/Space/click begins the selected mode.
+            if is_key_pressed(KeyCode::Left)
+                || is_key_pressed(KeyCode::Right)
+                || is_key_pressed(KeyCode::Tab)
+            {
+                selected_conquest = !selected_conquest;
+            }
             let start = is_key_pressed(KeyCode::Enter)
                 || is_key_pressed(KeyCode::Space)
-                || is_key_pressed(KeyCode::S)
                 || is_mouse_button_pressed(MouseButton::Left);
             if start {
-                survival_run = true;
+                survival_run = !selected_conquest;
                 phase = Phase::Playing;
-                sim = scenario::survival(survival_seed());
+                sim = if selected_conquest {
+                    scenario::conquest(survival_seed(), 4)
+                } else {
+                    scenario::survival(survival_seed())
+                };
                 view = view::ViewState::default();
                 view.on_tick(&sim);
                 particles.clear();
@@ -268,7 +281,7 @@ async fn main() {
                 doctrine_open = false;
                 grid_open = false;
             }
-            draw_title(&sprites);
+            draw_title(&sprites, selected_conquest);
             next_frame().await;
             continue;
         }
@@ -579,8 +592,12 @@ async fn main() {
             }
         }
         if over && is_key_pressed(KeyCode::R) {
-            // Restart on a fresh procedural Survival map.
-            sim = scenario::survival(survival_seed());
+            // Restart the current mode on a fresh procedural map.
+            sim = if survival_run {
+                scenario::survival(survival_seed())
+            } else {
+                scenario::conquest(survival_seed(), 4)
+            };
             view = view::ViewState::default();
             view.on_tick(&sim);
             particles.clear();
@@ -632,10 +649,20 @@ async fn main() {
         }
         while accumulator >= TICK_DT {
             let mut commands = std::mem::take(&mut pending);
-            // In survival, keep the build-up peaceful: the alien beachhead AI only acts
-            // once the first wave has spawned. Skirmish AI is unaffected.
-            if !survival_run || sim.waves_survived() > 0 {
-                commands.extend(sim.ai_commands(ENEMY));
+            if survival_run {
+                // Survival: keep the build-up peaceful — the alien beachhead AI
+                // only acts once the first wave has spawned.
+                if sim.waves_survived() > 0 {
+                    commands.extend(sim.ai_commands(ENEMY));
+                }
+            } else {
+                // Conquest: drive every living non-human civ's empire AI.
+                for id in 1..sim.civ_count() {
+                    let civ = PlayerId(id as u16);
+                    if sim.civ_alive(civ) {
+                        commands.extend(sim.ai_commands(civ));
+                    }
+                }
             }
             // Sectors govern first: each pushes its doctrine onto member colonies
             // (empty until the player forms sectors). Then colonies execute their
@@ -985,7 +1012,7 @@ fn cartouche() -> Rect {
 const CART_HEAD_H: f32 = 56.0;
 const CART_ROW_H: f32 = 58.0;
 
-fn draw_title(sprites: &Sprites) {
+fn draw_title(sprites: &Sprites, conquest: bool) {
     let (w, h) = (screen_width(), screen_height());
     let cx = w / 2.0;
     let fc = h * 0.40; // field center y
@@ -1049,18 +1076,25 @@ fn draw_title(sprites: &Sprites) {
 
     // --- parchment cartouche ---
     draw_cartouche(c);
-    centered("SURVIVAL", c.y + 30.0, 24.0, INK, sprites.font_regal());
+    let (mode_name, mode_desc, mode_line) = if conquest {
+        (
+            "CONQUEST",
+            "Settle planets, grow cities, conquer the star system.",
+            "Up to 6 civilizations vie for planets; cities grow and mature.".to_string(),
+        )
+    } else {
+        (
+            "SURVIVAL",
+            "Survey a world, found your colony, hold the line.",
+            format!(
+                "Hold {SURVIVAL_MILESTONE_WAVE} escalating sieges on an ever-changing procedural front."
+            ),
+        )
+    };
+    centered(mode_name, c.y + 30.0, 24.0, INK, sprites.font_regal());
+    centered(mode_desc, c.y + 52.0, 13.0, INK_DIM, sprites.font());
     centered(
-        "Survey a world, found your colony, hold the line.",
-        c.y + 52.0,
-        13.0,
-        INK_DIM,
-        sprites.font(),
-    );
-    centered(
-        &format!(
-            "Hold {SURVIVAL_MILESTONE_WAVE} escalating sieges on an ever-changing procedural front."
-        ),
+        &mode_line,
         c.y + c.h - 16.0,
         13.0,
         with_alpha(INK, 0.8),
@@ -1079,6 +1113,13 @@ fn draw_title(sprites: &Sprites) {
         c.y + c.h + 70.0,
         13.0,
         INK_DIM,
+        sprites.font(),
+    );
+    centered(
+        "Left / Right or Tab  \u{2022}  switch mode",
+        c.y + c.h + 96.0,
+        12.0,
+        with_alpha(GOLD_HI, 0.75),
         sprites.font(),
     );
 }
