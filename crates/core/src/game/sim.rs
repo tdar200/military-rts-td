@@ -790,6 +790,21 @@ impl Sim {
         self.colonies.get(id.0 as usize).filter(|c| c.alive)
     }
 
+    /// A colony's current population (city size). Read-only; not hash-affecting.
+    #[must_use]
+    pub fn colony_population(&self, id: ColonyId) -> u32 {
+        self.colony(id).map_or(0, |c| c.population)
+    }
+
+    /// `(current food, food needed for the next population point)` for a UI
+    /// readout. Read-only; not hash-affecting.
+    #[must_use]
+    pub fn colony_food_progress(&self, id: ColonyId) -> (Fixed, Fixed) {
+        self.colony(id).map_or((Fixed::ZERO, Fixed::ZERO), |c| {
+            (c.food, Balance::food_threshold(c.population))
+        })
+    }
+
     /// How many living colonies `owner` holds (for the UI and tests).
     #[must_use]
     pub fn colony_count_for(&self, owner: PlayerId) -> usize {

@@ -1666,7 +1666,7 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
     let (w, h) = (screen_width(), screen_height());
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 120));
 
-    let pw = 600.0_f32.min(w - 40.0);
+    let pw = 700.0_f32.min(w - 40.0);
     let row_h = 30.0;
     let head_h = 50.0;
     let foot_h = 56.0;
@@ -1718,10 +1718,32 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
                 ..Default::default()
             },
         );
+        // City size: current population and food progress toward the next pop.
+        // Fixed values are rendered as integers via the shell's bits/65536 idiom.
+        let pop = sim.colony_population(id);
+        let (food, threshold) = sim.colony_food_progress(id);
+        let food_now = food.to_bits() / 65536;
+        let food_next = threshold.to_bits() / 65536;
+        let city = if food_next <= 0 {
+            format!("pop {pop} (max)")
+        } else {
+            format!("pop {pop}  food {food_now}/{food_next}")
+        };
+        draw_text_ex(
+            &city,
+            px + 100.0,
+            ry + 16.0,
+            TextParams {
+                font: f,
+                font_size: 13,
+                color: TEXT_DIM,
+                ..Default::default()
+            },
+        );
         let auto = format!("auto {}/{}", c.effective_autonomy(), c.autonomy_level);
         draw_text_ex(
             &auto,
-            px + 180.0,
+            px + 250.0,
             ry + 16.0,
             TextParams {
                 font: f,
@@ -1734,7 +1756,7 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         let governed = c.sector.is_some();
         draw_text_ex(
             doctrine_name(doc),
-            px + 300.0,
+            px + 380.0,
             ry + 16.0,
             TextParams {
                 font: fb,
@@ -1757,7 +1779,7 @@ fn draw_sector_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
         };
         draw_text_ex(
             st,
-            px + 450.0,
+            px + 530.0,
             ry + 16.0,
             TextParams {
                 font: f,
