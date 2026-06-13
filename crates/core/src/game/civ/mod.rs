@@ -18,8 +18,35 @@
 pub mod special;
 
 use crate::fixed::Fixed;
-use crate::game::sim::{EntityId, PlayerId};
+use crate::game::sim::{EntityId, PlayerId, DOCTRINE_TRACKS};
+use crate::game::tech_grid::TechBitset;
 use special::{Knowledge, SPECIAL_COUNT};
+
+/// One civilization's empire-wide state (formerly `Player`).
+#[derive(Clone, Copy, Debug)]
+pub struct Civ {
+    /// Primary currency (the "Money" resource).
+    pub money: Fixed,
+    /// Researched grid-node set (the 500-slot Ascension capability grid).
+    pub researched_techs: TechBitset,
+    /// In-progress research: (tech id, ticks remaining). One at a time.
+    pub active_research: Option<(u32, u32)>,
+    /// Current era index (0=Modern..3=Interstellar).
+    pub era: u8,
+    /// Spendable Energy stockpile (produced by power buildings).
+    pub energy: Fixed,
+    /// Labour (population capacity) stockpile.
+    pub labour: Fixed,
+    /// Bitmask of chosen survival perks (bit i = perk i active).
+    pub active_perks: u32,
+    /// Level bought on each endless Ascendancy Doctrine track (see `DOC_*`).
+    pub doctrine_levels: [u16; DOCTRINE_TRACKS],
+    /// Bitmask of buildable building kinds (bit = `BuildingKind::index`). Tech
+    /// research flips these on; the human starts with a tiny founding kit.
+    pub unlocked_buildings: u16,
+    /// Bitmask of trainable unit kinds (bit = `UnitKind::index`).
+    pub unlocked_units: u16,
+}
 
 /// Stable handle for a colony.
 ///

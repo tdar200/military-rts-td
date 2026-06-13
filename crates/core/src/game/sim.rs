@@ -10,7 +10,7 @@
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
 use crate::game::civ::{
-    Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, KardashevTier, Sector,
+    Civ, Colony, ColonyId, ColonyIntent, ColonyPolicy, ExpansionIntent, KardashevTier, Sector,
     SectorDoctrine, SectorId, SimDetail, Species, AUTONOMY_FULL,
 };
 use crate::game::hex;
@@ -38,7 +38,11 @@ const COMBAT_CELL: i32 = 8;
 
 /// Identifies a player (`0` or `1`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct PlayerId(pub u8);
+pub struct PlayerId(pub u16);
+
+/// The identity of a civilization. Same newtype as [`PlayerId`]; the alias
+/// documents that an id now denotes a civ, not a 1-of-2 player slot.
+pub type CivId = PlayerId;
 
 /// Stable handle to an entity (index into the entity list).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -168,7 +172,7 @@ fn cap_at(v: Fixed, max: Fixed) -> Fixed {
 // the surplus forever instead of letting it bank. Effects fold into the existing
 // per-player weapon/armor/shield accessors, so the combat code is untouched.
 /// Number of doctrine tracks.
-const DOCTRINE_TRACKS: usize = 4;
+pub const DOCTRINE_TRACKS: usize = 4;
 /// Hard ceiling on a track's level (keeps Fixed bits + hash width bounded).
 const DOCTRINE_LEVEL_CAP: u16 = 9999;
 /// Track index: army-wide flat weapon damage (research-heavy).
@@ -216,32 +220,6 @@ const FOUNDING_ORE_BONUS: Fixed = Fixed::from_int(200);
 /// so the 120-tick golden run — which never reaches era 1 — never emits an Ascend
 /// and the golden hash stays stable across future balance tuning of the sink.
 const ASCEND_MIN_RESERVE: Fixed = Fixed::from_int(2000);
-
-/// Per-player resources.
-#[derive(Clone, Copy, Debug)]
-struct Player {
-    /// Primary currency (the "Money" resource).
-    money: Fixed,
-    /// Researched grid-node set (the 500-slot Ascension capability grid).
-    researched_techs: TechBitset,
-    /// In-progress research: (tech id, ticks remaining). One at a time.
-    active_research: Option<(u32, u32)>,
-    /// Current era index (0=Modern..3=Interstellar).
-    era: u8,
-    /// Spendable Energy stockpile (produced by power buildings).
-    energy: Fixed,
-    /// Labour (population capacity) stockpile.
-    labour: Fixed,
-    /// Bitmask of chosen survival perks (bit i = perk i active).
-    active_perks: u32,
-    /// Level bought on each endless Ascendancy Doctrine track (see `DOC_*`).
-    doctrine_levels: [u16; DOCTRINE_TRACKS],
-    /// Bitmask of buildable building kinds (bit = `BuildingKind::index`). Tech
-    /// research flips these on; the human starts with a tiny founding kit.
-    unlocked_buildings: u16,
-    /// Bitmask of trainable unit kinds (bit = `UnitKind::index`).
-    unlocked_units: u16,
-}
 
 /// A player or AI input, applied at a tick boundary.
 #[derive(Clone, Debug)]
@@ -527,7 +505,7 @@ pub struct Sim {
     tick: u64,
     rng: Rng,
     map: Map,
-    players: [Player; PLAYER_COUNT],
+    players: [Civ; PLAYER_COUNT],
     entities: Vec<Entity>,
     /// Indices of dead entity slots available for reuse, so long matches don't
     /// grow the entity list without bound.
@@ -669,7 +647,7 @@ impl Sim {
             tick: 0,
             rng: Rng::from_seed(seed),
             map,
-            players: [Player {
+            players: [Civ {
                 money: starting_credits,
                 researched_techs: TechBitset::empty(),
                 active_research: None,
@@ -1337,7 +1315,7 @@ impl Sim {
         }
         let alive: usize = has_cc.iter().filter(|&&b| b).count();
         if alive == 1 {
-            has_cc.iter().position(|&b| b).map(|i| PlayerId(i as u8))
+            has_cc.iter().position(|&b| b).map(|i| PlayerId(i as u16))
         } else {
             None
         }
@@ -2330,7 +2308,7 @@ impl Sim {
         )]
         let tick = self.tick as u32;
         let max: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| self.player_shield_max(PlayerId(u8::try_from(p).unwrap())));
+            core::array::from_fn(|p| self.player_shield_max(PlayerId(u16::try_from(p).unwrap())));
         for e in &mut self.entities {
             if !e.alive {
                 continue;
@@ -2377,7 +2355,7 @@ impl Sim {
                 LABOUR_CAP,
             );
             // Money income: the Economy tech rider, scaled by the Logistics perk.
-            let econ = self.player_economy_bonus(PlayerId(u8::try_from(p).unwrap()));
+            let econ = self.player_economy_bonus(PlayerId(u16::try_from(p).unwrap()));
             let mut money_income = econ;
             if self.players[p].active_perks & (1 << crate::game::perk::LOGISTICS) != 0 {
                 money_income = money_income * Fixed::from_ratio(3, 2);
@@ -2385,7 +2363,7 @@ impl Sim {
             self.players[p].money = self.players[p].money + money_income;
         }
         // Extractors mine the deposit they stand on — all deposits yield Money.
-        let mut to_mine: alloc::vec::Vec<(u16, u16, u8, i32)> = alloc::vec::Vec::new();
+        let mut to_mine: alloc::vec::Vec<(u16, u16, u16, i32)> = alloc::vec::Vec::new();
         for e in &self.entities {
             if !e.alive {
                 continue;
@@ -2581,7 +2559,7 @@ impl Sim {
 
     fn run_movement(&mut self) {
         let mobility: [Fixed; PLAYER_COUNT] = core::array::from_fn(|p| {
-            self.player_mobility_bonus(PlayerId(u8::try_from(p).unwrap()))
+            self.player_mobility_bonus(PlayerId(u16::try_from(p).unwrap()))
         });
         for e in &mut self.entities {
             if !e.alive {
@@ -2628,7 +2606,7 @@ impl Sim {
         // Pre-tick snapshot (all attackers this tick target the same frozen
         // state, so combat is order-independent and bit-deterministic). The last
         // field is current HP, used for focus-fire targeting.
-        let snap: Vec<(bool, u8, Vec2, ArmorType, bool, Fixed)> = self
+        let snap: Vec<(bool, u16, Vec2, ArmorType, bool, Fixed)> = self
             .entities
             .iter()
             .map(|e| {
@@ -2661,9 +2639,9 @@ impl Sim {
         // armor mitigates damage to structures, and weapon buffs the attacks of
         // armed buildings (turrets / command center). This is intentional.
         let weapon: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| self.player_weapon_bonus(PlayerId(u8::try_from(p).unwrap())));
+            core::array::from_fn(|p| self.player_weapon_bonus(PlayerId(u16::try_from(p).unwrap())));
         let armor: [Fixed; PLAYER_COUNT] =
-            core::array::from_fn(|p| self.player_armor_bonus(PlayerId(u8::try_from(p).unwrap())));
+            core::array::from_fn(|p| self.player_armor_bonus(PlayerId(u16::try_from(p).unwrap())));
         let era_dmg: [Fixed; PLAYER_COUNT] =
             core::array::from_fn(|p| era_damage_factor(self.players[p].era));
         // Survival perks: Overcharge scales outgoing damage; Bulwark adds flat
