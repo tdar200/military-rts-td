@@ -16,6 +16,7 @@
     reason = "the render/input shell converts fixed-point sim values and grid sizes to/from f32 screen space and runs a float accumulator game loop; draw functions and main() are inherently long; the determinism-critical math stays in rts_core"
 )]
 
+mod alerts;
 mod anim;
 mod audio;
 mod input;
@@ -58,6 +59,18 @@ use theme::{
 const TICK_DT: f32 = 1.0 / 30.0;
 /// Sim-speed gears (the +/- keys step through these).
 const GEARS: [u32; 4] = [1, 2, 4, 8];
+/// Control-group digit keys (1..=9). Index `i` maps to group slot `i + 1`.
+const DIGIT_KEYS: [KeyCode; 9] = [
+    KeyCode::Key1,
+    KeyCode::Key2,
+    KeyCode::Key3,
+    KeyCode::Key4,
+    KeyCode::Key5,
+    KeyCode::Key6,
+    KeyCode::Key7,
+    KeyCode::Key8,
+    KeyCode::Key9,
+];
 /// Capability-grid era column headers (10 eras, 1990s → cosmic).
 const GRID_ERAS: [&str; 10] = [
     "FND", "QNT", "RNW", "FUS", "SPC", "ST2", "GAL", "DRK", "HiD", "CSM",
@@ -245,6 +258,15 @@ async fn main() {
     let mut audio = audio::AudioMgr::load().await;
     let mut sim = scenario::survival(survival_seed());
     let mut selected = Selection::default();
+    // Under-attack alert tracker (anti-blindside): diffs HUMAN entity HP each
+    // frame, coalesces battles into pulsing markers, and drives the jump key.
+    let mut alerts = alerts::Alerts::default();
+    // Control groups 1..=9 (index 0 unused). Recall sets the selection to a slot's
+    // living members; Ctrl+digit assigns; Shift+digit appends; a double-tap also
+    // centers the camera on the group's centroid. Purely shell-side selection.
+    let mut groups: [Vec<EntityId>; 10] = Default::default();
+    // Wall-clock of the last bare press per slot, for ~300 ms double-tap detection.
+    let mut group_last_press: [f64; 10] = [0.0; 10];
     // Screen-space anchor of an in-progress left-drag box-select (None = not dragging).
     let mut drag_start: Option<(f32, f32)> = None;
     let mut build_mode: Option<BuildingKind> = None;
@@ -339,6 +361,11 @@ async fn main() {
                 prev_researching = false;
                 audio.set_music(audio::Music::Combat);
                 selected = Selection::default();
+                alerts.clear();
+                for g in &mut groups {
+                    g.clear();
+                }
+                group_last_press = [0.0; 10];
                 drag_start = None;
                 build_mode = None;
                 pending.clear();
@@ -406,6 +433,71 @@ async fn main() {
         // Final camera transform for THIS frame — the single source of truth shared
         // by both drawing and input, so clicks stay correct at any zoom/pan.
         let (cell, ox_cam, wtop_cam) = camera_transform(&sim, zoom, cam.unwrap_or(cam_center));
+
+        // --- Alert-jump key (backtick `): snap the camera to the most-recent
+        // under-attack alert; repeated presses cycle active alerts newest-first.
+        // Gated only on having a live camera + not over (no overlay needed; it's a
+        // pure camera move and shares no key with build/train/overlay toggles).
+        if !over && is_key_pressed(KeyCode::GraveAccent) {
+            if let Some(target) = alerts.cycle_jump_target() {
+                cam = Some(target);
+            }
+        }
+
+        // --- Control groups (1..=9): only when NO overlay/modal is open and not in
+        // the founding survey, so the digit keys can't collide with the perk draft
+        // (1..4), the doctrine modal (1..4), or the sector governance overlay (1..6).
+        let groups_input_ok = !over
+            && !sim.surveying()
+            && !research_open
+            && !perk_open
+            && !doctrine_open
+            && !sector_open
+            && !grid_open;
+        if groups_input_ok {
+            let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+            let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+            for (i, &key) in DIGIT_KEYS.iter().enumerate() {
+                if !is_key_pressed(key) {
+                    continue;
+                }
+                let slot = i + 1; // groups[1..=9]
+                if ctrl {
+                    // Assign the current unit selection to this slot (copy).
+                    groups[slot].clone_from(&selected.units);
+                } else if shift {
+                    // Append the current selection, deduped.
+                    for &id in &selected.units {
+                        if !groups[slot].contains(&id) {
+                            groups[slot].push(id);
+                        }
+                    }
+                } else {
+                    // Recall: select this slot's living members, dropping the planet.
+                    groups[slot].retain(|&id| sim.entity_alive(id));
+                    selected.units.clone_from(&groups[slot]);
+                    selected.planet = None;
+                    // Double-tap (<=300 ms) also centers the camera on the centroid.
+                    let now = get_time();
+                    if now - group_last_press[slot] <= 0.3 && !groups[slot].is_empty() {
+                        let views = sim.views();
+                        let mut sum = (0.0_f32, 0.0_f32);
+                        let mut n = 0.0_f32;
+                        for &id in &groups[slot] {
+                            if let Some(v) = views.iter().find(|v| v.id == id) {
+                                sum.0 += v.pos.x.to_bits() as f32 / 65536.0;
+                                sum.1 += v.pos.y.to_bits() as f32 / 65536.0;
+                                n += 1.0;
+                            }
+                        }
+                        if n > 0.0 {
+                            cam = Some((sum.0 / n, sum.1 / n));
+                        }
+                    }
+                    group_last_press[slot] = now;
+                }
+            }
+        }
 
         // Survival perk draft: each newly-spawned wave grants a perk pick until
         // all are taken, opening a (time-freezing) draft modal.
@@ -733,6 +825,11 @@ async fn main() {
             prev_researching = false;
             audio.set_music(audio::Music::Combat);
             selected = Selection::default();
+            alerts.clear();
+            for g in &mut groups {
+                g.clear();
+            }
+            group_last_press = [0.0; 10];
             drag_start = None;
             build_mode = None;
             pending.clear();
@@ -803,6 +900,11 @@ async fn main() {
             selected
                 .units
                 .retain(|&id| views.iter().any(|v| v.id == id && v.owner == HUMAN));
+        }
+        // Under-attack alerts: diff HUMAN HP vs. last frame, coalesce into markers,
+        // and blip (throttled) when a genuinely new battle appears. Read-only.
+        if !over && alerts.update(&sim) {
+            audio.play_throttled(audio::Sfx::WaveIncoming, 1.5);
         }
         view.frame(dt);
         // Turn this frame's FX events into particles, then advance the pool. Spawn
@@ -926,10 +1028,21 @@ async fn main() {
         if surveying {
             draw_survey_overlay(&sim, cell, ox_cam, wtop_cam, &sprites);
         }
+        // Under-attack alerts on the main view: on-screen rings + off-screen edge
+        // arrows pointing toward the battle. Drawn over the world, under the HUD.
+        draw_alert_overlay(&alerts.active, cell, ox_cam, wtop_cam);
         // The selection panel shows a single unit's stats; with exactly one unit
         // selected, behave as before. A planet selection drives Task 4's panel.
         let panel_unit = (selected.units.len() == 1).then(|| selected.units[0]);
-        ui::draw(&sim, build_mode, paused, game_speed, panel_unit, &sprites);
+        ui::draw(
+            &sim,
+            build_mode,
+            paused,
+            game_speed,
+            panel_unit,
+            &alerts.active,
+            &sprites,
+        );
         // Planet/city info + action panel (bottom-left), only while a planet is
         // selected. A planet selection clears the unit group, so this never
         // collides with the single-unit selection panel.
@@ -1288,8 +1401,15 @@ fn draw_title(sprites: &Sprites, conquest: bool) {
         sprites.font(),
     );
     centered(
+        "1-9 control groups (Ctrl set, Shift add, double-tap recenter)  \u{2022}  ` jump to attack",
+        c.y + c.h + 92.0,
+        13.0,
+        INK_DIM,
+        sprites.font(),
+    );
+    centered(
         "Left / Right or Tab  \u{2022}  switch mode",
-        c.y + c.h + 96.0,
+        c.y + c.h + 116.0,
         12.0,
         with_alpha(GOLD_HI, 0.75),
         sprites.font(),
@@ -3549,6 +3669,50 @@ fn draw_shield_bar(x: f32, y: f32, cell: f32, shield: f32, max_shield: f32) {
     draw_rectangle(left - 1.0, top - 1.0, width + 2.0, 4.0, WALL_EDGE); // frame plate
     draw_rectangle(left, top, width, 2.0, HP_TRACK);
     draw_rectangle(left, top, width * frac, 2.0, SHIELD);
+}
+
+/// Draws the under-attack alerts on the main view: a pulsing red ring at each
+/// on-screen battle, or — when the battle is off-screen — a red triangle clamped
+/// to the playfield border pointing toward it. No arrow glyphs (the font lacks
+/// them); the directional cue is a `draw_triangle` chevron. Read-only.
+fn draw_alert_overlay(alerts: &[alerts::Alert], cell: f32, ox: f32, wtop: f32) {
+    // Playfield viewport rect (between the top bar and the command bar).
+    let (vx0, vy0) = (0.0_f32, WORLD_TOP);
+    let vx1 = screen_width();
+    let vy1 = screen_height() - ui::CMD_BAR_H;
+    let pulse = (get_time() as f32 * 5.0).sin() * 0.5 + 0.5; // 0..1
+    for a in alerts {
+        let sx = ox + a.world.0 * cell;
+        let sy = wtop + a.world.1 * cell;
+        let on_screen = sx >= vx0 && sx <= vx1 && sy >= vy0 && sy <= vy1;
+        if on_screen {
+            // Subtle pulsing red ring at the battle location.
+            let r = cell * (1.1 + 0.25 * pulse);
+            draw_circle_lines(sx, sy, r, 2.0, with_alpha(BAD, 0.45 + 0.45 * pulse));
+            draw_circle_lines(sx, sy, r * 0.6, 1.5, with_alpha(BAD, 0.3 + 0.3 * pulse));
+        } else {
+            // Off-screen: clamp the alert's screen position to the viewport border
+            // (inset a little) and draw a triangle pointing outward toward it.
+            const PAD: f32 = 22.0;
+            let cx = (sx).clamp(vx0 + PAD, vx1 - PAD);
+            let cy = (sy).clamp(vy0 + PAD, vy1 - PAD);
+            // Direction from the clamped edge point toward the true (off-screen) pos.
+            let mut dx = sx - cx;
+            let mut dy = sy - cy;
+            let len = dx.hypot(dy).max(0.0001);
+            dx /= len;
+            dy /= len;
+            // Perpendicular for the triangle base.
+            let (px, py) = (-dy, dx);
+            let tip = vec2(cx + dx * 16.0, cy + dy * 16.0);
+            let b1 = vec2(cx + px * 9.0, cy + py * 9.0);
+            let b2 = vec2(cx - px * 9.0, cy - py * 9.0);
+            let glow = with_alpha(BAD, 0.55 + 0.4 * pulse);
+            draw_triangle(tip, b1, b2, glow);
+            // A small backing dot anchors the arrow on the border.
+            draw_circle(cx, cy, 4.0, with_alpha(BAD, 0.7));
+        }
+    }
 }
 
 #[cfg(test)]

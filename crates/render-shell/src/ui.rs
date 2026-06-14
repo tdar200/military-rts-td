@@ -226,9 +226,10 @@ pub fn draw(
     paused: bool,
     game_speed: u32,
     selected: Option<EntityId>,
+    alerts: &[crate::alerts::Alert],
     sprites: &Sprites,
 ) {
-    draw_minimap(sim);
+    draw_minimap(sim, alerts);
     draw_civ_roster(sim, sprites);
     draw_top_bar(sim, paused, game_speed, sprites);
     draw_selection_panel(sim, selected, sprites);
@@ -672,7 +673,7 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     draw_rectangle_lines(text_x, bar_y, bar_w, 7.0, 1.0, BORDER_NEUTRAL);
 }
 
-fn draw_minimap(sim: &Sim) {
+fn draw_minimap(sim: &Sim, alerts: &[crate::alerts::Alert]) {
     let map_w = f32::from(sim.map().width());
     let map_h = f32::from(sim.map().height());
     let mm_w = MM_W;
@@ -719,6 +720,21 @@ fn draw_minimap(sim: &Sim) {
         // Dark backing makes the faction dot pop against the terrain.
         draw_rectangle(dot_x - 3.0, dot_y - 3.0, 6.0, 6.0, WELL);
         draw_rectangle(dot_x - 2.0, dot_y - 2.0, 4.0, 4.0, col);
+    }
+    // Under-attack alerts: a pulsing red ring + dot at each battle's mapped
+    // position, so a multi-front war reads at a glance from the minimap.
+    let pulse = (get_time() as f32 * 5.0).sin() * 0.5 + 0.5; // 0..1
+    for a in alerts {
+        let ax = field_x + a.world.0.clamp(0.0, map_w) * scale_x;
+        let ay = field_y + a.world.1.clamp(0.0, map_h) * scale_y;
+        draw_circle_lines(
+            ax,
+            ay,
+            4.0 + 3.0 * pulse,
+            1.5,
+            with_alpha(BAD, 0.5 + 0.5 * pulse),
+        );
+        draw_circle(ax, ay, 2.0, with_alpha(BAD, 0.8));
     }
     // Glowing holographic frame — matches the map + menu frames.
     glow_rect(origin_x, origin_y, mm_w, mm_h, HOLO_GLOW, 3);
