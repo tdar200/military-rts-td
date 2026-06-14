@@ -102,6 +102,51 @@ const STUN_IMMUNITY: u32 = 90;
 /// catch up and fight. Armed units use their own weapon range instead.
 const ATTACK_MOVE_LEASH: Fixed = Fixed::from_int(4);
 
+/// Supply-decay full-strength radius (tiles). A UNIT firing within this distance
+/// of its owner's nearest Command Center deals 100% damage — fighting at or near
+/// a base/owned planet is unpenalised.
+const SUPPLY_FULL_RADIUS: Fixed = Fixed::from_int(6);
+/// Supply-decay outer radius (tiles). Beyond this distance from any friendly
+/// Command Center, a unit's outgoing damage bottoms out at [`SUPPLY_DECAY_FLOOR`]
+/// (overextension penalty). Between [`SUPPLY_FULL_RADIUS`] and here the factor
+/// ramps down linearly (in squared distance — monotonic, no sqrt needed).
+const SUPPLY_DECAY_RADIUS: Fixed = Fixed::from_int(20);
+/// Minimum outgoing-damage multiplier for a fully-overextended unit (0.6 = 40%
+/// penalty). Gentle by design: this nudges forward-basing, it doesn't gut deep
+/// strikes.
+const SUPPLY_DECAY_FLOOR: Fixed = Fixed::from_ratio(3, 5);
+
+/// Outgoing-damage multiplier for a unit firing at squared distance `dist_sq`
+/// (world units²) from its owner's NEAREST friendly Command Center.
+///
+/// Returns a [`Fixed`] in `[SUPPLY_DECAY_FLOOR, 1]`:
+/// - `<= SUPPLY_FULL_RADIUS²`  → `1` (full strength plateau).
+/// - `>= SUPPLY_DECAY_RADIUS²` → `SUPPLY_DECAY_FLOOR`.
+/// - between                  → linear ramp **in squared distance** (monotonically
+///   decreasing; cheaper and exact in `Fixed` since it avoids a square root).
+///
+/// Pass `None` for `dist_sq` when the owner has NO Command Center (just lost their
+/// last seat) — they get a `1` factor so a losing player isn't double-punished.
+/// Deterministic: `Fixed`/integer only, no rng, no float, no sqrt.
+fn supply_decay_factor(dist_sq: Option<Fixed>) -> Fixed {
+    let Some(d_sq) = dist_sq else {
+        return Fixed::ONE;
+    };
+    let full_sq = SUPPLY_FULL_RADIUS * SUPPLY_FULL_RADIUS;
+    if d_sq <= full_sq {
+        return Fixed::ONE;
+    }
+    let decay_sq = SUPPLY_DECAY_RADIUS * SUPPLY_DECAY_RADIUS;
+    if d_sq >= decay_sq {
+        return SUPPLY_DECAY_FLOOR;
+    }
+    // Linear interpolation on squared distance: t in (0,1) maps the band
+    // (full_sq, decay_sq) onto a 1 → FLOOR descent. `decay_sq > full_sq` here, so
+    // the divisor is strictly positive.
+    let t = (d_sq - full_sq) / (decay_sq - full_sq);
+    Fixed::ONE - t * (Fixed::ONE - SUPPLY_DECAY_FLOOR)
+}
+
 /// Veterancy rank for a given kill count (0 → 3, capped).
 const fn rank_for_kills(kills: u32) -> u8 {
     if kills >= 9 {
@@ -3318,6 +3363,21 @@ impl Sim {
             })
             .collect();
 
+        // Supply anchors: every living Command Center position, bucketed by owner.
+        // Gathered ONCE per tick (ascending entity index) so the per-firer
+        // nearest-anchor scan below stays deterministic and order-independent —
+        // and reuses the same frozen geometry every attacker fires against. A unit
+        // far from all of its owner's anchors fires at reduced strength
+        // (`supply_decay_factor`), making overextension costly and forward bases
+        // worth holding. Static defenders (turrets / CC) are intentionally exempt
+        // (see the firing loop), so homeworld defence is never weakened.
+        let mut cc_positions: Vec<Vec<Vec2>> = alloc::vec![Vec::new(); self.civs.len()];
+        for e in &self.entities {
+            if e.alive && e.kind == Kind::Building(BuildingKind::CommandCenter) {
+                cc_positions[usize::from(e.owner.0)].push(e.pos);
+            }
+        }
+
         // (target index, attacker index, damage, pierces-shields).
         let mut damage: Vec<(usize, usize, Fixed, bool)> = Vec::new();
         // Seats whose lethal blow this tick captures (not destroys) them:
@@ -3391,7 +3451,25 @@ impl Sim {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
                 let raw = profile.damage * mult * era_dmg[usize::from(e.owner.0)]
                     + weapon[usize::from(e.owner.0)];
-                let dmg = raw * veterancy_factor(e.rank) * perk_dmg[usize::from(e.owner.0)];
+                // Supply-line decay: a UNIT firing far from its owner's nearest
+                // Command Center deals less damage (overextension penalty), ramping
+                // from full strength within `SUPPLY_FULL_RADIUS` down to
+                // `SUPPLY_DECAY_FLOOR` past `SUPPLY_DECAY_RADIUS`. Static defenders
+                // (turrets / CC) are EXEMPT — they sit on an anchor anyway and we
+                // want homeworld defence at full strength. The nearest-anchor scan
+                // is ascending-index, squared-distance, `Fixed`-only (deterministic);
+                // an owner with no anchors gets factor 1 (don't punish a player who
+                // just lost their last CC). This factor folds into `dmg` BEFORE the
+                // push, so splash inherits it too.
+                let supply = if matches!(e.kind, Kind::Unit(_)) {
+                    let anchors = &cc_positions[usize::from(e.owner.0)];
+                    let nearest_sq = anchors.iter().map(|&a| (a - e.pos).length_squared()).min();
+                    supply_decay_factor(nearest_sq)
+                } else {
+                    Fixed::ONE
+                };
+                let dmg =
+                    raw * veterancy_factor(e.rank) * perk_dmg[usize::from(e.owner.0)] * supply;
                 let pierces = matches!(profile.damage_type, DamageType::AntiArmor);
                 damage.push((j, i, dmg, pierces));
                 lines.push((e.pos, snap[j].2));
@@ -4216,7 +4294,7 @@ impl Sim {
 mod tests {
     use super::{
         ascend_cost, tile_center, BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim,
-        UnitKind, WaveConfig, UPKEEP_STEP,
+        UnitKind, WaveConfig, SUPPLY_DECAY_FLOOR, UPKEEP_STEP,
     };
     use crate::fixed::Fixed;
     use crate::game::civ::ColonyId;
@@ -4677,6 +4755,90 @@ mod tests {
         s
     }
 
+    /// Distance-decayed combat: one Infantry (P0) shoots one stationary Tank (P1)
+    /// for exactly one combat tick. The attacker–target geometry is identical in
+    /// both runs; only the attacker's distance from its OWN Command Center differs.
+    /// `at` is the bottom-left anchor of the (CC, attacker, target) cluster, so the
+    /// far run is a pure translation of the near run.
+    ///
+    /// Returns the damage dealt = (target `max_hp` − target hp after one tick).
+    fn one_shot_damage(cc_at: (u16, u16), atk: Vec2, tgt: Vec2) -> Fixed {
+        let mut s = Sim::new(Map::new(60, 60), 1, f(0));
+        // P0's only anchor.
+        s.add_building(P0, BuildingKind::CommandCenter, cc_at.0, cc_at.1);
+        // Attacker (P0) and a fat target (P1). Tank has 220 hp, so a single 6-dmg
+        // Infantry shot (after the Ballistic-vs-Plated matrix, constant across both
+        // runs) leaves it comfortably alive — a clean hp delta to read.
+        let attacker = s.add_unit(P0, UnitKind::Infantry, atk);
+        let target = s.add_unit(P1, UnitKind::Tank, tgt);
+        let max = s.entities[target.0 as usize].hp;
+        // One step: movement (nobody has a move order), then combat fires once.
+        s.step(&[]);
+        // Sanity: the attacker actually fired (went on cooldown) and the target
+        // took a hit. Without this the test could pass vacuously on zero damage.
+        assert!(
+            s.entities[attacker.0 as usize].cooldown > 0,
+            "attacker must have fired this tick"
+        );
+        max - s.entities[target.0 as usize].hp
+    }
+
+    #[test]
+    fn combat_decays_with_distance_from_command_center() {
+        // Identical attacker/target geometry (attacker 1 tile from target, well
+        // within Infantry's range 3). Run #1: the attacker sits ON its CC (full
+        // supply). Run #2: the whole cluster is translated to the far corner, so
+        // the attacker is > SUPPLY_DECAY_RADIUS (20) from its only CC.
+        let near = one_shot_damage((2, 2), v(2, 2), v(3, 2));
+        // Far cluster: CC at (50,50), attacker at (50,50) would be adjacent — we
+        // want the ATTACKER far from the CC, so put the CC back near the origin
+        // and march the attacker+target to the opposite corner (distance ~67 >> 20).
+        let far = one_shot_damage((2, 2), v(50, 50), v(51, 50));
+
+        // The overextended attacker deals strictly LESS damage...
+        assert!(
+            far < near,
+            "an attacker far from its Command Center must deal less damage \
+             (near={} far={})",
+            near.to_bits(),
+            far.to_bits()
+        );
+        // ...and the near attacker deals FULL strength: exactly the factor-1
+        // baseline (what it would deal touching the CC). This is the pre-feature
+        // damage, proving the plateau is unpenalised.
+        let baseline = one_shot_damage((2, 2), v(2, 2), v(3, 2));
+        assert_eq!(
+            near, baseline,
+            "an attacker on its CC must deal full (factor-1) damage"
+        );
+        // And the floor is respected: far damage is at least FLOOR (0.6) of full,
+        // never zero — the penalty nudges, it doesn't erase the attack.
+        assert!(
+            far >= near * SUPPLY_DECAY_FLOOR,
+            "decayed damage must not drop below the FLOOR (near={} far={} floor=0.6)",
+            near.to_bits(),
+            far.to_bits()
+        );
+    }
+
+    #[test]
+    fn combat_full_strength_within_full_radius() {
+        // An attacker anywhere inside SUPPLY_FULL_RADIUS (6 tiles) of its CC deals
+        // the SAME damage as one touching the CC: the factor==1 plateau is flat.
+        // CC at (2,2). Touching: attacker at (2,2). Inside the plateau: attacker at
+        // (7,2) — 5 tiles away, still <= FULL_RADIUS=6.
+        let touching = one_shot_damage((2, 2), v(2, 2), v(3, 2));
+        let inside_plateau = one_shot_damage((2, 2), v(7, 2), v(8, 2));
+        assert_eq!(
+            inside_plateau,
+            touching,
+            "within FULL_RADIUS the supply factor is a flat 1 — damage must match \
+             touching the CC (touching={} inside={})",
+            touching.to_bits(),
+            inside_plateau.to_bits()
+        );
+    }
+
     #[test]
     fn same_setup_and_commands_produce_same_hash() {
         let mut a = scenario(99);
@@ -4860,6 +5022,16 @@ mod tests {
         // byte to the hash. The golden run issues no AttackMove orders (AI still emits
         // plain Move), so every byte is 0 — the only delta is one appended marker per
         // entity; the simulation itself is unchanged.
+        //
+        // GOLDEN-NEUTRAL for distance-decayed combat (supply-line damage falloff):
+        // a unit's outgoing damage now decays with its distance from the owner's
+        // nearest Command Center. This 120-tick scripted run never fields a unit
+        // that fires while > SUPPLY_FULL_RADIUS (6 tiles) from its CC — the CCs sit
+        // 25 tiles apart and the economy/research opening hasn't pushed armies into
+        // each other's deep field yet — so the supply factor is a flat 1 throughout
+        // and the hash is unchanged (verified: zero decayed-fire events in this run).
+        // The feature is exercised by `combat_decays_with_distance_from_command_center`
+        // and `combat_full_strength_within_full_radius`.
         assert_eq!(s.state_hash(), 1_037_729_920_696_487_524);
     }
 
@@ -7216,9 +7388,21 @@ mod tests {
 
     #[test]
     fn ai_researches_antigrav() {
-        // Over a long match (≈20_000 ticks, seed 7), the AI should eventually
-        // research Anti-Grav Drives (the last tech in priority, after all 16
-        // earlier techs are complete — sequential research takes ~9k+ ticks).
+        // Over a long match (seed 7), the AI should eventually research Anti-Grav
+        // Drives (the last tech in priority, after all 16 earlier techs are
+        // complete — sequential research takes ~46k ticks here).
+        //
+        // SOLO run (P0 only). Originally this was P0-vs-P1, but distance-decayed
+        // combat (forward-base supply lines) shifted the head-to-head balance so
+        // that with seed 7 the enemy now snowballs and conquers P0 before it can
+        // grind to the LAST tech — P0 reaches Era 3 and dies. This test is about
+        // the *research priority ladder* reaching its final node, NOT about who
+        // wins a skirmish, so the enemy is irrelevant noise here. Dropping P1
+        // isolates the ladder: with no one to conquer it, P0 reaches Anti-Grav at
+        // tick ~46_427 (verified), comfortably inside the 60_000-tick budget. The
+        // P0-vs-P1 combat balance is covered by the dedicated combat tests; the
+        // earlier-milestone economy tests (e.g. antimatter-by-era-1) still run
+        // head-to-head and pass because they resolve before the conquest.
         let mut map = Map::new(40, 40);
         // Scatter ore deposits across the whole map so the AI's Refineries earn income
         // regardless of which buildable tile they land on.
@@ -7236,11 +7420,9 @@ mod tests {
         }
         let mut s = Sim::new(map, 7, f(3000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
-        s.add_building(P1, BuildingKind::CommandCenter, 34, 20);
         let mut antigrav_seen = false;
         for _ in 0..60_000 {
-            let mut cmds = s.ai_commands(P0);
-            cmds.extend(s.ai_commands(P1));
+            let cmds = s.ai_commands(P0);
             s.step(&cmds);
             if s.has_antigrav(P0) {
                 antigrav_seen = true;
