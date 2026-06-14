@@ -1403,6 +1403,16 @@ impl Sim {
         self.civs[usize::from(player.0)].money
     }
 
+    /// Adds `amount` to a player's money stockpile (scenario setup only). Used by
+    /// `conquest` to grant a small, seeded, FAIR starting edge to one civ so a
+    /// symmetric stand-off can tip rather than deadlock. Money is part of the hashed
+    /// state, but this runs at BUILD time and is deterministic in `(seed)`, so the
+    /// per-seed setup stays bit-identical across runs.
+    pub fn grant_money(&mut self, player: PlayerId, amount: Fixed) {
+        let c = &mut self.civs[usize::from(player.0)];
+        c.money = c.money + amount;
+    }
+
     /// A player's current Energy stockpile.
     #[must_use]
     pub fn energy(&self, player: PlayerId) -> Fixed {

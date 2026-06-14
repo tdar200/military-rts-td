@@ -266,7 +266,43 @@ pub fn survival(seed: u64) -> Sim {
 ///
 /// `civ_count` is clamped to `1..=HOME_CENTERS.len()` (the number of pre-laid home
 /// regions); the `seed` only feeds `Sim`'s RNG (combat/wave jitter), never layout.
+/// A construction-only deterministic PRNG (mirrors the private `Lcg` in
+/// `procgen`), used solely to vary the [`conquest`] start per seed at BUILD time.
+/// It never runs in the tick loop, so it does not affect sim determinism: the
+/// same `(seed, civ_count)` always builds a bit-identical world.
+struct ConquestLcg(u64);
+
+impl ConquestLcg {
+    const fn next(&mut self) -> u32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "taking the high 32 bits of the 64-bit LCG state, as in procgen::Lcg"
+        )]
+        {
+            (self.0 >> 33) as u32
+        }
+    }
+
+    /// A value in `lo..hi` (hi exclusive; requires `lo < hi`).
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "modulo by (hi-lo) keeps the result within u16 range"
+    )]
+    fn range(&mut self, lo: u16, hi: u16) -> u16 {
+        lo + (self.next() % u32::from(hi - lo)) as u16
+    }
+}
+
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one cohesive scenario builder: solar layout, seeded ownership + forward \
+              colony, the push loop, and terrain painting read best as a single unit"
+)]
 pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     use crate::game::civ::AUTONOMY_FULL;
     use crate::game::hex;
@@ -301,12 +337,56 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
         (9, 17),  // 7 Neptune
     ];
     const EARTH: usize = 2;
-    // Planets the AI civs claim, in priority order (you always take Earth). Civ k
-    // (1..civ_count) homes on AI_PLANETS[k-1]; every other world stays neutral.
-    const AI_PLANETS: [usize; 7] = [3, 4, 5, 1, 6, 7, 0]; // Mars,Jupiter,Saturn,Venus,Uranus,Neptune,Mercury
+    /// Seeded FAIR edge granted to one civ per seed (see the comment at its use):
+    /// a starting-Money bump plus a standing garrison at its forward colony.
+    const EDGE_MONEY: i32 = 2400;
+    /// Standing Infantry pre-placed at the favoured civ's forward base.
+    const EDGE_GARRISON: i32 = 32;
 
     let civ_count = civ_count.clamp(1, 8);
     let mut sim = Sim::with_civ_count(Map::new(W, H), seed, Fixed::from_int(2000), civ_count);
+
+    // ===== CONSTRUCTION-ONLY SEEDED PRNG =====
+    // A tiny LCG (mirroring `procgen::Lcg`) used ONLY here at build time to vary the
+    // start per seed. This runs once during construction — it never touches the tick
+    // loop — so it is determinism-SAFE: the same `(seed, civ_count)` always builds a
+    // bit-identical world, exactly like `procgen::generate(seed)`. The golden test
+    // uses `survival()`, not `conquest()`, so this is golden-neutral.
+    let mut rng = ConquestLcg(seed ^ 0xC0FF_EE15_600D_5EED);
+
+    // VARY: AI home geography. The 7 non-Earth planet ids are shuffled (Fisher-Yates
+    // with the construction RNG), then the (civ_count-1) AI civs home on the first
+    // shuffled ids. Every other world stays neutral. Earth is always the human's, so
+    // it is held out of the shuffle. Different seeds => different neighbours, threats
+    // and expansion races on the SAME solar system.
+    let mut ai_pool: [usize; 7] = [0, 1, 3, 4, 5, 6, 7]; // all but Earth (2)
+    for i in (1..ai_pool.len()).rev() {
+        let j = usize::from(rng.range(0, u16::try_from(i + 1).unwrap_or(1)));
+        ai_pool.swap(i, j);
+    }
+
+    // VARY: a gentle, FAIR per-civ strength edge to break the symmetric deadlock.
+    // Each seed nominates exactly ONE civ (any of the civ_count, INCLUDING the human
+    // civ 0) to receive the head-start. The chosen civ rotates across seeds and the
+    // human is on equal footing (it can be the favoured civ too), so no side is
+    // systematically advantaged. The edge has two parts, applied below:
+    //   * a starting-Money bump (out-produces neighbours into a bigger army),
+    //   * a pre-settled FORWARD production colony seated on the neutral planet nearest
+    //     a rival (a CC + Power/Refinery/Barracks + a standing garrison — see below).
+    // The forward colony is the decisive, FAIR lever: a homeworld's seat is captured
+    // (not destroyed) only by a stack that reaches the seat at full strength, but
+    // outgoing damage decays with distance from the nearest friendly Command Center
+    // (`supply_decay_factor`), and a one-shot stack bounces off a ring the defender's
+    // home keeps re-crewing. A forward base that out-produces a rival from right next
+    // door lets the favoured civ apply CONTINUOUS full-strength pressure, so the
+    // borderless symmetric stand-off tips and one neighbour falls — while the other
+    // civs, fighting at the decay floor across the system, stay in a longer contest.
+    // It is one developed colony, not a doomstack, so games resolve mid-match rather
+    // than snowball instantly; geography (above) decides WHO the favoured civ borders,
+    // and on seeds where its border rival is too strong the match simply stays a
+    // longer multi-way contest (a fortified-homeworld balance ceiling, by design).
+    let edge_civ = rng.range(0, u16::try_from(civ_count).unwrap_or(1));
+    sim.grant_money(PlayerId(edge_civ), Fixed::from_int(EDGE_MONEY));
 
     // Marks the 3x3 tile block centred on `(cx, cy)` as belonging to `planet_id`.
     let mark_block = |sim: &mut Sim, cx: u16, cy: u16, planet_id: PlanetId| {
@@ -323,12 +403,50 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
         }
     };
 
-    // Decide each world's owner: Earth -> you (civ 0); the next civs -> their
-    // AI_PLANETS in order; every other world stays neutral (settle or conquer it).
+    // Decide each world's owner: Earth -> you (civ 0); each AI civ -> the next id
+    // from the per-seed shuffled pool; every other world stays neutral (settle or
+    // conquer it). With 8 planets and civ_count <= 4 this leaves >= 3 neutral before
+    // the forward colony below claims one — still >= 1 neutral, which
+    // `conquest_scenario_is_deterministic_and_resolves` depends on.
     let mut owner: [Option<PlayerId>; 8] = [None; 8];
     owner[EARTH] = Some(PlayerId(0));
     for k in 1..civ_count {
-        owner[AI_PLANETS[k - 1]] = Some(PlayerId(u16::try_from(k).unwrap_or(0)));
+        owner[ai_pool[k - 1]] = Some(PlayerId(u16::try_from(k).unwrap_or(0)));
+    }
+
+    // The favoured civ's FORWARD colony: among the rivals it does NOT yet border, aim
+    // at the nearest rival home, then settle the still-NEUTRAL planet closest to that
+    // rival as the favoured civ's second seat. Squared-distance compares on the
+    // hand-placed SOLAR coords; lowest planet index breaks ties. All static integer
+    // math — no rng beyond `edge_civ` — so the pick is deterministic per seed. Skips
+    // cleanly (leaving the edge purely economic) if there is no rival or no spare
+    // neutral, so the >= 1-neutral and fairness invariants always hold.
+    let d2 = |a: usize, b: usize| {
+        let (ax, ay) = (i32::from(SOLAR[a].0), i32::from(SOLAR[a].1));
+        let (bx, by) = (i32::from(SOLAR[b].0), i32::from(SOLAR[b].1));
+        (ax - bx) * (ax - bx) + (ay - by) * (ay - by)
+    };
+    let mut edge_forward: Option<usize> = None;
+    let edge_home = (0..8).find(|&p| owner[p] == Some(PlayerId(edge_civ)));
+    if let Some(home) = edge_home {
+        // Nearest RIVAL home (a different owned planet), lowest index on ties.
+        let rival = (0..8)
+            .filter(|&p| owner[p].is_some() && owner[p] != Some(PlayerId(edge_civ)))
+            .min_by_key(|&p| (d2(home, p), p));
+        if let Some(rival) = rival {
+            // Nearest still-NEUTRAL planet to that rival, lowest index on ties, but
+            // keep >= 1 planet neutral overall (never settle the last free world).
+            let neutral_count = (0..8).filter(|&p| owner[p].is_none()).count();
+            if neutral_count > 1 {
+                if let Some(fwd) = (0..8)
+                    .filter(|&p| owner[p].is_none())
+                    .min_by_key(|&p| (d2(rival, p), p))
+                {
+                    owner[fwd] = Some(PlayerId(edge_civ));
+                    edge_forward = Some(fwd);
+                }
+            }
+        }
     }
 
     // Push all eight planets in solar order, so PlanetId == solar index. Owned
@@ -368,6 +486,47 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
                 };
                 sim.add_building(civ, kind, tx, ty);
             }
+        }
+    }
+
+    // FAIR seeded edge (offensive half): make the favoured civ's FORWARD colony a
+    // working PRODUCTION base, not just a flagged seat — a PowerPlant + Refinery +
+    // Barracks beside the bordered rival, plus a standing Infantry garrison. The
+    // reason a 4-way of fortified homeworlds deadlocks is that a one-shot assault
+    // bounces off a ring that the defender's home keeps re-crewing; cracking a seat
+    // needs CONTINUOUS pressure at full supply. A forward base that out-produces the
+    // rival from right next door provides exactly that, so the favoured civ can grind
+    // one neighbour down and snowball — while the others, fighting at the supply
+    // decay floor across the system, stay in a longer contest. It is one developed
+    // colony, not a doomstack, so it tips the match toward a resolution rather than an
+    // instant win; geography decides WHO it borders and the favoured civ rotates
+    // across seeds (the human included), so no side is systematically advantaged.
+    if let Some(fwd) = edge_forward {
+        let (fx, fy) = SOLAR[fwd];
+        // Support buildings just outside the 3x3 block + ring (offsets >= 2), placed
+        // only where in-bounds. add_building marks the tile BLOCKED, so they never
+        // overlap the seat, ring, or each other.
+        for (dx, dy, kind) in [
+            (2i32, 0i32, BuildingKind::PowerPlant),
+            (-2, 0, BuildingKind::Refinery),
+            (0, 2, BuildingKind::Barracks),
+        ] {
+            if let (Ok(tx), Ok(ty)) = (
+                u16::try_from(i32::from(fx) + dx),
+                u16::try_from(i32::from(fy) + dy),
+            ) {
+                sim.add_building(PlayerId(edge_civ), kind, tx, ty);
+            }
+        }
+        // A standing garrison so the FIRST assault already has mass; the forward
+        // Barracks then keeps the pressure on. Units sit on world-space tiles clear
+        // of the building tiles (a 4-wide grid offset below the seat).
+        let c = hex::center(fx, fy);
+        for n in 0..EDGE_GARRISON {
+            let col = n % 4 - 2;
+            let row = n / 4;
+            let pos = Vec2::new(c.x + Fixed::from_int(col), c.y + Fixed::from_int(3 + row));
+            sim.add_unit(PlayerId(edge_civ), UnitKind::Infantry, pos);
         }
     }
 
@@ -502,6 +661,24 @@ mod tests {
         assert!(
             neutrals.iter().any(|&p| s.planet_owner(p).is_some()),
             "conquest-expansion AI must claim at least one neutral planet"
+        );
+    }
+
+    #[test]
+    fn conquest_varies_by_seed() {
+        // Different seeds build DIFFERENT starts (the whole point of the rewrite:
+        // shuffled AI homes + a seeded forward-colony edge), while the SAME seed is
+        // bit-identical (construction-only PRNG ⇒ determinism preserved). We compare
+        // the freshly-built state hash, before any ticks, so this isolates the SETUP.
+        assert_ne!(
+            conquest(1, 4).state_hash(),
+            conquest(2, 4).state_hash(),
+            "different seeds must produce different conquest starts"
+        );
+        assert_eq!(
+            conquest(7, 4).state_hash(),
+            conquest(7, 4).state_hash(),
+            "the same seed must produce a bit-identical conquest start"
         );
     }
 
