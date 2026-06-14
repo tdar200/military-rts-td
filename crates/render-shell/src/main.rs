@@ -2562,129 +2562,293 @@ fn hash01(h: u32, shift: u32) -> f32 {
     ((h >> (shift & 0x18)) & 0xFF) as f32 / 256.0
 }
 
+/// The Conquest scenario is literally our Solar System: planets are pushed in
+/// solar order, so `pid.0` maps directly to a real body. This returns the body's
+/// relative display size (× the base radius) so Jupiter dwarfs Mercury.
+const fn planet_size_scale(pid: PlanetId) -> f32 {
+    match pid.0 {
+        0 => 0.7,     // Mercury — small
+        3 => 0.8,     // Mars
+        4 => 1.6,     // Jupiter — largest
+        5 => 1.4,     // Saturn
+        6 | 7 => 1.2, // Uranus / Neptune — ice giants
+        _ => 1.0,     // Venus, Earth
+    }
+}
+
+/// Draws Saturn's ring system as a wide flat ellipse around the body. `front`
+/// selects which half is drawn: the back half (behind the planet) before the
+/// disc, the front half (over the planet) after it, so the rings read as
+/// encircling the world. A subtle Cassini gap is left between two ring bands.
+fn draw_saturn_rings(px: f32, py: f32, r: f32, front: bool) {
+    let rx = r * 2.05;
+    let ry = r * 0.45;
+    // A vertical clip: we approximate the front/back split by drawing the full
+    // ellipse but masking is unavailable, so we draw thin ellipse outlines and
+    // rely on the planet disc (drawn between the two calls) to occlude the back
+    // half. The front pass uses slightly brighter tan to sit over the body.
+    let tan_outer = srgb(210, 190, 140);
+    let tan_inner = srgb(180, 158, 110);
+    let alpha = if front { 0.8 } else { 0.55 };
+    // Filled ring band (outer), then a darker gap, then an inner band.
+    draw_ellipse(px, py, rx, ry, 0.0, with_alpha(tan_outer, alpha * 0.5));
+    draw_ellipse(
+        px,
+        py,
+        rx * 0.86,
+        ry * 0.86,
+        0.0,
+        with_alpha(srgb(20, 18, 14), alpha * 0.5),
+    );
+    draw_ellipse(
+        px,
+        py,
+        rx * 0.78,
+        ry * 0.78,
+        0.0,
+        with_alpha(tan_inner, alpha * 0.5),
+    );
+    draw_ellipse(
+        px,
+        py,
+        rx * 0.62,
+        ry * 0.62,
+        0.0,
+        with_alpha(srgb(20, 18, 14), alpha * 0.4),
+    );
+    // Crisp ring outlines for definition.
+    draw_ellipse_lines(px, py, rx, ry, 0.0, 1.5, with_alpha(tan_outer, alpha));
+    draw_ellipse_lines(
+        px,
+        py,
+        rx * 0.78,
+        ry * 0.78,
+        0.0,
+        1.0,
+        with_alpha(tan_inner, alpha),
+    );
+    draw_ellipse_lines(
+        px,
+        py,
+        rx * 0.6,
+        ry * 0.6,
+        0.0,
+        1.0,
+        with_alpha(tan_inner, alpha * 0.8),
+    );
+}
+
 /// Draws the natural (un-owned) surface of a world onto a disc of radius `r`
-/// centred at `(px, py)`. Style is `pid % 5`; all detail derives from `h`.
-/// Every fleck/blob is kept inside the disc so it reads as a sphere once the
-/// shading pass is layered on top.
+/// centred at `(px, py)`. The body is chosen by its real solar-order id
+/// (`pid.0` 0..7 = Mercury..Neptune); all detail derives deterministically from
+/// `h`. Every fleck/blob is kept inside the disc so it reads as a sphere once
+/// the shading pass is layered on top. Surfaces use natural palettes (never civ
+/// colours) — ownership reads from the atmosphere tint + city-lights elsewhere.
 #[allow(clippy::too_many_lines)]
 fn draw_planet_surface(px: f32, py: f32, r: f32, pid: PlanetId, h: u32) {
-    let style = u32::from(pid.0) % 5;
-    match style {
-        // --- Terran / oceanic: deep-blue ocean + green/brown continent blobs.
+    match pid.0 {
+        // --- 0 Mercury: small grey, heavily cratered.
         0 => {
+            draw_circle(px, py, r, srgb(140, 134, 126));
+            draw_circle(px, py, r, with_alpha(srgb(96, 90, 84), 0.4));
+            for k in 0..8u32 {
+                let a = hash01(h, k * 3) * std::f32::consts::TAU;
+                let d = (0.08 + 0.72 * hash01(h, k * 3 + 8)) * r;
+                let cx = px + a.cos() * d;
+                let cy = py + a.sin() * d;
+                let cr = r * (0.06 + 0.14 * hash01(h, k * 3 + 16));
+                draw_circle(cx, cy, cr, with_alpha(srgb(86, 80, 74), 0.7));
+                draw_circle_lines(cx, cy, cr, 1.0, with_alpha(srgb(54, 50, 46), 0.85));
+            }
+        }
+        // --- 1 Venus: pale yellow-cream, smooth featureless cloud cover.
+        1 => {
+            draw_circle(px, py, r, srgb(225, 205, 150));
+            draw_circle(px, py, r, with_alpha(srgb(235, 222, 178), 0.5));
+            // A couple of faint lighter cloud swirls.
+            for k in 0..3u32 {
+                let f = (k as f32 + 0.5) / 3.0;
+                let by = py - r + f * 2.0 * r;
+                let dy = (by - py) / r;
+                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
+                draw_ellipse(
+                    px,
+                    by,
+                    half * 0.9,
+                    r * 0.12,
+                    0.0,
+                    with_alpha(srgb(245, 235, 205), 0.35),
+                );
+            }
+        }
+        // --- 2 Earth: blue oceans + green/brown continents + white cloud arcs.
+        2 => {
             draw_circle(px, py, r, srgb(28, 64, 120));
-            draw_circle(px, py, r, with_alpha(srgb(40, 90, 150), 0.5));
+            draw_circle(px, py, r, with_alpha(srgb(40, 90, 150), 0.4));
             let lands = [srgb(70, 130, 70), srgb(96, 132, 78), srgb(120, 110, 72)];
-            for k in 0..4u32 {
+            for k in 0..3u32 {
                 let a = hash01(h, k * 4) * std::f32::consts::TAU;
-                let d = (0.15 + 0.55 * hash01(h, k * 4 + 8)) * r;
+                let d = (0.15 + 0.5 * hash01(h, k * 4 + 8)) * r;
                 let lx = px + a.cos() * d;
                 let ly = py + a.sin() * d;
-                let lr = r * (0.16 + 0.20 * hash01(h, k * 4 + 16));
+                let lr = r * (0.18 + 0.22 * hash01(h, k * 4 + 16));
                 let lc = lands[(k as usize) % lands.len()];
                 draw_ellipse(lx, ly, lr * 1.2, lr * 0.85, a * 20.0, lc);
             }
-        }
-        // --- Banded gas giant: warm or cool horizontal bands inside the disc.
-        1 => {
-            let warm = (h & 1) == 0;
-            let base = if warm {
-                srgb(150, 110, 70)
-            } else {
-                srgb(60, 110, 120)
-            };
-            draw_circle(px, py, r, base);
-            let bands = 4 + (h >> 3) % 3; // 4..6 bands
-            for k in 0..bands {
-                let f = (k as f32 + 0.5) / bands as f32; // 0..1 down the disc
-                let by = py - r + f * 2.0 * r;
-                // Half-chord of the circle at this height keeps the band clipped.
-                let dy = (by - py) / r;
-                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
-                let bh = r * (0.10 + 0.10 * hash01(h, k * 4));
-                let tone = if (k & 1) == 0 {
-                    if warm {
-                        srgb(205, 170, 120)
-                    } else {
-                        srgb(120, 175, 180)
-                    }
-                } else if warm {
-                    srgb(120, 80, 55)
-                } else {
-                    srgb(40, 80, 95)
-                };
-                draw_ellipse(px, by, half, bh, 0.0, with_alpha(tone, 0.85));
-            }
-            // A faint "great spot" oval for character.
-            let sx = px + (hash01(h, 12) - 0.5) * r;
-            let sy = py + (hash01(h, 20) - 0.5) * r * 0.6;
-            draw_ellipse(
-                sx,
-                sy,
-                r * 0.22,
-                r * 0.13,
-                0.0,
-                with_alpha(
-                    if warm {
-                        srgb(220, 120, 90)
-                    } else {
-                        srgb(90, 200, 200)
-                    },
-                    0.7,
-                ),
-            );
-        }
-        // --- Rocky / cratered: tan-grey base + scattered dark crater rings.
-        2 => {
-            draw_circle(px, py, r, srgb(150, 140, 120));
-            draw_circle(px, py, r, with_alpha(srgb(110, 100, 88), 0.35));
-            for k in 0..6u32 {
-                let a = hash01(h, k * 3) * std::f32::consts::TAU;
-                let d = (0.10 + 0.65 * hash01(h, k * 3 + 8)) * r;
-                let cx = px + a.cos() * d;
-                let cy = py + a.sin() * d;
-                let cr = r * (0.06 + 0.12 * hash01(h, k * 3 + 16));
-                draw_circle(cx, cy, cr, with_alpha(srgb(90, 80, 70), 0.6));
-                draw_circle_lines(cx, cy, cr, 1.0, with_alpha(srgb(60, 52, 46), 0.8));
+            // White cloud arcs, kept inside the disc.
+            for k in 0..2u32 {
+                let a = hash01(h, k * 6 + 4) * std::f32::consts::TAU;
+                let d = 0.4 * r;
+                let cxx = px + a.cos() * d;
+                let cyy = py + a.sin() * d;
+                draw_ellipse(
+                    cxx,
+                    cyy,
+                    r * 0.34,
+                    r * 0.12,
+                    a * 30.0,
+                    with_alpha(WHITE, 0.35),
+                );
             }
         }
-        // --- Volcanic / molten: dark basalt + glowing orange cracks + hot glow.
+        // --- 3 Mars: rusty red base + darker maria + a white polar cap (top).
         3 => {
-            draw_circle(px, py, r, srgb(38, 30, 30));
-            draw_circle(px, py, r, with_alpha(srgb(70, 40, 35), 0.4));
-            draw_circle(px, py, r * 0.6, with_alpha(srgb(255, 120, 40), 0.14));
-            for k in 0..5u32 {
-                let a = hash01(h, k * 3) * std::f32::consts::TAU;
-                let d = 0.6 * r;
-                let x0 = px + a.cos() * d * hash01(h, k * 3 + 8);
-                let y0 = py + a.sin() * d * hash01(h, k * 3 + 8);
-                let a2 = a + (hash01(h, k * 3 + 16) - 0.5) * 1.4;
-                let x1 = px + a2.cos() * d;
-                let y1 = py + a2.sin() * d;
-                draw_line(x0, y0, x1, y1, 2.0, with_alpha(srgb(255, 140, 40), 0.9));
-                draw_line(x0, y0, x1, y1, 4.0, with_alpha(srgb(255, 90, 20), 0.3));
-            }
-        }
-        // --- Ice: pale blue-white base + faint cracks + a brighter pole cap.
-        _ => {
-            draw_circle(px, py, r, srgb(205, 222, 235));
-            draw_circle(px, py, r, with_alpha(srgb(150, 185, 215), 0.3));
+            draw_circle(px, py, r, srgb(200, 95, 55));
+            draw_circle(px, py, r, with_alpha(srgb(165, 75, 45), 0.35));
             for k in 0..4u32 {
                 let a = hash01(h, k * 4) * std::f32::consts::TAU;
-                let x0 = px + a.cos() * r * 0.2;
-                let y0 = py + a.sin() * r * 0.2;
-                let x1 = px + a.cos() * r * 0.85;
-                let y1 = py + a.sin() * r * 0.85;
-                draw_line(x0, y0, x1, y1, 1.0, with_alpha(srgb(120, 150, 180), 0.4));
+                let d = (0.1 + 0.6 * hash01(h, k * 4 + 8)) * r;
+                let mx = px + a.cos() * d;
+                let my = py + a.sin() * d;
+                let mr = r * (0.12 + 0.18 * hash01(h, k * 4 + 16));
+                draw_ellipse(
+                    mx,
+                    my,
+                    mr * 1.1,
+                    mr * 0.8,
+                    a * 20.0,
+                    with_alpha(srgb(120, 55, 35), 0.6),
+                );
             }
-            // North pole cap (upper) — brighter white ellipse, clipped near top.
+            // North polar cap — bright white ellipse clipped near the top.
             draw_ellipse(
                 px,
-                py - r * 0.62,
-                r * 0.7,
-                r * 0.28,
+                py - r * 0.66,
+                r * 0.5,
+                r * 0.2,
                 0.0,
-                with_alpha(WHITE, 0.7),
+                with_alpha(WHITE, 0.85),
+            );
+        }
+        // --- 4 Jupiter: large cream/orange/brown bands + a Great Red Spot.
+        4 => {
+            draw_circle(px, py, r, srgb(200, 170, 130));
+            let bands = 7u32;
+            for k in 0..bands {
+                let f = (k as f32 + 0.5) / bands as f32;
+                let by = py - r + f * 2.0 * r;
+                let dy = (by - py) / r;
+                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
+                let bh = r * (0.07 + 0.06 * hash01(h, k * 4));
+                let tone = match k % 3 {
+                    0 => srgb(225, 200, 160), // pale cream
+                    1 => srgb(170, 120, 80),  // orange-brown
+                    _ => srgb(130, 90, 60),   // dark brown
+                };
+                draw_ellipse(px, by, half, bh, 0.0, with_alpha(tone, 0.9));
+            }
+            // Great Red Spot: lower-left oval.
+            draw_ellipse(
+                px - r * 0.32,
+                py + r * 0.22,
+                r * 0.26,
+                r * 0.15,
+                0.0,
+                with_alpha(srgb(200, 90, 60), 0.85),
+            );
+            draw_ellipse_lines(
+                px - r * 0.32,
+                py + r * 0.22,
+                r * 0.26,
+                r * 0.15,
+                0.0,
+                1.0,
+                with_alpha(srgb(150, 60, 40), 0.7),
+            );
+        }
+        // --- 5 Saturn: pale-gold banded body (rings drawn in draw_cities).
+        5 => {
+            draw_circle(px, py, r, srgb(220, 200, 150));
+            let bands = 5u32;
+            for k in 0..bands {
+                let f = (k as f32 + 0.5) / bands as f32;
+                let by = py - r + f * 2.0 * r;
+                let dy = (by - py) / r;
+                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
+                let bh = r * (0.08 + 0.05 * hash01(h, k * 4));
+                let tone = if (k & 1) == 0 {
+                    srgb(232, 214, 168)
+                } else {
+                    srgb(196, 172, 120)
+                };
+                draw_ellipse(px, by, half, bh, 0.0, with_alpha(tone, 0.8));
+            }
+        }
+        // --- 6 Uranus: pale cyan, smooth with faint banding.
+        6 => {
+            draw_circle(px, py, r, srgb(160, 220, 225));
+            draw_circle(px, py, r, with_alpha(srgb(190, 235, 235), 0.4));
+            for k in 0..3u32 {
+                let f = (k as f32 + 0.5) / 3.0;
+                let by = py - r + f * 2.0 * r;
+                let dy = (by - py) / r;
+                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
+                draw_ellipse(
+                    px,
+                    by,
+                    half * 0.95,
+                    r * 0.1,
+                    0.0,
+                    with_alpha(srgb(140, 205, 210), 0.3),
+                );
+            }
+            // Thin vertical ring (Uranus is tilted on its side).
+            draw_ellipse_lines(
+                px,
+                py,
+                r * 0.4,
+                r * 1.5,
+                0.0,
+                1.0,
+                with_alpha(srgb(180, 220, 225), 0.3),
+            );
+        }
+        // --- 7 Neptune: deep blue, smooth, a darker Great Dark Spot + faint bands.
+        _ => {
+            draw_circle(px, py, r, srgb(45, 80, 190));
+            draw_circle(px, py, r, with_alpha(srgb(60, 100, 210), 0.4));
+            for k in 0..3u32 {
+                let f = (k as f32 + 0.5) / 3.0;
+                let by = py - r + f * 2.0 * r;
+                let dy = (by - py) / r;
+                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
+                draw_ellipse(
+                    px,
+                    by,
+                    half * 0.95,
+                    r * 0.1,
+                    0.0,
+                    with_alpha(srgb(35, 65, 160), 0.4),
+                );
+            }
+            // Great Dark Spot — upper-right darker oval.
+            draw_ellipse(
+                px + r * 0.28,
+                py - r * 0.2,
+                r * 0.24,
+                r * 0.15,
+                0.0,
+                with_alpha(srgb(20, 40, 110), 0.75),
             );
         }
     }
@@ -2743,10 +2907,12 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
         };
         let px = ox + tile_to_px(c.x, cell);
         let py = wtop + tile_to_px(c.y, cell);
-        // Base body radius from the planet's tile radius, with a sane floor.
+        // Base body radius from the planet's tile radius, with a sane floor,
+        // then scaled by the real body's relative size (Jupiter >> Mercury).
         let body_r = sim
             .planet_radius(pid)
-            .map_or(cell * 0.9, |rad| tile_to_px(rad, cell).max(cell * 0.7));
+            .map_or(cell * 0.9, |rad| tile_to_px(rad, cell).max(cell * 0.7))
+            * planet_size_scale(pid);
         let hash = planet_hash(pid);
         let owner = sim.planet_owner(pid);
         // Atmosphere halo behind the body: tinted by owner, faint grey if neutral.
@@ -2758,9 +2924,17 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
         let pulse = (t * 1.6 + i as f32).sin() * 0.5 + 0.5;
         draw_circle(px, py, body_r * 1.35, with_alpha(atmo, 0.10));
         draw_circle(px, py, body_r * 1.18, with_alpha(atmo, 0.08));
+        // Saturn (pid 5): draw the back half of the ring system behind the body.
+        if pid.0 == 5 {
+            draw_saturn_rings(px, py, body_r, false);
+        }
         // The world itself.
         draw_planet_surface(px, py, body_r, pid, hash);
         shade_sphere(px, py, body_r);
+        // Saturn: front half of the rings, over the body, so it encircles it.
+        if pid.0 == 5 {
+            draw_saturn_rings(px, py, body_r, true);
+        }
         // Atmosphere rim line in the owner colour (gentle pulse).
         draw_circle_lines(
             px,
@@ -2842,6 +3016,26 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
                 py,
                 (body_r * 0.07).max(1.5),
                 with_alpha(WHITE, 0.3 + 0.4 * pulse),
+            );
+        }
+        // Planet name, centred under the world (pop number sits above it). The
+        // ring system pushes Saturn's label a little lower so it clears the rings.
+        let names = [
+            "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
+        ];
+        if let Some(name) = names.get(usize::from(pid.0)) {
+            let nw = measure_text(name, pf, 12, 1.0).width;
+            let drop = if pid.0 == 5 { body_r * 0.6 } else { 0.0 };
+            draw_text_ex(
+                name,
+                px - nw / 2.0,
+                py + body_r + 16.0 + drop,
+                TextParams {
+                    font: pf,
+                    font_size: 12,
+                    color: with_alpha(WHITE, 0.7),
+                    ..Default::default()
+                },
             );
         }
     }
@@ -2999,10 +3193,156 @@ fn board_size(sim: &Sim, cell: f32) -> (f32, f32) {
     ((0.75 * cols + 1.0) * cell, (rows + 0.5) * cell)
 }
 
+/// Renders the Conquest board as deep space: a near-black fill and a fixed
+/// deterministic starfield (hashed positions, varied brightness/size, a few
+/// bright cross-glint stars, a subtle per-star twinkle). No hex lattice — the
+/// planets and the Sun carry the visual. A faint cool void-vignette seats the
+/// rect against the letterbox.
+fn draw_space(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+    let (bw, bh) = board_size(sim, cell);
+    let t = get_time() as f32;
+    // Deep-space fill: a very dark blue-charcoal.
+    draw_rectangle(ox, wtop, bw, bh, Color::from_rgba(3, 5, 12, 255));
+    // A barely-there nebular gradient lifting the centre, cool and dim.
+    draw_ellipse(
+        ox + bw / 2.0,
+        wtop + bh * 0.5,
+        bw * 0.55,
+        bh * 0.5,
+        0.0,
+        Color::from_rgba(10, 16, 34, 40),
+    );
+    // Starfield: ~220 stars at deterministic positions across the board rect.
+    // Each star's x/y/brightness/size is sliced from a hash of its index, so the
+    // sky is fixed (no rng); a sin() term gives a gentle twinkle.
+    let stars = 220u32;
+    for k in 0..stars {
+        let h = k
+            .wrapping_mul(2_654_435_761)
+            .wrapping_add(0x9E37_79B9)
+            .wrapping_mul(2_246_822_519);
+        let fx = (h & 0xFFFF) as f32 / 65_536.0;
+        let fy = ((h >> 16) & 0xFFFF) as f32 / 65_536.0;
+        let sx = ox + fx * bw;
+        let sy = wtop + fy * bh;
+        let g = (h >> 5) & 0xFF; // brightness slice
+        let base_a = 0.25 + 0.55 * (g as f32 / 255.0);
+        let twk = 0.7 + 0.3 * ((t * 1.5 + k as f32 * 0.7).sin() * 0.5 + 0.5);
+        let a = base_a * twk;
+        // ~1 in 9 stars is a brighter 2px star with a tiny cross-glint.
+        if k % 9 == 0 {
+            draw_circle(sx, sy, 1.6, with_alpha(WHITE, a));
+            let gl = 3.2;
+            draw_line(sx - gl, sy, sx + gl, sy, 1.0, with_alpha(WHITE, a * 0.5));
+            draw_line(sx, sy - gl, sx, sy + gl, 1.0, with_alpha(WHITE, a * 0.5));
+        } else {
+            // Faint colour cast on a few stars (warm/cool) for depth.
+            let tint = match k % 5 {
+                0 => Color::from_rgba(200, 210, 255, 255),
+                1 => Color::from_rgba(255, 225, 200, 255),
+                _ => WHITE,
+            };
+            draw_circle(sx, sy, 0.9, with_alpha(tint, a));
+        }
+    }
+    // Cool void-vignette: concentric darkening frames, heaviest at the rim.
+    for (i, alpha) in [70u8, 50, 34].into_iter().enumerate() {
+        let inset = i as f32 * cell;
+        draw_rectangle_lines(
+            ox + inset,
+            wtop + inset,
+            bw - inset * 2.0,
+            bh - inset * 2.0,
+            cell,
+            Color::from_rgba(1, 2, 6, alpha),
+        );
+    }
+    // The Sun and orbit rings sit under the planets (drawn later in draw_cities).
+    draw_sun(sim, cell, ox, wtop);
+}
+
+/// Screen-space centroid of all planet centres — the point the planets orbit,
+/// where the Sun sits. `None` if there are no planets.
+fn system_center(sim: &Sim, cell: f32, ox: f32, wtop: f32) -> Option<(f32, f32)> {
+    let n = sim.planets_len();
+    if n == 0 {
+        return None;
+    }
+    let (mut sx, mut sy, mut count) = (0.0f32, 0.0f32, 0.0f32);
+    for i in 0..n {
+        if let Some(c) = sim.planet_center(PlanetId(i as u16)) {
+            sx += ox + tile_to_px(c.x, cell);
+            sy += wtop + tile_to_px(c.y, cell);
+            count += 1.0;
+        }
+    }
+    if count == 0.0 {
+        None
+    } else {
+        Some((sx / count, sy / count))
+    }
+}
+
+/// Draws the system's Sun at the centroid of the planets, plus one faint orbit
+/// ring per planet (a circle on the Sun centred at the planet's screen radius).
+/// The Sun is a blazing warm star: stacked translucent glow discs (white→orange
+/// →transparent), a hot white-yellow core, a gently pulsing corona, and a few
+/// faint rotating rays. Warm colours only — never a civ colour.
+fn draw_sun(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+    let Some((cx, cy)) = system_center(sim, cell, ox, wtop) else {
+        return;
+    };
+    let t = get_time() as f32;
+    // Orbit rings: one faint cool circle per planet, radius = Sun→planet distance.
+    for i in 0..sim.planets_len() {
+        let Some(c) = sim.planet_center(PlanetId(i as u16)) else {
+            continue;
+        };
+        let px = ox + tile_to_px(c.x, cell);
+        let py = wtop + tile_to_px(c.y, cell);
+        let rad = (px - cx).hypot(py - cy);
+        if rad < 1.0 {
+            continue;
+        }
+        // Faint cool steel-blue orbit ring, low alpha.
+        draw_circle_lines(cx, cy, rad, 1.0, Color::from_rgba(120, 150, 200, 30));
+    }
+    // Sun radius scaled to the cell so it reads as the blazing system heart.
+    let r = (cell * 1.6).max(18.0);
+    // Soft radial glow: several stacked translucent discs warm-white→orange→clear,
+    // with a slow breathing pulse.
+    let pulse = 0.5 + 0.5 * (t * 0.8).sin();
+    let glow = r * (3.4 + 0.25 * pulse);
+    draw_circle(cx, cy, glow, Color::from_rgba(255, 170, 60, 14));
+    draw_circle(cx, cy, glow * 0.72, Color::from_rgba(255, 190, 90, 20));
+    draw_circle(cx, cy, glow * 0.5, Color::from_rgba(255, 215, 130, 32));
+    draw_circle(cx, cy, r * 1.7, Color::from_rgba(255, 235, 180, 60));
+    // Faint rotating rays — a subtle corona, gently animated.
+    for k in 0..8u32 {
+        let ang = t * 0.15 + k as f32 * (std::f32::consts::TAU / 8.0);
+        let len = r * (2.2 + 0.3 * (t * 1.1 + k as f32).sin());
+        let x1 = cx + ang.cos() * len;
+        let y1 = cy + ang.sin() * len;
+        draw_line(cx, cy, x1, y1, 2.0, Color::from_rgba(255, 210, 130, 18));
+    }
+    // Core disc: bright white-yellow body with a hot white centre.
+    draw_circle(cx, cy, r, srgb(255, 240, 200));
+    draw_circle(cx, cy, r * 0.78, srgb(255, 250, 225));
+    draw_circle(cx, cy, r * 0.45, WHITE);
+    // Thin warm rim to seat the corona against the core.
+    draw_circle_lines(cx, cy, r, 1.5, with_alpha(srgb(255, 200, 120), 0.6));
+}
+
 /// Draws the battlefield as a gilded antique **hex** campaign-map: flat-top hex
 /// terrain tiles in warm painted tones, a sepia varnish + edge vignette, and an
 /// ornate gold deco frame with corner ornaments — matching the regal menu.
 fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+    // Conquest (planetary) → render the board as deep space with a starfield,
+    // not the gilded hex campaign-map. Survival (no planets) keeps the hex look.
+    if sim.planets_len() > 0 {
+        draw_space(sim, cell, ox, wtop);
+        return;
+    }
     let cols = sim.map().width();
     let rows = sim.map().height();
     let (bw, bh) = board_size(sim, cell);
