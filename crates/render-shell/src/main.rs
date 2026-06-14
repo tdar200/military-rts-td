@@ -32,7 +32,7 @@ use rts_core::game::civ::{
     ColonyId, ColonyIntent, SectorDoctrine, AUTONOMY_FULL, AUTONOMY_HOLD_TICKS,
 };
 use rts_core::game::hex;
-use rts_core::game::map::DepositKind;
+use rts_core::game::map::{DepositKind, TerrainKind};
 use rts_core::game::perk;
 use rts_core::game::planet::PlanetId;
 use rts_core::game::scenario;
@@ -47,10 +47,11 @@ use sprites::Sprites;
 use theme::{
     civ_color, glow_rect, holo_flicker, hp_color, ALERT_GLOW, BAD, BASE_CHARCOAL, BORDER_NEUTRAL,
     BRONZE, CIV_NEUTRAL, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_HI, GOOD, GRID, GRID_HOT, GROUND,
-    GROUND_MACRO, HOLO_GLOW, HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2, MAP_PLAINS,
-    OLIVE, PANEL, PANEL_RAISED, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO,
-    PIECE_SHADOW, REGAL_BG, REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER,
-    TERRAIN_WALL, TEXT, TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
+    GROUND_MACRO, HOLO_GLOW, HP_TRACK, INK, INK_DIM, OLIVE, PANEL, PANEL_RAISED, PARCHMENT,
+    PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW, REGAL_BG, REGAL_BG_HI, REGAL_BG_LO,
+    SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_BARREN, TERRAIN_FERTILE, TERRAIN_PLAINS,
+    TERRAIN_RICH, TERRAIN_WALL, TEXT, TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP,
+    WARN, WELL,
 };
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
@@ -2858,19 +2859,31 @@ fn draw_piece(
     }
 }
 
-/// Picks a warm campaign-map terrain tone for a tile, deterministically by
-/// position — mostly grassland with patches of plains and forest, so the board
-/// reads as a painted Civ-style map rather than a flat checkerboard.
-fn terrain_tone(tx: u16, ty: u16) -> Color {
-    let n = (u32::from(tx) * 73 + u32::from(ty) * 151) % 100;
-    if n < 50 {
-        MAP_GRASS
-    } else if n < 72 {
-        MAP_GRASS2
-    } else if n < 88 {
-        MAP_PLAINS
-    } else {
-        MAP_FOREST
+/// Distinct base tone for a real gameplay `TerrainKind`, so the board shows the
+/// actual terrain layer (fertile green vs barren grey vs mineral teal) rather
+/// than decorative position-noise. Tuned dark + muted to read on the holo board.
+const fn terrain_color(kind: TerrainKind) -> Color {
+    match kind {
+        TerrainKind::Barren => TERRAIN_BARREN,
+        TerrainKind::Plains => TERRAIN_PLAINS,
+        TerrainKind::Fertile => TERRAIN_FERTILE,
+        TerrainKind::Rich => TERRAIN_RICH,
+    }
+}
+
+/// Per-tile fill: the real terrain tone with a small deterministic brightness
+/// jitter (±~6% by position hash) so each region gets subtle texture instead of
+/// a flat slab, while staying fully deterministic (no rng).
+fn terrain_tile_color(sim: &Sim, tx: u16, ty: u16) -> Color {
+    let base = terrain_color(sim.map().terrain_at(i32::from(tx), i32::from(ty)));
+    // 0..16 → roughly -6%..+6% multiplicative value jitter, centered.
+    let n = (u32::from(tx) * 73 + u32::from(ty) * 151) % 16;
+    let jitter = 0.94 + (n as f32) * (0.12 / 15.0);
+    Color {
+        r: (base.r * jitter).clamp(0.0, 1.0),
+        g: (base.g * jitter).clamp(0.0, 1.0),
+        b: (base.b * jitter).clamp(0.0, 1.0),
+        a: base.a,
     }
 }
 
@@ -2895,7 +2908,7 @@ fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     for row in 0..rows {
         for col in 0..cols {
             let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
-            draw_hex(cx, cy, cell, terrain_tone(col, row));
+            draw_hex(cx, cy, cell, terrain_tile_color(sim, col, row));
             if (col / 4 + row / 4).is_multiple_of(2) {
                 draw_hex(cx, cy, cell, GROUND_MACRO);
             }

@@ -162,14 +162,17 @@ pub const DECO_GOLD: Color = color_u8!(64, 220, 235, 255);
 pub const DECO_GOLD_HI: Color = color_u8!(150, 245, 255, 255);
 
 // --- board terrain tones (holographic floor) ---
-/// Floor base.
-pub const MAP_GRASS: Color = color_u8!(10, 16, 26, 255);
-/// Floor variant (a step lighter).
-pub const MAP_GRASS2: Color = color_u8!(14, 22, 34, 255);
-/// Floor sector accent (faint cyan-tinted).
-pub const MAP_PLAINS: Color = color_u8!(16, 28, 40, 255);
-/// Floor low band (darker).
-pub const MAP_FOREST: Color = color_u8!(8, 14, 22, 255);
+// Distinct base tones per real `TerrainKind`, tuned dark + muted so they read on
+// the holographic board (varnish/vignette wash over them) while still showing
+// clear regions: cool grey rock, warm savanna, green vegetation, mineral teal.
+/// Barren: cool grey rock / dust (the default open-space floor).
+pub const TERRAIN_BARREN: Color = color_u8!(34, 41, 48, 255);
+/// Plains: warm tan / savanna.
+pub const TERRAIN_PLAINS: Color = color_u8!(58, 52, 34, 255);
+/// Fertile: green vegetation.
+pub const TERRAIN_FERTILE: Color = color_u8!(30, 58, 36, 255);
+/// Rich: a valuable mineral teal-cyan tint so resource worlds stand out.
+pub const TERRAIN_RICH: Color = color_u8!(30, 64, 70, 255);
 /// Cool holographic center-bloom wash unifying the board.
 pub const VARNISH: Color = color_u8!(64, 220, 235, 30);
 
