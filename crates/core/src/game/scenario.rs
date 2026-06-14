@@ -283,23 +283,29 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     /// Claim radius in world units (auxiliary; exact membership is the Map layer).
     const PLANET_RADIUS: i32 = 3;
 
-    // Eight home-region centres on a 4x2 grid across the wide field, well clear of
-    // the contested centre column and >= 4 tiles from every map edge so the 3x3
-    // blocks stay in-bounds and never overlap. Index-ordered for determinism.
-    const HOME_CENTERS: [(u16, u16); 8] = [
-        (8, 5),
-        (63, 22),
-        (63, 5),
-        (8, 22),
-        (36, 5),
-        (36, 22),
-        (8, 13),
-        (63, 13),
+    // ===== OUR SOLAR SYSTEM =====
+    // The Sun sits at the map centre (a render-only star — not a settleable planet).
+    // The eight planets are hand-placed in SOLAR ORDER at monotonically increasing
+    // distance from the centre (so their orbits nest) and spread in angle, with all
+    // 3x3 blocks in-bounds and non-overlapping on the 72x28 field. Planet IDs ARE
+    // the solar order (0=Mercury .. 7=Neptune), so the renderer styles + names each
+    // world from its id. You (civ 0) always start on EARTH.
+    const SOLAR: [(u16, u16); 8] = [
+        (44, 16), // 0 Mercury
+        (26, 10), // 1 Venus
+        (50, 11), // 2 Earth  <- the human homeworld
+        (20, 20), // 3 Mars
+        (55, 19), // 4 Jupiter
+        (14, 9),  // 5 Saturn
+        (61, 11), // 6 Uranus
+        (9, 17),  // 7 Neptune
     ];
-    // Two neutral expansion planets down the centre column, away from every home.
-    const NEUTRAL_CENTERS: [(u16, u16); 2] = [(36, 11), (36, 16)];
+    const EARTH: usize = 2;
+    // Planets the AI civs claim, in priority order (you always take Earth). Civ k
+    // (1..civ_count) homes on AI_PLANETS[k-1]; every other world stays neutral.
+    const AI_PLANETS: [usize; 7] = [3, 4, 5, 1, 6, 7, 0]; // Mars,Jupiter,Saturn,Venus,Uranus,Neptune,Mercury
 
-    let civ_count = civ_count.clamp(1, HOME_CENTERS.len());
+    let civ_count = civ_count.clamp(1, 8);
     let mut sim = Sim::with_civ_count(Map::new(W, H), seed, Fixed::from_int(2000), civ_count);
 
     // Marks the 3x3 tile block centred on `(cx, cy)` as belonging to `planet_id`.
@@ -317,40 +323,32 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
         }
     };
 
-    // Planet ids are assigned in push order: homes first (0..civ_count), then the
-    // neutral planets. To keep a SINGLE source of truth for the id, we push each
-    // planet first and mark its tile block using the `PlanetId` `push_planet`
-    // returns — no parallel counter to desync from the planet arena.
-
-    // Lay each civ's home planet: seat a CommandCenter at the centre, register the
-    // planet (owned), mark its 3x3 block with the returned id, and add a
-    // fully-autonomous colony.
-    for (id, &(cx, cy)) in HOME_CENTERS.iter().enumerate().take(civ_count) {
-        let pid = PlayerId(u16::try_from(id).unwrap_or(0));
-        let cc = sim.add_building(pid, BuildingKind::CommandCenter, cx, cy);
-        let planet_id = sim.push_planet(Planet {
-            owner: Some(pid),
-            seat: Some(cc),
-            center: hex::center(cx, cy),
-            radius: Fixed::from_int(PLANET_RADIUS),
-        });
-        mark_block(&mut sim, cx, cy, planet_id);
-        // The human (civ id 0) starts MANUAL so the player actively drives their
-        // colony; AI civs start fully autonomous so they auto-play.
-        let autonomy = if id == 0 { 0 } else { AUTONOMY_FULL };
-        let _ = sim.add_colony(pid, cc, autonomy);
+    // Decide each world's owner: Earth -> you (civ 0); the next civs -> their
+    // AI_PLANETS in order; every other world stays neutral (settle or conquer it).
+    let mut owner: [Option<PlayerId>; 8] = [None; 8];
+    owner[EARTH] = Some(PlayerId(0));
+    for k in 1..civ_count {
+        owner[AI_PLANETS[k - 1]] = Some(PlayerId(u16::try_from(k).unwrap_or(0)));
     }
 
-    // Lay the neutral expansion planets: marked blocks with a centre but no owner
-    // or seat, so any civ may settle them.
-    for &(cx, cy) in &NEUTRAL_CENTERS {
+    // Push all eight planets in solar order, so PlanetId == solar index. Owned
+    // worlds get a CommandCenter seat + a colony (you start MANUAL on Earth so you
+    // drive it; AI civs start fully autonomous). The tile block is marked with the
+    // id `push_planet` returns — one source of truth, no parallel counter.
+    for (idx, &(cx, cy)) in SOLAR.iter().enumerate() {
+        let holder = owner[idx];
+        let seat = holder.map(|civ| sim.add_building(civ, BuildingKind::CommandCenter, cx, cy));
         let planet_id = sim.push_planet(Planet {
-            owner: None,
-            seat: None,
+            owner: holder,
+            seat,
             center: hex::center(cx, cy),
             radius: Fixed::from_int(PLANET_RADIUS),
         });
         mark_block(&mut sim, cx, cy, planet_id);
+        if let (Some(civ), Some(cc)) = (holder, seat) {
+            let autonomy = if civ.0 == 0 { 0 } else { AUTONOMY_FULL };
+            let _ = sim.add_colony(civ, cc, autonomy);
+        }
     }
 
     // Paint deterministic, non-Barren terrain on every planet tile so colonies have
