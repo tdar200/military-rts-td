@@ -94,6 +94,11 @@ const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
 /// The battlefield is drawn below the top bar.
 const WORLD_TOP: f32 = ui::TOP_BAR_H;
+/// Camera zoom bounds: `1.0` is the default fit-to-screen view.
+const MIN_ZOOM: f32 = 0.6;
+const MAX_ZOOM: f32 = 4.0;
+/// Wheel-tick zoom step (per detent).
+const ZOOM_STEP: f32 = 0.12;
 /// Surviving this many waves earns the celebratory "BEACHHEAD SECURED" milestone.
 /// The run keeps going — survival stays an endurance mode; this is the goal to
 /// beat, not an ending.
@@ -151,6 +156,40 @@ fn tile_to_px(v: Fixed, cell: f32) -> f32 {
 /// Horizontal offset that centers the hex board in the window.
 fn board_origin_x(sim: &Sim, cell: f32) -> f32 {
     ((screen_width() - board_size(sim, cell).0) / 2.0).max(0.0)
+}
+
+/// Camera = (`zoom`, `cam` world-space center). Returns the effective per-unit
+/// scale `cell` and the world→screen base offsets `(ox, wtop_base)` such that
+/// `screen = (ox + world.x * cell, wtop_base + world.y * cell)`. `cam` is mapped
+/// to the center of the playfield viewport (between the top + command bars), so
+/// at `zoom == 1` and `cam == board center` this reproduces the default framing.
+/// Screen-shake is applied by callers on top of `(ox, wtop_base)`.
+fn camera_transform(sim: &Sim, zoom: f32, cam: (f32, f32)) -> (f32, f32, f32) {
+    let cell = cell_size(sim) * zoom;
+    let (vcx, vcy) = viewport_center();
+    let ox = vcx - cam.0 * cell;
+    let wtop_base = vcy - cam.1 * cell;
+    (cell, ox, wtop_base)
+}
+
+/// Center of the playfield viewport: full window width, vertically between the
+/// top bar and the command bar.
+fn viewport_center() -> (f32, f32) {
+    let vcx = screen_width() / 2.0;
+    let vcy = WORLD_TOP + (screen_height() - ui::CMD_BAR_H - WORLD_TOP) / 2.0;
+    (vcx, vcy)
+}
+
+/// The default camera target (world units), chosen so that at `zoom == 1` the
+/// transform reproduces today's framing *exactly*: it inverts [`camera_transform`]
+/// against the legacy offsets `ox = board_origin_x` and `wtop = WORLD_TOP`. Using
+/// the inverse (rather than a nominal board center) guarantees the default view is
+/// pixel-identical regardless of whether the fit is width- or height-constrained.
+fn default_cam(sim: &Sim) -> (f32, f32) {
+    let cell = cell_size(sim);
+    let (vcx, vcy) = viewport_center();
+    let ox = board_origin_x(sim, cell);
+    ((vcx - ox) / cell, (vcy - WORLD_TOP) / cell)
 }
 
 /// World-space center of hex cell `(col, row)` in pixels, with the board centered
@@ -231,6 +270,14 @@ async fn main() {
     let mut view = view::ViewState::default();
     let mut particles = particles::Particles::new();
     let mut camera = anim::Camera::default();
+    // Player camera (independent of the screen-shake `camera`): mouse-wheel zoom +
+    // middle-drag pan. `zoom == 1` and `cam == default_cam` reproduce today's view.
+    // `cam` is the world-space point pinned to the playfield viewport center.
+    // Lazily initialized once the first sim exists (needs the map dimensions).
+    let mut zoom: f32 = 1.0;
+    let mut cam: Option<(f32, f32)> = None;
+    // Last mouse position, for computing middle-drag pan deltas.
+    let mut last_mouse: (f32, f32) = mouse_position();
     // Hit-stop: while > 0 the sim is frozen (in wall-clock) for impact emphasis.
     let mut hitstop = 0.0_f32;
     // Audio bookkeeping: one-shot game-over jingle + wave-incoming alarm edges.
@@ -297,14 +344,66 @@ async fn main() {
                 research_open = false;
                 doctrine_open = false;
                 grid_open = false;
+                // Reset the player camera for the fresh match (re-centers on map).
+                zoom = 1.0;
+                cam = None;
             }
             draw_title(&sprites, selected_conquest);
             next_frame().await;
             continue;
         }
 
-        let cell = cell_size(&sim);
         let over = sim.winner().is_some();
+        // Lazily anchor the camera on the current map (default == today's view).
+        let cam_center = *cam.get_or_insert_with(|| default_cam(&sim));
+        // --- Player camera input: wheel-zoom (to cursor) + middle-drag pan ---
+        // Gated to map interaction: not over the UI, not in a modal, while Playing.
+        let (mx, my) = mouse_position();
+        let cam_input_ok = !over
+            && !ui::pointer_over_ui()
+            && !research_open
+            && !perk_open
+            && !doctrine_open
+            && !sector_open;
+        if cam_input_ok {
+            let (vcx, vcy) = viewport_center();
+            // Zoom toward the cursor: keep the world point under the cursor fixed.
+            let (_, wheel_y) = mouse_wheel();
+            if wheel_y != 0.0 {
+                let (cell_pre, ox_pre, wtop_pre) = camera_transform(&sim, zoom, cam_center);
+                let wpx = (mx - ox_pre) / cell_pre;
+                let wpy = (my - wtop_pre) / cell_pre;
+                zoom = (zoom * (1.0 + wheel_y.signum() * ZOOM_STEP)).clamp(MIN_ZOOM, MAX_ZOOM);
+                let cell_post = cell_size(&sim) * zoom;
+                cam = Some((wpx - (mx - vcx) / cell_post, wpy - (my - vcy) / cell_post));
+            }
+            // Pan: hold the middle button and drag (left=select / right=order are
+            // untouched). Move `cam` by the inverse of the mouse delta in world units.
+            if is_mouse_button_down(MouseButton::Middle) {
+                let (cell_now, _, _) = camera_transform(&sim, zoom, cam.unwrap_or(cam_center));
+                let c = cam.unwrap_or(cam_center);
+                cam = Some((
+                    c.0 - (mx - last_mouse.0) / cell_now,
+                    c.1 - (my - last_mouse.1) / cell_now,
+                ));
+            }
+            // Reset to the default view (Home).
+            if is_key_pressed(KeyCode::Home) {
+                zoom = 1.0;
+                cam = Some(default_cam(&sim));
+            }
+        }
+        last_mouse = (mx, my);
+        // Clamp the camera so the board can't be panned entirely off-screen (loose).
+        let world_w = 0.75 * f32::from(sim.map().width());
+        let world_h = f32::from(sim.map().height());
+        if let Some(c) = cam.as_mut() {
+            c.0 = c.0.clamp(0.0, world_w);
+            c.1 = c.1.clamp(0.0, world_h);
+        }
+        // Final camera transform for THIS frame — the single source of truth shared
+        // by both drawing and input, so clicks stay correct at any zoom/pan.
+        let (cell, ox_cam, wtop_cam) = camera_transform(&sim, zoom, cam.unwrap_or(cam_center));
 
         // Survival perk draft: each newly-spawned wave grants a perk pick until
         // all are taken, opening a (time-freezing) draft modal.
@@ -349,14 +448,14 @@ async fn main() {
             // Reject clicks in the letterbox margins: cursor_tile clamps off-board
             // points onto an edge tile, so check the raw world position is in bounds.
             let (mx, my) = mouse_position();
-            let wx = (mx - board_origin_x(&sim, cell)) / cell;
-            let wy = (my - WORLD_TOP) / cell;
+            let wx = (mx - ox_cam) / cell;
+            let wy = (my - wtop_cam) / cell;
             let on_board = wx >= 0.0
                 && wy >= 0.0
                 && wx < f32::from(sim.map().width())
                 && wy < f32::from(sim.map().height());
             if on_board && is_mouse_button_pressed(MouseButton::Left) && !ui::pointer_over_ui() {
-                let (col, row) = input::cursor_tile(&sim, cell);
+                let (col, row) = input::cursor_tile(&sim, cell, (ox_cam, wtop_cam));
                 if sim
                     .map()
                     .tile(i32::from(col), i32::from(row))
@@ -384,6 +483,7 @@ async fn main() {
                 &mut build_mode,
                 ui::pointer_over_ui(),
                 cell,
+                (ox_cam, wtop_cam),
             ));
         }
         // Survey allows only founding — pause/speed/modals are suppressed until
@@ -703,8 +803,10 @@ async fn main() {
                 .retain(|&id| views.iter().any(|v| v.id == id && v.owner == HUMAN));
         }
         view.frame(dt);
-        // Turn this frame's FX events into particles, then advance the pool.
-        let ofx = board_origin_x(&sim, cell);
+        // Turn this frame's FX events into particles, then advance the pool. Spawn
+        // at the shared camera transform (no shake, matching the legacy framing) so
+        // explosions/spawns/muzzle flashes land on-piece at any zoom/pan.
+        let ofx = ox_cam;
         for ev in view.events.drain(..) {
             match ev {
                 view::FxEvent::Death {
@@ -712,7 +814,7 @@ async fn main() {
                     building,
                     human,
                 } => {
-                    let p = vec2(ofx + world.x * cell, WORLD_TOP + world.y * cell);
+                    let p = vec2(ofx + world.x * cell, wtop_cam + world.y * cell);
                     let col = if human { TEAM_PLAYER } else { TEAM_ENEMY };
                     particles.explosion(p, col, if building { 1.8 } else { 1.0 });
                     if building {
@@ -728,7 +830,7 @@ async fn main() {
                     building,
                     human,
                 } => {
-                    let p = vec2(ofx + world.x * cell, WORLD_TOP + world.y * cell);
+                    let p = vec2(ofx + world.x * cell, wtop_cam + world.y * cell);
                     let col = if human { TEAM_PLAYER } else { TEAM_ENEMY };
                     if building {
                         particles.poof(p, col);
@@ -743,7 +845,7 @@ async fn main() {
                     human,
                     amount,
                 } => {
-                    let p = vec2(ofx + world.x * cell, WORLD_TOP + world.y * cell);
+                    let p = vec2(ofx + world.x * cell, wtop_cam + world.y * cell);
                     let col = if human { TEAM_PLAYER } else { TEAM_ENEMY };
                     particles.impact(p, col, amount * 0.12);
                     camera.add_trauma((amount * 0.01).min(0.12));
@@ -754,7 +856,7 @@ async fn main() {
         for &(from, _to) in sim.recent_attacks() {
             let f = vec2(
                 ofx + tile_to_px(from.x, cell),
-                WORLD_TOP + tile_to_px(from.y, cell),
+                wtop_cam + tile_to_px(from.y, cell),
             );
             particles.muzzle(f, TRACER);
         }
@@ -816,11 +918,11 @@ async fn main() {
         let (sx, sy) = camera.offset(7.0);
 
         draw(
-            &sim, &view, &particles, &selected, drag_start, build_mode, cell, alpha, sx, sy,
-            &sprites,
+            &sim, &view, &particles, &selected, drag_start, build_mode, cell, ox_cam, wtop_cam,
+            alpha, sx, sy, &sprites,
         );
         if surveying {
-            draw_survey_overlay(&sim, cell, &sprites);
+            draw_survey_overlay(&sim, cell, ox_cam, wtop_cam, &sprites);
         }
         // The selection panel shows a single unit's stats; with exactly one unit
         // selected, behave as before. A planet selection drives Task 4's panel.
@@ -1283,11 +1385,9 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
 /// legal / green deposit-adjacent premium), ring the cursor tile, and prompt the
 /// player to choose a site. Founding adjacent to an Ore deposit pays a bonus, so
 /// green tiles are the recommended picks.
-fn draw_survey_overlay(sim: &Sim, cell: f32, sprites: &Sprites) {
-    let ox = board_origin_x(sim, cell);
-    let wtop = WORLD_TOP;
+fn draw_survey_overlay(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
     let map = sim.map();
-    let (cur_c, cur_r) = input::cursor_tile(sim, cell);
+    let (cur_c, cur_r) = input::cursor_tile(sim, cell, (ox, wtop));
     let pulse = (get_time() as f32 * 2.5).sin() * 0.5 + 0.5;
     for row in 0..map.height() {
         for col in 0..map.width() {
@@ -2264,15 +2364,18 @@ fn draw(
     drag_start: Option<(f32, f32)>,
     build_mode: Option<BuildingKind>,
     cell: f32,
+    ox_base: f32,
+    wtop_base: f32,
     alpha: f32,
     sx: f32,
     sy: f32,
     sprites: &Sprites,
 ) {
     clear_background(BASE_CHARCOAL);
-    // The world layer is offset by the screen-shake (sx, sy); the HUD is not.
-    let ox = board_origin_x(sim, cell) + sx;
-    let wtop = WORLD_TOP + sy;
+    // `ox_base`/`wtop_base` are the camera transform (zoom + pan) shared with input;
+    // the world layer adds the screen-shake (sx, sy) on top. The HUD does not.
+    let ox = ox_base + sx;
+    let wtop = wtop_base + sy;
     draw_ground(sim, cell, ox, wtop);
     // Resource deposits sit on the ground, above the terrain but under pieces/fog.
     draw_deposits(sim, cell, ox, wtop);
@@ -2964,12 +3067,12 @@ fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     corner_ornament(ox + bw, wtop + bh, -1.0, -1.0);
 }
 
-/// The hovered hex during building placement (mouse → cell), board centered.
-fn mouse_hex(sim: &Sim, cell: f32) -> (u16, u16) {
+/// The hovered hex during building placement (mouse → cell), using the shared
+/// camera transform `ox`/`wtop` so the ghost lands under the cursor at any zoom/pan.
+fn mouse_hex(sim: &Sim, cell: f32, ox: f32, wtop: f32) -> (u16, u16) {
     let (mx, my) = mouse_position();
-    let ox = board_origin_x(sim, cell);
     let wx = Fixed::from_bits((((mx - ox) / cell) * 65536.0) as i64);
-    let wy = Fixed::from_bits((((my - WORLD_TOP) / cell) * 65536.0) as i64);
+    let wy = Fixed::from_bits((((my - wtop) / cell) * 65536.0) as i64);
     hex::from_world(SimVec2::new(wx, wy), sim.map().width(), sim.map().height())
 }
 
@@ -3029,7 +3132,7 @@ fn draw_tracers(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
 /// For `Refinery` and `AntimatterPlant` (extractors), also outlines every deposit
 /// tile in cyan so the player can see where extractors belong.
 fn draw_build_ghost(sim: &Sim, kind: BuildingKind, cell: f32, ox: f32, wtop: f32) {
-    let (col, row) = mouse_hex(sim, cell);
+    let (col, row) = mouse_hex(sim, cell, ox, wtop);
     let buildable = sim
         .map()
         .tile(i32::from(col), i32::from(row))

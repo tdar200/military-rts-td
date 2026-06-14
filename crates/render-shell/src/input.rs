@@ -48,12 +48,14 @@ pub fn gather_commands(
     build_mode: &mut Option<BuildingKind>,
     pointer_over_ui: bool,
     cell: f32,
+    origin: (f32, f32),
 ) -> Vec<Command> {
     let mut cmds = Vec::new();
+    let (ox, wtop) = origin;
     let (mx, my) = mouse_position();
-    // The board is centered horizontally; back out that offset to reach world x.
-    let ox = crate::board_origin_x(sim, cell);
-    let (wx, wy) = ((mx - ox) / cell, (my - crate::ui::TOP_BAR_H) / cell);
+    // `ox`/`wtop` come from the shared camera transform (zoom + pan), so this
+    // screen→world conversion is identical to what `draw` used this frame.
+    let (wx, wy) = ((mx - ox) / cell, (my - wtop) / cell);
 
     // Drop dead/recycled ids so stale selections never command a reused slot.
     if !selected.units.is_empty() {
@@ -124,7 +126,7 @@ pub fn gather_commands(
     if is_mouse_button_released(MouseButton::Left) && !pointer_over_ui {
         if let Some((sxp, syp)) = drag_start.take() {
             if (mx - sxp).hypot(my - syp) >= CLICK_SLOP_PX {
-                let (w0x, w0y) = ((sxp - ox) / cell, (syp - crate::ui::TOP_BAR_H) / cell);
+                let (w0x, w0y) = ((sxp - ox) / cell, (syp - wtop) / cell);
                 let (lo_x, hi_x) = (w0x.min(wx), w0x.max(wx));
                 let (lo_y, hi_y) = (w0y.min(wy), w0y.max(wy));
                 selected.units = sim
@@ -249,7 +251,7 @@ pub fn gather_commands(
             continue;
         }
         let tx = (touch.position.x - ox) / cell;
-        let ty = (touch.position.y - crate::ui::TOP_BAR_H) / cell;
+        let ty = (touch.position.y - wtop) / cell;
         if let Some(unit) = nearest_friendly_unit(sim, tx, ty) {
             selected.units = vec![unit];
             selected.planet = None;
@@ -294,11 +296,11 @@ fn seat_pos(sim: &Sim, pid: rts_core::game::planet::PlanetId) -> Option<SimVec> 
 
 /// The map tile under the mouse cursor (for survey-phase founding).
 #[must_use]
-pub fn cursor_tile(sim: &Sim, cell: f32) -> (u16, u16) {
+pub fn cursor_tile(sim: &Sim, cell: f32, origin: (f32, f32)) -> (u16, u16) {
+    let (ox, wtop) = origin;
     let (mx, my) = mouse_position();
-    let ox = crate::board_origin_x(sim, cell);
     let wx = (mx - ox) / cell;
-    let wy = (my - crate::ui::TOP_BAR_H) / cell;
+    let wy = (my - wtop) / cell;
     hex::from_world(
         SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
         sim.map().width(),
