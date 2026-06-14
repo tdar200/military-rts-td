@@ -3269,6 +3269,37 @@ impl Sim {
                 damage.push((j, i, dmg, pierces));
                 lines.push((e.pos, snap[j].2));
                 e.cooldown = profile.period;
+
+                // Area splash: a weapon with a non-zero blast radius also damages
+                // every OTHER enemy within `splash_radius` of the PRIMARY TARGET
+                // (not the firer) for a `splash_falloff` fraction of the hit. We
+                // reuse the already-sorted `candidates` (ascending index), so the
+                // extra entries are pushed in deterministic, order-independent
+                // index order and land in the same post-loop apply pass — shields,
+                // mitigation, and kill-credit all flow through uniformly. Every
+                // weapon but the Capital has `splash_radius == ZERO`, so this scan
+                // is skipped entirely and base combat (the golden run) is identical.
+                if profile.splash_radius > Fixed::ZERO {
+                    let splash_dmg = dmg * profile.splash_falloff;
+                    let splash_sq = profile.splash_radius * profile.splash_radius;
+                    let primary_pos = snap[j].2;
+                    for &k in &candidates {
+                        if k == j {
+                            continue;
+                        }
+                        let t = snap[k];
+                        // Living enemies only (owner != firer); the primary `j` is
+                        // excluded above. Air/ground gating already held for `j`;
+                        // neighbours inherit the same blast regardless of layer.
+                        if !t.0 || t.1 == e.owner.0 {
+                            continue;
+                        }
+                        if (t.2 - primary_pos).length_squared() > splash_sq {
+                            continue;
+                        }
+                        damage.push((k, i, splash_dmg, pierces));
+                    }
+                }
             }
         }
         #[allow(
@@ -6122,6 +6153,64 @@ mod tests {
             s.entities[tank.0 as usize].hp.to_bits(),
             f(220).to_bits(),
             "partial heal also caps at max HP"
+        );
+    }
+
+    #[test]
+    fn capital_splash_hits_clustered_neighbors() {
+        // The Capital's main gun is the one weapon with area splash: a 2-tile
+        // blast where neighbours of the primary target take 50% damage. A clumped
+        // pair both bleed; a pair spread beyond the blast radius does not.
+        //
+        // Capital damage 40, Explosive vs Flesh is neutral (×1), era-0 / no
+        // research / no perks ⇒ no other factors. Fresh sim ⇒ zero shields, so
+        // damage lands straight on HP: primary -40, splash -20 (50% of 40).
+        let mut clustered = Sim::new(Map::new(30, 30), 1, f(0));
+        let cap = clustered.add_unit(P0, UnitKind::Capital, v(10, 10));
+        // Primary (nearest, 4 away) and a neighbour 1 tile from it (inside the
+        // 2-tile blast, 5 away from the Capital — still inside its range 6).
+        let primary = clustered.add_unit(P1, UnitKind::Infantry, v(14, 10));
+        let neighbour = clustered.add_unit(P1, UnitKind::Infantry, v(15, 10));
+        // First tick: cooldown starts at 0, so the Capital fires immediately.
+        clustered.step(&[]);
+        assert!(
+            clustered.entities[cap.0 as usize].cooldown > 0,
+            "the Capital must have fired this tick"
+        );
+        assert_eq!(
+            clustered.entities[primary.0 as usize].hp.to_bits(),
+            f(10).to_bits(),
+            "the primary target takes the full 40 (50 -> 10)"
+        );
+        assert_eq!(
+            clustered.entities[neighbour.0 as usize].hp.to_bits(),
+            f(30).to_bits(),
+            "the clustered neighbour takes half the blast, 20 (50 -> 30)"
+        );
+
+        // Control: the same fight, but the second enemy is well beyond the 2-tile
+        // blast (far side of the map, out of splash but a clean primary pick is
+        // still the near one). Only the primary takes damage.
+        let mut spread = Sim::new(Map::new(30, 30), 1, f(0));
+        let cap2 = spread.add_unit(P0, UnitKind::Capital, v(10, 10));
+        let near = spread.add_unit(P1, UnitKind::Infantry, v(14, 10));
+        // 6 tiles from `near` (>> splash radius 2) and out of the Capital's
+        // range-6 reach, so it is neither splashed nor targeted this tick.
+        let far = spread.add_unit(P1, UnitKind::Infantry, v(20, 10));
+        spread.step(&[]);
+        assert!(
+            spread.entities[cap2.0 as usize].cooldown > 0,
+            "the Capital must have fired this tick"
+        );
+        assert_eq!(
+            spread.entities[near.0 as usize].hp.to_bits(),
+            f(10).to_bits(),
+            "the primary target still takes the full 40"
+        );
+        assert_eq!(
+            spread.entities[far.0 as usize].hp.to_bits(),
+            f(50).to_bits(),
+            "a foe beyond the splash radius is untouched"
         );
     }
 

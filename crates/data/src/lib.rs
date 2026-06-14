@@ -42,6 +42,14 @@ struct AttackData {
     targets_ground: bool,
     #[serde(default)]
     targets_air: bool,
+    /// Area-of-effect blast radius in whole tiles. `0` (the default, so older
+    /// RON without the key still parses) means a single-target weapon.
+    #[serde(default)]
+    splash_radius: i32,
+    /// Splash damage fraction in milli (`500` = 0.5). Ignored when
+    /// `splash_radius == 0`. Defaults to `0`.
+    #[serde(default)]
+    splash_falloff_milli: i64,
 }
 
 #[derive(Deserialize)]
@@ -132,6 +140,8 @@ const fn to_attack(a: &AttackData) -> AttackProfile {
         period: a.period,
         targets_ground: a.targets_ground,
         targets_air: a.targets_air,
+        splash_radius: Fixed::from_int(a.splash_radius),
+        splash_falloff: Fixed::from_ratio(a.splash_falloff_milli, 1000),
     }
 }
 

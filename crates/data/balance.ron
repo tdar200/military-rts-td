@@ -27,7 +27,7 @@
     ),
     capital: (
         max_hp: 600, armor: Plated,
-        attack: (damage: 40, damage_type: Explosive, range: 6, period: 18),
+        attack: (damage: 40, damage_type: Explosive, range: 6, period: 18, splash_radius: 2, splash_falloff_milli: 500),
         speed_milli: 40, cost: 500, energy_cost: 40, labour_cost: 5, build_time: 600,
     ),
     // Buildings. `cost` is Money; `energy_output`/`labour_output` feed the

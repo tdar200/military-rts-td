@@ -859,23 +859,27 @@ mod tests {
         // The survival human starts with no army and a 3-building kit; driven by
         // ai_commands it must research its way to a lab, an era, and a standing
         // army — proving the progression is not soft-locked.
+        //
+        // We track each milestone the FIRST time it's reached over the run rather
+        // than only sampling the final tick: the late game is a deliberately
+        // lethal siege (escalating waves + a Capital boss whose main gun now has
+        // area splash), so a fully-teched human can still eventually be overrun.
+        // The soft-lock guarantee is that the human DOES tech up, not that it
+        // survives the endgame — so reaching the milestones is what we assert.
         let mut s = survival(3);
+        let mut got_lab = false;
+        let mut got_era = false;
+        let mut got_army = false;
         for _ in 0..40_000u32 {
             let cmds = s.ai_commands(PlayerId(0));
             s.step(&cmds);
+            got_lab |= s.has_research_lab(PlayerId(0));
+            got_era |= s.player_era(PlayerId(0)) >= 1;
+            got_army |= s.unit_count(PlayerId(0)) > 0;
         }
-        assert!(
-            s.has_research_lab(PlayerId(0)),
-            "human should research the Lab (Orbital Logistics)"
-        );
-        assert!(
-            s.player_era(PlayerId(0)) >= 1,
-            "human should advance at least one era"
-        );
-        assert!(
-            s.unit_count(PlayerId(0)) > 0,
-            "human should unlock + train an army"
-        );
+        assert!(got_lab, "human should research the Lab (Orbital Logistics)");
+        assert!(got_era, "human should advance at least one era");
+        assert!(got_army, "human should unlock + train an army");
     }
 
     #[test]

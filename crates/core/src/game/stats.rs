@@ -104,10 +104,19 @@ pub struct AttackProfile {
     pub targets_ground: bool,
     /// Whether this attack can hit air targets.
     pub targets_air: bool,
+    /// Area-of-effect blast radius (world units) around the primary target.
+    /// `Fixed::ZERO` means a single-target weapon (no splash) — the default for
+    /// every profile except the Capital ship's main gun.
+    pub splash_radius: Fixed,
+    /// Fraction (`0..=1`) of the primary hit's damage that each enemy within
+    /// `splash_radius` of the primary target takes. Ignored when
+    /// `splash_radius == ZERO`.
+    pub splash_falloff: Fixed,
 }
 
 impl AttackProfile {
-    /// A ground-only attack (the common case).
+    /// A ground-only attack (the common case). Single-target by default
+    /// (`splash_radius == ZERO`); use [`Self::with_splash`] to add area damage.
     #[must_use]
     pub const fn ground(damage: Fixed, damage_type: DamageType, range: Fixed, period: u32) -> Self {
         Self {
@@ -117,10 +126,12 @@ impl AttackProfile {
             period,
             targets_ground: true,
             targets_air: false,
+            splash_radius: Fixed::ZERO,
+            splash_falloff: Fixed::ZERO,
         }
     }
 
-    /// An air-only attack (anti-air weapons).
+    /// An air-only attack (anti-air weapons). Single-target by default.
     #[must_use]
     pub const fn anti_air(
         damage: Fixed,
@@ -135,7 +146,18 @@ impl AttackProfile {
             period,
             targets_ground: false,
             targets_air: true,
+            splash_radius: Fixed::ZERO,
+            splash_falloff: Fixed::ZERO,
         }
+    }
+
+    /// Returns this profile with an area-of-effect blast: enemies within
+    /// `splash_radius` of the primary target take `splash_falloff` of the hit.
+    #[must_use]
+    pub const fn with_splash(mut self, splash_radius: Fixed, splash_falloff: Fixed) -> Self {
+        self.splash_radius = splash_radius;
+        self.splash_falloff = splash_falloff;
+        self
     }
 }
 
@@ -324,12 +346,18 @@ impl UnitKind {
             Self::Capital => UnitStats {
                 max_hp: Fixed::from_int(600),
                 armor: ArmorType::Plated,
+                // The capital's main gun is the only weapon with area splash:
+                // a 2-tile blast where neighbours of the primary target take
+                // 50% damage. This punishes clumped armies — every other unit /
+                // building stays single-target (splash radius ZERO), so the
+                // golden run (no Capital) is behaviour-identical.
                 attack: AttackProfile::ground(
                     Fixed::from_int(40),
                     DamageType::Explosive,
                     Fixed::from_int(6),
                     18,
-                ),
+                )
+                .with_splash(Fixed::from_int(2), Fixed::from_ratio(1, 2)),
                 speed: Fixed::from_ratio(8, 200),
                 money_cost: Fixed::from_int(500),
                 energy_cost: Fixed::from_int(40),
