@@ -213,6 +213,25 @@ pub fn gather_commands(
             });
         }
     }
+    // F settles the selected NEUTRAL planet: found a colony on it. The target tile
+    // is the planet's center, converted world -> tile. The core re-validates
+    // affordability + that the planet is unowned, so a bad press is a harmless
+    // no-op. Only fires when a planet is selected and currently unclaimed.
+    if is_key_pressed(KeyCode::F) {
+        if let Some(pid) = selected.planet {
+            if sim.planet_owner(pid).is_none() {
+                if let Some(c) = sim.planet_center(pid) {
+                    let (col, row) = hex::from_world(c, sim.map().width(), sim.map().height());
+                    cmds.push(Command::FoundColony {
+                        owner: HUMAN,
+                        parent: rts_core::game::civ::ColonyId(0),
+                        x: col,
+                        y: row,
+                    });
+                }
+            }
+        }
+    }
     // Q casts the first selected unit's ability at the cursor. The core validates
     // ownership, cooldown, and range, so a bad cast is simply a no-op.
     if is_key_pressed(KeyCode::Q) {

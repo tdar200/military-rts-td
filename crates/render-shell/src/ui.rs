@@ -10,16 +10,20 @@
 use crate::sprites::Sprites;
 use crate::theme::{
     civ_color, glow_rect, holo_flicker, hp_color, pill, scanline, with_alpha, ALERT_GLOW, BAD,
-    BORDER_NEUTRAL, BRONZE, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD, GROUND_ALT,
-    HOLO_GLOW, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD, TEAM_ENEMY,
-    TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
+    BORDER_NEUTRAL, BRONZE, CIV_NEUTRAL, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_DK, GOLD_HI, GOOD,
+    GROUND_ALT, HOLO_GLOW, HP_TRACK, OLIVE, PANEL, PANEL_ACTIVE, PANEL_HOVER, PANEL_RAISED, SHIELD,
+    TEAM_ENEMY, TEAM_PLAYER, TEXT, TEXT_DIM, WARN, WELL,
 };
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
+use rts_core::game::planet::PlanetId;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 
 const HUMAN: PlayerId = PlayerId(0);
+/// Money the core charges to found a colony (mirrors `FOUND_COLONY_COST` in the
+/// sim); used only to label the Settle action — the core re-validates the spend.
+const SETTLE_COST: i64 = 800;
 /// Height of the top resource bar. Tall enough to stack a small uppercase
 /// label over each yield's value so the ribbon reads without a legend.
 pub const TOP_BAR_H: f32 = 50.0;
@@ -229,6 +233,131 @@ pub fn draw(
     draw_top_bar(sim, paused, game_speed, sprites);
     draw_selection_panel(sim, selected, sprites);
     draw_command_bar(sim, build_mode, sprites);
+}
+
+/// The planet/city info + action panel, docked bottom-left above the command bar.
+/// Shown only while a planet is selected. Reads the planet's owner, colony stats,
+/// and offers a contextual action line:
+/// * **YOURS** — build hotkeys + manage.
+/// * **NEUTRAL** — Settle here (F) with the cost, gated on affordability.
+/// * **ENEMY** — assault hint + defender population.
+///
+/// ASCII / `\u{2022}` glyphs only (no arrow glyphs).
+pub fn draw_planet_panel(sim: &Sim, pid: PlanetId, sprites: &Sprites) {
+    let font = sprites.font();
+    let fb = sprites.font_bold();
+    let pw = 320.0;
+    let ph = 132.0;
+    let x = 14.0;
+    let y = screen_height() - CMD_BAR_H - ph - 12.0;
+    fill_panel(x, y, pw, ph);
+    let lx = x + 16.0;
+    let mut ty = y + 26.0;
+
+    // Header: PLANET n + owner badge.
+    text(&format!("PLANET {}", pid.0), lx, ty, 20.0, GOLD_HI, fb);
+    let owner = sim.planet_owner(pid);
+    let (badge, badge_col) = match owner {
+        Some(o) if o == HUMAN => ("YOURS".to_owned(), TEAM_PLAYER),
+        Some(o) => (format!("CIV {}", o.0), civ_color(o.0)),
+        None => ("NEUTRAL".to_owned(), CIV_NEUTRAL),
+    };
+    let bw = text_width(&badge, 14.0, fb) + 16.0;
+    let bx = x + pw - bw - 14.0;
+    draw_rectangle(bx, y + 12.0, bw, 20.0, with_alpha(badge_col, 0.18));
+    draw_rectangle_lines(bx, y + 12.0, bw, 20.0, 1.0, badge_col);
+    text(&badge, bx + 8.0, y + 26.0, 14.0, badge_col, fb);
+    ty += 26.0;
+
+    // Colony stats (population / food / buildings) when settled.
+    if let Some(cid) = sim.planet_colony(pid) {
+        let pop = sim.colony_population(cid);
+        let (food, next) = sim.colony_food_progress(cid);
+        let fi = food.to_bits() / 65536;
+        let ni = next.to_bits() / 65536;
+        let count = building_count_on(sim, pid);
+        text(&format!("POPULATION {pop}"), lx, ty, 16.0, TEXT, font);
+        ty += 20.0;
+        text(
+            &format!("FOOD {fi}/{ni}   BUILDINGS {count}"),
+            lx,
+            ty,
+            15.0,
+            TEXT_DIM,
+            font,
+        );
+    } else {
+        text("UNINHABITED", lx, ty, 16.0, TEXT_DIM, font);
+    }
+    ty += 22.0;
+
+    // Contextual action line.
+    match owner {
+        Some(o) if o == HUMAN => {
+            text(
+                "Build: B Barracks  G Turret  R Refinery",
+                lx,
+                ty,
+                13.0,
+                GOOD,
+                font,
+            );
+            ty += 18.0;
+            text(
+                "L Lab  P Reactor   \u{2022}  K manage",
+                lx,
+                ty,
+                13.0,
+                GOOD,
+                font,
+            );
+        }
+        Some(_) => {
+            text(
+                "Right-click with units selected to assault",
+                lx,
+                ty,
+                13.0,
+                WARN,
+                font,
+            );
+        }
+        None => {
+            let money = sim.money(HUMAN).to_bits() / 65536;
+            if money >= SETTLE_COST {
+                text(
+                    &format!("F  \u{2022}  Settle here ({SETTLE_COST} money)"),
+                    lx,
+                    ty,
+                    14.0,
+                    GOOD,
+                    font,
+                );
+            } else {
+                text(
+                    &format!("Need {SETTLE_COST} money to settle"),
+                    lx,
+                    ty,
+                    14.0,
+                    BAD,
+                    font,
+                );
+            }
+        }
+    }
+}
+
+/// Counts buildings whose tile belongs to planet `pid` (world pos -> tile -> owner).
+fn building_count_on(sim: &Sim, pid: PlanetId) -> u32 {
+    let (w, h) = (sim.map().width(), sim.map().height());
+    sim.views()
+        .iter()
+        .filter(|v| matches!(v.kind, EntityKindView::Building(_)))
+        .filter(|v| {
+            let (col, row) = rts_core::game::hex::from_world(v.pos, w, h);
+            sim.map().planet_at(i32::from(col), i32::from(row)) == Some(pid)
+        })
+        .count() as u32
 }
 
 /// Compact N-civ roster, docked under the minimap (top-right). One row per civ:

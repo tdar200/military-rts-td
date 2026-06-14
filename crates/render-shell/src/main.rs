@@ -45,12 +45,12 @@ use sprites::Sprites;
 // Explicit theme imports (not a glob) so they take precedence over the
 // like-named macroquad prelude color constants (e.g. GOLD).
 use theme::{
-    glow_rect, holo_flicker, hp_color, ALERT_GLOW, BAD, BASE_CHARCOAL, BORDER_NEUTRAL, BRONZE,
-    DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_HI, GOOD, GRID, GRID_HOT, GROUND, GROUND_MACRO, HOLO_GLOW,
-    HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2, MAP_PLAINS, OLIVE, PANEL,
-    PANEL_RAISED, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO, PIECE_SHADOW, REGAL_BG,
-    REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER, TERRAIN_WALL, TEXT,
-    TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
+    civ_color, glow_rect, holo_flicker, hp_color, ALERT_GLOW, BAD, BASE_CHARCOAL, BORDER_NEUTRAL,
+    BRONZE, CIV_NEUTRAL, DECO_GOLD, DECO_GOLD_HI, GOLD, GOLD_HI, GOOD, GRID, GRID_HOT, GROUND,
+    GROUND_MACRO, HOLO_GLOW, HP_TRACK, INK, INK_DIM, MAP_FOREST, MAP_GRASS, MAP_GRASS2, MAP_PLAINS,
+    OLIVE, PANEL, PANEL_RAISED, PARCHMENT, PARCHMENT_EDGE, PARCHMENT_HI, PARCHMENT_LO,
+    PIECE_SHADOW, REGAL_BG, REGAL_BG_HI, REGAL_BG_LO, SELECT_RING, SHIELD, TEAM_ENEMY, TEAM_PLAYER,
+    TERRAIN_WALL, TEXT, TEXT_DIM, TRACER, VARNISH, WALL_EDGE, WALL_HI, WALL_TOP, WARN, WELL,
 };
 
 /// Fixed simulation timestep (30 Hz), decoupled from the render frame rate.
@@ -825,6 +825,12 @@ async fn main() {
         // selected, behave as before. A planet selection drives Task 4's panel.
         let panel_unit = (selected.units.len() == 1).then(|| selected.units[0]);
         ui::draw(&sim, build_mode, paused, game_speed, panel_unit, &sprites);
+        // Planet/city info + action panel (bottom-left), only while a planet is
+        // selected. A planet selection clears the unit group, so this never
+        // collides with the single-unit selection panel.
+        if let Some(pid) = selected.planet {
+            ui::draw_planet_panel(&sim, pid, &sprites);
+        }
         // Colony autonomy readout (the player's delegation dial) — shows the
         // effective/requested level, *why* it sits there (the binding constraint),
         // and, while still earning, progress toward the next level.
@@ -2372,6 +2378,10 @@ fn draw(
             },
         );
     }
+    // Cities: each planet rendered as a glowing world that grows with its colony.
+    // Drawn over pieces (the Command Center sprite sits under the city glow) so the
+    // planets read as the focal points of the map.
+    draw_cities(sim, cell, ox, wtop, sprites);
     // A selected planet gets a pulsing cyan ring at its center, sized to its
     // radius (in tiles) so it reads as the chosen world, not a unit.
     if let Some(pid) = selected.planet {
@@ -2406,6 +2416,113 @@ fn draw(
         if rw > 2.0 || rh > 2.0 {
             draw_rectangle(rx, ry, rw, rh, with_alpha(SELECT_RING, 0.10));
             draw_rectangle_lines(rx, ry, rw, rh, 1.0, with_alpha(SELECT_RING, 0.9));
+        }
+    }
+}
+
+/// Counts buildings standing on planet `pid` by mapping each building's world
+/// position to a tile and asking the map which planet owns that tile.
+fn buildings_on_planet(sim: &Sim, pid: PlanetId) -> u32 {
+    let (w, h) = (sim.map().width(), sim.map().height());
+    sim.views()
+        .iter()
+        .filter(|v| matches!(v.kind, EntityKindView::Building(_)))
+        .filter(|v| {
+            let (col, row) = hex::from_world(v.pos, w, h);
+            sim.map().planet_at(i32::from(col), i32::from(row)) == Some(pid)
+        })
+        .count() as u32
+}
+
+/// Renders every planet as a visible "city" at its center, the heart of the map.
+///
+/// * **Owned planet** — a glowing planet body in the owner's civ colour, a ring of
+///   building "blips" whose count tracks the colony's building count, an overall
+///   glow/size that scales with population, and the population number above it
+///   (brighter cyan for the human's own worlds).
+/// * **Neutral planet** — a dim grey barren ring with a faint pulsing "settle"
+///   dot, clearly unclaimed and inviting a colony. No population number.
+fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
+    let pf = sprites.font_bold();
+    let t = get_time() as f32;
+    for i in 0..sim.planets_len() {
+        let pid = PlanetId(i as u16);
+        let Some(c) = sim.planet_center(pid) else {
+            continue;
+        };
+        let px = ox + tile_to_px(c.x, cell);
+        let py = wtop + tile_to_px(c.y, cell);
+        // Base body radius from the planet's tile radius, with a sane floor.
+        let body_r = sim
+            .planet_radius(pid)
+            .map_or(cell * 0.9, |rad| tile_to_px(rad, cell).max(cell * 0.7));
+        if let Some(owner) = sim.planet_owner(pid) {
+            let human = owner == HUMAN;
+            let col = if human {
+                TEAM_PLAYER
+            } else {
+                civ_color(owner.0)
+            };
+            // City scale grows with population: from ~1.0 up to ~1.8 of the body
+            // radius as the colony fills out (capped at 400 pop).
+            let pop = sim
+                .planet_colony(pid)
+                .map_or(0, |cid| sim.colony_population(cid));
+            let grow = 1.0 + (f32::from(u16::try_from(pop.min(400)).unwrap_or(400)) / 400.0);
+            let r = body_r * (0.7 + 0.55 * grow);
+            let pulse = (t * 1.6 + i as f32).sin() * 0.5 + 0.5;
+            // Population-scaled outer glow (bigger, brighter city).
+            draw_circle(px, py, r * 1.45, with_alpha(col, 0.08 + 0.06 * grow));
+            glow_rect(px - r, py - r, r * 2.0, r * 2.0, with_alpha(col, 0.10), 3);
+            // Planet body: a lit core ringed in the civ colour.
+            draw_circle(px, py, r, with_alpha(col, 0.22));
+            draw_circle(px, py, r * 0.74, with_alpha(col, 0.30));
+            draw_circle_lines(px, py, r, 2.5, col);
+            draw_circle_lines(px, py, r + 3.0 + pulse * 3.0, 1.0, with_alpha(col, 0.4));
+            // Building blips: a ring of N dots (N scales with building count),
+            // brightness lifted by population so a busy city sparkles.
+            let count = buildings_on_planet(sim, pid).min(8);
+            let blip = (r * 0.13).max(2.0);
+            let ring = r * 0.6;
+            let bright = (0.55 + 0.45 * (grow - 1.0)).min(1.0);
+            for b in 0..count {
+                let ang = t * 0.3 + b as f32 / count.max(1) as f32 * std::f32::consts::TAU;
+                let bx = px + ang.cos() * ring;
+                let by = py + ang.sin() * ring;
+                draw_circle(bx, by, blip, with_alpha(col, bright));
+                draw_circle(bx, by, blip * 0.5, with_alpha(WHITE, bright * 0.7));
+            }
+            // Population number, centered above the city, in the owner colour
+            // (brighter cyan for the human's own worlds).
+            let s = format!("{pop}");
+            let tw = measure_text(&s, pf, 14, 1.0).width;
+            let tc = if human { GOLD_HI } else { col };
+            draw_text_ex(
+                &s,
+                px - tw / 2.0,
+                py - r - 6.0,
+                TextParams {
+                    font: pf,
+                    font_size: 14,
+                    color: tc,
+                    ..Default::default()
+                },
+            );
+        } else {
+            // Neutral: a dim, uninhabited barren rock — hollow grey ring with a
+            // faint pulsing "settle" dot at its center inviting a colony.
+            let r = body_r;
+            let pulse = (t * 1.4 + i as f32).sin() * 0.5 + 0.5;
+            draw_circle(px, py, r * 0.7, with_alpha(CIV_NEUTRAL, 0.10));
+            draw_circle_lines(px, py, r, 1.5, with_alpha(CIV_NEUTRAL, 0.85));
+            draw_circle_lines(px, py, r * 0.62, 1.0, with_alpha(CIV_NEUTRAL, 0.5));
+            // Faint "settle here" affordance dot, gently pulsing.
+            draw_circle(
+                px,
+                py,
+                (r * 0.12).max(2.0),
+                with_alpha(GOOD, 0.3 + 0.4 * pulse),
+            );
         }
     }
 }
