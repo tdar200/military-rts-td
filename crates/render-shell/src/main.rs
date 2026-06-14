@@ -292,7 +292,9 @@ async fn main() {
     let mut survival_run = true;
     // Title-screen mode selection: false = Survival, true = Conquest (N-civ
     // planetary war with growing cities). Toggled with Left/Right on the title.
-    let mut selected_conquest = false;
+    // Default to Conquest — it's the main game (planets, cities, interplanetary
+    // war); Survival is the legacy siege mode.
+    let mut selected_conquest = true;
     // Survival perk draft: a modal opens each new wave until all perks are taken.
     let mut perk_open = false;
     let mut prev_waves = 0_u32;
