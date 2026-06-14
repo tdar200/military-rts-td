@@ -30,6 +30,32 @@ use alloc::vec::Vec;
 /// pathfinding work.
 const MOVE_REISSUE_PERIOD: u64 = 20;
 
+/// Conquest only: how many of a civ's combat units must have gathered at the
+/// staging rally before the AI COMMITS them as one focused assault on the chosen
+/// enemy planet. Below this, units keep massing at a safe rally (out of the
+/// target's defensive range) instead of trickling in to die one-by-one against a
+/// turret ring. Tuned via the `playtest_measure_contest` harness: real combat
+/// captures (held seats taken, not neutrals settled) peak around 14 — big enough
+/// that a committed wave can break a turret-defended colony seat, small enough that
+/// the upkeep-capped economy reaches it often. (Far larger stacks commit too rarely;
+/// far smaller ones dribble in and bleed.) NOTE: the four turret-RINGED starting
+/// homeworlds resist any stack the economy can field once distance-decay and the
+/// defenders' standing army are counted — a balance ceiling, see the commit/report.
+const ASSAULT_STACK: usize = 14;
+
+/// Conquest only: the staging rally sits this fraction of the way from the
+/// attacker's Command Center toward the assault target, kept OUT of the target's
+/// defensive range so the massing stack is not bled while it gathers. Expressed
+/// as a numerator over 16 (`Fixed`-friendly, no float).
+const RALLY_NUM: i64 = 9;
+const RALLY_DEN: i64 = 16;
+
+/// Conquest only: a unit counts as "at the rally" (ready to commit) when within
+/// this world-space radius of the rally point. Generous enough that units which
+/// arrive from slightly different paths still pool, small enough that it does not
+/// count units still marching across the map.
+const RALLY_GATHER_RADIUS: i32 = 6;
+
 /// Combat spatial-grid cell size in tiles. Must be >= the largest attack range so
 /// a 3x3 cell query around an attacker contains every in-range enemy.
 const COMBAT_CELL: i32 = 8;
@@ -4031,11 +4057,18 @@ impl Sim {
             }
         }
 
-        // Periodically push idle units toward the enemy base. Re-issuing a Move
-        // (and thus running A*) for every idle unit every tick is the classic RTS
-        // perf trap; throttling by tick keeps pathfinding cheap and is still fully
-        // deterministic.
-        if self.tick.is_multiple_of(MOVE_REISSUE_PERIOD) {
+        // SURVIVAL ONLY: periodically push idle units toward the enemy base.
+        // Re-issuing a Move (and thus running A*) for every idle unit every tick
+        // is the classic RTS perf trap; throttling by tick keeps pathfinding cheap
+        // and is still fully deterministic.
+        //
+        // Gated to planet-free maps. In survival `planets.is_empty()` is always
+        // true, so this branch runs unchanged ⇒ the golden run stays byte-identical.
+        // In CONQUEST this trickle is the bleed: idle units dribble one-by-one into
+        // a defended homeworld and die. There the massing path in
+        // `ai_conquest_commands` takes over instead (it pools a stack at a SAFE
+        // rally, then commits it as one focused assault).
+        if self.planets.is_empty() && self.tick.is_multiple_of(MOVE_REISSUE_PERIOD) {
             if let Some(target) = self.enemy_command_center_pos(player) {
                 for unit in self.idle_units(player) {
                     cmds.push(Command::Move {
@@ -4051,6 +4084,10 @@ impl Sim {
         // A TOTAL NO-OP on planet-free maps (golden / survival / skirmish), so the
         // existing AI path is byte-identical there.
         cmds.extend(self.ai_conquest_commands(player));
+        // Conquest offence: mass a stack at a safe rally, then commit it as one
+        // focused assault on the weakest enemy homeworld. Also a NO-OP without
+        // planets, so survival/golden are unaffected.
+        cmds.extend(self.ai_conquest_military(player));
         cmds
     }
 
@@ -4124,6 +4161,217 @@ impl Sim {
             x,
             y,
         }]
+    }
+
+    /// Conquest-only OFFENCE: mass a stack at a safe rally, then commit it as one
+    /// focused assault on the nearest enemy planet. This replaces the survival
+    /// trickle (now gated to planet-free maps) which bled units one-by-one into a
+    /// defended seat. The flow each call:
+    ///
+    /// 1. Pick the assault target — the NEAREST enemy-owned planet to our base
+    ///    (lowest-index tiebreak), so the fight stays inside the supply ramp and the
+    ///    assault fires near full strength. No enemy planets ⇒ fall back to the
+    ///    nearest enemy CC position.
+    /// 2. Pick a launch anchor — our `CommandCenter` (home or any colony) NEAREST the
+    ///    target — and compute a rally partway from it toward the target, kept OUT of
+    ///    the target's defensive range so the massing stack is not shot while it
+    ///    gathers.
+    /// 3. While under-massed, rally all idle combat units there (plain `Move` — they
+    ///    pool, no bleed, no en-route attrition).
+    /// 4. Once `ASSAULT_STACK` of our combat units have gathered at the rally,
+    ///    `AttackMove` the WHOLE army (gathered + stragglers + fresh trainees) at the
+    ///    target seat: attack-move clears defenders en route and engages the seat, so
+    ///    the existing capture detection in `run_combat` flips the planet. Committed
+    ///    units carry a `move_target` so they are no longer "idle" and won't be
+    ///    re-rallied until that order clears.
+    ///
+    /// A NO-OP without planets (survival/golden untouched). Throttled by
+    /// `MOVE_REISSUE_PERIOD` for pathing cost. Deterministic: ascending-index
+    /// scans, `Fixed`/squared-distance math, no rng, no float.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one cohesive assault pipeline — target select, forward launch, safe rally, commit — splitting it would scatter the shared geometry across helpers and obscure the flow"
+    )]
+    fn ai_conquest_military(&self, player: PlayerId) -> Vec<Command> {
+        // Hard gate: planet-free maps (survival/golden) never enter here.
+        if self.planets.is_empty() {
+            return Vec::new();
+        }
+        // Throttle: re-pathing every idle unit every tick is the RTS perf trap.
+        if !self.tick.is_multiple_of(MOVE_REISSUE_PERIOD) {
+            return Vec::new();
+        }
+        // No base ⇒ nowhere to rally from, nothing to do.
+        let Some(from) = self.command_center_pos(player) else {
+            return Vec::new();
+        };
+
+        // --- 1. Choose the assault target. ---
+        // Pick the assault target = the NEAREST enemy-owned planet to this civ's
+        // base, tie-broken by lowest planet index. Proximity is the dominant lever
+        // for one decisive reason: outgoing damage decays with a unit's distance
+        // from its NEAREST friendly Command Center (`supply_decay_factor`), bottoming
+        // out at 0.6 beyond 20 tiles. A turret-defended seat that a ~14-unit stack
+        // breaks at full strength needs far more at the 0.6 floor. Assaulting the
+        // CLOSEST enemy world keeps the fight inside the supply ramp (near full
+        // strength), so a stack the economy can actually field is enough to crack a
+        // soft colony; hitting the softest far-flung colony instead would forever
+        // fire at the decay floor and bounce. Distance and index are both STATIC per
+        // planet, so the target — and the rally derived from it — does not jitter; it
+        // holds until the world falls or changes hands. Ascending index scan; Fixed
+        // math, no rng, no float.
+        let mut best: Option<(Fixed, usize)> = None;
+        for (i, pl) in self.planets.iter().enumerate() {
+            // Enemy-owned only (owner is Some and != us).
+            let Some(owner) = pl.owner else { continue };
+            if owner == player {
+                continue;
+            }
+            let dx = pl.center.x - from.x;
+            let dy = pl.center.y - from.y;
+            let cc_d2 = dx * dx + dy * dy;
+            let cand = (cc_d2, i);
+            if best.is_none_or(|b| cand < b) {
+                best = Some(cand);
+            }
+        }
+
+        // Resolve the target world-position (the seat we must reach to capture) and
+        // the defensive radius to stay clear of while massing.
+        let (target_pos, defense_radius) = if let Some((_, idx)) = best {
+            let pid = PlanetId(u16::try_from(idx).unwrap_or(u16::MAX));
+            // Aim at the seat entity's position when settled (that's the CC whose
+            // destruction triggers capture); else the planet centre.
+            let seat_pos = self
+                .planet_seat(pid)
+                .and_then(|s| self.entity(s))
+                .filter(|e| e.alive)
+                .map(|e| e.pos);
+            let center = self.planet_center(pid).unwrap_or(from);
+            let radius = self.planet_radius(pid).unwrap_or(Fixed::ZERO);
+            (seat_pos.unwrap_or(center), radius)
+        } else {
+            // No enemy planet ⇒ assault the nearest enemy CC directly. A CC has no
+            // planet claim radius here, so treat it as a point target.
+            let Some(cc) = self.enemy_command_center_pos(player) else {
+                return Vec::new();
+            };
+            (cc, Fixed::ZERO)
+        };
+
+        // Launch anchor: rally from the friendly CommandCenter (home seat or any
+        // settled colony — each colony is a CC) NEAREST the target, not necessarily
+        // the main homeworld. Distance-decay is measured from a unit's NEAREST
+        // friendly CC, so staging the assault off the closest forward base keeps the
+        // committed stack as near full strength as the empire's footprint allows —
+        // the difference between bouncing off a turret ring at the 0.6 decay floor
+        // and breaking it. Ascending index scan, lowest-index tiebreak; no rng.
+        let launch = {
+            let mut best_cc: Option<(Vec2, Fixed)> = None;
+            for e in &self.entities {
+                if !e.alive
+                    || e.owner != player
+                    || e.kind != Kind::Building(BuildingKind::CommandCenter)
+                {
+                    continue;
+                }
+                let d2 = (e.pos - target_pos).length_squared();
+                if best_cc.is_none_or(|(_, bd)| d2 < bd) {
+                    best_cc = Some((e.pos, d2));
+                }
+            }
+            best_cc.map_or(from, |(p, _)| p)
+        };
+
+        // --- 2. Compute a SAFE rally on our side of the front. ---
+        // Start partway from the launch anchor toward the target, then if that point
+        // falls inside the target's defensive range, pull it back along the
+        // launch->target line until it clears (keep_clear). Massing in the open, not
+        // under fire.
+        let dir = target_pos - launch;
+        let total = dir.length();
+        // Degenerate (target on top of us): rally at the launch anchor.
+        let rally = if total <= Fixed::ZERO {
+            launch
+        } else {
+            // Partway point: launch + dir * (RALLY_NUM / RALLY_DEN).
+            let r = launch + dir.scale(Fixed::from_ratio(RALLY_NUM, RALLY_DEN));
+            // Keep the rally OUT of the defensive ring (plus a small buffer) so the
+            // massing stack is not under fire. `keep_clear` is the minimum allowed
+            // distance from the target along the CC->target line.
+            let keep_clear = defense_radius + Fixed::from_int(RALLY_GATHER_RADIUS);
+            let rdist = (target_pos - r).length();
+            if rdist < keep_clear {
+                // The partway point is too close: pull it back along the same line
+                // so it sits exactly `keep_clear` out from the target. If that would
+                // land behind the launch anchor, just rally at the anchor.
+                let back = total - keep_clear;
+                if back <= Fixed::ZERO {
+                    launch
+                } else {
+                    launch + dir.scale(back / total)
+                }
+            } else {
+                r
+            }
+        };
+
+        let mut cmds = Vec::new();
+        let gather_sq = {
+            let g = Fixed::from_int(RALLY_GATHER_RADIUS);
+            g * g
+        };
+
+        // --- 3/4. Count our combat units already AT the rally (decides commit). ---
+        // Ascending index scan; alive `Kind::Unit` within the gather radius.
+        let gathered = self
+            .entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && e.owner == player
+                    && matches!(e.kind, Kind::Unit(_))
+                    && (e.pos - rally).length_squared() <= gather_sq
+            })
+            .count();
+
+        if gathered >= ASSAULT_STACK {
+            // COMMIT: throw the ENTIRE army at the target seat, not just the units
+            // inside the gather circle. Once the rally has pooled a critical mass,
+            // every combat unit (gathered, stragglers, fresh trainees) attack-moves
+            // in — maximising the mass that lands on the seat. Attack-move clears
+            // defenders en route and engages the seat, so the existing capture
+            // detection in `run_combat` flips the planet. A half-stack trickling in
+            // dies to the turret ring; the whole army arriving together overwhelms a
+            // soft (lightly-held) seat. (A heavily-fortified homeworld — its 3-gun
+            // ring plus its owner's standing army, all firing while the assault wades
+            // in at distance-decayed damage — can out-attrit the ~16-20 stack the
+            // upkeep-capped economy fields; cracking those is a balance question, not
+            // an AI-massing one. See the report.)
+            for (i, e) in self.entities.iter().enumerate() {
+                if e.alive && e.owner == player && matches!(e.kind, Kind::Unit(_)) {
+                    cmds.push(Command::AttackMove {
+                        owner: player,
+                        unit: EntityId(u32::try_from(i).unwrap_or(u32::MAX)),
+                        target: target_pos,
+                    });
+                }
+            }
+        } else {
+            // MASS: rally every idle combat unit to the safe staging point. Plain
+            // Move so they pool (no attack-move stance, no en-route bleed). Idle =
+            // no current move_target, so committed/already-rallying units are left
+            // alone. Units already inside the gather radius with no order will be
+            // (harmlessly) re-issued the same rally Move.
+            for unit in self.idle_units(player) {
+                cmds.push(Command::Move {
+                    owner: player,
+                    unit,
+                    target: rally,
+                });
+            }
+        }
+        cmds
     }
 
     fn command_center_tile(&self, player: PlayerId) -> Option<(u16, u16)> {
@@ -4562,6 +4810,99 @@ mod tests {
         assert!(!s.civ_alive(P0), "civ with no CC is eliminated");
         assert!(s.civ_alive(P1));
         assert_eq!(s.winner(), Some(P1), "sole survivor wins");
+    }
+
+    /// The aggressive conquest AI must actually RESOLVE assaults — not just trickle
+    /// units to their death. With every civ driven by `ai_commands`, require that
+    /// within the run a real COMBAT CAPTURE happens: a planet that was already OWNED
+    /// changes to a DIFFERENT owner (an owner→other-owner flip, which the engine only
+    /// produces by driving a held seat's HP to zero — see `apply_seat_capture`). That
+    /// is categorically different from a neutral being settled for the first time
+    /// (None→owner), and it cannot occur unless the AI masses a stack and breaks a
+    /// DEFENDED seat. A civ elimination also counts. Either proves the old frozen
+    /// stalemate (zero captures, armies stuck at 1-6) is gone.
+    ///
+    /// NB: this asserts a captured *defended seat*, not specifically one of the four
+    /// turret-ringed starting HOMEWORLDS. Measurement showed those fortified cores
+    /// are NOT broken by the ~16-20-unit army the upkeep-capped economy fields once
+    /// distance-decay and the defenders' standing army are accounted for; that is a
+    /// balance ceiling (turret ring / decay / upkeep), deliberately left to a human
+    /// tuning pass rather than worked around in the AI. See the report.
+    ///
+    /// Deterministic by construction (`ai_commands` is a pure function of state, no
+    /// rng), so this is a stable regression guard against the AI ever regressing to a
+    /// no-capture trickle.
+    #[test]
+    fn conquest_ai_breaks_a_defended_homeworld() {
+        use crate::game::scenario::conquest;
+        const CIVS: u16 = 4;
+        let mut s = conquest(12_345, usize::from(CIVS));
+        let pn = u16::try_from(s.planets_len()).unwrap();
+
+        // Per-planet last-seen owner, and the set of civs alive at the start.
+        let mut last_owner: Vec<Option<PlayerId>> =
+            (0..pn).map(|p| s.planet_owner(PlanetId(p))).collect();
+        let start_alive: Vec<bool> = (0..CIVS).map(|c| s.civ_alive(PlayerId(c))).collect();
+
+        let mut captured = false;
+        let mut eliminated = false;
+        for _ in 0..12_000u32 {
+            let cmds: Vec<Command> = (0..CIVS)
+                .filter(|&c| s.civ_alive(PlayerId(c)))
+                .flat_map(|c| s.ai_commands(PlayerId(c)))
+                .collect();
+            s.step(&cmds);
+
+            for p in 0..pn {
+                let now = s.planet_owner(PlanetId(p));
+                let prev = last_owner[p as usize];
+                // A combat capture is an owned→DIFFERENT-owned transition. A
+                // None→owner change (first settlement) and owner→None (never happens
+                // for seats) are excluded, so this fires only on a real seat capture.
+                if let (Some(a), Some(b)) = (prev, now) {
+                    if a != b {
+                        captured = true;
+                    }
+                }
+                last_owner[p as usize] = now;
+            }
+            for c in 0..CIVS {
+                if start_alive[c as usize] && !s.civ_alive(PlayerId(c)) {
+                    eliminated = true;
+                }
+            }
+            if captured || eliminated {
+                break;
+            }
+        }
+
+        assert!(
+            captured || eliminated,
+            "aggressive conquest AI must resolve assaults: a held, defended planet \
+             seat should be captured (or a civ eliminated) within 12000 ticks — \
+             proving the AI masses a stack and breaks a defended seat rather than \
+             trickling units to their death"
+        );
+    }
+
+    /// Conquest with all civs AI-driven must be bit-for-bit reproducible: the
+    /// massing/assault logic is a pure function of state (ascending-index scans,
+    /// `Fixed` math, no rng), so two independent runs land on the same state hash.
+    #[test]
+    fn conquest_ai_offence_is_deterministic() {
+        use crate::game::scenario::conquest;
+        fn run() -> u64 {
+            let mut s = conquest(12_345, 4);
+            for _ in 0..4_000u32 {
+                let cmds: Vec<Command> = (0..4u16)
+                    .filter(|&c| s.civ_alive(PlayerId(c)))
+                    .flat_map(|c| s.ai_commands(PlayerId(c)))
+                    .collect();
+                s.step(&cmds);
+            }
+            s.state_hash()
+        }
+        assert_eq!(run(), run(), "AI-driven conquest must replay identically");
     }
 
     #[test]
