@@ -4,6 +4,7 @@
 //! platform-agnostic [`rts_core`] [`Command`]s for the human player. Keeping this
 //! layer separate is what lets the same simulation accept input from any device.
 
+use crate::Selection;
 use macroquad::prelude::*;
 use rts_core::fixed::Fixed;
 use rts_core::game::hex;
@@ -14,6 +15,9 @@ use rts_core::vec::Vec2 as SimVec;
 const HUMAN: PlayerId = PlayerId(0);
 /// Max squared distance (in tiles) for a left-click to grab a unit.
 const SELECT_RADIUS_SQ: f32 = 2.25;
+/// Below this screen-space drag distance (px) a left release counts as a click,
+/// not a box-select.
+const CLICK_SLOP_PX: f32 = 6.0;
 
 #[must_use]
 fn f32_to_fixed(v: f32) -> Fixed {
@@ -26,12 +30,21 @@ fn fixed_to_tiles(v: Fixed) -> f32 {
 }
 
 /// Reads this frame's input and returns commands for the human player.
-/// `selected` tracks the selected unit; `build_mode` tracks a pending building
+///
+/// `selected` is the live group selection (units + an optional planet);
+/// `drag_start` holds the screen-space anchor of an in-progress box-select (set on
+/// left-press, consumed on release); `build_mode` tracks a pending building
 /// placement (the shell draws a ghost for it until a click places or cancels it).
+///
+/// Selection: a left *click* on a friendly unit selects just it; on open planet
+/// ground selects the planet; on nothing clears. A left *drag* box-selects every
+/// friendly unit inside the rectangle. A right click moves the selected group, or
+/// assaults an enemy/neutral planet under the cursor.
 #[must_use]
 pub fn gather_commands(
     sim: &Sim,
-    selected: &mut Option<EntityId>,
+    selected: &mut Selection,
+    drag_start: &mut Option<(f32, f32)>,
     build_mode: &mut Option<BuildingKind>,
     pointer_over_ui: bool,
     cell: f32,
@@ -41,6 +54,14 @@ pub fn gather_commands(
     // The board is centered horizontally; back out that offset to reach world x.
     let ox = crate::board_origin_x(sim, cell);
     let (wx, wy) = ((mx - ox) / cell, (my - crate::ui::TOP_BAR_H) / cell);
+
+    // Drop dead/recycled ids so stale selections never command a reused slot.
+    if !selected.units.is_empty() {
+        let views = sim.views();
+        selected
+            .units
+            .retain(|&id| sim.entity_alive(id) && views.iter().any(|v| v.id == id));
+    }
 
     // Build hotkeys arm a placement; the shell shows a ghost until you click.
     if is_key_pressed(KeyCode::P) {
@@ -68,7 +89,14 @@ pub fn gather_commands(
         *build_mode = None;
     }
 
+    // Left press: arm a box-select (the anchor) unless a build is being placed —
+    // placement happens on press to match the existing feel.
     if is_mouse_button_pressed(MouseButton::Left) && !pointer_over_ui {
+        *drag_start = Some(mouse_position());
+    }
+    // Left release: place a building, or resolve a click vs. box-select.
+    if is_mouse_button_released(MouseButton::Left) && !pointer_over_ui {
+        let start = drag_start.take();
         if let Some(kind) = build_mode.take() {
             // Snap the click to the nearest hex cell.
             let (col, row) = hex::from_world(
@@ -82,18 +110,62 @@ pub fn gather_commands(
                 x: col,
                 y: row,
             });
-        } else {
-            *selected = nearest_friendly_unit(sim, wx, wy);
+        } else if let Some((sxp, syp)) = start {
+            let drag = (mx - sxp).hypot(my - syp);
+            if drag < CLICK_SLOP_PX {
+                // A click: friendly unit > planet > clear.
+                if let Some(unit) = nearest_friendly_unit(sim, wx, wy) {
+                    selected.units = vec![unit];
+                    selected.planet = None;
+                } else if let Some(pid) = planet_at_world(sim, wx, wy) {
+                    selected.planet = Some(pid);
+                    selected.units.clear();
+                } else {
+                    selected.units.clear();
+                    selected.planet = None;
+                }
+            } else {
+                // A box drag: select every friendly unit inside the rectangle.
+                let (w0x, w0y) = ((sxp - ox) / cell, (syp - crate::ui::TOP_BAR_H) / cell);
+                let (lo_x, hi_x) = (w0x.min(wx), w0x.max(wx));
+                let (lo_y, hi_y) = (w0y.min(wy), w0y.max(wy));
+                selected.units = sim
+                    .views()
+                    .into_iter()
+                    .filter(|v| v.owner == HUMAN && matches!(v.kind, EntityKindView::Unit(_)))
+                    .filter(|v| {
+                        let (ux, uy) = (fixed_to_tiles(v.pos.x), fixed_to_tiles(v.pos.y));
+                        ux >= lo_x && ux <= hi_x && uy >= lo_y && uy <= hi_y
+                    })
+                    .map(|v| v.id)
+                    .collect();
+                selected.planet = None;
+            }
         }
     }
     if is_mouse_button_pressed(MouseButton::Right) && !pointer_over_ui {
         *build_mode = None; // right-click cancels a pending placement
-        if let Some(unit) = *selected {
-            cmds.push(Command::Move {
-                owner: HUMAN,
-                unit,
-                target: SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
+        if !selected.units.is_empty() {
+            // Assault: a right-click on an enemy/neutral planet orders the whole
+            // group to that planet's seat (else its center). Otherwise it's a plain
+            // group move to the cursor.
+            let assault = planet_at_world(sim, wx, wy)
+                .and_then(|pid| (sim.planet_owner(pid) != Some(HUMAN)).then_some(pid));
+            let cursor = SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy));
+            let target = assault.map_or(cursor, |pid| {
+                seat_pos(sim, pid)
+                    .or_else(|| sim.planet_center(pid))
+                    .unwrap_or(cursor)
             });
+            for &unit in &selected.units {
+                if sim.entity_alive(unit) {
+                    cmds.push(Command::Move {
+                        owner: HUMAN,
+                        unit,
+                        target,
+                    });
+                }
+            }
         }
     }
     if is_key_pressed(KeyCode::T) {
@@ -141,10 +213,10 @@ pub fn gather_commands(
             });
         }
     }
-    // Q casts the selected unit's ability at the cursor. The core validates
+    // Q casts the first selected unit's ability at the cursor. The core validates
     // ownership, cooldown, and range, so a bad cast is simply a no-op.
     if is_key_pressed(KeyCode::Q) {
-        if let Some(unit) = *selected {
+        if let Some(&unit) = selected.units.first() {
             cmds.push(Command::UseAbility {
                 owner: HUMAN,
                 unit,
@@ -153,8 +225,8 @@ pub fn gather_commands(
         }
     }
 
-    // Touch (mobile): a tap on a friendly unit selects it; a tap on empty ground
-    // moves the selected unit. Same command set as mouse/keyboard.
+    // Touch (mobile): a tap on a friendly unit selects just it; a tap on empty
+    // ground moves the selected group. Same command set as mouse/keyboard.
     for touch in touches() {
         if touch.phase != TouchPhase::Started {
             continue;
@@ -162,16 +234,45 @@ pub fn gather_commands(
         let tx = (touch.position.x - ox) / cell;
         let ty = (touch.position.y - crate::ui::TOP_BAR_H) / cell;
         if let Some(unit) = nearest_friendly_unit(sim, tx, ty) {
-            *selected = Some(unit);
-        } else if let Some(unit) = *selected {
-            cmds.push(Command::Move {
-                owner: HUMAN,
-                unit,
-                target: SimVec::new(f32_to_fixed(tx), f32_to_fixed(ty)),
-            });
+            selected.units = vec![unit];
+            selected.planet = None;
+        } else if !selected.units.is_empty() {
+            let target = SimVec::new(f32_to_fixed(tx), f32_to_fixed(ty));
+            for &unit in &selected.units {
+                if sim.entity_alive(unit) {
+                    cmds.push(Command::Move {
+                        owner: HUMAN,
+                        unit,
+                        target,
+                    });
+                }
+            }
         }
     }
     cmds
+}
+
+/// Which planet (if any) the world point `(wx, wy)` in tile units falls on. Maps
+/// the world point to a tile, then asks the map which planet owns that tile.
+#[must_use]
+fn planet_at_world(sim: &Sim, wx: f32, wy: f32) -> Option<rts_core::game::planet::PlanetId> {
+    let (col, row) = hex::from_world(
+        SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
+        sim.map().width(),
+        sim.map().height(),
+    );
+    sim.map().planet_at(i32::from(col), i32::from(row))
+}
+
+/// The world position of a planet's seat entity (its capital), if it has a living
+/// one — used as the muster point for an assault order.
+#[must_use]
+fn seat_pos(sim: &Sim, pid: rts_core::game::planet::PlanetId) -> Option<SimVec> {
+    let seat = sim.planet_seat(pid)?;
+    sim.views()
+        .into_iter()
+        .find(|v| v.id == seat)
+        .map(|v| v.pos)
 }
 
 /// The map tile under the mouse cursor (for survey-phase founding).

@@ -34,6 +34,7 @@ use rts_core::game::civ::{
 use rts_core::game::hex;
 use rts_core::game::map::DepositKind;
 use rts_core::game::perk;
+use rts_core::game::planet::PlanetId;
 use rts_core::game::scenario;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim};
 use rts_core::game::stats::{BuildingKind, UnitKind};
@@ -102,6 +103,18 @@ const SURVIVAL_MILESTONE_WAVE: u32 = 5;
 enum Phase {
     Title,
     Playing,
+}
+
+/// The player's current selection: a group of friendly units and/or one planet.
+///
+/// A click on a friendly unit selects just that unit; a box-drag selects every
+/// friendly unit inside the rectangle; a click on open planet ground selects the
+/// planet (clearing the unit group). Right-click issues group move / assault
+/// orders for the selected units.
+#[derive(Default)]
+pub struct Selection {
+    pub units: Vec<EntityId>,
+    pub planet: Option<PlanetId>,
 }
 
 fn window_conf() -> Conf {
@@ -191,7 +204,9 @@ async fn main() {
     let sprites = Sprites::load().await;
     let mut audio = audio::AudioMgr::load().await;
     let mut sim = scenario::survival(survival_seed());
-    let mut selected: Option<EntityId> = None;
+    let mut selected = Selection::default();
+    // Screen-space anchor of an in-progress left-drag box-select (None = not dragging).
+    let mut drag_start: Option<(f32, f32)> = None;
     let mut build_mode: Option<BuildingKind> = None;
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
@@ -273,7 +288,8 @@ async fn main() {
                 prev_era = 0;
                 prev_researching = false;
                 audio.set_music(audio::Music::Combat);
-                selected = None;
+                selected = Selection::default();
+                drag_start = None;
                 build_mode = None;
                 pending.clear();
                 accumulator = 0.0;
@@ -363,6 +379,7 @@ async fn main() {
             pending.extend(input::gather_commands(
                 &sim,
                 &mut selected,
+                &mut drag_start,
                 &mut build_mode,
                 ui::pointer_over_ui(),
                 cell,
@@ -612,7 +629,8 @@ async fn main() {
             prev_era = 0;
             prev_researching = false;
             audio.set_music(audio::Music::Combat);
-            selected = None;
+            selected = Selection::default();
+            drag_start = None;
             build_mode = None;
             pending.clear();
             accumulator = 0.0;
@@ -623,7 +641,8 @@ async fn main() {
         if over && is_key_pressed(KeyCode::M) {
             phase = Phase::Title;
             audio.set_music(audio::Music::Menu);
-            selected = None;
+            selected = Selection::default();
+            drag_start = None;
             build_mode = None;
             pending.clear();
             accumulator = 0.0;
@@ -673,13 +692,14 @@ async fn main() {
             view.on_tick(&sim);
             accumulator -= TICK_DT;
         }
-        // Drop a selection whose entity died: slots are recycled, so a stale id
+        // Drop selected units whose entity died: slots are recycled, so a stale id
         // could otherwise issue Move/UseAbility through a different unit that
-        // reused it.
-        if let Some(id) = selected {
-            if !sim.views().iter().any(|v| v.id == id && v.owner == HUMAN) {
-                selected = None;
-            }
+        // reused it. Keep only living, still-friendly entities.
+        if !selected.units.is_empty() {
+            let views = sim.views();
+            selected
+                .units
+                .retain(|&id| views.iter().any(|v| v.id == id && v.owner == HUMAN));
         }
         view.frame(dt);
         // Turn this frame's FX events into particles, then advance the pool.
@@ -795,12 +815,16 @@ async fn main() {
         let (sx, sy) = camera.offset(7.0);
 
         draw(
-            &sim, &view, &particles, selected, build_mode, cell, alpha, sx, sy, &sprites,
+            &sim, &view, &particles, &selected, drag_start, build_mode, cell, alpha, sx, sy,
+            &sprites,
         );
         if surveying {
             draw_survey_overlay(&sim, cell, &sprites);
         }
-        ui::draw(&sim, build_mode, paused, game_speed, selected, &sprites);
+        // The selection panel shows a single unit's stats; with exactly one unit
+        // selected, behave as before. A planet selection drives Task 4's panel.
+        let panel_unit = (selected.units.len() == 1).then(|| selected.units[0]);
+        ui::draw(&sim, build_mode, paused, game_speed, panel_unit, &sprites);
         // Colony autonomy readout (the player's delegation dial) — shows the
         // effective/requested level, *why* it sits there (the binding constraint),
         // and, while still earning, progress toward the next level.
@@ -2223,13 +2247,14 @@ fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "the single render entry point threads sim, view/particle layers, selection, camera and assets"
+    reason = "the single render entry point threads sim, view/particle layers, selection, the in-progress drag box, camera and assets"
 )]
 fn draw(
     sim: &Sim,
     view: &view::ViewState,
     particles: &particles::Particles,
-    selected: Option<EntityId>,
+    selected: &Selection,
+    drag_start: Option<(f32, f32)>,
     build_mode: Option<BuildingKind>,
     cell: f32,
     alpha: f32,
@@ -2306,7 +2331,7 @@ fn draw(
         draw_piece(x, y, base_size * scale, texture, team, is_building, flash);
         draw_health_bar(x, y, cell, hp, max_hp);
         draw_shield_bar(x, y, cell, sh, max_sh);
-        if Some(v.id) == selected {
+        if selected.units.contains(&v.id) {
             // Pulsing double ring — a live holographic selection lock.
             let pulse = (get_time() as f32 * 3.0).sin() * 0.5 + 0.5;
             draw_circle_lines(x, y, base_size * 0.62, 2.0, SELECT_RING);
@@ -2347,9 +2372,41 @@ fn draw(
             },
         );
     }
+    // A selected planet gets a pulsing cyan ring at its center, sized to its
+    // radius (in tiles) so it reads as the chosen world, not a unit.
+    if let Some(pid) = selected.planet {
+        if let Some(c) = sim.planet_center(pid) {
+            let px = ox + tile_to_px(c.x, cell);
+            let py = wtop + tile_to_px(c.y, cell);
+            let r = sim
+                .planet_radius(pid)
+                .map_or(cell * 1.5, |rad| tile_to_px(rad, cell).max(cell));
+            let pulse = (get_time() as f32 * 2.0).sin() * 0.5 + 0.5;
+            draw_circle_lines(px, py, r, 2.5, SELECT_RING);
+            draw_circle_lines(
+                px,
+                py,
+                r + 4.0 + pulse * 6.0,
+                1.5,
+                with_alpha(SELECT_RING, 0.3 + pulse * 0.4),
+            );
+        }
+    }
     if let Some(kind) = build_mode {
         draw_build_grid(sim, cell, ox, wtop);
         draw_build_ghost(sim, kind, cell, ox, wtop);
+    }
+    // The in-progress box-select rectangle, drawn last (over the world) in raw
+    // screen space — the HUD/cursor frame, so it ignores the screen-shake offset.
+    if let Some((dx, dy)) = drag_start {
+        let (mx, my) = mouse_position();
+        let (rx, ry) = (dx.min(mx), dy.min(my));
+        let (rw, rh) = ((dx - mx).abs(), (dy - my).abs());
+        // Only draw once it's actually a drag, not a pending click.
+        if rw > 2.0 || rh > 2.0 {
+            draw_rectangle(rx, ry, rw, rh, with_alpha(SELECT_RING, 0.10));
+            draw_rectangle_lines(rx, ry, rw, rh, 1.0, with_alpha(SELECT_RING, 0.9));
+        }
     }
 }
 
