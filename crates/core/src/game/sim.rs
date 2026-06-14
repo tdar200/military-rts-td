@@ -84,11 +84,23 @@ struct Entity {
     /// massed casters can never chain-stun a clump into a permanent lock (max
     /// stun uptime = duration / (duration + `STUN_IMMUNITY`)).
     stun_immunity: u32,
+    /// Attack-move flag: when `true`, the unit halts its advance toward
+    /// `move_target` whenever an enemy is within its weapon range (standing to
+    /// fight via the existing auto-fire), and resumes once the area is clear.
+    /// Set by [`Command::AttackMove`], cleared by a plain [`Command::Move`] and
+    /// on arrival. Genuine mutable per-entity state, so it is folded into
+    /// [`Sim::state_hash`].
+    attack_move: bool,
 }
 
 /// Ticks of EMP immunity granted when a stun wears off — twice the stun length,
 /// capping worst-case stun uptime at one third even against massed casters.
 const STUN_IMMUNITY: u32 = 90;
+
+/// Engagement leash (world units) for an attack-moving unit that has NO weapon:
+/// it halts its advance when an enemy comes this close, letting armed escorts
+/// catch up and fight. Armed units use their own weapon range instead.
+const ATTACK_MOVE_LEASH: Fixed = Fixed::from_int(4);
 
 /// Veterancy rank for a given kill count (0 → 3, capped).
 const fn rank_for_kills(kills: u32) -> u8 {
@@ -254,6 +266,19 @@ pub enum Command {
     },
     /// Order a unit to move to a world position.
     Move {
+        /// Owning player.
+        owner: PlayerId,
+        /// The unit entity.
+        unit: EntityId,
+        /// Destination.
+        target: Vec2,
+    },
+    /// Order a unit to ATTACK-MOVE to a world position: it advances toward the
+    /// point but STOPS to fight any enemy that comes within its weapon range
+    /// en route (the existing auto-fire deals the damage), resuming once the
+    /// area is clear. Clears itself on arrival. Contrast with [`Command::Move`],
+    /// which marches straight to the point and never stops for a fight.
+    AttackMove {
         /// Owning player.
         owner: PlayerId,
         /// The unit entity.
@@ -1662,6 +1687,11 @@ impl Sim {
                 h.write_u64(u64::from(wx));
                 h.write_u64(u64::from(wy));
             }
+            // Attack-move stance — genuine mutable per-entity state (set by an
+            // AttackMove order, cleared by a plain Move and on arrival), so it is
+            // folded into the hash. Appended last per the stable-order rule above
+            // (this is what re-pinned the golden).
+            h.write_u64(u64::from(e.attack_move));
         }
         h.write_u64(self.free.len() as u64);
         for &slot in &self.free {
@@ -1811,6 +1841,7 @@ impl Sim {
             ability_cd: 0,
             stun_ticks: 0,
             stun_immunity: 0,
+            attack_move: false,
         })
     }
 
@@ -1841,6 +1872,7 @@ impl Sim {
             ability_cd: 0,
             stun_ticks: 0,
             stun_immunity: 0,
+            attack_move: false,
         })
     }
 
@@ -1938,14 +1970,14 @@ impl Sim {
             };
             let spawned = self.add_unit(cfg.attacker, kind, cfg.spawn + offset);
             if let Some(t) = target {
-                self.order_unit_to(spawned.0 as usize, t);
+                self.order_unit_to(spawned.0 as usize, t, false);
             }
         }
         // Boss: a Capital ship joins every 5th wave once escalation is underway.
         if cfg.escalate && (w + 1).is_multiple_of(5) {
             let spawned = self.add_unit(cfg.attacker, UnitKind::Capital, cfg.spawn);
             if let Some(t) = target {
-                self.order_unit_to(spawned.0 as usize, t);
+                self.order_unit_to(spawned.0 as usize, t, false);
             }
         }
         // The swarm ADAPTS: each escalating wave also hardens the attacker itself —
@@ -1967,12 +1999,13 @@ impl Sim {
     /// building like the enemy Command Center), the unit paths to the nearest
     /// passable tile beside it and then closes the last step directly — so
     /// "attack the base" actually routes there.
-    fn order_unit_to(&mut self, idx: usize, target: Vec2) {
+    fn order_unit_to(&mut self, idx: usize, target: Vec2, attack_move: bool) {
         let owner = self.entities[idx].owner;
         if is_air_of(&self.balance, self.entities[idx].kind) || self.player_has_antigrav(owner) {
             // Air units and anti-grav units fly straight to the target, ignoring terrain.
             let e = &mut self.entities[idx];
             e.move_target = Some(target);
+            e.attack_move = attack_move;
             e.path = Vec::new();
             return;
         }
@@ -1989,6 +2022,7 @@ impl Sim {
         if let Some(path) = find_path(&self.map, start, goal) {
             let e = &mut self.entities[idx];
             e.move_target = Some(target);
+            e.attack_move = attack_move;
             e.path = path;
         }
     }
@@ -2119,7 +2153,21 @@ impl Sim {
                     e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_))
                 });
                 if valid {
-                    self.order_unit_to(idx, target);
+                    // Plain move clears any standing attack-move stance.
+                    self.order_unit_to(idx, target, false);
+                }
+            }
+            Command::AttackMove {
+                owner,
+                unit,
+                target,
+            } => {
+                let idx = unit.0 as usize;
+                let valid = self.entities.get(idx).is_some_and(|e| {
+                    e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_))
+                });
+                if valid {
+                    self.order_unit_to(idx, target, true);
                 }
             }
             Command::Research { owner, tech_id } => self.apply_research(owner, tech_id),
@@ -3084,7 +3132,16 @@ impl Sim {
         let mobility: Vec<Fixed> = (0..self.civs.len())
             .map(|p| self.player_mobility_bonus(PlayerId(u16::try_from(p).unwrap())))
             .collect();
-        for e in &mut self.entities {
+        // Pre-tick snapshot of every living entity's (owner, position), so an
+        // attack-mover can scan for a nearby enemy without borrowing `entities`
+        // mutably during the move loop. Ascending index, no rng/float — the same
+        // deterministic order the combat pass relies on.
+        let snap: Vec<(bool, u16, Vec2)> = self
+            .entities
+            .iter()
+            .map(|e| (e.alive, e.owner.0, e.pos))
+            .collect();
+        for (i, e) in self.entities.iter_mut().enumerate() {
             if !e.alive {
                 continue;
             }
@@ -3096,6 +3153,30 @@ impl Sim {
             let Some(target) = e.move_target else {
                 continue;
             };
+            // Attack-move: stand and fight if any enemy is within engagement
+            // range — the existing combat auto-fire does the damage; here we
+            // only SUPPRESS the advance this tick. Engagement range is the
+            // unit's own weapon range (`attack_of`), or a small fixed leash if
+            // it is unarmed. Scan in ascending index order over the frozen
+            // snapshot (deterministic; no rng/float). Plain Move never enters
+            // this branch, so it marches through unchanged.
+            if e.attack_move {
+                let leash = attack_of(&self.balance, e.kind).map_or(ATTACK_MOVE_LEASH, |p| p.range);
+                let leash_sq = leash * leash;
+                let mut enemy_in_range = false;
+                for (j, t) in snap.iter().enumerate() {
+                    if !t.0 || j == i || t.1 == e.owner.0 {
+                        continue;
+                    }
+                    if (t.2 - e.pos).length_squared() <= leash_sq {
+                        enemy_in_range = true;
+                        break;
+                    }
+                }
+                if enemy_in_range {
+                    continue;
+                }
+            }
             let speed = uk.stats().speed + mobility[usize::from(e.owner.0)];
             // Head to the next waypoint, or straight to the target once the path
             // is exhausted.
@@ -3109,6 +3190,8 @@ impl Sim {
                 e.pos = subgoal;
                 if e.path.is_empty() {
                     e.move_target = None;
+                    // Arrived: drop the attack-move stance with the waypoint.
+                    e.attack_move = false;
                 } else {
                     e.path.remove(0);
                 }
@@ -4548,6 +4631,89 @@ mod tests {
         assert_eq!(run_ai_vs_ai(7), run_ai_vs_ai(7));
     }
 
+    /// Builds a 1-D corridor: a P0 Infantry at x=5, a P1 Infantry "ambush" at
+    /// x=10, both on row 5, with a far destination at x=20. Both combatants get a
+    /// huge HP pool so neither dies inside the test window — the assertions key on
+    /// POSITION (did the attacker stop?) and on the enemy taking *some* damage.
+    fn corridor() -> (Sim, EntityId, EntityId, Vec2) {
+        let mut s = Sim::new(Map::new(30, 12), 1, f(0));
+        let atk = s.add_unit(P0, UnitKind::Infantry, v(5, 5));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(10, 5));
+        // Survive the whole window so the test measures behavior, not lethality.
+        s.entities[atk.0 as usize].hp = f(100_000);
+        s.entities[foe.0 as usize].hp = f(100_000);
+        (s, atk, foe, v(20, 5))
+    }
+
+    #[test]
+    fn attack_move_units_stop_to_fight() {
+        // An AttackMove order PAST an enemy must make the unit halt at the enemy
+        // (engagement range) and damage it — NOT walk on to the far destination.
+        let (mut s, atk, foe, dest) = corridor();
+        let foe_full = s.entities[foe.0 as usize].hp;
+        s.step(&[Command::AttackMove {
+            owner: P0,
+            unit: atk,
+            target: dest,
+        }]);
+        for _ in 0..200 {
+            s.step(&[]);
+        }
+        let atk_x = s.entities[atk.0 as usize].pos.x;
+        // Halted well short of the destination (x=20): it stopped to fight, so it
+        // never crossed the enemy at x=10.
+        assert!(
+            atk_x < f(11),
+            "attack-mover should halt near the enemy (~x<=10), got x-bits={}",
+            atk_x.to_bits()
+        );
+        // Still carrying the unreached order (move_target set, stance still armed).
+        assert!(
+            s.entities[atk.0 as usize].move_target.is_some(),
+            "the unmet move order must persist while standing to fight"
+        );
+        assert!(
+            s.entities[atk.0 as usize].attack_move,
+            "the attack-move stance must stay armed until the destination is reached"
+        );
+        // And it actually fought: the enemy bled.
+        assert!(
+            s.entities[foe.0 as usize].hp < foe_full,
+            "the halted attack-mover must deal damage to the enemy it stopped for"
+        );
+    }
+
+    #[test]
+    fn plain_move_ignores_enemies() {
+        // The control: a plain Move with the SAME geometry marches straight to the
+        // far destination, never stopping for the enemy on the way.
+        let (mut s, atk, _foe, dest) = corridor();
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: atk,
+            target: dest,
+        }]);
+        // A plain move never sets the attack-move stance.
+        assert!(
+            !s.entities[atk.0 as usize].attack_move,
+            "plain Move must not arm the attack-move stance"
+        );
+        for _ in 0..400 {
+            s.step(&[]);
+        }
+        // Reached the destination: move_target cleared (arrival) and x is at x=20.
+        assert!(
+            s.entities[atk.0 as usize].move_target.is_none(),
+            "a plain Move must reach the destination and clear its order"
+        );
+        let atk_x = s.entities[atk.0 as usize].pos.x;
+        assert!(
+            atk_x > f(19),
+            "a plain Move must reach the far destination (~x=20), got x-bits={}",
+            atk_x.to_bits()
+        );
+    }
+
     #[test]
     fn golden_hash_pins_cross_target_determinism() {
         // A fixed scripted AI-vs-AI run. This constant must be byte-identical on
@@ -4573,7 +4739,12 @@ mod tests {
         //
         // Re-pinned for planetary territory: state hash now appends each civ's `alive`
         // byte and the planets arena (this run has no planets -> one zero-length marker).
-        assert_eq!(s.state_hash(), 17_495_389_389_365_438_884);
+        //
+        // Re-pinned for attack-move: each entity now appends its `attack_move` stance
+        // byte to the hash. The golden run issues no AttackMove orders (AI still emits
+        // plain Move), so every byte is 0 — the only delta is one appended marker per
+        // entity; the simulation itself is unchanged.
+        assert_eq!(s.state_hash(), 1_037_729_920_696_487_524);
     }
 
     #[test]

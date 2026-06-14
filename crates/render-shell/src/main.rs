@@ -270,6 +270,8 @@ async fn main() {
     // Screen-space anchor of an in-progress left-drag box-select (None = not dragging).
     let mut drag_start: Option<(f32, f32)> = None;
     let mut build_mode: Option<BuildingKind> = None;
+    // Attack-move mode: armed by `A`, consumed by the next left/right map click.
+    let mut attack_move_armed = false;
     let mut pending = Vec::new();
     let mut accumulator = 0.0_f32;
     let mut paused = false;
@@ -368,6 +370,7 @@ async fn main() {
                 group_last_press = [0.0; 10];
                 drag_start = None;
                 build_mode = None;
+                attack_move_armed = false;
                 pending.clear();
                 accumulator = 0.0;
                 research_open = false;
@@ -575,6 +578,7 @@ async fn main() {
                 &mut selected,
                 &mut drag_start,
                 &mut build_mode,
+                &mut attack_move_armed,
                 ui::pointer_over_ui(),
                 cell,
                 (ox_cam, wtop_cam),
@@ -832,6 +836,7 @@ async fn main() {
             group_last_press = [0.0; 10];
             drag_start = None;
             build_mode = None;
+            attack_move_armed = false;
             pending.clear();
             accumulator = 0.0;
             research_open = false;
@@ -844,6 +849,7 @@ async fn main() {
             selected = Selection::default();
             drag_start = None;
             build_mode = None;
+            attack_move_armed = false;
             pending.clear();
             accumulator = 0.0;
             research_open = false;
@@ -1031,6 +1037,11 @@ async fn main() {
         // Under-attack alerts on the main view: on-screen rings + off-screen edge
         // arrows pointing toward the battle. Drawn over the world, under the HUD.
         draw_alert_overlay(&alerts.active, cell, ox_cam, wtop_cam);
+        // Attack-move armed: a banner + cursor reticle telling the player the next
+        // click issues an attack-move (mirrors how build_mode shows a ghost).
+        if attack_move_armed {
+            draw_attack_move_banner(&sprites);
+        }
         // The selection panel shows a single unit's stats; with exactly one unit
         // selected, behave as before. A planet selection drives Task 4's panel.
         let panel_unit = (selected.units.len() == 1).then(|| selected.units[0]);
@@ -1635,6 +1646,44 @@ fn draw_milestone_banner(remaining: f32, sprites: &Sprites) {
         with_alpha(TEXT_DIM, alpha),
         sprites.font(),
     );
+}
+
+/// Attack-move affordance: a centered banner plus a reticle at the cursor, so it
+/// is unmistakable that the next click issues an attack-move (`StarCraft` `A`-move).
+fn draw_attack_move_banner(sprites: &Sprites) {
+    let fb = sprites.font_bold();
+    let msg = "ATTACK-MOVE \u{2014} click target";
+    let tw = measure_text(msg, fb, 24, 1.0).width;
+    let x = (screen_width() - tw) / 2.0;
+    let y = WORLD_TOP + 84.0;
+    draw_rectangle(x - 24.0, y - 30.0, tw + 48.0, 58.0, with_alpha(PANEL, 0.9));
+    glow_rect(x - 24.0, y - 30.0, tw + 48.0, 58.0, ALERT_GLOW, 3);
+    draw_rectangle(x - 24.0, y - 30.0, tw + 48.0, 3.0, BAD);
+    draw_text_ex(
+        msg,
+        x,
+        y,
+        TextParams {
+            font: fb,
+            font_size: 24,
+            color: BAD,
+            ..Default::default()
+        },
+    );
+    centered(
+        "A again or Esc to cancel",
+        y + 22.0,
+        14.0,
+        TEXT_DIM,
+        sprites.font(),
+    );
+    // Cursor reticle: crosshair ring at the mouse so the armed state is local too.
+    let (mx, my) = mouse_position();
+    draw_circle_lines(mx, my, 11.0, 1.5, BAD);
+    draw_line(mx - 16.0, my, mx - 6.0, my, 1.5, BAD);
+    draw_line(mx + 6.0, my, mx + 16.0, my, 1.5, BAD);
+    draw_line(mx, my - 16.0, mx, my - 6.0, 1.5, BAD);
+    draw_line(mx, my + 6.0, mx, my + 16.0, 1.5, BAD);
 }
 
 /// The commanded-time auto-pause banner: names the event that froze the game and

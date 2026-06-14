@@ -34,18 +34,26 @@ fn fixed_to_tiles(v: Fixed) -> f32 {
 /// `selected` is the live group selection (units + an optional planet);
 /// `drag_start` holds the screen-space anchor of an in-progress box-select (set on
 /// left-press, consumed on release); `build_mode` tracks a pending building
-/// placement (the shell draws a ghost for it until a click places or cancels it).
+/// placement (the shell draws a ghost for it until a click places or cancels it);
+/// `attack_move_armed` tracks attack-move mode — pressing `A` arms it, and the
+/// next left- or right-click issues [`Command::AttackMove`] for the whole group
+/// instead of a plain move, then disarms (`StarCraft` convention).
 ///
 /// Selection: a left *click* on a friendly unit selects just it; on open planet
 /// ground selects the planet; on nothing clears. A left *drag* box-selects every
 /// friendly unit inside the rectangle. A right click moves the selected group, or
 /// assaults an enemy/neutral planet under the cursor.
 #[must_use]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the per-frame input state (selection, drag, build_mode, attack_move, camera) is threaded explicitly rather than bundled into a struct, matching the shell's existing style"
+)]
 pub fn gather_commands(
     sim: &Sim,
     selected: &mut Selection,
     drag_start: &mut Option<(f32, f32)>,
     build_mode: &mut Option<BuildingKind>,
+    attack_move_armed: &mut bool,
     pointer_over_ui: bool,
     cell: f32,
     origin: (f32, f32),
@@ -78,7 +86,8 @@ pub fn gather_commands(
     if is_key_pressed(KeyCode::G) {
         *build_mode = Some(BuildingKind::GunTurret);
     }
-    if is_key_pressed(KeyCode::A) {
+    // J arms Flak (AaTurret) placement. (`A` was reassigned to attack-move.)
+    if is_key_pressed(KeyCode::J) {
         *build_mode = Some(BuildingKind::AaTurret);
     }
     if is_key_pressed(KeyCode::L) {
@@ -87,8 +96,19 @@ pub fn gather_commands(
     if is_key_pressed(KeyCode::N) {
         *build_mode = Some(BuildingKind::AntimatterPlant);
     }
+    // A arms ATTACK-MOVE (StarCraft convention): the next left/right click issues
+    // an AttackMove for the whole group. Arming a build placement cancels it, and
+    // vice versa, so the two modes never fight.
+    if is_key_pressed(KeyCode::A) {
+        *attack_move_armed = true;
+        *build_mode = None;
+    }
+    if build_mode.is_some() {
+        *attack_move_armed = false;
+    }
     if is_key_pressed(KeyCode::Escape) {
         *build_mode = None;
+        *attack_move_armed = false;
     }
 
     // Left press: arm a box-select (the anchor) unless a build is being placed —
@@ -97,6 +117,27 @@ pub fn gather_commands(
     // where button-release edges are unreliable): place a building, else select
     // the friendly unit > planet > clear under the cursor. A subsequent drag
     // upgrades to a box-select when the button is released.
+    // Attack-move armed: a left-click on the map issues AttackMove to the whole
+    // group (instead of selecting), then disarms. Handled before the normal
+    // press logic so it takes precedence; does not start a box-select.
+    if *attack_move_armed
+        && is_mouse_button_pressed(MouseButton::Left)
+        && !pointer_over_ui
+        && !selected.units.is_empty()
+    {
+        let target = SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy));
+        for &unit in &selected.units {
+            if sim.entity_alive(unit) {
+                cmds.push(Command::AttackMove {
+                    owner: HUMAN,
+                    unit,
+                    target,
+                });
+            }
+        }
+        *attack_move_armed = false;
+        return cmds;
+    }
     if is_mouse_button_pressed(MouseButton::Left) && !pointer_over_ui {
         *drag_start = Some((mx, my));
         if let Some(kind) = build_mode.take() {
@@ -145,6 +186,10 @@ pub fn gather_commands(
     }
     if is_mouse_button_pressed(MouseButton::Right) && !pointer_over_ui {
         *build_mode = None; // right-click cancels a pending placement
+                            // A right-click while attack-move is armed also issues the attack-move
+                            // (and disarms), matching the left-click path.
+        let attack_move = *attack_move_armed;
+        *attack_move_armed = false;
         if !selected.units.is_empty() {
             // Assault: a right-click on an enemy/neutral planet orders the whole
             // group to that planet's seat (else its center). Otherwise it's a plain
@@ -159,10 +204,18 @@ pub fn gather_commands(
             });
             for &unit in &selected.units {
                 if sim.entity_alive(unit) {
-                    cmds.push(Command::Move {
-                        owner: HUMAN,
-                        unit,
-                        target,
+                    cmds.push(if attack_move {
+                        Command::AttackMove {
+                            owner: HUMAN,
+                            unit,
+                            target,
+                        }
+                    } else {
+                        Command::Move {
+                            owner: HUMAN,
+                            unit,
+                            target,
+                        }
                     });
                 }
             }

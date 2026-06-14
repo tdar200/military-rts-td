@@ -131,7 +131,7 @@ fn layout() -> [Button; 12] {
         mk(1, "Extractor", 'R', Action::Build(BuildingKind::Refinery)),
         mk(2, "Hangar", 'B', Action::Build(BuildingKind::Barracks)),
         mk(3, "Laser", 'G', Action::Build(BuildingKind::GunTurret)),
-        mk(4, "Flak", 'A', Action::Build(BuildingKind::AaTurret)),
+        mk(4, "Flak", 'J', Action::Build(BuildingKind::AaTurret)),
         mk(5, "Lab", 'L', Action::Build(BuildingKind::ResearchLab)),
         mk(
             6,

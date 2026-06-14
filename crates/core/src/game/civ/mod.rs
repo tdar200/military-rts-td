@@ -462,7 +462,7 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         // expansion
         Command::FoundBase { .. } | Command::FoundColony { .. } => 6,
         // movement / initiative
-        Command::Move { .. } | Command::UseAbility { .. } => 7,
+        Command::Move { .. } | Command::AttackMove { .. } | Command::UseAbility { .. } => 7,
         // institution-level spend
         Command::Ascend { .. } | Command::ChoosePerk { .. } => 8,
         // player→colony / player→sector configuration commands are never
