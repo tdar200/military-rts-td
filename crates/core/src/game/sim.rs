@@ -169,6 +169,18 @@ const MIN_COLONY_SPACING: u16 = 6;
 /// that makes a bigger empire face proportionally harder sieges (scale forces
 /// the strategic layer). Zero colonies ⇒ legacy waves are unchanged.
 const EMPIRE_WAVE_PRESSURE: u32 = 2;
+/// Per-colony step of the super-linear empire-administration upkeep, charged in
+/// Money every economy tick. Total upkeep for an `n`-colony empire is
+/// `UPKEEP_STEP × n·(n−1)/2` (triangular): colony `k` costs `UPKEEP_STEP·(k−1)`,
+/// so the FIRST colony is free and each extra colony costs more than the last
+/// (1→0, 2→1·step, 3→3·step, 4→6·step, 8→28·step). This is the "wide empires
+/// cost more to administer" 4X brake: a runaway leader pays disproportionately
+/// more upkeep per colony than a trailing 2–3 colony follower, so expansion is
+/// self-limiting and trailing civs get room to contest. Keyed off owned-COLONY
+/// count (administrative empire size), which is ZERO in the colony-free golden
+/// survival run, so this is golden-neutral. Tuning magnitude is deliberately
+/// modest pending playtest.
+const UPKEEP_STEP: Fixed = Fixed::from_int(1);
 /// Ceiling on the Energy stockpile — a bounded, spend-it-or-cap-it resource
 /// rather than a runaway counter.
 const ENERGY_CAP: Fixed = Fixed::from_int(8000);
@@ -834,6 +846,25 @@ impl Sim {
     #[must_use]
     pub fn colony_count_for(&self, owner: PlayerId) -> usize {
         self.count_owner_colonies(owner)
+    }
+
+    /// Super-linear empire-administration upkeep (in Money) for `owner` this tick.
+    ///
+    /// For `n` owned colonies the cost is the triangular sum
+    /// `UPKEEP_STEP × n·(n−1)/2`, so colony `k` adds `UPKEEP_STEP·(k−1)`: the first
+    /// colony is free and every extra colony costs more than the last
+    /// (n=1→0, 2→1·step, 3→3·step, 4→6·step, 8→28·step). A runaway leader therefore
+    /// pays disproportionately more upkeep PER colony than a small follower — the
+    /// "wide empires cost more to administer" brake on the conquest snowball.
+    ///
+    /// Fully integer/`Fixed`: `n·(n−1)` is always even, so the `/2` is exact with no
+    /// float and no rounding (determinism rule D1). Deducted in [`run_economy`].
+    #[must_use]
+    pub fn empire_upkeep(&self, owner: PlayerId) -> Fixed {
+        let n = i32::try_from(self.count_owner_colonies(owner)).unwrap_or(i32::MAX);
+        // n·(n−1) is the product of consecutive integers ⇒ even ⇒ /2 is exact.
+        let triangular = n.saturating_mul(n.saturating_sub(1)) / 2;
+        UPKEEP_STEP * Fixed::from_int(triangular)
     }
 
     /// `owner`'s current Kardashev tier, derived from its empire size.
@@ -2755,6 +2786,19 @@ impl Sim {
                 money_income = money_income * Fixed::from_ratio(3, 2);
             }
             self.civs[p].money = self.civs[p].money + money_income;
+            // Escalating empire-administration upkeep: the more colonies this player
+            // holds, the more Money it bleeds per tick, scaling super-linearly so a
+            // wide runaway empire pays disproportionately more per colony than a small
+            // one (the conquest-snowball brake). Clamp at zero so the stockpile never
+            // runs negative on upkeep alone — a broke empire simply can't fund growth.
+            // ZERO in the colony-free survival run, so the golden hash is unaffected.
+            let upkeep = self.empire_upkeep(PlayerId(u16::try_from(p).unwrap()));
+            let after = self.civs[p].money - upkeep;
+            self.civs[p].money = if after > Fixed::ZERO {
+                after
+            } else {
+                Fixed::ZERO
+            };
         }
         // Extractors mine the deposit they stand on — all deposits yield Money.
         let mut to_mine: alloc::vec::Vec<(u16, u16, u16, i32)> = alloc::vec::Vec::new();
@@ -4172,7 +4216,7 @@ impl Sim {
 mod tests {
     use super::{
         ascend_cost, tile_center, BuildingKind, Command, EntityId, EntityKindView, PlayerId, Sim,
-        UnitKind, WaveConfig,
+        UnitKind, WaveConfig, UPKEEP_STEP,
     };
     use crate::fixed::Fixed;
     use crate::game::civ::ColonyId;
@@ -4188,6 +4232,78 @@ mod tests {
     }
     const P0: PlayerId = PlayerId(0);
     const P1: PlayerId = PlayerId(1);
+
+    /// Empire-administration upkeep scales SUPER-LINEARLY with colony count: each
+    /// extra colony costs strictly more than the last, so a wide empire pays
+    /// disproportionately more upkeep per colony than a small one. Verified two ways:
+    /// the exact closed-form curve for n = 1,2,4,8, and a stepped-economy run where
+    /// the many-colony player bleeds MORE-THAN-PROPORTIONALLY more Money than a
+    /// one-colony player. Fully deterministic (integer/`Fixed`, no rng, no float).
+    #[test]
+    fn empire_upkeep_scales_superlinearly() {
+        const TICKS: i32 = 10;
+        const CREDITS: i32 = 100_000; // ample headroom so upkeep never clamps at zero
+
+        // A bare, planet-free map: colonies here have no planet yield (Money output
+        // is ZERO) and no tech, so the ONLY money movement in `run_economy` is the
+        // upkeep deduction — letting us read it off exactly from stockpile deltas.
+        // `seat` validity is irrelevant: upkeep keys purely off owned-colony COUNT.
+        fn sim_with_colonies(n: usize, credits: i32) -> Sim {
+            let mut s = Sim::with_civ_count(Map::new(8, 8), 1, f(credits), 2);
+            // One real CC seat to anchor the colonies (count is what upkeep reads).
+            let seat = s.add_building(P0, BuildingKind::CommandCenter, 3, 3);
+            for _ in 0..n {
+                s.add_colony(P0, seat, 0);
+            }
+            s
+        }
+
+        // --- Exact closed-form curve: triangular UPKEEP_STEP·n·(n−1)/2 ---
+        // n=1→0, 2→1·step, 3→3·step, 4→6·step, 8→28·step.
+        let upkeep_for = |n: usize| sim_with_colonies(n, 100_000).empire_upkeep(P0);
+        assert_eq!(upkeep_for(1), Fixed::ZERO, "the first colony is free");
+        assert_eq!(upkeep_for(2), UPKEEP_STEP * f(1));
+        assert_eq!(upkeep_for(4), UPKEEP_STEP * f(6));
+        assert_eq!(upkeep_for(8), UPKEEP_STEP * f(28));
+
+        // PER-COLONY upkeep strictly rises with empire size (the super-linearity):
+        // doubling colonies more-than-doubles total upkeep, so cost/colony climbs.
+        // 4 colonies cost 6·step total (1.5·step each) vs 2 colonies' 1·step total
+        // (0.5·step each); 8 cost 28·step (3.5·step each). Compare with integer
+        // cross-multiplication to stay float-free: upkeep(8)/8 > upkeep(4)/4 ⇔
+        // upkeep(8)·4 > upkeep(4)·8.
+        let per4_x = upkeep_for(4) * f(8); // upkeep(4) scaled by 8
+        let per8_x = upkeep_for(8) * f(4); // upkeep(8) scaled by 4
+        assert!(
+            per8_x > per4_x,
+            "per-colony upkeep must rise with empire size (super-linear)"
+        );
+
+        // --- Stepped-economy run: the deduction actually happens, and the wide
+        // empire loses MORE-THAN-PROPORTIONALLY more Money over the same ticks. ---
+        let run = |n: usize| -> Fixed {
+            let mut s = sim_with_colonies(n, CREDITS);
+            let before = s.money(P0);
+            for _ in 0..TICKS {
+                s.run_economy();
+            }
+            before - s.money(P0) // total Money paid in upkeep over TICKS
+        };
+        let paid_2 = run(2);
+        let paid_8 = run(8);
+        // Exact: TICKS · UPKEEP_STEP · n·(n−1)/2.
+        assert_eq!(paid_2, f(TICKS) * UPKEEP_STEP * f(1));
+        assert_eq!(paid_8, f(TICKS) * UPKEEP_STEP * f(28));
+        // The 8-colony leader holds 4× the colonies of the 2-colony follower but
+        // pays 28× the upkeep — far more than the 4× a flat per-colony tax would
+        // give. Assert strictly more than proportional: paid_8 > 4 · paid_2.
+        assert!(
+            paid_8 > paid_2 * f(4),
+            "wide empire must pay MORE than proportionally more upkeep \
+             (paid_8={paid_8:?} should exceed 4·paid_2={:?})",
+            paid_2 * f(4)
+        );
+    }
 
     #[test]
     #[allow(
