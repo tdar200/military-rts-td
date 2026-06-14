@@ -2434,14 +2434,199 @@ fn buildings_on_planet(sim: &Sim, pid: PlanetId) -> u32 {
         .count() as u32
 }
 
-/// Renders every planet as a visible "city" at its center, the heart of the map.
+/// A solid natural color from raw RGB bytes (full alpha), for surface palettes.
+fn srgb(r: u8, g: u8, b: u8) -> Color {
+    Color::new(
+        f32::from(r) / 255.0,
+        f32::from(g) / 255.0,
+        f32::from(b) / 255.0,
+        1.0,
+    )
+}
+
+/// A deterministic 32-bit hash of a planet id — the world's fixed "identity".
+/// Surface style, continent positions, crater scatter etc. are all sliced from
+/// this so a given planet always looks the same (no rng in presentation).
+fn planet_hash(pid: PlanetId) -> u32 {
+    u32::from(pid.0).wrapping_add(1).wrapping_mul(2_654_435_761)
+}
+
+/// Maps a hash word to a float in `[0, 1)` from a chosen bit-slice (`shift`).
+fn hash01(h: u32, shift: u32) -> f32 {
+    ((h >> (shift & 0x18)) & 0xFF) as f32 / 256.0
+}
+
+/// Draws the natural (un-owned) surface of a world onto a disc of radius `r`
+/// centred at `(px, py)`. Style is `pid % 5`; all detail derives from `h`.
+/// Every fleck/blob is kept inside the disc so it reads as a sphere once the
+/// shading pass is layered on top.
+#[allow(clippy::too_many_lines)]
+fn draw_planet_surface(px: f32, py: f32, r: f32, pid: PlanetId, h: u32) {
+    let style = u32::from(pid.0) % 5;
+    match style {
+        // --- Terran / oceanic: deep-blue ocean + green/brown continent blobs.
+        0 => {
+            draw_circle(px, py, r, srgb(28, 64, 120));
+            draw_circle(px, py, r, with_alpha(srgb(40, 90, 150), 0.5));
+            let lands = [srgb(70, 130, 70), srgb(96, 132, 78), srgb(120, 110, 72)];
+            for k in 0..4u32 {
+                let a = hash01(h, k * 4) * std::f32::consts::TAU;
+                let d = (0.15 + 0.55 * hash01(h, k * 4 + 8)) * r;
+                let lx = px + a.cos() * d;
+                let ly = py + a.sin() * d;
+                let lr = r * (0.16 + 0.20 * hash01(h, k * 4 + 16));
+                let lc = lands[(k as usize) % lands.len()];
+                draw_ellipse(lx, ly, lr * 1.2, lr * 0.85, a * 20.0, lc);
+            }
+        }
+        // --- Banded gas giant: warm or cool horizontal bands inside the disc.
+        1 => {
+            let warm = (h & 1) == 0;
+            let base = if warm {
+                srgb(150, 110, 70)
+            } else {
+                srgb(60, 110, 120)
+            };
+            draw_circle(px, py, r, base);
+            let bands = 4 + (h >> 3) % 3; // 4..6 bands
+            for k in 0..bands {
+                let f = (k as f32 + 0.5) / bands as f32; // 0..1 down the disc
+                let by = py - r + f * 2.0 * r;
+                // Half-chord of the circle at this height keeps the band clipped.
+                let dy = (by - py) / r;
+                let half = r * (1.0 - dy * dy).max(0.0).sqrt();
+                let bh = r * (0.10 + 0.10 * hash01(h, k * 4));
+                let tone = if (k & 1) == 0 {
+                    if warm {
+                        srgb(205, 170, 120)
+                    } else {
+                        srgb(120, 175, 180)
+                    }
+                } else if warm {
+                    srgb(120, 80, 55)
+                } else {
+                    srgb(40, 80, 95)
+                };
+                draw_ellipse(px, by, half, bh, 0.0, with_alpha(tone, 0.85));
+            }
+            // A faint "great spot" oval for character.
+            let sx = px + (hash01(h, 12) - 0.5) * r;
+            let sy = py + (hash01(h, 20) - 0.5) * r * 0.6;
+            draw_ellipse(
+                sx,
+                sy,
+                r * 0.22,
+                r * 0.13,
+                0.0,
+                with_alpha(
+                    if warm {
+                        srgb(220, 120, 90)
+                    } else {
+                        srgb(90, 200, 200)
+                    },
+                    0.7,
+                ),
+            );
+        }
+        // --- Rocky / cratered: tan-grey base + scattered dark crater rings.
+        2 => {
+            draw_circle(px, py, r, srgb(150, 140, 120));
+            draw_circle(px, py, r, with_alpha(srgb(110, 100, 88), 0.35));
+            for k in 0..6u32 {
+                let a = hash01(h, k * 3) * std::f32::consts::TAU;
+                let d = (0.10 + 0.65 * hash01(h, k * 3 + 8)) * r;
+                let cx = px + a.cos() * d;
+                let cy = py + a.sin() * d;
+                let cr = r * (0.06 + 0.12 * hash01(h, k * 3 + 16));
+                draw_circle(cx, cy, cr, with_alpha(srgb(90, 80, 70), 0.6));
+                draw_circle_lines(cx, cy, cr, 1.0, with_alpha(srgb(60, 52, 46), 0.8));
+            }
+        }
+        // --- Volcanic / molten: dark basalt + glowing orange cracks + hot glow.
+        3 => {
+            draw_circle(px, py, r, srgb(38, 30, 30));
+            draw_circle(px, py, r, with_alpha(srgb(70, 40, 35), 0.4));
+            draw_circle(px, py, r * 0.6, with_alpha(srgb(255, 120, 40), 0.14));
+            for k in 0..5u32 {
+                let a = hash01(h, k * 3) * std::f32::consts::TAU;
+                let d = 0.6 * r;
+                let x0 = px + a.cos() * d * hash01(h, k * 3 + 8);
+                let y0 = py + a.sin() * d * hash01(h, k * 3 + 8);
+                let a2 = a + (hash01(h, k * 3 + 16) - 0.5) * 1.4;
+                let x1 = px + a2.cos() * d;
+                let y1 = py + a2.sin() * d;
+                draw_line(x0, y0, x1, y1, 2.0, with_alpha(srgb(255, 140, 40), 0.9));
+                draw_line(x0, y0, x1, y1, 4.0, with_alpha(srgb(255, 90, 20), 0.3));
+            }
+        }
+        // --- Ice: pale blue-white base + faint cracks + a brighter pole cap.
+        _ => {
+            draw_circle(px, py, r, srgb(205, 222, 235));
+            draw_circle(px, py, r, with_alpha(srgb(150, 185, 215), 0.3));
+            for k in 0..4u32 {
+                let a = hash01(h, k * 4) * std::f32::consts::TAU;
+                let x0 = px + a.cos() * r * 0.2;
+                let y0 = py + a.sin() * r * 0.2;
+                let x1 = px + a.cos() * r * 0.85;
+                let y1 = py + a.sin() * r * 0.85;
+                draw_line(x0, y0, x1, y1, 1.0, with_alpha(srgb(120, 150, 180), 0.4));
+            }
+            // North pole cap (upper) — brighter white ellipse, clipped near top.
+            draw_ellipse(
+                px,
+                py - r * 0.62,
+                r * 0.7,
+                r * 0.28,
+                0.0,
+                with_alpha(WHITE, 0.7),
+            );
+        }
+    }
+}
+
+/// Overlays sphere shading on a freshly-drawn surface disc: a soft specular
+/// highlight upper-left, a dark terminator crescent lower-right, and a thin
+/// dark rim. Makes the flat disc read as a lit 3-D ball.
+fn shade_sphere(px: f32, py: f32, r: f32) {
+    // Terminator: a dark disc offset down-right, fading the night side.
+    draw_circle(
+        px + r * 0.35,
+        py + r * 0.35,
+        r * 0.92,
+        Color::new(0.0, 0.0, 0.04, 0.34),
+    );
+    draw_circle(
+        px + r * 0.5,
+        py + r * 0.5,
+        r * 0.7,
+        Color::new(0.0, 0.0, 0.03, 0.28),
+    );
+    // Specular highlight: small soft white blob upper-left.
+    draw_circle(
+        px - r * 0.34,
+        py - r * 0.34,
+        r * 0.30,
+        with_alpha(WHITE, 0.18),
+    );
+    draw_circle(
+        px - r * 0.36,
+        py - r * 0.36,
+        r * 0.14,
+        with_alpha(WHITE, 0.28),
+    );
+    // Thin dark rim to seat the ball against the void.
+    draw_circle_lines(px, py, r, 1.5, Color::new(0.0, 0.0, 0.0, 0.45));
+}
+
+/// Renders every planet as an actual *world* at its center, the heart of the map.
 ///
-/// * **Owned planet** — a glowing planet body in the owner's civ colour, a ring of
-///   building "blips" whose count tracks the colony's building count, an overall
-///   glow/size that scales with population, and the population number above it
-///   (brighter cyan for the human's own worlds).
-/// * **Neutral planet** — a dim grey barren ring with a faint pulsing "settle"
-///   dot, clearly unclaimed and inviting a colony. No population number.
+/// Each planet gets a fixed natural surface style (terran / gas-giant / rocky /
+/// volcanic / ice, chosen from `pid % 5`) under 3-D sphere shading and an
+/// atmosphere halo. **Owned** worlds tint that halo in the owner's civ colour
+/// and grow a glittering city of light-dots on their night side whose count
+/// tracks the colony population (the "city that grows"), with the population
+/// number above. **Neutral** worlds stay natural and dim with a faint pulsing
+/// "settle here" dot, clearly unclaimed.
 fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
     let pf = sprites.font_bold();
     let t = get_time() as f32;
@@ -2456,51 +2641,81 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
         let body_r = sim
             .planet_radius(pid)
             .map_or(cell * 0.9, |rad| tile_to_px(rad, cell).max(cell * 0.7));
-        if let Some(owner) = sim.planet_owner(pid) {
+        let hash = planet_hash(pid);
+        let owner = sim.planet_owner(pid);
+        // Atmosphere halo behind the body: tinted by owner, faint grey if neutral.
+        let atmo = match owner {
+            Some(o) if o == HUMAN => TEAM_PLAYER,
+            Some(o) => civ_color(o.0),
+            None => CIV_NEUTRAL,
+        };
+        let pulse = (t * 1.6 + i as f32).sin() * 0.5 + 0.5;
+        draw_circle(px, py, body_r * 1.35, with_alpha(atmo, 0.10));
+        draw_circle(px, py, body_r * 1.18, with_alpha(atmo, 0.08));
+        // The world itself.
+        draw_planet_surface(px, py, body_r, pid, hash);
+        shade_sphere(px, py, body_r);
+        // Atmosphere rim line in the owner colour (gentle pulse).
+        draw_circle_lines(
+            px,
+            py,
+            body_r + 2.0 + pulse * 2.0,
+            1.5,
+            with_alpha(atmo, if owner.is_some() { 0.7 } else { 0.4 }),
+        );
+
+        if let Some(owner) = owner {
             let human = owner == HUMAN;
             let col = if human {
                 TEAM_PLAYER
             } else {
                 civ_color(owner.0)
             };
-            // City scale grows with population: from ~1.0 up to ~1.8 of the body
-            // radius as the colony fills out (capped at 400 pop).
             let pop = sim
                 .planet_colony(pid)
                 .map_or(0, |cid| sim.colony_population(cid));
-            let grow = 1.0 + (f32::from(u16::try_from(pop.min(400)).unwrap_or(400)) / 400.0);
-            let r = body_r * (0.7 + 0.55 * grow);
-            let pulse = (t * 1.6 + i as f32).sin() * 0.5 + 0.5;
-            // Population-scaled outer glow (bigger, brighter city).
-            draw_circle(px, py, r * 1.45, with_alpha(col, 0.08 + 0.06 * grow));
-            glow_rect(px - r, py - r, r * 2.0, r * 2.0, with_alpha(col, 0.10), 3);
-            // Planet body: a lit core ringed in the civ colour.
-            draw_circle(px, py, r, with_alpha(col, 0.22));
-            draw_circle(px, py, r * 0.74, with_alpha(col, 0.30));
-            draw_circle_lines(px, py, r, 2.5, col);
-            draw_circle_lines(px, py, r + 3.0 + pulse * 3.0, 1.0, with_alpha(col, 0.4));
-            // Building blips: a ring of N dots (N scales with building count),
-            // brightness lifted by population so a busy city sparkles.
-            let count = buildings_on_planet(sim, pid).min(8);
-            let blip = (r * 0.13).max(2.0);
-            let ring = r * 0.6;
-            let bright = (0.55 + 0.45 * (grow - 1.0)).min(1.0);
-            for b in 0..count {
-                let ang = t * 0.3 + b as f32 / count.max(1) as f32 * std::f32::consts::TAU;
-                let bx = px + ang.cos() * ring;
-                let by = py + ang.sin() * ring;
-                draw_circle(bx, by, blip, with_alpha(col, bright));
-                draw_circle(bx, by, blip * 0.5, with_alpha(WHITE, bright * 0.7));
+            // City lights: count grows with population (a few up to ~60), each a
+            // deterministic speck on the disc, biased toward the shaded night
+            // side (lower-right) so the city reads as a glowing nightscape.
+            let lights = usize::try_from(pop.min(60).max(buildings_on_planet(sim, pid).min(60)))
+                .unwrap_or(60);
+            // Soft owner-coloured city glow over the lit area, growing with pop.
+            let glow_a = 0.06 + 0.22 * (lights as f32 / 60.0);
+            draw_circle(
+                px + body_r * 0.18,
+                py + body_r * 0.18,
+                body_r * 0.7,
+                with_alpha(col, glow_a),
+            );
+            for k in 0..lights {
+                // Deterministic per-light hash from planet hash + index.
+                let lh = hash
+                    ^ ((k as u32)
+                        .wrapping_mul(2_246_822_519)
+                        .wrapping_add(0x9E37_79B9));
+                let a = (lh & 0xFFFF) as f32 / 65_536.0 * std::f32::consts::TAU;
+                // sqrt radius for even areal spread; bias center-out toward night.
+                let rad = ((lh >> 16) & 0xFF) as f32 / 256.0;
+                let d = rad.sqrt() * body_r * 0.82;
+                let lx = px + a.cos() * d + body_r * 0.12;
+                let ly = py + a.sin() * d + body_r * 0.12;
+                // Keep the speck inside the disc.
+                if (lx - px) * (lx - px) + (ly - py) * (ly - py) > body_r * body_r * 0.9 {
+                    continue;
+                }
+                let twk = 0.6 + 0.4 * ((t * 3.0 + k as f32 * 1.7).sin() * 0.5 + 0.5);
+                let sz = (body_r * 0.045).max(1.0);
+                draw_circle(lx, ly, sz, with_alpha(col, 0.9 * twk));
+                draw_circle(lx, ly, sz * 0.55, with_alpha(WHITE, 0.8 * twk));
             }
-            // Population number, centered above the city, in the owner colour
-            // (brighter cyan for the human's own worlds).
+            // Population number, centered above the world (brighter for human).
             let s = format!("{pop}");
             let tw = measure_text(&s, pf, 14, 1.0).width;
             let tc = if human { GOLD_HI } else { col };
             draw_text_ex(
                 &s,
                 px - tw / 2.0,
-                py - r - 6.0,
+                py - body_r * 1.35 - 6.0,
                 TextParams {
                     font: pf,
                     font_size: 14,
@@ -2509,19 +2724,18 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
                 },
             );
         } else {
-            // Neutral: a dim, uninhabited barren rock — hollow grey ring with a
-            // faint pulsing "settle" dot at its center inviting a colony.
-            let r = body_r;
-            let pulse = (t * 1.4 + i as f32).sin() * 0.5 + 0.5;
-            draw_circle(px, py, r * 0.7, with_alpha(CIV_NEUTRAL, 0.10));
-            draw_circle_lines(px, py, r, 1.5, with_alpha(CIV_NEUTRAL, 0.85));
-            draw_circle_lines(px, py, r * 0.62, 1.0, with_alpha(CIV_NEUTRAL, 0.5));
-            // Faint "settle here" affordance dot, gently pulsing.
+            // Neutral: natural & dim, with a faint pulsing "settle here" dot.
             draw_circle(
                 px,
                 py,
-                (r * 0.12).max(2.0),
-                with_alpha(GOOD, 0.3 + 0.4 * pulse),
+                (body_r * 0.14).max(2.5),
+                with_alpha(GOOD, 0.25 + 0.45 * pulse),
+            );
+            draw_circle(
+                px,
+                py,
+                (body_r * 0.07).max(1.5),
+                with_alpha(WHITE, 0.3 + 0.4 * pulse),
             );
         }
     }
