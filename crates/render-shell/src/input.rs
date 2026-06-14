@@ -91,14 +91,13 @@ pub fn gather_commands(
 
     // Left press: arm a box-select (the anchor) unless a build is being placed —
     // placement happens on press to match the existing feel.
+    // Selection resolves on PRESS for immediate feedback (and so it works even
+    // where button-release edges are unreliable): place a building, else select
+    // the friendly unit > planet > clear under the cursor. A subsequent drag
+    // upgrades to a box-select when the button is released.
     if is_mouse_button_pressed(MouseButton::Left) && !pointer_over_ui {
-        *drag_start = Some(mouse_position());
-    }
-    // Left release: place a building, or resolve a click vs. box-select.
-    if is_mouse_button_released(MouseButton::Left) && !pointer_over_ui {
-        let start = drag_start.take();
+        *drag_start = Some((mx, my));
         if let Some(kind) = build_mode.take() {
-            // Snap the click to the nearest hex cell.
             let (col, row) = hex::from_world(
                 SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
                 sim.map().width(),
@@ -110,22 +109,21 @@ pub fn gather_commands(
                 x: col,
                 y: row,
             });
-        } else if let Some((sxp, syp)) = start {
-            let drag = (mx - sxp).hypot(my - syp);
-            if drag < CLICK_SLOP_PX {
-                // A click: friendly unit > planet > clear.
-                if let Some(unit) = nearest_friendly_unit(sim, wx, wy) {
-                    selected.units = vec![unit];
-                    selected.planet = None;
-                } else if let Some(pid) = planet_at_world(sim, wx, wy) {
-                    selected.planet = Some(pid);
-                    selected.units.clear();
-                } else {
-                    selected.units.clear();
-                    selected.planet = None;
-                }
-            } else {
-                // A box drag: select every friendly unit inside the rectangle.
+        } else if let Some(unit) = nearest_friendly_unit(sim, wx, wy) {
+            selected.units = vec![unit];
+            selected.planet = None;
+        } else if let Some(pid) = planet_at_world(sim, wx, wy) {
+            selected.planet = Some(pid);
+            selected.units.clear();
+        } else {
+            selected.units.clear();
+            selected.planet = None;
+        }
+    }
+    // On release, if the press became a drag, select every friendly unit in the box.
+    if is_mouse_button_released(MouseButton::Left) && !pointer_over_ui {
+        if let Some((sxp, syp)) = drag_start.take() {
+            if (mx - sxp).hypot(my - syp) >= CLICK_SLOP_PX {
                 let (w0x, w0y) = ((sxp - ox) / cell, (syp - crate::ui::TOP_BAR_H) / cell);
                 let (lo_x, hi_x) = (w0x.min(wx), w0x.max(wx));
                 let (lo_y, hi_y) = (w0y.min(wy), w0y.max(wy));
