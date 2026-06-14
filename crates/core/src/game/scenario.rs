@@ -335,7 +335,10 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
             radius: Fixed::from_int(PLANET_RADIUS),
         });
         mark_block(&mut sim, cx, cy, planet_id);
-        sim.add_colony(pid, cc, AUTONOMY_FULL);
+        // The human (civ id 0) starts MANUAL so the player actively drives their
+        // colony; AI civs start fully autonomous so they auto-play.
+        let autonomy = if id == 0 { 0 } else { AUTONOMY_FULL };
+        let _ = sim.add_colony(pid, cc, autonomy);
     }
 
     // Lay the neutral expansion planets: marked blocks with a centre but no owner

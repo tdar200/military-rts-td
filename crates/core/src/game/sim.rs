@@ -1166,6 +1166,38 @@ impl Sim {
         self.planets.get(id.0 as usize).and_then(|pl| pl.owner)
     }
 
+    /// A planet's world-space centre (for drawing its city + anchoring its panel).
+    /// Read-only accessor; does not affect the deterministic state hash.
+    #[must_use]
+    pub fn planet_center(&self, id: PlanetId) -> Option<Vec2> {
+        self.planets.get(usize::from(id.0)).map(|p| p.center)
+    }
+
+    /// A planet's claim radius (world units).
+    /// Read-only accessor; does not affect the deterministic state hash.
+    #[must_use]
+    pub fn planet_radius(&self, id: PlanetId) -> Option<Fixed> {
+        self.planets.get(usize::from(id.0)).map(|p| p.radius)
+    }
+
+    /// A planet's controlling seat (`CommandCenter` entity), if settled.
+    /// Read-only accessor; does not affect the deterministic state hash.
+    #[must_use]
+    pub fn planet_seat(&self, id: PlanetId) -> Option<EntityId> {
+        self.planets.get(usize::from(id.0)).and_then(|p| p.seat)
+    }
+
+    /// The living colony seated on a planet (its city), if any.
+    /// Read-only accessor; does not affect the deterministic state hash.
+    #[must_use]
+    pub fn planet_colony(&self, id: PlanetId) -> Option<ColonyId> {
+        let seat = self.planets.get(usize::from(id.0)).and_then(|p| p.seat)?;
+        self.colonies
+            .iter()
+            .position(|c| c.alive && c.seat == seat)
+            .map(|i| ColonyId(u32::try_from(i).unwrap_or(0)))
+    }
+
     /// The number of planets registered in the control arena (tests and UI).
     #[must_use]
     pub const fn planets_len(&self) -> usize {
