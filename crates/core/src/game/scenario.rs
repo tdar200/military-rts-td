@@ -348,6 +348,26 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
         if let (Some(civ), Some(cc)) = (holder, seat) {
             let autonomy = if civ.0 == 0 { 0 } else { AUTONOMY_FULL };
             let _ = sim.add_colony(civ, cc, autonomy);
+            // Planetary defense: ring the seat with turrets at the block corners so
+            // taking a homeworld is a real assault, not a drive-by seat-snipe — this
+            // is the main brake on runaway conquest. AA on one corner covers air.
+            for (i, &(dx, dy)) in [(-1i32, -1i32), (1, -1), (-1, 1), (1, 1)]
+                .iter()
+                .enumerate()
+            {
+                let (Ok(tx), Ok(ty)) = (
+                    u16::try_from(i32::from(cx) + dx),
+                    u16::try_from(i32::from(cy) + dy),
+                ) else {
+                    continue;
+                };
+                let kind = if i == 0 {
+                    BuildingKind::AaTurret
+                } else {
+                    BuildingKind::GunTurret
+                };
+                sim.add_building(civ, kind, tx, ty);
+            }
         }
     }
 
