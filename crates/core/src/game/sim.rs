@@ -3639,6 +3639,40 @@ impl Sim {
             self.map.set_tile(x, y, Tile::OPEN);
         }
         self.free.extend(freed_slots);
+
+        // Reap orphaned colonies: a colony whose seat CommandCenter has just been
+        // reaped (or is otherwise no longer a live entity) must be freed too, or it
+        // would keep accruing income/upkeep forever, keep inflating its dead owner's
+        // `count_owner_colonies` / `empire_upkeep` / Kardashev tier / wave pressure,
+        // and — worst — alias a recycled entity slot so its LOD/rates would later
+        // flip to whatever entity reuses that index (logically corrupt; a latent
+        // panic vector). `free_colony` already settles accrual exactly and recycles
+        // the slot (LIFO), so freeing on seat-death is the correct, exact action and
+        // keeps the Dormant-LOD skip==full invariant intact.
+        //
+        // Note a captured (not destroyed) planet seat is NOT reaped — `run_combat`
+        // restored its HP to a positive fraction before `clear_dead`, so its entity
+        // stays alive and its (now re-ownered) colony is untouched here.
+        //
+        // Borrow-safe: collect the orphaned colony ids first (immutable scan), then
+        // free them. Ascending colony order, no rng ⇒ deterministic.
+        let orphaned: Vec<ColonyId> = self
+            .colonies
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                // Orphaned iff the seat entity is gone or no longer alive.
+                c.alive
+                    && self
+                        .entities
+                        .get(c.seat.0 as usize)
+                        .is_none_or(|e| !e.alive)
+            })
+            .map(|(i, _)| ColonyId(i as u32))
+            .collect();
+        for id in orphaned {
+            self.free_colony(id);
+        }
     }
 
     /// Capture (not destroy) a planet seat: flip the seat + planet to `attacker`,
@@ -8017,5 +8051,60 @@ mod tests {
             "surviving buildings transfer"
         );
         assert_eq!(s.colony_owner_of_seat(seat), Some(P0), "colony transfers");
+    }
+
+    /// Reaping a colony's seat `CommandCenter` must free the colony in the same tick,
+    /// not leave a ghost that keeps inflating its dead owner's empire. Here a seat is
+    /// DESTROYED (driven to 0 HP with no attacker to capture it), so `clear_dead`
+    /// reaps the entity and the orphaned-colony pass must drop the colony.
+    #[test]
+    fn destroying_a_colony_seat_reaps_the_colony() {
+        use crate::game::civ::AUTONOMY_FULL;
+        let mut s = Sim::new(Map::new(16, 16), 1, f(0));
+        // P0 owns two colonies seated on two CommandCenters (no planets registered,
+        // so neither seat is a capturable planet seat — a lethal blow DESTROYS them).
+        let keep_seat = s.add_building(P0, BuildingKind::CommandCenter, 1, 1);
+        let doomed_seat = s.add_building(P0, BuildingKind::CommandCenter, 8, 8);
+        let keep = s.add_colony(P0, keep_seat, AUTONOMY_FULL);
+        let doomed = s.add_colony(P0, doomed_seat, AUTONOMY_FULL);
+        assert_eq!(s.colony_count_for(P0), 2, "owner starts with two colonies");
+
+        // Destroy the doomed seat (no enemy present ⇒ no capture ⇒ reaped by
+        // clear_dead), then step so clear_dead runs.
+        s.debug_set_hp(doomed_seat, f(0));
+        s.step(&[]);
+
+        // (a) The owner's colony count DROPS by exactly one.
+        assert_eq!(
+            s.colony_count_for(P0),
+            1,
+            "the orphaned colony must be freed when its seat is destroyed"
+        );
+        // The surviving colony is the one whose seat is intact; the orphan is gone.
+        assert!(s.colony(keep).is_some(), "the live-seat colony survives");
+        assert!(
+            s.colony(doomed).is_none(),
+            "the dead-seat colony is freed, not a ghost"
+        );
+
+        // (b) No ghost accrual / slot aliasing: the freed slot is recycled (LIFO), so
+        // a freshly added colony reuses the doomed colony's exact slot index — proving
+        // the orphan was actually freed (its slot returned to the free list), not just
+        // left dead-but-unrecycled. The new colony seats on the live CC.
+        let reused = s.add_colony(P0, keep_seat, AUTONOMY_FULL);
+        assert_eq!(
+            reused.0, doomed.0,
+            "freeing the orphan recycled its slot (LIFO), so the next add reuses it"
+        );
+        assert_eq!(
+            s.colony_count_for(P0),
+            2,
+            "no orphan double-counts: count is exactly the two live colonies"
+        );
+        // The ghost never aliased the live colony's slot.
+        assert_ne!(
+            keep.0, doomed.0,
+            "the live colony kept its own distinct slot"
+        );
     }
 }
