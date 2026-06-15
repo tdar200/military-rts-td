@@ -340,8 +340,11 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     /// Seeded FAIR edge granted to one civ per seed (see the comment at its use):
     /// a starting-Money bump plus a standing garrison at its forward colony.
     const EDGE_MONEY: i32 = 2400;
-    /// Standing Infantry pre-placed at the favoured civ's forward base.
-    const EDGE_GARRISON: i32 = 32;
+    /// Standing Infantry pre-placed at the favoured civ's forward base. Kept BELOW
+    /// the AI's assault-commit threshold (`ASSAULT_STACK`, 14) so the forward base
+    /// must MASS before it can assault — a sustained grind, never an instant
+    /// homeworld delete (the old value of 32 captured an idle neighbour in ~8s).
+    const EDGE_GARRISON: i32 = 10;
 
     let civ_count = civ_count.clamp(1, 8);
     let mut sim = Sim::with_civ_count(Map::new(W, H), seed, Fixed::from_int(2000), civ_count);
@@ -430,8 +433,13 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
     let edge_home = (0..8).find(|&p| owner[p] == Some(PlayerId(edge_civ)));
     if let Some(home) = edge_home {
         // Nearest RIVAL home (a different owned planet), lowest index on ties.
+        // NEVER aim an AI's forward base at the human (Earth / civ 0): the human
+        // starts MANUAL and army-light, so a forward base next door would delete
+        // Earth before the player can act. When the human IS the favoured civ it
+        // may still forward-base an AI rival.
         let rival = (0..8)
             .filter(|&p| owner[p].is_some() && owner[p] != Some(PlayerId(edge_civ)))
+            .filter(|&p| edge_civ == 0 || owner[p] != Some(PlayerId(0)))
             .min_by_key(|&p| (d2(home, p), p));
         if let Some(rival) = rival {
             // Nearest still-NEUTRAL planet to that rival, lowest index on ties, but
@@ -486,6 +494,25 @@ pub fn conquest(seed: u64, civ_count: usize) -> Sim {
                 };
                 sim.add_building(civ, kind, tx, ty);
             }
+        }
+    }
+
+    // The human (civ 0, Earth) starts MANUAL with zero army while every AI is fully
+    // autonomous and already producing; without a footing, Earth is overrun before the
+    // player can build or train anything. A small starting garrison offsets that
+    // manual-vs-autonomous opening gap so the opening is survivable and the agency
+    // tools (alerts, control groups, attack-move) are reachable in real play.
+    // Conquest-only ⇒ golden-neutral (the golden replay uses survival()).
+    {
+        const HUMAN_GARRISON: i32 = 6;
+        let (ex, ey) = SOLAR[EARTH];
+        let c = hex::center(ex, ey);
+        for n in 0..HUMAN_GARRISON {
+            let pos = Vec2::new(
+                c.x + Fixed::from_int(n % 3 - 1),
+                c.y + Fixed::from_int(3 + n / 3),
+            );
+            sim.add_unit(PlayerId(0), UnitKind::Infantry, pos);
         }
     }
 
