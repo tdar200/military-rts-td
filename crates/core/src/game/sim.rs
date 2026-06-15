@@ -263,6 +263,19 @@ const ENERGY_CAP: Fixed = Fixed::from_int(15000);
 /// content. Guarded by `every_grid_node_is_affordable`.
 const LABOUR_CAP: Fixed = Fixed::from_int(15000);
 
+/// Hard resolution cap for a CONQUEST game, in ticks (~20 min @ 30 Hz). A fully
+/// fortified 4-civ standoff can outlast a single-survivor decision indefinitely, so
+/// once `self.tick` reaches this cap [`Sim::winner`] resolves to the deterministic
+/// leader rather than running forever. SURVIVAL is unaffected — it ends only when
+/// the human's base falls. Read-only in `winner()` from the already-hashed `self.tick`
+/// (no new hashed state), so it is golden-neutral and lockstep-safe.
+const CONQUEST_TICK_CAP: u64 = 36_000;
+/// Domination threshold: an alive civ owning a STRICT majority — more than this
+/// percent — of all planets wins a conquest game immediately. Read from current
+/// ownership (no per-civ counter is added to the hashed state), so it is
+/// instantaneous and golden-neutral.
+const DOMINATION_PERCENT: usize = 60;
+
 /// Clamps `v` to at most `max` (non-const: `Fixed`'s `Ord` isn't usable in const).
 fn cap_at(v: Fixed, max: Fixed) -> Fixed {
     if v > max {
@@ -1685,8 +1698,25 @@ impl Sim {
             .collect()
     }
 
-    /// The winner: the only player still holding a Command Center, if exactly
-    /// one does; otherwise `None` (game ongoing or no bases left).
+    /// The winner of the game, or `None` while it is still undecided.
+    ///
+    /// SURVIVAL is unchanged: only the human losing their base ends the run.
+    ///
+    /// CONQUEST resolves by THREE deterministic rules, in order:
+    /// 1. **Last civ standing** — exactly one civ still holds a `CommandCenter`.
+    /// 2. **Domination** — an alive civ owns a strict majority (> [`DOMINATION_PERCENT`]%)
+    ///    of all planets; it wins immediately (a clear leader needn't grind out the
+    ///    last fortified seat). Skipped in planet-free scenarios.
+    /// 3. **Timeout** — at [`CONQUEST_TICK_CAP`] a fortified multi-civ standoff would
+    ///    otherwise never resolve, so the LEADING alive civ wins on a deterministic
+    ///    score (most planets → most total `CommandCenter` HP → most entities → lowest
+    ///    `PlayerId`), broken to a single civ.
+    ///
+    /// READ-ONLY query: it is NOT part of [`state_hash`](Self::state_hash). It reads
+    /// only already-hashed/derived state (`self.tick`, planet ownership, entity HP),
+    /// adds no new hashed counter, and never mutates — so the new rules are
+    /// golden-neutral and lockstep-safe (the hash is identical; only the *reported*
+    /// winner/end-time changes).
     #[must_use]
     #[allow(
         clippy::cast_possible_truncation,
@@ -1709,6 +1739,8 @@ impl Sim {
         }
         // Endurance mode: only the human losing their base ends the run —
         // razing the alien beachhead is not a win, so the waves are the real test.
+        // (Byte-identical to the original survival branch — never reaches the
+        // conquest-only domination/timeout logic below.)
         if self.survival {
             return if has_cc[usize::from(self.human_civ.0)] {
                 None
@@ -1716,12 +1748,75 @@ impl Sim {
                 Some(PlayerId(1))
             };
         }
+        // Conquest rule 1 — last civ standing.
         let alive: usize = has_cc.iter().filter(|&&b| b).count();
         if alive == 1 {
-            has_cc.iter().position(|&b| b).map(|i| PlayerId(i as u16))
-        } else {
-            None
+            return has_cc.iter().position(|&b| b).map(|i| PlayerId(i as u16));
         }
+        if alive == 0 {
+            // Everyone's base is gone (e.g. mutual destruction); no winner to name.
+            return None;
+        }
+
+        // Conquest rule 2 — domination: a strict majority of all planets wins now.
+        // Only an alive civ (still holds a CC) can claim victory this way. Skipped
+        // when there are no planets (nothing to dominate).
+        if !self.planets.is_empty() {
+            let total = self.planets.len();
+            for (i, &has) in has_cc.iter().enumerate() {
+                if !has {
+                    continue;
+                }
+                let civ = PlayerId(i as u16);
+                let held = self
+                    .planets
+                    .iter()
+                    .filter(|pl| pl.owner == Some(civ))
+                    .count();
+                // Strict majority by integer comparison: held·100 > total·PERCENT.
+                if held * 100 > total * DOMINATION_PERCENT {
+                    return Some(civ);
+                }
+            }
+        }
+
+        // Conquest rule 3 — timeout: a fortified standoff resolves to the leader.
+        if self.tick >= CONQUEST_TICK_CAP {
+            // Deterministic score, descending priority: planets owned, then total
+            // CommandCenter HP (in Fixed bits), then entity count, then lowest
+            // PlayerId. Scanned in ascending civ order with strict `>`, so the first
+            // civ to set a tuple keeps it on ties ⇒ lowest PlayerId wins the tie.
+            let mut best: Option<(PlayerId, (usize, i64, usize))> = None;
+            for (i, &has) in has_cc.iter().enumerate() {
+                if !has {
+                    continue;
+                }
+                let owner = PlayerId(i as u16);
+                let planets = self
+                    .planets
+                    .iter()
+                    .filter(|pl| pl.owner == Some(owner))
+                    .count();
+                let mut cc_hp: i64 = 0;
+                let mut entities = 0usize;
+                for e in &self.entities {
+                    if !e.alive || e.owner != owner {
+                        continue;
+                    }
+                    entities += 1;
+                    if e.kind == Kind::Building(BuildingKind::CommandCenter) {
+                        cc_hp = cc_hp.saturating_add(e.hp.to_bits());
+                    }
+                }
+                let score = (planets, cc_hp, entities);
+                if best.is_none_or(|(_, b)| score > b) {
+                    best = Some((owner, score));
+                }
+            }
+            return best.map(|(owner, _)| owner);
+        }
+
+        None
     }
 
     /// Whether `civ` is still in the game (holds at least one `CommandCenter`).
@@ -4952,6 +5047,90 @@ mod tests {
             s.state_hash()
         }
         assert_eq!(run(), run(), "AI-driven conquest must replay identically");
+    }
+
+    /// A conquest game must ALWAYS resolve to a winner: a fully fortified multi-civ
+    /// standoff that never collapses to a single survivor is decided by the tick cap
+    /// (or earlier by domination). Drives all four civs with `ai_commands` and asserts
+    /// `winner()` is `Some` by `CONQUEST_TICK_CAP` — the flagship mode is winnable.
+    #[test]
+    fn conquest_resolves_by_timeout_or_domination() {
+        use super::CONQUEST_TICK_CAP;
+        use crate::game::scenario::conquest;
+        let mut s = conquest(12_345, 4);
+        // While unresolved, winner() is None (the game is genuinely ongoing).
+        assert!(
+            s.winner().is_none(),
+            "a fresh conquest game has no winner yet"
+        );
+
+        let mut resolved_at: Option<u64> = None;
+        // Run AT MOST up to the cap. The +1 lets the cap tick itself be evaluated.
+        for _ in 0..=CONQUEST_TICK_CAP {
+            if s.winner().is_some() {
+                resolved_at = Some(s.tick);
+                break;
+            }
+            let cmds: Vec<Command> = (0..4u16)
+                .filter(|&c| s.civ_alive(PlayerId(c)))
+                .flat_map(|c| s.ai_commands(PlayerId(c)))
+                .collect();
+            s.step(&cmds);
+        }
+        // If the loop fell through without an early winner, the cap tick must decide.
+        let winner = s.winner();
+        assert!(
+            winner.is_some(),
+            "conquest must resolve to a winner by the tick cap (tick={}, cap={})",
+            s.tick,
+            CONQUEST_TICK_CAP
+        );
+        // Whoever it resolved to must be an alive civ (last-standing, dominator, or
+        // the timeout leader) — never a civ that already lost its base.
+        let w = winner.unwrap();
+        assert!(
+            s.civ_alive(w),
+            "the resolved winner must still hold a base (winner={w:?}, resolved_at={resolved_at:?})"
+        );
+    }
+
+    /// Domination victory: an alive civ owning a strict majority (> 60%) of all
+    /// planets wins a conquest game IMMEDIATELY, without grinding out the last seat.
+    /// Read straight from current planet ownership (no hashed counter), so it is
+    /// instantaneous and deterministic.
+    #[test]
+    fn conquest_majority_planet_owner_wins_immediately() {
+        let mut s = Sim::new(Map::new(24, 24), 1, f(0));
+        // Five planets; both civs keep a CommandCenter (so neither is eliminated and
+        // the single-survivor rule does NOT fire — domination must be what resolves).
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 2);
+        s.add_building(P1, BuildingKind::CommandCenter, 20, 20);
+        for i in 0..5u16 {
+            s.push_planet(Planet {
+                owner: None,
+                seat: None,
+                center: tile_center(i, 0),
+                radius: f(2),
+            });
+        }
+        // Two of five owned (40%) is not a strict majority of > 60% ⇒ no winner yet
+        // (both civs still hold a CC, so it's a genuine ongoing game).
+        s.set_planet_owner(PlanetId(0), Some(P0));
+        s.set_planet_owner(PlanetId(1), Some(P0));
+        assert_eq!(
+            s.winner(),
+            None,
+            "40% of planets is below the >60% domination threshold"
+        );
+        // A fourth planet (4/5 = 80% > 60%) flips P0 to an immediate domination win,
+        // even though P1 still holds its base.
+        s.set_planet_owner(PlanetId(2), Some(P0));
+        s.set_planet_owner(PlanetId(3), Some(P0));
+        assert_eq!(
+            s.winner(),
+            Some(P0),
+            "a civ owning a strict majority (>60%) of planets wins immediately"
+        );
     }
 
     #[test]
