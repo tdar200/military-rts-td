@@ -395,8 +395,9 @@ async fn main() {
         }
 
         // The human is OUT the moment their last Command Center falls — even if
-        // 2+ AI civs remain, so `winner()` is still `None` (no single survivor).
-        // Without this the player would be trapped spectating an AI-vs-AI game with
+        // 2+ AI civs remain and the game hasn't yet resolved to a winner (conquest
+        // resolves on last-civ / 60%-domination / tick-cap, so `winner()` may still
+        // be `None` here). Without this the player would be trapped spectating with
         // no defeat card and no `R` restart (both gate on `over`). Survey doesn't
         // count: pre-founding the human simply has no base yet.
         let human_lost = !sim.surveying() && !sim.civ_alive(HUMAN);
