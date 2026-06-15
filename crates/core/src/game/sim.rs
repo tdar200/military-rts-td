@@ -253,10 +253,15 @@ const EMPIRE_WAVE_PRESSURE: u32 = 2;
 /// modest pending playtest.
 const UPKEEP_STEP: Fixed = Fixed::from_int(1);
 /// Ceiling on the Energy stockpile — a bounded, spend-it-or-cap-it resource
-/// rather than a runaway counter.
-const ENERGY_CAP: Fixed = Fixed::from_int(8000);
-/// Ceiling on the Labour (population) stockpile.
-const LABOUR_CAP: Fixed = Fixed::from_int(800);
+/// rather than a runaway counter. Must be ≥ the most expensive grid node's
+/// Energy cost (currently 14000) or that node — and any era it gates — becomes
+/// permanently unresearchable; see `every_grid_node_is_affordable`.
+const ENERGY_CAP: Fixed = Fixed::from_int(15000);
+/// Ceiling on the Labour (population) stockpile. Must be ≥ the most expensive
+/// grid node's Labour cost (currently 14000); the old 800 cap made 283 nodes —
+/// including the Era-3 key and the Capital ship — unaccumulable and so dead
+/// content. Guarded by `every_grid_node_is_affordable`.
+const LABOUR_CAP: Fixed = Fixed::from_int(15000);
 
 /// Clamps `v` to at most `max` (non-const: `Fixed`'s `Ord` isn't usable in const).
 fn cap_at(v: Fixed, max: Fixed) -> Fixed {
@@ -5386,6 +5391,57 @@ mod tests {
         assert_eq!(s.state_hash(), 1_037_729_920_696_487_524);
     }
 
+    /// Reachability invariant: every grid node's per-resource cost must fit under
+    /// its stockpile cap, or that node can NEVER be accumulated and is dead
+    /// content. Research charges Money (uncapped), Energy (`ENERGY_CAP`) and
+    /// Labour (`LABOUR_CAP`) from the SAME `node.energy`/`node.labour` fields the
+    /// charging path reads (see `apply_research`). This guards the cap-vs-cost
+    /// invariant forever — if a future cost edit (or a cap cut) breaks it, this
+    /// fails instead of silently bricking the back half of the tech grid.
+    #[test]
+    fn every_grid_node_is_affordable() {
+        use super::{ENERGY_CAP, LABOUR_CAP};
+        for node in &crate::game::tech_grid_table::GRID {
+            let energy = Fixed::from_int(i32::try_from(node.energy).unwrap());
+            let labour = Fixed::from_int(i32::try_from(node.labour).unwrap());
+            assert!(
+                energy <= ENERGY_CAP,
+                "node {} ({}) energy cost {} exceeds ENERGY_CAP — unresearchable",
+                node.id,
+                node.name,
+                node.energy,
+            );
+            assert!(
+                labour <= LABOUR_CAP,
+                "node {} ({}) labour cost {} exceeds LABOUR_CAP — unresearchable",
+                node.id,
+                node.name,
+                node.labour,
+            );
+        }
+    }
+
+    /// Era-key nodes gate era advancement: if a key is unaffordable, that era and
+    /// everything past it (including the Capital ship) is permanently unreachable.
+    /// Pin the strongest version of the invariant on exactly the gating nodes.
+    #[test]
+    fn era_key_nodes_are_affordable() {
+        use super::{ENERGY_CAP, LABOUR_CAP};
+        for &key in &crate::game::tech_grid::ERA_KEYS {
+            let node = crate::game::tech_grid::node(key).expect("era key in range");
+            let energy = Fixed::from_int(i32::try_from(node.energy).unwrap());
+            let labour = Fixed::from_int(i32::try_from(node.labour).unwrap());
+            assert!(
+                energy <= ENERGY_CAP && labour <= LABOUR_CAP,
+                "era-key node {} ({}) unaffordable: energy {} (cap {ENERGY_CAP:?}), labour {} (cap {LABOUR_CAP:?})",
+                node.id,
+                node.name,
+                node.energy,
+                node.labour,
+            );
+        }
+    }
+
     #[test]
     fn colony_growth_fields_hash_is_stable_and_golden_neutral() {
         fn build() -> Sim {
@@ -7740,8 +7796,9 @@ mod tests {
     #[test]
     fn ai_researches_antigrav() {
         // Over a long match (seed 7), the AI should eventually research Anti-Grav
-        // Drives (the last tech in priority, after all 16 earlier techs are
-        // complete — sequential research takes ~46k ticks here).
+        // Drives — the LOWEST-priority node in the ladder, reached only after the
+        // higher-priority work (era keys + every real building/unit unlock) is
+        // exhausted.
         //
         // SOLO run (P0 only). Originally this was P0-vs-P1, but distance-decayed
         // combat (forward-base supply lines) shifted the head-to-head balance so
@@ -7750,8 +7807,18 @@ mod tests {
         // the *research priority ladder* reaching its final node, NOT about who
         // wins a skirmish, so the enemy is irrelevant noise here. Dropping P1
         // isolates the ladder: with no one to conquer it, P0 reaches Anti-Grav at
-        // tick ~46_427 (verified), comfortably inside the 60_000-tick budget. The
-        // P0-vs-P1 combat balance is covered by the dedicated combat tests; the
+        // tick ~185_542 (verified), comfortably inside the 200_000-tick budget.
+        //
+        // The reach-tick jumped from ~46_427 to ~185_542 when the Energy/Labour
+        // caps were raised so every grid node is affordable (the cap-reachability
+        // fix). Before, the 283 nodes whose Labour cost exceeded the old 800 cap
+        // were PERMANENTLY unaffordable, so `ai_next_research` skipped them and the
+        // ladder was short. Now those nodes — including every era key — are
+        // affordable, so the AI climbs the full tree to Era 9 first, and only then
+        // drops to the low-priority gravity node. The longer grind is the fix
+        // working as intended: the back half of the game is now live content.
+        //
+        // The P0-vs-P1 combat balance is covered by the dedicated combat tests; the
         // earlier-milestone economy tests (e.g. antimatter-by-era-1) still run
         // head-to-head and pass because they resolve before the conquest.
         let mut map = Map::new(40, 40);
@@ -7772,7 +7839,7 @@ mod tests {
         let mut s = Sim::new(map, 7, f(3000));
         s.add_building(P0, BuildingKind::CommandCenter, 5, 20);
         let mut antigrav_seen = false;
-        for _ in 0..60_000 {
+        for _ in 0..200_000 {
             let cmds = s.ai_commands(P0);
             s.step(&cmds);
             if s.has_antigrav(P0) {
