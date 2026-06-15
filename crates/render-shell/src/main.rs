@@ -71,6 +71,15 @@ const DIGIT_KEYS: [KeyCode; 9] = [
     KeyCode::Key8,
     KeyCode::Key9,
 ];
+/// The eight worlds, in solar order, indexed by `PlanetId.0`.
+///
+/// The single source of truth for planet names shown to the player — the map
+/// labels (`draw_cities`) and the selection panel (`ui::draw_planet_panel`) both
+/// read from here so a world is called the same thing everywhere.
+pub const PLANET_NAMES: [&str; 8] = [
+    "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
+];
+
 /// Capability-grid era column headers (10 eras, 1990s → cosmic).
 const GRID_ERAS: [&str; 10] = [
     "FND", "QNT", "RNW", "FUS", "SPC", "ST2", "GAL", "DRK", "HiD", "CSM",
@@ -283,7 +292,7 @@ async fn main() {
     let mut research_cursor: usize = 0;
     let mut doctrine_open = false;
     let mut doctrine_cursor: usize = 0;
-    // Read-only viewer for the 500-slot Ascension capability grid (toggle: G).
+    // Read-only viewer for the 500-slot Ascension capability grid (toggle: X).
     let mut grid_open = false;
     // Sector governance overlay (toggle: K) — assign colonies a doctrine.
     let mut sector_open = false;
@@ -385,7 +394,13 @@ async fn main() {
             continue;
         }
 
-        let over = sim.winner().is_some();
+        // The human is OUT the moment their last Command Center falls — even if
+        // 2+ AI civs remain, so `winner()` is still `None` (no single survivor).
+        // Without this the player would be trapped spectating an AI-vs-AI game with
+        // no defeat card and no `R` restart (both gate on `over`). Survey doesn't
+        // count: pre-founding the human simply has no base yet.
+        let human_lost = !sim.surveying() && !sim.civ_alive(HUMAN);
+        let over = sim.winner().is_some() || human_lost;
         // Lazily anchor the camera on the current map (default == today's view).
         let cam_center = *cam.get_or_insert_with(|| default_cam(&sim));
         // --- Player camera input: wheel-zoom (to cursor) + middle-drag pan ---
@@ -642,7 +657,10 @@ async fn main() {
         {
             doctrine_open = !doctrine_open;
         }
-        // Toggle the read-only capability-grid viewer with G.
+        // Toggle the read-only capability-grid viewer with X (the matriX/grid).
+        // NOT G: G arms the Laser/GunTurret build placement (input.rs), and one
+        // press must do exactly one thing — sharing G both armed a turret AND
+        // toggled this overlay in the same frame.
         if !over
             && !paused
             && !surveying
@@ -650,7 +668,7 @@ async fn main() {
             && !doctrine_open
             && !perk_open
             && !sector_open
-            && is_key_pressed(KeyCode::G)
+            && is_key_pressed(KeyCode::X)
         {
             grid_open = !grid_open;
         }
@@ -1009,18 +1027,19 @@ async fn main() {
         prev_wave_secs = wave_secs;
 
         // Game-over jingle, once; stop the music; record the survival high score.
-        if let Some(winner) = sim.winner() {
-            if !over_announced {
-                over_announced = true;
-                audio.stop_music();
-                audio.play(if winner == HUMAN {
-                    audio::Sfx::Victory
-                } else {
-                    audio::Sfx::Defeat
-                });
-                if survival_run {
-                    best_waves = meta::record_waves(sim.waves_survived());
-                }
+        // `over` already folds in human elimination (no single winner yet), so a
+        // human wipe still triggers the defeat sting instead of silence.
+        if over && !over_announced {
+            over_announced = true;
+            audio.stop_music();
+            let human_won = sim.winner() == Some(HUMAN);
+            audio.play(if human_won {
+                audio::Sfx::Victory
+            } else {
+                audio::Sfx::Defeat
+            });
+            if survival_run {
+                best_waves = meta::record_waves(sim.waves_survived());
             }
         }
 
@@ -1159,9 +1178,11 @@ async fn main() {
         if perk_open {
             draw_perk_modal(&sim, &sprites);
         }
-        if let Some(winner) = sim.winner() {
+        // Show the end card whenever the match is over — that includes a human
+        // wipe with rival AI civs still fighting (no single `winner()` yet).
+        if over {
             let score = survival_run.then(|| (sim.waves_survived(), best_waves));
-            draw_game_over(winner, score, &sprites);
+            draw_game_over(sim.winner(), human_lost, score, &sprites);
         }
         next_frame().await;
     }
@@ -1405,7 +1426,7 @@ fn draw_title(sprites: &Sprites, conquest: bool) {
         sprites.font_bold(),
     );
     centered(
-        "Y tech tree  \u{2022}  U doctrines  \u{2022}  K sectors  \u{2022}  Q ability  \u{2022}  G grid  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
+        "Y tech tree  \u{2022}  U doctrines  \u{2022}  K sectors  \u{2022}  Q ability  \u{2022}  X grid  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
         c.y + c.h + 70.0,
         13.0,
         INK_DIM,
@@ -1458,7 +1479,17 @@ fn draw_cartouche(c: Rect) {
     keystone_crest(c.x + c.w / 2.0, c.y - 6.0);
 }
 
-fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites: &Sprites) {
+/// The end-of-match card. `winner` is the sole surviving civ if there is one
+/// (`Some(HUMAN)` = the player conquered or repelled the assault); it is `None`
+/// when the human's last base fell while 2+ rival AI civs still fight. The
+/// explicit `human_lost` flag distinguishes that "wiped, game continues without
+/// you" case so it still draws a clear defeat card and offers the `R` restart.
+fn draw_game_over(
+    winner: Option<PlayerId>,
+    human_lost: bool,
+    survival_score: Option<(u32, u32)>,
+    sprites: &Sprites,
+) {
     let (w, h) = (screen_width(), screen_height());
     draw_rectangle(0.0, 0.0, w, h, Color::from_rgba(0, 0, 0, 175));
     // Survival runs get a taller card: waves + (possibly) the milestone + best.
@@ -1473,10 +1504,21 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
     glow_rect(px, py, pw, ph, HOLO_GLOW, 3);
     draw_rectangle(px, py, pw, 4.0, GOLD);
     draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
-    let (msg, color) = if winner == HUMAN {
-        ("REPELLED", GOOD)
-    } else {
+    // The human triumphs only as the sole survivor; everything else (a single
+    // rival winner, OR a human wipe with multiple AI civs still standing) is a
+    // defeat. Survival victory keeps its "REPELLED" wording; a conquest loss /
+    // human elimination reads "DEFEAT" with the cause beneath it.
+    let human_won = winner == Some(HUMAN);
+    let (msg, color) = if human_won {
+        if survival_score.is_some() {
+            ("REPELLED", GOOD)
+        } else {
+            ("VICTORY", GOOD)
+        }
+    } else if survival_score.is_some() {
         ("OVERRUN", BAD)
+    } else {
+        ("DEFEAT", BAD)
     };
     centered(msg, py + 78.0, 54.0, color, sprites.font_display());
     if let Some((waves, best)) = survival_score {
@@ -1503,6 +1545,18 @@ fn draw_game_over(winner: PlayerId, survival_score: Option<(u32, u32)>, sprites:
             TEXT_DIM,
             sprites.font(),
         );
+    } else {
+        // Conquest subtitle: name the outcome. A human wipe while rival AI civs
+        // fight on (`human_lost` but no `winner`) gets its own clear line so the
+        // player understands the galaxy didn't end — only their empire did.
+        let subtitle = if human_won {
+            "The galaxy is yours."
+        } else if human_lost {
+            "Your last Command Center has fallen."
+        } else {
+            "Your empire has been conquered."
+        };
+        centered(subtitle, py + 122.0, 17.0, TEXT, sprites.font());
     }
     centered(
         "Press R to restart",
@@ -2000,7 +2054,7 @@ fn draw_grid_backdrop(l: &GridLayout, sprites: &Sprites, tint: impl Fn(u32) -> C
 }
 
 /// A read-only viewer for the 500-slot Ascension capability grid, pips coloured
-/// by reality class. Toggle with G; Esc closes.
+/// by reality class. Toggle with X; Esc closes.
 fn draw_grid_viewer(sprites: &Sprites) {
     draw_rectangle(
         0.0,
@@ -2017,7 +2071,7 @@ fn draw_grid_viewer(sprites: &Sprites) {
         sprites.font_bold(),
     );
     centered(
-        "10 eras × 10 branches × 5 steps   •   G / Esc to close",
+        "10 eras × 10 branches × 5 steps   •   X / Esc to close",
         60.0,
         14.0,
         TEXT_DIM,
@@ -2553,11 +2607,22 @@ fn draw(
     // Scorch decals sit on the ground, under terrain and pieces.
     particles.draw_scorches(ox, wtop, cell);
     draw_terrain(sim, cell, ox, wtop);
+    // Cities: each planet is a glowing world that grows with its colony. Drawn
+    // BEFORE the pieces so on-planet buildings (Command Center, turrets,
+    // refineries) render ON TOP of the planet disc instead of being buried under
+    // it — otherwise the base the player builds is invisible. The planets' pop
+    // numbers and name labels sit above/below the disc, clear of the pieces.
+    draw_cities(sim, cell, ox, wtop, sprites);
     for v in sim.views() {
+        // Per-civ identity, matching the minimap + planet discs (which already use
+        // `civ_color`). The binary human-cyan / everyone-red split made a 4-civ
+        // match unreadable on the main view; now each rival empire reads distinct.
+        // Civ 0 is the friendly cyan and civ 1 the classic red, so 2-civ matches
+        // look unchanged.
         let team = if v.owner == HUMAN {
             TEAM_PLAYER
         } else {
-            TEAM_ENEMY
+            civ_color(v.owner.0)
         };
         let (texture, base_size, is_building) = match v.kind {
             EntityKindView::Building(b) => (
@@ -2653,10 +2718,6 @@ fn draw(
             },
         );
     }
-    // Cities: each planet rendered as a glowing world that grows with its colony.
-    // Drawn over pieces (the Command Center sprite sits under the city glow) so the
-    // planets read as the focal points of the map.
-    draw_cities(sim, cell, ox, wtop, sprites);
     // A selected planet gets a pulsing cyan ring at its center, sized to its
     // radius (in tiles) so it reads as the chosen world, not a unit.
     if let Some(pid) = selected.planet {
@@ -3189,10 +3250,7 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
         }
         // Planet name, centred under the world (pop number sits above it). The
         // ring system pushes Saturn's label a little lower so it clears the rings.
-        let names = [
-            "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune",
-        ];
-        if let Some(name) = names.get(usize::from(pid.0)) {
+        if let Some(name) = PLANET_NAMES.get(usize::from(pid.0)) {
             let nw = measure_text(name, pf, 12, 1.0).width;
             let drop = if pid.0 == 5 { body_r * 0.6 } else { 0.0 };
             draw_text_ex(

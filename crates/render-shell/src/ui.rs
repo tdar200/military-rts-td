@@ -255,8 +255,14 @@ pub fn draw_planet_panel(sim: &Sim, pid: PlanetId, sprites: &Sprites) {
     let lx = x + 16.0;
     let mut ty = y + 26.0;
 
-    // Header: PLANET n + owner badge.
-    text(&format!("PLANET {}", pid.0), lx, ty, 20.0, GOLD_HI, fb);
+    // Header: the world's real name (Earth, Mars, …) + owner badge. Reuses the
+    // shared PLANET_NAMES the map labels draw from, so the panel says "Earth"
+    // rather than the old placeholder "PLANET 2".
+    let pname = crate::PLANET_NAMES
+        .get(usize::from(pid.0))
+        .copied()
+        .unwrap_or("PLANET");
+    text(&pname.to_uppercase(), lx, ty, 20.0, GOLD_HI, fb);
     let owner = sim.planet_owner(pid);
     let (badge, badge_col) = match owner {
         Some(o) if o == HUMAN => ("YOURS".to_owned(), TEAM_PLAYER),
@@ -296,7 +302,9 @@ pub fn draw_planet_panel(sim: &Sim, pid: PlanetId, sprites: &Sprites) {
     match owner {
         Some(o) if o == HUMAN => {
             text(
-                "Build: B Barracks  G Turret  R Refinery",
+                // Match the command-bar names exactly (Hangar/Laser/Extractor)
+                // so the same building isn't called two different things.
+                "Build: B Hangar  G Laser  R Extractor",
                 lx,
                 ty,
                 13.0,
