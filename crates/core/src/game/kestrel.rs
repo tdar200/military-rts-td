@@ -17,6 +17,7 @@ pub const HOLDFAST: (u16, u16) = (36, 8);
 /// The alien Core Node (enemy Command Centre): destroying it wins the mission.
 pub const CORE_NODE: (u16, u16) = (37, 8);
 
+#[derive(Clone, Copy, Debug)]
 pub struct Region {
     pub name: &'static str,
     pub kind: &'static str,

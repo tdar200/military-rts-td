@@ -1493,7 +1493,7 @@ mod tests {
         }
         assert!(find_path(s2.map(), HOME_CC, HOLDFAST).is_none());
         // Hex flood fill (six odd-q neighbours) from home with the ford plugged: no
-        // diagonal leak reaches ANY tile east of the river, Highland or Flats.
+        // diagonal leak reaches ANY tile east of the river band.
         let map = s2.map();
         let (w, h) = (map.width(), map.height());
         let mut seen = alloc::vec![false; usize::from(w) * usize::from(h)];
@@ -1514,15 +1514,21 @@ mod tests {
                 }
             }
         }
-        for y in 0..h {
+        // Per row, the river band (or, below the river mouth, the bay) starts at the
+        // first 'r'/'w'/'o' glyph of the authored text; everything from there east
+        // is the far side. Reachable == exactly the passable tiles west of it.
+        for (y, row) in (0u16..).zip(crate::game::kestrel::ROWS) {
+            let band = row
+                .find(['r', 'w', 'o'])
+                .unwrap_or_else(|| panic!("row {y} has no river or bay"));
             for x in 0..w {
-                let g = map.ground_at(x.into(), y.into());
-                if seen[idx((x, y))] {
-                    assert!(
-                        !matches!(g, Ground::Flats | Ground::Highland | Ground::Crater),
-                        "west bank leaks to {g:?} at ({x},{y})"
-                    );
-                }
+                let west = usize::from(x) < band;
+                let passable = map.ground_at(x.into(), y.into()).props().passable;
+                assert_eq!(
+                    seen[idx((x, y))],
+                    west && passable,
+                    "flood fill mismatch at ({x},{y}): west={west} passable={passable}"
+                );
             }
         }
     }

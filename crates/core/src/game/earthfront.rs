@@ -3,7 +3,7 @@ use super::{
     BuildingKind, Command, Entity, EntityId, Fixed, Kind, PlayerId, Sim, UnitKind, Vec, Vec2,
 };
 use crate::game::hex;
-use crate::game::map::Ground;
+use crate::game::map::{DepositKind, Ground};
 use crate::game::tech_grid::{GridNode, RealityClass, Unlock, UnlockFamily};
 
 /// Authored scenario role, independent of a building's production or supply behavior.
@@ -347,7 +347,7 @@ impl Sim {
         let tile = self.world_to_tile(e.pos);
         self.map
             .deposits()
-            .any(|(dx, dy, _)| hex::distance(tile, (dx, dy)) <= 1)
+            .any(|(dx, dy, d)| d.kind == DepositKind::Ore && hex::distance(tile, (dx, dy)) <= 1)
     }
 
     /// Read-only economic state, including the binding research constraint.
@@ -1235,6 +1235,10 @@ mod tests {
     }
 
     fn refinery_money_after_a_second(deposit_at: Option<(u16, u16)>, ore: u32) -> i64 {
+        refinery_money_with(deposit_at, DepositKind::Ore, ore)
+    }
+
+    fn refinery_money_with(deposit_at: Option<(u16, u16)>, kind: DepositKind, ore: u32) -> i64 {
         let mut sim = Sim::new(Map::new(16, 16), 1, Fixed::ZERO);
         sim.enable_earthfront();
         sim.add_building(HUMAN, BuildingKind::PowerPlant, 3, 12);
@@ -1244,7 +1248,7 @@ mod tests {
                 dx,
                 dy,
                 Deposit {
-                    kind: DepositKind::Ore,
+                    kind,
                     remaining: 100,
                 },
             );
@@ -1265,6 +1269,26 @@ mod tests {
         // 15 ore -> 12 material at 100 percent, 14 (12 * 120 / 100, truncated) beside ore.
         assert_eq!(refinery_money_after_a_second(Some((1, 1)), 15), 12 * one);
         assert_eq!(refinery_money_after_a_second(near_cell, 15), 14 * one);
+    }
+
+    #[test]
+    fn alloy_beside_a_refinery_gives_no_ore_bonus() {
+        // Alloy is decorative in Earthfront (never mined), so only an Ore deposit
+        // within one hex earns the +20 percent.
+        let one = Fixed::from_int(1).to_bits();
+        let near_cell = Some(nbr(8, 8, 2));
+        assert_eq!(
+            refinery_money_with(Some((1, 1)), DepositKind::Alloy, 15),
+            12 * one
+        );
+        assert_eq!(
+            refinery_money_with(near_cell, DepositKind::Alloy, 15),
+            12 * one
+        );
+        assert_eq!(
+            refinery_money_with(near_cell, DepositKind::Ore, 15),
+            14 * one
+        );
     }
 
     #[test]
