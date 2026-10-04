@@ -60,8 +60,10 @@ const RALLY_DEN: i64 = 16;
 /// count units still marching across the map.
 const RALLY_GATHER_RADIUS: i32 = 6;
 
-/// Combat spatial-grid cell size in tiles. Must be >= the largest attack range so
-/// a 3x3 cell query around an attacker contains every in-range enemy.
+/// Combat spatial-grid cell size in tiles. Must be >= the largest attack range
+/// INCLUDING the Highland range bonus (1.25x, `Ground::Highland`), so a 3x3 cell
+/// query around an attacker contains every in-range enemy. Guarded by the test
+/// `combat_cell_covers_highland_extended_range`.
 const COMBAT_CELL: i32 = 8;
 
 /// Identifies a player (`0` or `1`).
@@ -858,6 +860,11 @@ fn ground_props_at(map: &Map, pos: Vec2) -> crate::game::map::GroundProps {
 /// A small percent as `i32` for `Fixed::from_int` (ground percents are tiny; saturates).
 fn pct_i32(p: u32) -> i32 {
     i32::try_from(p).unwrap_or(i32::MAX)
+}
+
+/// Percent of damage that gets through `cover_pct` of cover (never underflows).
+const fn through_cover_pct(cover_pct: u32) -> u32 {
+    100u32.saturating_sub(cover_pct)
 }
 
 /// World-space center of hex cell `(x, y)`.
@@ -4119,8 +4126,9 @@ impl Sim {
             .collect();
 
         // Spatial grid over living entities so target lookup is ~O(neighbours)
-        // rather than O(n^2). The cell size is >= the largest attack range, so a
-        // 3x3 cell query around an attacker contains every in-range enemy.
+        // rather than O(n^2). The cell size is >= 1.25x the largest attack range
+        // (the Highland-extended reach), so a 3x3 cell query around an attacker
+        // contains every in-range enemy.
         let cols = (i32::from(self.map.width()) + COMBAT_CELL - 1) / COMBAT_CELL;
         let rows = (i32::from(self.map.height()) + COMBAT_CELL - 1) / COMBAT_CELL;
         let mut grid = alloc::vec![Vec::<usize>::new(); (cols * rows).max(1) as usize];
@@ -4284,7 +4292,7 @@ impl Sim {
                 // targets take none. Applied before the push so splash inherits it.
                 let raw = if self.earthfront && !snap[j].4 {
                     let cover = ground_props_at(&self.map, snap[j].2).cover_pct;
-                    raw * Fixed::from_int(pct_i32(100 - cover)) / Fixed::from_int(100)
+                    raw * Fixed::from_int(pct_i32(through_cover_pct(cover))) / Fixed::from_int(100)
                 } else {
                     raw
                 };
@@ -6227,6 +6235,47 @@ mod tests {
         assert!(
             (wood * 100 - open * 80).abs() <= 60 * 100,
             "wood={wood} open={open}"
+        );
+    }
+
+    #[test]
+    fn combat_cell_covers_highland_extended_range() {
+        let mut ranges: Vec<Fixed> = Vec::new();
+        for u in [
+            UnitKind::Harvester,
+            UnitKind::Infantry,
+            UnitKind::Tank,
+            UnitKind::AntiArmor,
+            UnitKind::Helicopter,
+            UnitKind::Capital,
+        ] {
+            ranges.push(u.stats().attack.range);
+        }
+        for b in [
+            BuildingKind::CommandCenter,
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Barracks,
+            BuildingKind::GunTurret,
+            BuildingKind::AaTurret,
+            BuildingKind::Wall,
+            BuildingKind::ResearchLab,
+            BuildingKind::AntimatterPlant,
+            BuildingKind::VehicleFactory,
+            BuildingKind::Airfield,
+            BuildingKind::SupplyDepot,
+            BuildingKind::Battery,
+        ] {
+            if let Some(a) = b.stats().attack {
+                ranges.push(a.range);
+            }
+        }
+        let max = ranges.into_iter().max().unwrap();
+        let highland = max * Fixed::from_int(125) / Fixed::from_int(100);
+        assert!(
+            highland <= Fixed::from_int(super::COMBAT_CELL),
+            "highland-extended max range {highland:?} exceeds COMBAT_CELL {}",
+            super::COMBAT_CELL
         );
     }
 

@@ -655,26 +655,30 @@ impl Sim {
             });
         }
         // Process exact batches: 5 ore -> 4 material. Never mine automatically beneath a building.
-        let near_ore: Vec<bool> = self
-            .entities
-            .iter()
-            .map(|e| self.refinery_near_ore(e))
-            .collect();
-        for (e, near) in self.entities.iter_mut().zip(near_ore) {
-            if !e.alive
-                || e.construction_remaining > 0
-                || e.kind != Kind::Building(BuildingKind::Refinery)
-            {
-                continue;
-            }
-            // Refinery work accumulator is separate from its queued replacement-harvester work.
-            if self.tick.is_multiple_of(30) && e.power_fraction >= 500 {
-                let ore = (e.ore_buffer / 5).min(1 + e.power_fraction / 500) * 5;
-                e.ore_buffer -= ore;
-                let c = &mut self.civs[usize::from(e.owner.0)];
-                let material = ore / 5 * 4;
-                let material = if near { material * 120 / 100 } else { material };
-                c.money = c.money + Fixed::from_int(i32::try_from(material).unwrap_or(0));
+        // Refineries only process on the 30-tick beat, so the (whole-map deposit scan) near-ore
+        // check is computed only then.
+        if self.tick.is_multiple_of(30) {
+            let near_ore: Vec<bool> = self
+                .entities
+                .iter()
+                .map(|e| self.refinery_near_ore(e))
+                .collect();
+            for (e, near) in self.entities.iter_mut().zip(near_ore) {
+                if !e.alive
+                    || e.construction_remaining > 0
+                    || e.kind != Kind::Building(BuildingKind::Refinery)
+                {
+                    continue;
+                }
+                // Refinery work accumulator is separate from its queued replacement-harvester work.
+                if e.power_fraction >= 500 {
+                    let ore = (e.ore_buffer / 5).min(1 + e.power_fraction / 500) * 5;
+                    e.ore_buffer -= ore;
+                    let c = &mut self.civs[usize::from(e.owner.0)];
+                    let material = ore / 5 * 4;
+                    let material = if near { material * 120 / 100 } else { material };
+                    c.money = c.money + Fixed::from_int(i32::try_from(material).unwrap_or(0));
+                }
             }
         }
         if !self.tick.is_multiple_of(30) {
