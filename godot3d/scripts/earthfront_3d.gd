@@ -296,7 +296,11 @@ func _setup_environment() -> void:
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.35
+	# Only 35 percent of the ambient light comes from the sky; the rest is a cool flat colour, so the sun's cast
+	# shadows keep a readable edge instead of being filled in to the same brightness as the lit ground.
+	env.ambient_light_sky_contribution = 0.35
+	env.ambient_light_color = Color("8fa3b8")
+	env.ambient_light_energy = 0.6
 	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.tonemap_exposure = 0.78
@@ -305,19 +309,24 @@ func _setup_environment() -> void:
 	env.adjustment_saturation = 0.85
 	env.glow_enabled = false
 	env.glow_intensity = 0.22
-	env.ssao_enabled = true
-	env.ssao_radius = 1.65
-	env.ssao_intensity = 1.45
+	if _renderer_supports_ssao():
+		env.ssao_enabled = true
+		env.ssao_radius = 1.65
+		env.ssao_intensity = 1.45
 	world_environment.environment = env
 	add_child(world_environment)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-54.0, -34.0, 0.0)
-	sun.light_color = Color("eee9df")
-	sun.light_energy = 0.7
-	sun.shadow_blur = 2.4
+	# One warm sun in the north-west (north is -Z, west is -X) at 38 degrees elevation: its light travels toward
+	# (+x, +z), so shadows fall toward the south-east, in front of the buildings for the default camera.
+	sun.rotation_degrees = Vector3(-38.0, -135.0, 0.0)
+	sun.light_color = Color("ffe8c8")
+	sun.light_energy = 1.0
+	sun.shadow_blur = 1.2
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.0
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 60.0
+	sun.directional_shadow_max_distance = 120.0
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	add_child(sun)
 	var fill := DirectionalLight3D.new()
@@ -332,6 +341,15 @@ func _setup_environment() -> void:
 	camera.current = true
 	camera.far = 160.0
 	add_child(camera)
+
+
+## SSAO needs the Forward+ or Mobile renderer and a real GPU; Compatibility, headless and CPU rasterisers skip it silently.
+func _renderer_supports_ssao() -> bool:
+	if DisplayServer.get_name() == "headless":
+		return false
+	if String(RenderingServer.get_current_rendering_method()) == "gl_compatibility":
+		return false
+	return RenderingServer.get_video_adapter_type() != RenderingDevice.DEVICE_TYPE_CPU
 
 
 func _build_terrain() -> void:
