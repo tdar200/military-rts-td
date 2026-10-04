@@ -122,12 +122,18 @@ table or the bridge has nothing behind them:
   (footprints do not rotate and Enter is not a placement key). No key was bound. The chip's right edge is an estimate
   from the top strip.
 - Projected grid: shows generation, demand and the real post-placement values only. No per-minute deltas.
-- Enemy territory card: counts and kinds from alien entities (units, gun and AA defences) plus terrain cover and range
-  from the ground table. Not built: "partly seen", "~14 est." and "east shore" lines (no fog, explored or discovery
-  state, no sight range, no direction data) and any river attack penalty (not a sim mechanic).
-- Combat preview is terrain-only: the damage-type multiplier, rank bonus and terrain cover that the sim has. The mock's
-  health bars, damage numbers, "range 7" and "walls in the line" are not drawn (no weapon, armour, range or line of
-  sight data in the snapshot). The harness rect covers only the header and sub line (`combat_head`), not the body rows.
+- Enemy territory card: Defences (gun, AA and wall counts), Garrison (alien unit count), Terrain (the two most common
+  ground names along the enemy border, names only) and Reinforce (next wave timer and size). Not built: "partly seen",
+  "~14 est." and "east shore" lines (no fog, explored or discovery state, no sight range, no direction data) and any
+  river attack penalty (not a sim mechanic).
+- Combat preview rows: (1) damage type against armour class, one row per selected attacker kind, for example "Explosive
+  vs Structure +50% damage", from the sim's damage matrix (`damage_multiplier`); built only when the attacker kind and the
+  target's kind and category are known; (2) "Veteran rank N" with "+10%", "+20%" or "+35% damage" from the sim's
+  veterancy factors, only for armed selected units with rank above 0; (3) the terrain rows: standing speed, range held on
+  high ground, and the target's cover. The mock's health forecast bars, absolute damage numbers, "range 7" and "walls in
+  the line" are not drawn. The tables live in `godot3d/scripts/ui/combat_rules.gd`; `tests/test_combat_rules.gd` parses
+  the Rust source so a balance change fails a test. The harness rect covers only the header and sub line
+  (`combat_head`), not the body rows.
 - Pins: the "Alloy +6 on high ground" pin is not built (no haul claims). The hostile pin shows the kind only. Both pin
   positions in the gallery fixtures were moved a few pixels to sit clear of the map texture, as in gp01; this is a
   fixture detail, not a layout change.

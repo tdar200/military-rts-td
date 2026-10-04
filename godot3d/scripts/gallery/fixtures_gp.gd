@@ -86,6 +86,8 @@ static func assault_board() -> Dictionary:
 			{"label": "Reinforce", "value": "45 s, 10 units", "tone": "warn"},
 		]},
 		"combat": {"x": 1060, "y": 360, "sub": "4 x Battle tank vs Alien gun turret", "rows": [
+			{"label": "Explosive vs Structure", "value": "+50% damage", "tone": "good"},
+			{"label": "Veteran rank 2, 2 units", "value": "+20% damage", "tone": "good"},
 			{"label": "Standing on Dry flats", "value": "speed +10%", "tone": "good"},
 			{"label": "Target on Highland", "value": "-25% damage", "tone": "bad"},
 		]},

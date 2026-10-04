@@ -558,6 +558,7 @@ static func enemy_intel(snap: Dictionary, ground_model) -> Dictionary:
 	return {"rows": rows}
 
 
+const Rules := preload("res://scripts/ui/combat_rules.gd")
 const FOOT_KINDS := ["Infantry", "AntiArmor"]
 const AIR_KINDS := ["Helicopter"]
 
@@ -576,9 +577,11 @@ static func _speed_text(pct: int) -> String:
 
 
 ## Combat preview (board 3, Civ-style): the selected human units `attacker_ids` against the alien entity standing on
-## `target` hex. Only what the data backs: the matchup, the speed and range the attackers' ground gives, and the cover the
-## target's ground gives. The snapshot has no weapon, armour or range data, so health forecasts, damage and "range 7 tiles"
-## are not built, nor the board's "walls in the line" (no line-of-fire data). {} without attackers or a hostile target.
+## `target` hex. Rows, in order: the damage type of each attacker kind against the target's armour class (sim damage
+## matrix), the veterancy bonus of any selected veterans (sim rank factors), the speed and range the attackers' ground
+## gives, and the cover the target's ground gives. A damage row is built only when both the attacker kind and the target's
+## kind and category are known; a rank row only for armed units with rank above 0. {} without attackers or a hostile
+## target.
 static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, target: Array) -> Dictionary:
 	if ground_model == null or target.size() < 2:
 		return {}
@@ -592,6 +595,7 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 	if foe.is_empty():
 		return {}
 	var kinds := {}
+	var ranks := {}
 	var ground_votes := {}
 	var stand_at := {}
 	var foot := 0
@@ -602,6 +606,9 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 			continue
 		var kind := str(a.get("kind", ""))
 		kinds[kind] = int(kinds.get(kind, 0)) + 1
+		if int(a.get("rank", 0)) > 0 and Rules.damage_of(kind) != "":
+			var rk := mini(int(a["rank"]), Rules.VETERANCY_PCT.size() - 1)
+			ranks[rk] = int(ranks.get(rk, 0)) + 1
 		if kind in AIR_KINDS:
 			continue
 		var cell := entity_cell(a)
@@ -622,6 +629,21 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 		parts.append("%d x %s" % [int(kinds[k]), _kind_label(str(k))])
 	var out := {"sub": "%s vs Alien %s" % [", ".join(parts), _kind_label(str(foe.get("kind", ""))).to_lower()], "rows": []}
 	var rows: Array = out["rows"]
+	var armour := Rules.armour_of(str(foe.get("kind", "")), str(foe.get("category", "")))
+	for k in order:
+		var dmg := Rules.damage_of(str(k))
+		if dmg == "" or armour == "":
+			continue
+		var pct := Rules.multiplier_pct(dmg, armour)
+		var label := "%s vs %s" % [Rules.DAMAGE_NAMES[dmg], Rules.ARMOUR_NAMES[armour]]
+		if order.size() > 1:
+			label = "%s: %s" % [_kind_label(str(k)), label]
+		rows.append({"label": label, "value": "normal damage" if pct == 0 else "%s%d%% damage" % ["+" if pct > 0 else "-", absi(pct)], "tone": "good" if pct > 0 else ("bad" if pct < 0 else "dim")})
+	var rank_order: Array = ranks.keys()
+	rank_order.sort()
+	for rk in rank_order:
+		var n := int(ranks[rk])
+		rows.append({"label": "Veteran rank %d%s" % [rk, ", %d units" % n if n > 1 else ""], "value": "+%d%% damage" % Rules.veterancy_pct(int(rk)), "tone": "good"})
 	if not ground_votes.is_empty():
 		var best := ""
 		for glyph in ground_votes:

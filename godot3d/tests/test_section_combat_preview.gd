@@ -22,6 +22,19 @@ func test_card_shows_the_matchup_and_the_ground_rows(t) -> void:
 	root.free()
 
 
+func test_card_shows_the_damage_type_and_rank_rows(t) -> void:
+	var root := Control.new()
+	Section.build(root, {"combat": {"x": 0, "y": 0, "sub": "2 x Riflemen vs Alien rifleman", "rows": [
+		{"label": "Ballistic vs Flesh", "value": "+50% damage", "tone": "good"},
+		{"label": "Veteran rank 2, 2 units", "value": "+20% damage", "tone": "good"},
+	]}})
+	t.ok(U.has_text(root, "Ballistic vs Flesh"), "damage type against armour class")
+	t.ok(U.has_text(root, "+50% damage"), "the matrix multiplier")
+	t.ok(U.has_text(root, "Veteran rank 2, 2 units"), "rank label")
+	t.ok(U.has_text(root, "+20% damage"), "rank bonus")
+	root.free()
+
+
 func test_card_sits_at_the_slice_position_with_a_red_frame(t) -> void:
 	var root := Control.new()
 	Section.build(root, {"combat": COMBAT})

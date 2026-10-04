@@ -1,8 +1,7 @@
 extends RefCounted
 ## Combat preview (board 3): the card beside a hostile target while human units are selected. Driven by vm["combat"]:
-## {x, y, sub, rows}. The board's health bars ("320 -> 110", "-96 spread over 4"), "range 7 tiles" and "walls in the
-## line" need weapon, armour and line-of-fire data the snapshot does not carry, so only the matchup and the ground rows
-## are built. Read-only; builds nothing without the slice.
+## {x, y, sub, rows}. Rows come from VmGameplay.combat_preview: damage type against the target's armour class, veteran
+## rank bonus, and the terrain rows. Read-only; builds nothing without the slice.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const Rows = preload("res://scripts/ui/sections/rows.gd")

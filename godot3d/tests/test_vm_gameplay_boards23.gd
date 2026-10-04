@@ -167,8 +167,8 @@ func test_combat_preview_names_the_matchup_and_reads_the_ground(t) -> void:
 	t.eq(_row(c["rows"], "Standing on Grassland")["value"], "normal speed", "grass is 100% for infantry")
 	var target := _row(c["rows"], "Target on Dry flats")
 	t.eq(target["value"], "no cover", "dry flats give no cover")
-	t.ok(not str(c).contains("range 7"), "no range figure: the snapshot has no weapon data")
-	t.ok(not str(c).contains("health"), "no damage or health figures: the snapshot has no weapon data")
+	t.ok(not str(c).contains("range 7"), "no range figure is shown")
+	t.ok(not str(c).contains("health"), "no health figure is shown")
 
 
 func test_combat_preview_cover_and_range_come_from_the_ground_table(t) -> void:
@@ -180,8 +180,7 @@ func test_combat_preview_cover_and_range_come_from_the_ground_table(t) -> void:
 	# Put the rifleman on the ridge: speed -30%, range +25%.
 	for e in snap["entities"]:
 		if int(e["id"]) == 1:
-			var at := VM.entity_cell({"x_bits": 0, "z_bits": 0})
-			at = [27, 2]
+			var at := [27, 2]
 			e["x_bits"] = roundi((0.5 + 0.75 * at[0]) * 65536.0)
 			e["z_bits"] = roundi((0.5 + at[1] + (0.5 if at[0] % 2 != 0 else 0.0)) * 65536.0)
 	var ridge := VM.combat_preview(snap, GroundModel.from_snapshot(snap), [1], [34, 6])
@@ -196,6 +195,94 @@ func test_combat_preview_needs_attackers_and_a_hostile_target(t) -> void:
 	t.eq(VM.combat_preview(snap, ground, [1], [20, 20]), {}, "empty hex")
 	t.eq(VM.combat_preview(snap, ground, [1], [7, 9]), {}, "own building is not a target")
 	t.eq(VM.combat_preview(snap, ground, [5], [34, 6]), {}, "an alien id is not an attacker")
+
+
+func _with_ranks(snap: Dictionary, ranks: Dictionary) -> void:
+	for e in snap["entities"]:
+		if ranks.has(int(e["id"])):
+			e["rank"] = ranks[int(e["id"])]
+
+
+func test_combat_preview_shows_the_damage_type_against_the_target_armour(t) -> void:
+	var snap := _snap()
+	var ground := GroundModel.from_snapshot(snap)
+	# Riflemen (Ballistic) against a gun turret (Structure): neutral.
+	var turret := VM.combat_preview(snap, ground, [1, 2], [34, 6])
+	var neutral := _row(turret["rows"], "Ballistic vs Structure")
+	t.eq(neutral["value"], "normal damage", "Ballistic against Structure is neutral in the sim")
+	t.eq(neutral["tone"], "dim", "neutral is dim")
+	# Riflemen against an alien rifleman (Flesh): +50%.
+	var foe := {}
+	for e in snap["entities"]:
+		if int(e["owner"]) == 1 and e["kind"] == "Infantry":
+			foe = e
+			break
+	var at := VM.entity_cell(foe)
+	var flesh := VM.combat_preview(snap, ground, [1], [at[0], at[1]])
+	var plus := _row(flesh["rows"], "Ballistic vs Flesh")
+	t.eq(plus["value"], "+50% damage", "Ballistic against Flesh is x1.5")
+	t.eq(plus["tone"], "good", "an edge is good")
+	# Rocket team (Anti-armor) against Flesh is -50%, bad.
+	for e in snap["entities"]:
+		if int(e["id"]) == 2:
+			e["kind"] = "AntiArmor"
+	var rockets := VM.combat_preview(snap, ground, [2], [at[0], at[1]])
+	var minus := _row(rockets["rows"], "Anti-armor vs Flesh")
+	t.eq(minus["value"], "-50% damage", "Anti-armor against Flesh is x0.5")
+	t.eq(minus["tone"], "bad", "a handicap is bad")
+	# Rocket team against a turret: Anti-armor vs Structure is neutral.
+	t.eq(_row(VM.combat_preview(snap, ground, [2], [34, 6])["rows"], "Anti-armor vs Structure")["value"], "normal damage", "neutral")
+
+
+func test_mixed_attackers_get_one_damage_row_per_kind(t) -> void:
+	var snap := _snap()
+	for e in snap["entities"]:
+		if int(e["id"]) == 3:
+			e["kind"] = "Tank"
+	var c := VM.combat_preview(snap, GroundModel.from_snapshot(snap), [1, 2, 3], [34, 6])
+	t.eq(_row(c["rows"], "Riflemen: Ballistic vs Structure")["value"], "normal damage", "riflemen row carries the kind name")
+	t.eq(_row(c["rows"], "Battle tank: Explosive vs Structure")["value"], "+50% damage", "tank shells against a building: x1.5")
+	t.ok(_row(c["rows"], "Ballistic vs Structure").is_empty(), "with two kinds the plain label is not used")
+
+
+func test_rank_bonus_uses_the_sim_veterancy_values(t) -> void:
+	var snap := _snap()
+	var ground := GroundModel.from_snapshot(snap)
+	_with_ranks(snap, {1: 2, 2: 2, 3: 1, 4: 0})
+	var c := VM.combat_preview(snap, ground, [1, 2, 3, 4], [34, 6])
+	t.eq(_row(c["rows"], "Veteran rank 2, 2 units")["value"], "+20% damage", "rank 2 is +20% and two units have it")
+	t.eq(_row(c["rows"], "Veteran rank 1")["value"], "+10% damage", "rank 1 is +10%, one unit")
+	t.ok(_row(c["rows"], "Veteran rank 0").is_empty(), "rank 0 earns no row")
+	_with_ranks(snap, {1: 3})
+	var top := VM.combat_preview(snap, ground, [1], [34, 6])
+	t.eq(_row(top["rows"], "Veteran rank 3")["value"], "+35% damage", "rank 3 is +35%")
+
+
+func test_no_rank_row_without_veterans_and_none_for_unarmed_units(t) -> void:
+	var snap := _snap()
+	var ground := GroundModel.from_snapshot(snap)
+	for r in VM.combat_preview(snap, ground, [1, 2], [34, 6])["rows"]:
+		t.ok(not str(r["label"]).begins_with("Veteran"), "no veterans selected, no rank rows")
+	for e in snap["entities"]:
+		if int(e["id"]) == 1:
+			e["kind"] = "Harvester"
+			e["rank"] = 2
+	var c := VM.combat_preview(snap, ground, [1], [34, 6])
+	t.ok(c.is_empty() or _row(c["rows"], "Veteran rank 2").is_empty(), "a harvester has no weapon, so no rank bonus")
+	if not c.is_empty():
+		for r in c["rows"]:
+			t.ok(not str(r["label"]).contains(" vs Structure"), "and no damage-type row")
+
+
+func test_unknown_pairs_build_no_damage_row(t) -> void:
+	var snap := _snap()
+	var ground := GroundModel.from_snapshot(snap)
+	for e in snap["entities"]:
+		if int(e["owner"]) == 1 and e["kind"] == "GunTurret":
+			e["category"] = "mystery"
+	var c := VM.combat_preview(snap, ground, [1], [34, 6])
+	for r in c.get("rows", []):
+		t.ok(not str(r["label"]).contains(" vs "), "an unknown target class builds no matchup row")
 
 
 # ------------------------------------------------------------------ thr lens
