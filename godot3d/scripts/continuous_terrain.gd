@@ -10,6 +10,33 @@ var cell_z := 1.0
 var height_noise := FastNoiseLite.new()
 var biome_noise := FastNoiseLite.new()
 var coast_noise := FastNoiseLite.new()
+var ground: RefCounted = null  # GroundModel; null keeps the cosmetic noise terrain
+var _detail_texture: Texture2D
+
+## Per-glyph look of the snapshot ground layer: base height, noise amplitude, sRGB colour, water flag.
+const GROUND_LOOK := {
+	"g": [0.20, 0.08, "6a9a3a", 0.0],
+	"m": [0.20, 0.08, "97a64a", 0.0],
+	"f": [0.05, 0.02, "c9923a", 0.0],
+	"h": [1.60, 0.05, "6e747a", 0.0],
+	"t": [0.30, 0.05, "2f8a52", 0.0],
+	"r": [-0.50, 0.0, "3f86b8", 1.0],
+	"w": [-0.15, 0.0, "6fb0c4", 1.0],
+	"s": [0.05, 0.0, "c9b27a", 0.0],
+	"o": [-0.80, 0.0, "2a6a9a", 1.0],
+	"c": [-0.30, 0.0, "5b5346", 0.0],
+}
+const RASTER_STEP := 0.25
+const RASTER_MARGIN := 5.0
+const BLEND_RADIUS := 1.3
+var _cell_h := PackedFloat32Array()
+var _cell_amp := PackedFloat32Array()
+var _cell_color := PackedColorArray()
+var _cell_wet := PackedFloat32Array()
+var _raster_h := PackedFloat32Array()
+var _raster_c := PackedColorArray()  # rgb linear ground colour, alpha = water share
+var _raster_cols := 0
+var _raster_rows := 0
 
 
 func configure(width: int, height: int, map_origin_x: float, map_origin_z: float, hex_x: float, hex_z: float, detail_texture: Texture2D) -> void:
@@ -19,6 +46,7 @@ func configure(width: int, height: int, map_origin_x: float, map_origin_z: float
 	origin_z = map_origin_z
 	cell_x = hex_x
 	cell_z = hex_z
+	_detail_texture = detail_texture
 	height_noise.seed = 8128
 	height_noise.frequency = 0.055
 	height_noise.fractal_octaves = 4
@@ -35,6 +63,22 @@ func configure(width: int, height: int, map_origin_x: float, map_origin_z: float
 	_build_surface(detail_texture)
 
 
+## Drives the terrain from the snapshot ground layer: rebuilds the surface mesh once from the model. A null model leaves
+## the noise terrain exactly as configure() built it.
+func apply_ground(model: RefCounted) -> void:
+	if model == null:
+		return
+	ground = model
+	map_width = int(model.width)
+	map_height = int(model.height)
+	_bake_ground()
+	var old := get_node_or_null("ContinuousPainterlyTerrain")
+	if old != null:
+		remove_child(old)
+		old.free()
+	_build_surface(_detail_texture)
+
+
 func height_at_world(world_x: float, world_z: float) -> float:
 	var gx := (world_x - origin_x) / cell_x
 	var gz := (world_z - origin_z) / cell_z
@@ -42,6 +86,8 @@ func height_at_world(world_x: float, world_z: float) -> float:
 
 
 func biome_at_world(world_x: float, world_z: float) -> float:
+	if ground != null:
+		return _ground_biome((world_x - origin_x) / cell_x, (world_z - origin_z) / cell_z)
 	return biome_noise.get_noise_2d((world_x - origin_x) / cell_x, (world_z - origin_z) / cell_z)
 
 
@@ -53,6 +99,8 @@ func _land_height(gx: float, gz: float) -> float:
 
 
 func _surface_height(gx: float, gz: float) -> float:
+	if ground != null:
+		return _raster_sample_height(gx, gz)
 	var land := _land_height(gx, gz)
 	var world_x := origin_x + gx * cell_x
 	var world_z := origin_z + gz * cell_z
@@ -87,7 +135,7 @@ func _add_vertex(surface: SurfaceTool, gx: float, gz: float) -> void:
 	var elevation := _surface_height(gx, gz)
 	var world_x := origin_x + gx * cell_x
 	var world_z := origin_z + gz * cell_z
-	surface.set_color(_biome_color(gx, gz, elevation))
+	surface.set_color(_raster_sample_color(gx, gz) if ground != null else _biome_color(gx, gz, elevation))
 	surface.set_uv(Vector2(world_x, world_z) * 0.17)
 	var epsilon := 0.05
 	var dx := (_surface_height(gx + epsilon, gz) - _surface_height(gx - epsilon, gz)) / (2.0 * epsilon * cell_x)
@@ -98,7 +146,15 @@ func _add_vertex(surface: SurfaceTool, gx: float, gz: float) -> void:
 
 func _terrain_material(detail_texture: Texture2D) -> ShaderMaterial:
 	var shader := Shader.new()
-	shader.code = """
+	shader.code = _ground_shader_code() if ground != null else _noise_shader_code()
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	material.set_shader_parameter("detail_texture", detail_texture)
+	return material
+
+
+func _noise_shader_code() -> String:
+	return """
 shader_type spatial;
 render_mode diffuse_burley;
 uniform sampler2D detail_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -133,10 +189,43 @@ void fragment() {
     SPECULAR = 0.08;
 }
 """
-	var material := ShaderMaterial.new()
-	material.shader = shader
-	material.set_shader_parameter("detail_texture", detail_texture)
-	return material
+
+
+## Snapshot-driven look: vertex colour is the ground palette, vertex alpha the water share (River, Ford, Sea).
+func _ground_shader_code() -> String:
+	return """
+shader_type spatial;
+render_mode diffuse_burley;
+uniform sampler2D detail_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+varying vec3 world_position;
+varying vec3 world_normal;
+float ground_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float ground_noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(ground_hash(i), ground_hash(i + vec2(1, 0)), f.x),
+               mix(ground_hash(i + vec2(0, 1)), ground_hash(i + vec2(1, 1)), f.x), f.y);
+}
+void vertex() {
+    world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+    world_normal = normalize(mat3(MODEL_MATRIX) * NORMAL);
+}
+void fragment() {
+    vec3 detail = texture(detail_texture, UV).rgb;
+    float detail_luma = dot(detail, vec3(0.299, 0.587, 0.114));
+    vec3 micro = vec3(0.90 + detail_luma * 0.16);
+    float patches = ground_noise(world_position.xz * 0.9) * 0.6 + ground_noise(world_position.xz * 3.6) * 0.4;
+    float water = smoothstep(0.42, 0.62, COLOR.a);
+    float ripple = sin(world_position.x * 3.1 + TIME * 0.7) * cos(world_position.z * 2.7 - TIME * 0.5);
+    vec3 land = COLOR.rgb * micro * (0.90 + patches * 0.20);
+    vec3 wet = COLOR.rgb * (0.92 + ripple * 0.05 + patches * 0.08);
+    float slope = 1.0 - clamp(world_normal.y, 0.0, 1.0);
+    vec3 shaded = mix(land, land * 0.62, smoothstep(0.25, 0.65, slope) * 0.6);
+    ALBEDO = mix(shaded, wet, water);
+    ROUGHNESS = mix(0.95, 0.18, water);
+    SPECULAR = mix(0.08, 0.55, water);
+}
+"""
 
 
 func _build_surface(detail_texture: Texture2D) -> void:
@@ -169,3 +258,120 @@ func _build_surface(detail_texture: Texture2D) -> void:
 	instance.material_override = _terrain_material(detail_texture)
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(instance)
+
+
+# ---- snapshot ground layer ----
+
+func _bake_ground() -> void:
+	var count := map_width * map_height
+	_cell_h.resize(count)
+	_cell_amp.resize(count)
+	_cell_color.resize(count)
+	_cell_wet.resize(count)
+	for y in range(map_height):
+		for x in range(map_width):
+			var look: Array = GROUND_LOOK.get(ground.glyph_at(x, y), GROUND_LOOK["g"])
+			var i := y * map_width + x
+			_cell_h[i] = float(look[0])
+			_cell_amp[i] = float(look[1])
+			_cell_color[i] = Color(String(look[2])).srgb_to_linear()
+			_cell_wet[i] = float(look[3])
+	_raster_cols = int((float(map_width - 1) + 2.0 * RASTER_MARGIN) / RASTER_STEP) + 1
+	_raster_rows = int((float(map_height - 1) + 2.0 * RASTER_MARGIN) / RASTER_STEP) + 1
+	_raster_h.resize(_raster_cols * _raster_rows)
+	_raster_c.resize(_raster_cols * _raster_rows)
+	for row in range(_raster_rows):
+		var gz := -RASTER_MARGIN + float(row) * RASTER_STEP
+		for col in range(_raster_cols):
+			var gx := -RASTER_MARGIN + float(col) * RASTER_STEP
+			var blend := _blend_cells(gx, gz)
+			_raster_h[row * _raster_cols + col] = blend[0]
+			_raster_c[row * _raster_cols + col] = Color(blend[1], blend[2], blend[3], blend[4])
+
+
+## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share]. Off-map cells count as sea so
+## the island rolls off into water at the edge.
+func _blend_cells(gx: float, gz: float) -> Array:
+	var total := 0.0
+	var height_sum := 0.0
+	var amp_sum := 0.0
+	var color_sum := Color(0, 0, 0, 0)
+	var wet_sum := 0.0
+	var col0 := roundi(gx)
+	for c in range(col0 - 1, col0 + 2):
+		var offset := 0.5 if posmod(c, 2) == 1 else 0.0
+		var row0 := roundi(gz - offset)
+		for r in range(row0 - 1, row0 + 2):
+			var d := Vector2(gx - float(c), gz - (float(r) + offset)).length()
+			if d >= BLEND_RADIUS:
+				continue
+			var w := 1.0 - d / BLEND_RADIUS
+			w *= w
+			var h: float
+			var amp: float
+			var color: Color
+			var wet: float
+			if c < 0 or r < 0 or c >= map_width or r >= map_height:
+				var sea: Array = GROUND_LOOK["o"]
+				h = float(sea[0])
+				amp = 0.0
+				color = Color(String(sea[2])).srgb_to_linear()
+				wet = 1.0
+			else:
+				var i := r * map_width + c
+				h = _cell_h[i]
+				amp = _cell_amp[i]
+				color = _cell_color[i]
+				wet = _cell_wet[i]
+			total += w
+			height_sum += h * w
+			amp_sum += amp * w
+			color_sum += color * w
+			wet_sum += wet * w
+	if total <= 0.0:
+		return [-0.8, 0.0, 0.0, 0.0, 1.0]
+	var inv := 1.0 / total
+	var noise := height_noise.get_noise_2d(gx, gz)
+	return [height_sum * inv + noise * amp_sum * inv, color_sum.r * inv, color_sum.g * inv, color_sum.b * inv, wet_sum * inv]
+
+
+func _raster_index(gx: float, gz: float) -> Array:
+	var fx := clampf((gx + RASTER_MARGIN) / RASTER_STEP, 0.0, float(_raster_cols - 1) - 0.0001)
+	var fz := clampf((gz + RASTER_MARGIN) / RASTER_STEP, 0.0, float(_raster_rows - 1) - 0.0001)
+	var ix := int(fx)
+	var iz := int(fz)
+	return [iz * _raster_cols + ix, fx - float(ix), fz - float(iz)]
+
+
+func _raster_sample_height(gx: float, gz: float) -> float:
+	var at := _raster_index(gx, gz)
+	var i: int = at[0]
+	var tx: float = at[1]
+	var tz: float = at[2]
+	var top := lerpf(_raster_h[i], _raster_h[i + 1], tx)
+	var bottom := lerpf(_raster_h[i + _raster_cols], _raster_h[i + _raster_cols + 1], tx)
+	return lerpf(top, bottom, tz)
+
+
+func _raster_sample_color(gx: float, gz: float) -> Color:
+	var at := _raster_index(gx, gz)
+	var i: int = at[0]
+	var tx: float = at[1]
+	var tz: float = at[2]
+	var top := _raster_c[i].lerp(_raster_c[i + 1], tx)
+	var bottom := _raster_c[i + _raster_cols].lerp(_raster_c[i + _raster_cols + 1], tx)
+	return top.lerp(bottom, tz)
+
+
+## Stand-in for the biome noise so tile dressing (trees, rocks) follows the ground classes.
+func _ground_biome(gx: float, gz: float) -> float:
+	var col := clampi(roundi(gx), 0, map_width - 1)
+	var row := clampi(roundi(gz - (0.5 if col % 2 == 1 else 0.0)), 0, map_height - 1)
+	match String(ground.glyph_at(col, row)):
+		"t":
+			return -0.5
+		"m":
+			return 0.4
+		"f":
+			return -0.3
+	return 0.0

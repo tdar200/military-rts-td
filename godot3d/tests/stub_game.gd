@@ -46,6 +46,18 @@ var seen_rect := Rect2(4, 3, 20, 15)
 
 var cursor_valid := true
 
+## Kestrel Reach: `use_kestrel()` loads the committed real snapshot, and the same members the game fills from it.
+var kestrel := false
+var bridge_snapshot: Dictionary = {}
+var ground_model: RefCounted = null
+
+
+func use_kestrel() -> void:
+	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+	bridge_snapshot = JSON.parse_string(f.get_as_text())
+	ground_model = preload("res://scripts/terrain/ground_model.gd").from_snapshot(bridge_snapshot)
+	kestrel = true
+
 
 func era_name() -> String:
 	return "Contemporary"

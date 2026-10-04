@@ -1,7 +1,8 @@
 extends Node3D
 
-const MAP_W := 44
-const MAP_H := 26
+# 44 x 26 until a snapshot carrying a ground layer reports its own map_width/map_height.
+var MAP_W := 44
+var MAP_H := 26
 const HEX_X := 0.68
 const HEX_Z := 0.70
 const MAP_ORIGIN_X := 2.1
@@ -12,6 +13,7 @@ const HUMAN := 0
 const ALIEN := 1
 const TICKS_PER_SECOND := 30.0
 const GameUI = preload("res://scripts/ui/game_ui.gd")
+const GroundModel = preload("res://scripts/terrain/ground_model.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -36,6 +38,8 @@ var camera_yaw := -0.68
 var camera_zoom := 12.2
 var terrain_height: Dictionary = {}
 var terrain_renderer: Node3D
+var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null = cosmetic noise terrain
+var terrain_dressing: Array = []  # nodes built on top of the terrain surface (trees, rocks, lattice, river)
 var materials: Dictionary = {}
 var tactical_models = preload("res://scripts/tactical_models.gd").new()
 var units: Array[Node3D] = []
@@ -344,19 +348,7 @@ func _build_terrain() -> void:
 		load("res://assets/terrain/painterly/continuous_ground_detail_v4.png")
 	)
 
-	for x in range(MAP_W):
-		for z in range(MAP_H):
-			var world := _hex_world(x, z)
-			var elevation: float = terrain_renderer.height_at_world(world.x, world.z)
-			var biome_signal: float = terrain_renderer.biome_at_world(world.x, world.z)
-			terrain_height[Vector2i(x, z)] = elevation
-			_dress_tile(x, z, world, elevation, biome_signal)
-
-	_build_shoreline_details()
-	_build_river()
-	_build_strategic_routes()
-	_build_hex_grid()
-	_place_scene(self, "res://assets/models/world/bridge.glb", Vector3(12.0, _height_world(12.0, 6.9) + 0.08, 6.9), Vector3.ONE * 0.62, 90.0)
+	_build_terrain_dressing()
 	var hover_mesh := TorusMesh.new()
 	hover_mesh.inner_radius = 0.42
 	hover_mesh.outer_radius = 0.47
@@ -365,6 +357,64 @@ func _build_terrain() -> void:
 	hover_tile = _mesh(hover_mesh, materials.hover, Vector3.ZERO)
 	hover_tile.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	hover_tile.visible = false
+
+
+## Everything standing on the terrain surface. Built once for the noise terrain and once more (replacing the first set)
+## when the first snapshot with a ground layer arrives.
+func _build_terrain_dressing() -> void:
+	for node in terrain_dressing:
+		if is_instance_valid(node):
+			remove_child(node)
+			node.free()
+	terrain_dressing.clear()
+	terrain_height.clear()
+	var first_child := get_child_count()
+	for x in range(MAP_W):
+		for z in range(MAP_H):
+			var world := _hex_world(x, z)
+			var elevation: float = terrain_renderer.height_at_world(world.x, world.z)
+			var biome_signal: float = terrain_renderer.biome_at_world(world.x, world.z)
+			terrain_height[Vector2i(x, z)] = elevation
+			if ground_model != null:
+				_dress_ground_tile(x, z, world, elevation)
+			else:
+				_dress_tile(x, z, world, elevation, biome_signal)
+	if ground_model == null:
+		_build_shoreline_details()
+		_build_river()
+		_build_strategic_routes()
+	_build_hex_grid()
+	if ground_model == null:
+		_place_scene(self, "res://assets/models/world/bridge.glb", Vector3(12.0, _height_world(12.0, 6.9) + 0.08, 6.9), Vector3.ONE * 0.62, 90.0)
+	for index in range(first_child, get_child_count()):
+		terrain_dressing.append(get_child(index))
+
+
+## First snapshot with a ground layer: the terrain, its dressing and the map size follow the snapshot. Later snapshots
+## carry the same layer and are ignored, so the mesh is rebuilt once, not per poll.
+func _sync_ground(snapshot: Dictionary) -> void:
+	if ground_model != null or not snapshot.has("ground"):
+		return
+	var model: RefCounted = GroundModel.from_snapshot(snapshot)
+	if model == null:
+		push_warning("Bridge ground layer does not match its map dimensions")
+		return
+	ground_model = model
+	MAP_W = int(model.width)
+	MAP_H = int(model.height)
+	terrain_renderer.apply_ground(model)
+	_build_terrain_dressing()
+
+
+func _dress_ground_tile(x: int, z: int, world: Vector3, elevation: float) -> void:
+	var signature := absi((x * 73856093) ^ (z * 19349663))
+	match String(ground_model.glyph_at(x, z)):
+		"t":
+			if signature % 2 == 0:
+				_create_tree(world + Vector3(0, elevation, 0), 0.34 + float(signature % 3) * 0.04)
+		"h":
+			if signature % 13 == 0:
+				_create_rocks(world + Vector3(0, elevation, 0), 0.24)
 
 
 func _build_shoreline_details() -> void:
@@ -1743,6 +1793,7 @@ func _poll_bridge(delta: float) -> void:
 		bridge_research_signature = next_signature
 		bridge_research_options = next_options
 	bridge_winner = int(parsed.get("winner", -1))
+	_sync_ground(parsed)
 	_sync_bridge_map(parsed)
 	_sync_bridge_entities(parsed.get("entities", []))
 	_apply_era_visuals()
