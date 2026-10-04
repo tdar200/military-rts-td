@@ -6,6 +6,7 @@
 //! you can also push a lane to destroy the enemy Command Center.
 
 use crate::fixed::Fixed;
+use crate::game::kestrel;
 use crate::game::map::{Deposit, DepositKind, Map, Tile};
 use crate::game::procgen;
 use crate::game::sim::{PlayerId, Sim, WaveConfig};
@@ -286,6 +287,101 @@ pub fn survival(seed: u64) -> Sim {
             Fixed::from_int(i32::from(w) - 5),
             Fixed::from_int(i32::from(mid)),
         ),
+        unit: UnitKind::Infantry,
+        attacker: ENEMY,
+        defender: HUMAN,
+        escalate: true,
+    });
+
+    sim
+}
+
+/// Kestrel Reach: the fixed, hand-authored Earthfront map ([`kestrel`]).
+///
+/// The same mission as [`survival`] (Earthfront rules, the alien Core district,
+/// two defended relays, escalating waves, basic starting unlocks) on the
+/// authored river basin instead of a procgen field. The home base is already
+/// founded at [`kestrel::HOME_CC`] (no survey phase), exactly as a `FoundBase`
+/// there would found it; the alien district is re-anchored on
+/// [`kestrel::CORE_NODE`] with `survival`'s relative offsets, and waves muster at
+/// [`kestrel::HOLDFAST`] and must cross the Wyllow Ford.
+#[must_use]
+pub fn kestrel_reach(seed: u64) -> Sim {
+    let mut sim = Sim::new(kestrel::build_map(), seed, Fixed::from_int(1800));
+    let at = |(x, y): (u16, u16)| crate::game::hex::center(x, y);
+
+    sim.set_starting_unlocks(
+        HUMAN,
+        &[
+            BuildingKind::CommandCenter,
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Barracks,
+            BuildingKind::Wall,
+        ],
+        &[UnitKind::Harvester, UnitKind::Infantry],
+    );
+    sim.set_survival_mode(true);
+    sim.enable_earthfront();
+    // `enable_earthfront` turns every deposit into ore. Restore the authored
+    // Ironback Ridge alloy seams afterwards so the ridge keeps its alloy (the map
+    // contract). Earthfront trucks only mine ore, so the seams are not harvested.
+    for (x, y, d) in kestrel::DEPOSITS {
+        if d.kind == DepositKind::Alloy {
+            sim.map_mut().set_deposit(x, y, d);
+        }
+    }
+
+    // Home colony, founded as `Command::FoundBase` founds it: the Command Center,
+    // a manual (autonomy 0) colony and four Earthfront rifle squads. The home ore
+    // is two hexes away, so no founding ore bonus applies (as in `survival`).
+    let (hx, hy) = kestrel::HOME_CC;
+    let cc = sim.add_building(HUMAN, BuildingKind::CommandCenter, hx, hy);
+    sim.add_colony(HUMAN, cc, 0);
+    for i in 0..4 {
+        sim.add_unit(
+            HUMAN,
+            UnitKind::Infantry,
+            at(kestrel::HOME_CC) + Vec2::new(Fixed::ONE, Fixed::from_int(i)),
+        );
+    }
+
+    // Alien holdfast on the east flats: `survival`'s Core district, re-anchored on
+    // the Core Node with the same relative offsets.
+    let (cx, cy) = kestrel::CORE_NODE;
+    sim.add_building(ENEMY, BuildingKind::CommandCenter, cx, cy);
+    sim.add_building(ENEMY, BuildingKind::PowerPlant, cx + 1, cy - 2);
+    sim.add_building(ENEMY, BuildingKind::Barracks, cx + 1, cy + 2);
+    sim.add_building(ENEMY, BuildingKind::GunTurret, cx - 3, cy - 2);
+    sim.add_building(ENEMY, BuildingKind::GunTurret, cx - 3, cy + 2);
+    for dy in [-2, -1, 1, 2] {
+        sim.add_unit(
+            ENEMY,
+            UnitKind::Infantry,
+            at((cx - 2, cy.saturating_add_signed(dy))),
+        );
+    }
+
+    // The two relay outposts screen the approaches from the ford: one on the
+    // Ironback Ridge (north), one on the flats (south, two hexes further east
+    // than `survival`'s offset so it stands clear of the riverbank). The authored
+    // ground there is open, so no pad clearing is needed (clearing would also
+    // erase river tiles' impassability).
+    for (x, y) in [(cx - 9, cy - 5), (cx - 7, cy + 5)] {
+        sim.add_alien_relay(ENEMY, x, y);
+        sim.add_building(ENEMY, BuildingKind::GunTurret, x - 1, y - 1);
+        sim.add_building(ENEMY, BuildingKind::AaTurret, x + 1, y + 1);
+        sim.add_unit(ENEMY, UnitKind::AntiArmor, at((x, y + 1)));
+    }
+    sim.add_building(ENEMY, BuildingKind::PowerPlant, cx + 2, cy + 4);
+
+    // Escalating waves from the holdfast toward the player (`survival`'s config).
+    sim.set_waves(WaveConfig {
+        first_delay: 2_700,
+        interval: 5_400,
+        base_size: 6,
+        growth: 2,
+        spawn: at(kestrel::HOLDFAST),
         unit: UnitKind::Infantry,
         attacker: ENEMY,
         defender: HUMAN,
@@ -636,6 +732,9 @@ pub enum Scenario {
     /// Deliberately excluded from [`Scenario::ALL`] (the skirmish roster): it is
     /// its own mode with its own tests, launched separately by the shell.
     Survival,
+    /// [`kestrel_reach`] — the fixed Kestrel Reach river basin under Earthfront
+    /// rules. Like Survival, excluded from [`Scenario::ALL`].
+    KestrelReach,
 }
 
 impl Scenario {
@@ -650,6 +749,7 @@ impl Scenario {
             Self::OpenClash => "Open Front",
             Self::Crossroads => "Crater Crossroads",
             Self::Survival => "Earthfront",
+            Self::KestrelReach => kestrel::MAP_NAME,
         }
     }
 
@@ -661,6 +761,7 @@ impl Scenario {
             Self::OpenClash => "Open-field clash — no walls, no waves",
             Self::Crossroads => "Flank a central wreck under pressure",
             Self::Survival => "Build, command, defend Earth, and counterattack in real time",
+            Self::KestrelReach => "A coastal river basin. Hold the ford.",
         }
     }
 
@@ -672,13 +773,16 @@ impl Scenario {
             Self::OpenClash => open_clash(seed),
             Self::Crossroads => crossroads(seed),
             Self::Survival => survival(seed),
+            Self::KestrelReach => kestrel_reach(seed),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{conquest, crossroads, lane_defense, open_clash, survival, Scenario};
+    use super::{
+        conquest, crossroads, kestrel_reach, lane_defense, open_clash, survival, Scenario,
+    };
     use crate::game::civ::ColonyId;
     use crate::game::map::Map;
     use crate::game::path::find_path;
@@ -814,6 +918,7 @@ mod tests {
             Scenario::LaneDefense,
             Scenario::Crossroads,
             Scenario::Survival,
+            Scenario::KestrelReach,
         ] {
             let s = sc.build(7);
             let count = s.map().deposits().count();
@@ -1277,6 +1382,290 @@ mod tests {
             s.unit_count(PlayerId(1)),
             6,
             "the base and relay garrisons remain, but no attack wave spawns during the peace window"
+        );
+    }
+
+    #[test]
+    fn kestrel_text_map_is_44_by_26_and_all_glyphs_known() {
+        use crate::game::{kestrel::ROWS, map::Ground};
+        assert_eq!(ROWS.len(), 26);
+        for row in ROWS {
+            assert_eq!(row.chars().count(), 44, "row: {row}");
+            assert!(row.chars().all(|c| Ground::from_glyph(c).is_some()));
+        }
+    }
+
+    #[test]
+    fn kestrel_regions_match_the_text_map() {
+        use crate::game::kestrel::{Region, HOLDFAST, HOME_CC, MAP_NAME, REGIONS, ROWS};
+        let region = |name: &str| -> &Region {
+            REGIONS
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("missing region {name}"))
+        };
+        let inside = |r: &Region, (x, y): (u16, u16)| {
+            (r.x0..=r.x1).contains(&x) && (r.y0..=r.y1).contains(&y)
+        };
+        assert_eq!(MAP_NAME, "Kestrel Reach");
+        for r in &REGIONS {
+            assert!(
+                r.x0 <= r.x1 && r.x1 < 44 && r.y0 <= r.y1 && r.y1 < 26,
+                "{}",
+                r.name
+            );
+        }
+        // Every river, ford, sea and highland glyph lies inside its named region.
+        for (y, row) in ROWS.iter().enumerate() {
+            for (x, c) in row.chars().enumerate() {
+                let at = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
+                let name = match c {
+                    'r' => "Calder River",
+                    'w' => "Wyllow Ford",
+                    'o' => "Kestrel Bay",
+                    'h' => "Ironback Ridge",
+                    'c' => "The Dry Flats",
+                    _ => continue,
+                };
+                assert!(inside(region(name), at), "{c} at {at:?} outside {name}");
+            }
+        }
+        // The river band touches every row of the Calder River bounds down to the bay.
+        let calder = region("Calder River");
+        assert!(ROWS[usize::from(calder.y0)].contains('r'));
+        // Hollow Wood is mostly forest; the colony and Sunfield hold the home CC.
+        let wood = region("Hollow Wood");
+        let (mut trees, mut cells) = (0, 0);
+        for y in wood.y0..=wood.y1 {
+            for x in wood.x0..=wood.x1 {
+                cells += 1;
+                trees += usize::from(ROWS[usize::from(y)].as_bytes()[usize::from(x)] == b't');
+            }
+        }
+        assert!(trees * 2 > cells, "Hollow Wood: {trees}/{cells} forest");
+        assert!(inside(region("Colony"), HOME_CC));
+        assert!(inside(region("Sunfield"), HOME_CC));
+        assert!(inside(region("The Dry Flats"), HOLDFAST));
+    }
+
+    #[test]
+    fn kestrel_reach_builds_and_ground_matches_text() {
+        let sim = kestrel_reach(2026);
+        assert_eq!(sim.map().width(), 44);
+        assert_eq!(sim.map().height(), 26);
+        // Earthfront with the home Command Centre already standing at HOME_CC: its
+        // 10 kW only counts under the Earthfront economy.
+        assert!(
+            !sim.surveying(),
+            "Kestrel Reach opens with the base founded"
+        );
+        assert!(sim.economy_view(PlayerId(0)).generation >= 10);
+        assert_eq!(sim.colony_count_for(PlayerId(0)), 1);
+        let (cx, cy) = crate::game::kestrel::HOME_CC;
+        assert!(
+            !sim.map()
+                .tile(i32::from(cx), i32::from(cy))
+                .unwrap()
+                .passable
+        );
+        for (y, row) in crate::game::kestrel::ROWS.iter().enumerate() {
+            for (x, c) in row.chars().enumerate() {
+                let (x, y) = (i32::try_from(x).unwrap(), i32::try_from(y).unwrap());
+                assert_eq!(sim.map().ground_at(x, y).glyph(), c, "({x},{y})");
+            }
+        }
+    }
+
+    #[test]
+    fn kestrel_river_is_crossable_only_at_the_ford() {
+        use crate::game::kestrel::{ford_tiles, HOLDFAST, HOME_CC};
+        use crate::game::map::Ground;
+        let sim = kestrel_reach(2026);
+        assert_eq!(ford_tiles().count(), 2, "the Wyllow Ford is two hexes");
+        let path = find_path(sim.map(), HOME_CC, HOLDFAST).expect("ford connects the banks");
+        assert!(path
+            .iter()
+            .any(|&(x, y)| sim.map().ground_at(x.into(), y.into()) == Ground::Ford));
+        // Plug the ford: no path.
+        let mut s2 = kestrel_reach(2026);
+        for (x, y) in ford_tiles() {
+            s2.map_mut().set_ground(x, y, Ground::River);
+        }
+        assert!(find_path(s2.map(), HOME_CC, HOLDFAST).is_none());
+        // Hex flood fill (six odd-q neighbours) from home with the ford plugged: no
+        // diagonal leak reaches ANY tile east of the river, Highland or Flats.
+        let map = s2.map();
+        let (w, h) = (map.width(), map.height());
+        let mut seen = alloc::vec![false; usize::from(w) * usize::from(h)];
+        let mut stack = alloc::vec![HOME_CC];
+        let idx = |(x, y): (u16, u16)| usize::from(y) * usize::from(w) + usize::from(x);
+        seen[idx(HOME_CC)] = true;
+        while let Some((x, y)) = stack.pop() {
+            for (nx, ny) in crate::game::hex::neighbors(x, y) {
+                let (Ok(nx), Ok(ny)) = (u16::try_from(nx), u16::try_from(ny)) else {
+                    continue;
+                };
+                if nx >= w || ny >= h || seen[idx((nx, ny))] {
+                    continue;
+                }
+                if map.ground_at(nx.into(), ny.into()).props().passable {
+                    seen[idx((nx, ny))] = true;
+                    stack.push((nx, ny));
+                }
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let g = map.ground_at(x.into(), y.into());
+                if seen[idx((x, y))] {
+                    assert!(
+                        !matches!(g, Ground::Flats | Ground::Highland | Ground::Crater),
+                        "west bank leaks to {g:?} at ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kestrel_reach_is_deterministic_and_replays() {
+        let (mut a, mut b) = (kestrel_reach(7), kestrel_reach(7));
+        for _ in 0..600 {
+            a.step(&[]);
+            b.step(&[]);
+        }
+        assert_eq!(a.state_hash(), b.state_hash());
+        // Full both-sides command log replays bit-identically (spec 4.6 replay).
+        let mut original = kestrel_reach(5);
+        let mut log = Vec::new();
+        for _ in 0..3000 {
+            let mut cmds = original.ai_commands(PlayerId(0));
+            cmds.extend(original.ai_commands(PlayerId(1)));
+            original.step(&cmds);
+            log.push(cmds);
+        }
+        let mut replay = kestrel_reach(5);
+        for batch in &log {
+            replay.step(batch);
+        }
+        assert_eq!(
+            replay.state_hash(),
+            original.state_hash(),
+            "Kestrel replay diverged"
+        );
+    }
+
+    #[test]
+    fn kestrel_reach_has_ore_on_both_banks_and_alloy_on_the_ridge() {
+        use crate::game::map::{DepositKind, Ground};
+        let sim = kestrel_reach(2026);
+        let map = sim.map();
+        let (mut west, mut east, mut alloy) = (0, 0, 0);
+        for (x, y, d) in map.deposits() {
+            let g = map.ground_at(i32::from(x), i32::from(y));
+            match d.kind {
+                DepositKind::Ore if x < 20 => west += 1,
+                DepositKind::Ore => east += 1,
+                DepositKind::Alloy if g == Ground::Highland => alloy += 1,
+                DepositKind::Alloy => {}
+            }
+        }
+        assert!(
+            west >= 3 && east >= 2 && alloy >= 2,
+            "west={west} east={east} alloy={alloy}"
+        );
+        // A buildable river-side plant site (Task 6 river bonus) that is also a
+        // refinery site within 1 hex of ore (Task 6 ore bonus) exists on the west bank.
+        let riverside = |x: u16, y: u16| {
+            crate::game::hex::neighbors(x, y)
+                .iter()
+                .any(|&(nx, ny)| map.ground_at(nx, ny) == Ground::River)
+        };
+        let site = (0..map.height()).any(|y| {
+            (0..20).any(|x| {
+                map.tile(i32::from(x), i32::from(y)).unwrap().buildable
+                    && riverside(x, y)
+                    && map.deposits().any(|(dx, dy, d)| {
+                        d.kind == DepositKind::Ore
+                            && crate::game::hex::distance((x, y), (dx, dy)) <= 1
+                    })
+            })
+        });
+        assert!(
+            site,
+            "no river-side plant/refinery site beside west-bank ore"
+        );
+    }
+
+    /// Waves the AI-defended Kestrel base must hold: the ported playtest's one
+    /// tunable threshold. `survival_balance_playtest` (seed 3) holds 3 waves and
+    /// falls at t=14489; Kestrel Reach (seed 3) also holds 3, falling at t=13917.
+    const KESTREL_DEFENDED_WAVES: u32 = 3;
+
+    #[test]
+    fn kestrel_reach_overruns_an_undefended_base_and_holds_with_the_playtest_defence() {
+        // Port of `survival_overruns_an_undefended_base`: the player does nothing;
+        // the enemy AI (+ escalating waves once the grace period expires) must take
+        // the base so the run resolves with no soft-lock. Kestrel Reach opens with
+        // the base already founded at HOME_CC, so there is no founding step.
+        let mut s = kestrel_reach(3);
+        assert!(!s.surveying());
+        let mut winner = None;
+        let mut undefended_fell_at = 0;
+        for t in 0..40000u64 {
+            let enemy = s.ai_commands(PlayerId(1));
+            s.step(&enemy);
+            if let Some(w) = s.winner() {
+                winner = Some(w);
+                undefended_fell_at = t;
+                break;
+            }
+        }
+        assert_eq!(
+            winner,
+            Some(PlayerId(1)),
+            "undefended Kestrel Reach never resolved"
+        );
+
+        // Port of `survival_balance_playtest`: a competent AI plays the PLAYER side
+        // against the waves; the beachhead AI acts once the first wave has spawned,
+        // mirroring the shell. The defence must hold several waves and outlast the
+        // undefended base.
+        let mut s = kestrel_reach(3);
+        let mut resolved_at = None;
+        for t in 0..140_000u64 {
+            let mut cmds = s.ai_commands(PlayerId(0));
+            if s.waves_survived() > 0 {
+                cmds.extend(s.ai_commands(PlayerId(1)));
+            }
+            s.step(&cmds);
+            if s.winner().is_some() {
+                resolved_at = Some(t);
+                break;
+            }
+        }
+        assert!(
+            s.waves_survived() >= KESTREL_DEFENDED_WAVES,
+            "defended Kestrel base held only {} waves",
+            s.waves_survived()
+        );
+        assert!(
+            resolved_at.is_none_or(|t| t > undefended_fell_at),
+            "the playtest defence must outlast an undefended base"
+        );
+    }
+
+    #[test]
+    fn kestrel_reach_is_its_own_mode_outside_the_skirmish_roster() {
+        assert!(!Scenario::ALL.contains(&Scenario::KestrelReach));
+        assert_eq!(Scenario::KestrelReach.name(), "Kestrel Reach");
+        assert_eq!(
+            Scenario::KestrelReach.tagline(),
+            "A coastal river basin. Hold the ford."
+        );
+        assert_eq!(
+            Scenario::KestrelReach.build(9).state_hash(),
+            kestrel_reach(9).state_hash()
         );
     }
 

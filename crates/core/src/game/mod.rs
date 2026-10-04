@@ -8,6 +8,7 @@ pub mod ability;
 pub mod balance;
 pub mod civ;
 pub mod hex;
+pub mod kestrel;
 pub mod lockstep;
 pub mod map;
 pub mod path;
