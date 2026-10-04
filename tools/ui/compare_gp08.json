@@ -1,15 +1,46 @@
 {
- "gp08": {
-  "ignore": [],
-  "rects": [
-   {
-    "name": "battlefield",
-    "x": 0,
-    "y": 0,
-    "w": 1920,
-    "h": 1080,
-    "mask": true
-   }
-  ]
- }
+  "gp08": {
+    "ignore": [
+      [
+        21,
+        811,
+        288,
+        250
+      ]
+    ],
+    "rects": [
+      {
+        "name": "battlefield",
+        "x": 0,
+        "y": 0,
+        "w": 1920,
+        "h": 1080,
+        "mask": true
+      },
+      {
+        "name": "deck_frame_top",
+        "x": 1284,
+        "y": 810,
+        "w": 624,
+        "h": 15,
+        "max": 3.0
+      },
+      {
+        "name": "deck_frame_bottom",
+        "x": 1284,
+        "y": 1053,
+        "w": 624,
+        "h": 15,
+        "max": 3.1
+      },
+      {
+        "name": "minimap",
+        "x": 12,
+        "y": 770,
+        "w": 304,
+        "h": 298,
+        "max": 14.3
+      }
+    ]
+  }
 }

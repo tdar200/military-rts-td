@@ -25,6 +25,7 @@ const SelectionRoster = preload("res://scripts/ui/sections/selection_roster.gd")
 const AttackMoveBanner = preload("res://scripts/ui/sections/attack_move_banner.gd")
 const WavePanel = preload("res://scripts/ui/sections/wave_panel.gd")
 const ControlGroups = preload("res://scripts/ui/sections/control_groups.gd")
+const LogisticsTab = preload("res://scripts/ui/sections/logistics_tab.gd")
 
 signal action(name: String, arg: Variant)
 
@@ -123,6 +124,8 @@ func _register_gameplay() -> void:
 	register_section("wave_panel", func(layer: Control, slice: Variant) -> void: WavePanel.build(layer, slice))
 	register_section("control_groups", func(layer: Control, slice: Variant) -> void: ControlGroups.build(layer, slice, emit))
 	register_section("attack_move_banner", func(layer: Control, slice: Variant) -> void: AttackMoveBanner.build(layer, slice))
+	# Board 8: the Logistics deck tab replaces the deck body while its tab is open.
+	register_body("logistics", func(layer: Control, body: Variant) -> void: LogisticsTab.build(layer, body, emit))
 
 
 func _layer(key: String) -> Control:

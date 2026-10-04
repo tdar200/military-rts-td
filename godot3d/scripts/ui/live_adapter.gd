@@ -40,6 +40,8 @@ const STAGE_DETAIL := [
 	"Train three combat units (T / V / K)", "Hold the Earthfront, first wave in %ds", "Destroy the hostile Core Node",
 ]
 const TABS := [["build", "Build", "build"], ["units", "Units", "units"], ["orders", "Orders", "orders"], ["science", "Science", "flask"]]
+## Added after the others once the snapshot carries the ground layer (Earthfront): the map lens tab.
+const LOGISTICS_TAB := ["logistics", "Logistics", "logistics"]
 ## id, bridge kind, name, hotkey, material, kW (negative = output), role line, sprite. Costs are the game's command table.
 const BUILD_CARDS := [
 	["power", "PowerPlant", "Reactor", "P", 100, -80, "Adds generation", "power_plant_v2.png"],
@@ -72,10 +74,16 @@ const CONTROL_GROUPS_H := 148.0
 var g  # earthfront_3d.gd, or a stub with the same members in tests
 const LiveAssault = preload("res://scripts/ui/live_assault.gd")
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
+const OverlayFeed = preload("res://scripts/world/overlay_feed.gd")
 
 var tab := "build"
 ## The active minimap lens (vm_gameplay.LENSES); lives here so the HUD stays a pure view.
 var lens := "land"
+## The Logistics tab's map overlay (overlay_feed.gd): "" off, otherwise power, borders, coverage or yield. Client-side only.
+var world_lens := ""
+var _overlay_snap: Variant = null
+var _overlay_lens := ""
+var _overlay_hex: Array = []
 var assault
 var _alerts: Array = []
 var _ticker := ""
@@ -315,6 +323,11 @@ func board_marks(project: Callable) -> Array:
 			var b: Vector2 = project.call(seg["to"][0], seg["to"][1])
 			if a != Vector2.INF and b != Vector2.INF:
 				marks.append({"kind": "beam", "x": a.x, "y": a.y, "c1": a.lerp(b, 1.0 / 3.0), "c2": a.lerp(b, 2.0 / 3.0), "to": b})
+	# The Logistics overlay shares this path and schema; nothing is computed unless that tab has a lens on.
+	if tab == "logistics":
+		var lens_id := active_world_lens(snap)
+		if lens_id != "":
+			marks.append_array(OverlayFeed.project(_overlay_marks(snap, lens_id), project))
 	return marks
 
 
@@ -699,9 +712,17 @@ func _orders(is_building: bool, kind: String) -> Array:
 
 # ------------------------------------------------------------------ deck
 
+## The deck's tab list: Logistics joins once the snapshot has ground (Earthfront); it stays hidden otherwise.
+func _tab_defs() -> Array:
+	var snap = g.get("bridge_snapshot")
+	if snap is Dictionary and OverlayFeed.tab_available(snap):
+		return TABS + [LOGISTICS_TAB]
+	return TABS
+
+
 func _tabs() -> Array:
 	var tabs: Array = []
-	for t in TABS:
+	for t in _tab_defs():
 		var entry := {"id": t[0], "label": t[1], "icon": t[2]}
 		if t[0] == tab:
 			entry["on"] = true
@@ -715,8 +736,47 @@ func _deck_body() -> Dictionary:
 			return _units_body()
 		"orders":
 			return _orders_body()
+		"logistics":
+			return _logistics_body()
 		_:
 			return {"title": "Build", "right": "", "cards": []}
+
+
+## The lens the overlay really uses: the chosen one, if the snapshot can back it ("" otherwise).
+func active_world_lens(snap: Dictionary) -> String:
+	return world_lens if world_lens != "" and OverlayFeed.available(snap).has(world_lens) else ""
+
+
+## Hex-space marks of the lens, recomputed only when the snapshot (a new dictionary per bridge tick) or the lens changes.
+func _overlay_marks(snap: Dictionary, lens: String) -> Array:
+	if not (is_same(snap, _overlay_snap) and lens == _overlay_lens):
+		_overlay_snap = snap
+		_overlay_lens = lens
+		_overlay_hex = OverlayFeed.marks(snap, lens)
+	return _overlay_hex
+
+
+## Lens buttons for the lenses the snapshot backs (Supply is never one: the bridge exposes no supply route), plus the
+## active lens's legend and what it draws. {} without a snapshot.
+func _logistics_body() -> Dictionary:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or snap.is_empty():
+		return {}
+	var lenses: Array = []
+	var active := active_world_lens(snap)
+	for id in OverlayFeed.available(snap):
+		lenses.append({"id": id, "label": OverlayFeed.LABELS[id], "on": id == active})
+	var body := {"kind": "logistics", "lenses": lenses, "lens": active}
+	if active != "":
+		var drawn := _overlay_marks(snap, active)
+		body["legend"] = OverlayFeed.legend(snap, active)
+		body["note"] = OverlayFeed.note(active)
+		var summary := OverlayFeed.summary(snap, active, drawn)
+		if summary != "":
+			body["summary"] = summary
+		else:
+			body["empty"] = OverlayFeed.empty_text(active)
+	return body
 
 
 func _units_body() -> Dictionary:
@@ -859,7 +919,7 @@ func _build_body() -> Dictionary:
 			entry["selected"] = true
 		cards.append(entry)
 	var tabs: Array = []
-	for t in TABS:
+	for t in _tab_defs():
 		tabs.append({"id": t[0], "label": t[1], "on": t[0] == tab})
 	var body := {"kind": "build", "tabs": tabs, "cards": cards, "legend": ["M materials", "kW power draw (+ is output)"]}
 	var queue := _queue()
@@ -945,6 +1005,9 @@ func on_action(name: String, arg: Variant) -> void:
 		"minimap_lens":
 			if str(arg) in VmGameplay.LENSES:
 				lens = str(arg)
+		"world_lens":
+			if str(arg) == "" or OverlayFeed.LENSES.has(str(arg)):
+				world_lens = str(arg)
 		"minimap_layer", "speed":
 			pass
 

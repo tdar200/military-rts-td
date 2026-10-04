@@ -27,6 +27,11 @@ func _ready() -> void:
 			_hud(_l("gallery/fixtures_gp.gd").orders_board(), false)
 		"gp07":
 			_hud(_l("gallery/fixtures_gp.gd").wave_board(), false)
+		"gp08":
+			var overlay = _l("ui/world_marks.gd").new()
+			add_child(overlay)
+			overlay.set_marks(_l("gallery/fixtures_gp.gd").logistics_marks())
+			_hud(_l("gallery/fixtures_gp.gd").logistics_board(), false)
 		"builddeck":
 			_hud(_l("gallery/fixtures_build.gd").build_deck(), true)
 		"builddeck_many", "builddeck_none", "builddeck_locked", "builddeck_short", "builddeck_no_queue", "builddeck_invalid":

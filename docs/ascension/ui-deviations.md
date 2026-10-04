@@ -18,8 +18,9 @@ sprite battlefield in the mocks is a stand-in and is masked out.
 - Icons are inline SVG path data in `scripts/ui/icons.gd`, rasterised on demand. There is no `assets/ui/icons/` folder.
 - The gallery is `scripts/gallery/capture.gd` run with `--script`, not a `ui_gallery.tscn` scene.
 - The panel gradient top is rgb(18,32,46), as every mock writes it. The spec's `#122030` was a rounding.
-- The deck tabs are Build, Units, Orders, Science. Science opens the research modal. Logistics is hidden because the
-  bridge exposes no supply routes (the spec says to hide it rather than fake it).
+- The deck tabs are Build, Units, Orders, Science. Science opens the research modal. Logistics joins them (Task 13) once
+  the snapshot carries the ground layer (Earthfront) and stays hidden otherwise; it offers only the lenses the snapshot
+  can back (see "Gameplay board 8" below).
 - The viewport is 1920x1080 with the window-size overrides removed.
 
 ## 3. Mock flaws and deliberate departures
@@ -138,7 +139,7 @@ table or the bridge has nothing behind them:
   positions in the gallery fixtures were moved a few pixels to sit clear of the map texture, as in gp01; this is a
   fixture detail, not a layout change.
 - The thr lens now draws enemy cells as well as the route.
-- Not built here, left to later tasks: objective panel, core bar, alert rows, the Logistics tab, the world-layer route and territory border, and the top-strip chips of
+- Not built here, left to later tasks: objective panel, core bar, alert rows, the Logistics tab (Task 13 built it), the world-layer route and territory border (Task 13), and the top-strip chips of
   boards 2 and 3. The build and assault layouts keep their old minimap, alerts and queue panels.
 - Live wiring: the placing card follows the hovered hex (below and left of it, clamped to the screen) and hides when the
   pointer is over the HUD; the old build_placement panel remains when there is no hover. The enemy card is live only in
@@ -199,6 +200,51 @@ nothing behind them:
   control_groups 6.83, roster_head 9.26, roster_cards 4.82, roster_status 12.39, btn_cancel 4.85, minimap 7.54. gp07:
   wave_head 9.64, structure_head 8.95, structure_health 9.41, terrain_head 7.50, btn_repair 5.22, minimap 10.04.
   The minimap rects exclude the terrain interior and compare only the frame.
+
+### Gameplay board 8 (Map overlays gp08), decided 2026-10-05 (Task 13)
+Built: the Logistics deck tab (shown when the snapshot has `ground`, hidden otherwise) holding the lens Buttons, the active
+lens's legend, one line of what it draws and a note; and four world overlays through the existing `world_marks.gd` path
+(`live_adapter.board_marks`), computed once per snapshot by `scripts/world/overlay_feed.gd` and projected every frame.
+A lens is a client-side choice (`world_lens` in the adapter, no bridge command, no key binding added). The overlay shows
+only while the Logistics tab is open; clicking the lit lens again turns it off.
+- Supply lens: NOT BUILT. The bridge snapshot has no supply route (the sim's `supply_route` is internal; only per-building
+  `ammo` and `stock` are exposed), so there is no button, no mark and the feed answers []. The mock's "Supply routes / 3
+  active" card list, "Refinery to Barracks 04, Broken, no path" row, "no supply link" alerts and the green dashed supply
+  paths are therefore absent. The mock's "A depot feeds everything within 9 tiles" is also not claimed (the sim radius is 5
+  or 7 by research and is not in the snapshot).
+- Power lens: tier order IS derivable (the sim allocates by building kind: defence, refinery, factories, laboratory; mirrored
+  in `overlay_feed.TIER` and checked against `earthfront.rs` by a test) but WHICH plant feeds WHICH building is not (one
+  shared grid). So each consumer gets one `link` to its nearest finished PowerPlant or Battery (hex distance, ties to the
+  lower id), links emitted in tier order then id. Colour and weight follow the real delivered power, `services[].power`
+  (0 to 1000): 1000 cyan, 500 to 999 amber, under 500 a red dotted line with a cross (the sim stops a building under 500).
+  A consumer without a `services` row draws nothing. Line weight 2 to 6 px scales with the fraction, replacing the mock's kW
+  weights (no per-line kW exists). No new cable mechanic; the mock's "Reactor A +100 kW" node pins, "Lab 30 kW, throttled"
+  labels and "Power short by 8 kW" alert rows are not built (per-building kW is not in the snapshot).
+- Borders lens: the player border is the outline of the real `construction_zone` (hex sides between a zone cell and an in
+  map cell outside it; the map edge is not drawn); the enemy border is `vm_gameplay.enemy_border` with the label "Enemy
+  territory". A cyan or red 3 px line with a halo; the mock's 5 percent territory fill is not drawn. The label sits on the
+  enemy cell nearest the middle of the territory and pins to the screen edge with an arrow when it is off screen.
+- Coverage lens: a dashed ring per finished human turret at the `stats.rs` range (the existing drift-tested constants), times
+  (100 + `ground_table.range_pct` at the turret's cell) / 100, so a Highland turret shows +25 percent with a "+25%" pill. Not
+  built: the mock's two big power-station circles (no coverage mechanic behind them).
+- Yield lens: a one-hex ring around each human Refinery (the sim's ore reach), a "+20%" pill only when `ore_bonus` is true,
+  and "river +N" over a PowerPlant only when `river_kw` > 0 (N is the real value). Not built: the mock's ore haul number "4",
+  Cover "C" and Ford "F" tile chips (no Alloy or haul claims; cover and ford are already in the tile inspector).
+- Minimap lens keys are unchanged (Land, Res, Bdr, Thr), not the mock's Pwr, Sup, Yld, Thr: the overlays are chosen in the
+  Logistics tab, so the minimap header differs from the mock and is part of the minimap rect's 11.28 percent.
+- Not built: the top-right "Map lenses" legend card (the legend rows live in the deck tab instead, so one place both picks
+  and explains a lens), "Tab cycles" (no key), the Grid ledger panel, the alert rows, the top bar chips of this board. The
+  deck tab strip keeps the Main board's icon tabs, as in boards 1 to 7 (the gp mocks draw them without icons), so the tab
+  strip is not a harness rect.
+- `world_marks.gd` gained styles, not kinds of data: `link` takes tone, width and broken; `ring` takes dashed and tone;
+  `badge` becomes a pill for text longer than two characters; new `border` kind (segments in screen pixels).
+- Cost: nothing is computed unless the Logistics tab is open with a lens on. Then the feed runs once per new snapshot
+  (O(entities); the nearest-source search is plants times consumers, a handful of plants) and projection is O(marks) with a
+  per-frame cell cache. On Kestrel the player border is 95 short segments.
+- Harness limits are achieved percent plus 3 (floor 3.0). gp08: deck_frame_top 0.02 (3.0), deck_frame_bottom 0.06 (3.1),
+  minimap 11.28 (14.3). The battlefield (marks included) is masked and the deck panel interior, whose mock content is the
+  supply route list, is not compared. The gallery renders Power, Borders, Coverage and Yield marks together for a visual
+  check; the live game draws one lens at a time.
 
 ## 5. Known cosmetic items
 

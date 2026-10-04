@@ -6,14 +6,18 @@ extends Control
 ##
 ## Mark = {kind, x, y, ...} in screen pixels (the viewport is this control's size, 1920x1080 by default):
 ##   brackets  x y w h                       friendly selection box, square corners
-##   ring      x y [rx=48 ry=20]             selected unit ground ellipse, (x, y) is the centre
+##   ring      x y [rx=48 ry=20 dashed tone]  selected unit ground ellipse, (x, y) is the centre; dashed is a thin
+##                                           dashed range line in `tone` (cyan or good) instead of the glowing selection ring
 ##   hostile   x y hp [w=50]                 red diamond centred on (x, y) with an HP bar under it; dropped when off-screen
 ##   impact    x y r [inner]                 hatched danger disc centred on (x, y)
-##   link      x y c1 c2 to [dim]            supply path (cubic: start, two control points, end)
+##   link      x y c1 c2 to [dim tone broken width]  supply path (cubic: start, two control points, end). Power lines pass
+##                                           tone ok|warn|bad (cyan, amber, red), a width in px and broken (dotted, with a cross)
 ##   arrow     x y c1 c2 to [queued]         attack-move path with a head; queued is dotted
 ##   beam      x y c1 c2 to                  the Core's charge line (dashed, no head)
 ##   countdown x y value total [sub]         ring around (x, y), value in the middle
-##   badge     x y text                      numbered step marker, (x, y) is its top-left
+##   badge     x y text                      numbered step marker, (x, y) is its top-left; text longer than 2 characters
+##                                           makes a pill sized by badge_size
+##   border    segs tone(own|enemy)          territory outline: segs = [[Vector2 a, Vector2 b], ...] in screen pixels
 ##   callout   x y ...                       glass label, (x, y) is its top-left; forms below
 ##       tag form    {tag, tag_tone, text, border?}
 ##       title form  {title, sub, border?}
@@ -214,7 +218,7 @@ func _draw_bar(ci: CanvasItem, rect: Rect2, ratio: float) -> void:
 # ---------------------------------------------------------------- drawing
 
 func _draw() -> void:
-	for pass_kinds in [["impact", "link"], ["hostile"], ["ring"], ["brackets", "arrow", "beam", "countdown"], ["badge"]]:
+	for pass_kinds in [["border"], ["impact", "link"], ["hostile"], ["ring"], ["brackets", "arrow", "beam", "countdown"], ["badge"]]:
 		for r in resolved:
 			if r["kind"] in pass_kinds:
 				_draw_mark(r["kind"], r["mark"])
@@ -227,7 +231,11 @@ func _draw_mark(kind: String, m: Dictionary) -> void:
 	var at := Vector2(float(m.get("x", 0.0)), float(m.get("y", 0.0)))
 	match kind:
 		"brackets": _brackets(Rect2(at, Vector2(float(m.get("w", 0.0)), float(m.get("h", 0.0)))))
-		"ring": _ring(at, float(m.get("rx", 48.0)), float(m.get("ry", 20.0)))
+		"ring":
+			if m.get("dashed", false):
+				_range_ring(at, float(m.get("rx", 48.0)), float(m.get("ry", 20.0)), T.tone(str(m.get("tone", "cyan"))))
+			else:
+				_ring(at, float(m.get("rx", 48.0)), float(m.get("ry", 20.0)))
 		"hostile": _hostile(at, float(m.get("hp", 1.0)), float(m.get("w", 50.0)))
 		"impact": _impact(at, float(m.get("r", 215.0)), float(m.get("inner", m.get("r", 215.0) * 0.7)))
 		"link": _link(at, m)
@@ -235,6 +243,7 @@ func _draw_mark(kind: String, m: Dictionary) -> void:
 		"beam": _beam(at, m)
 		"countdown": _countdown(at, m)
 		"badge": _badge(at, str(m.get("text", "")))
+		"border": _border(m)
 
 
 static func _pt(v: Variant) -> Vector2:
@@ -304,10 +313,30 @@ func _curve(at: Vector2, m: Dictionary) -> PackedVector2Array:
 
 func _link(at: Vector2, m: Dictionary) -> void:
 	var pts := _curve(at, m)
-	if m.get("dim", false):
+	if m.has("tone"):
+		_power_line(pts, m)
+	elif m.get("dim", false):
 		_dashed(pts, 6.0, 6.0, 2.0, T.LINE_DIM)
 	else:
 		_dashed(pts, 3.0, 9.0, 3.0, T.CYAN, true)
+
+
+## A power line: solid in the tone's colour, as thick as `width`; a broken one is red, dotted and crossed halfway.
+func _power_line(pts: PackedVector2Array, m: Dictionary) -> void:
+	var width := float(m.get("width", 3.0))
+	var tone_name := str(m.get("tone", "ok"))
+	var color: Color = T.CYAN if tone_name == "ok" else T.tone(tone_name)
+	if m.get("broken", false):
+		_dashed(pts, 3.0, 8.0, width, color, true)
+		var mid := pts[pts.size() / 2]
+		draw_circle(mid, 12.0, Color(T.BG2.r, T.BG2.g, T.BG2.b, 0.9))
+		draw_arc(mid, 12.0, 0.0, TAU, 32, color, 2.0, true)
+		draw_line(mid + Vector2(-6, -6), mid + Vector2(6, 6), color, 2.0, true)
+		draw_line(mid + Vector2(6, -6), mid + Vector2(-6, 6), color, 2.0, true)
+	else:
+		draw_polyline(pts, color, width, true)
+		draw_circle(pts[0], width * 0.5, color)
+		draw_circle(pts[pts.size() - 1], width * 0.5, color)
 
 
 func _arrow(at: Vector2, m: Dictionary) -> void:
@@ -360,6 +389,21 @@ func _ring(c: Vector2, rx: float, ry: float) -> void:
 	var edge := _ellipse(c, rx - 1.0, ry - 1.0)
 	edge.append(edge[0])
 	draw_polyline(edge, T.CYAN, 2.0, true)
+
+
+## A coverage or reach ring: thin dashed ellipse over a faint wash, no glow (several can be on screen at once).
+func _range_ring(c: Vector2, rx: float, ry: float, color: Color) -> void:
+	var pts := _ellipse(c, rx, ry, 120)
+	pts.append(pts[0])
+	draw_colored_polygon(_ellipse(c, rx, ry, 120), Color(color.r, color.g, color.b, 0.05))
+	_dashed(pts, 8.0, 8.0, 1.5, Color(color.r, color.g, color.b, 0.55))
+
+
+func _border(m: Dictionary) -> void:
+	var color: Color = T.BAD if str(m.get("tone", "own")) == "enemy" else T.CYAN
+	for seg in m.get("segs", []):
+		draw_line(seg[0], seg[1], Color(color.r, color.g, color.b, 0.28), 7.0, true)
+		draw_line(seg[0], seg[1], color, 3.0, true)
 
 
 ## Upper tail of the standard normal (logistic approximation): how much of a gaussian shadow reaches z sigmas out.
@@ -440,7 +484,17 @@ func _countdown(c: Vector2, m: Dictionary) -> void:
 			draw_char(mono, Vector2(x0 + i * step, c.y + 38.0), sub[i], 12, Color("f4b3ae"))
 
 
+## A badge is a 22px disc for one or two characters, a pill of the same height for longer text.
+static func badge_size(s: String) -> Vector2:
+	if s.length() <= 2:
+		return Vector2(22, 22)
+	return Vector2(ceilf(s.length() * T.MONO_ADVANCE * 12.0) + 16.0, 22)
+
+
 func _badge(top_left: Vector2, s: String) -> void:
+	if s.length() > 2:
+		_pill_badge(top_left, s)
+		return
 	var c := top_left + Vector2(11, 11)
 	draw_circle(c, 11.0, T.BG2)
 	draw_arc(c, 10.25, 0.0, TAU, 48, T.CYAN, 1.5, true)
@@ -448,6 +502,22 @@ func _badge(top_left: Vector2, s: String) -> void:
 	var asc := T.ascent(f, 12)
 	var base := top_left.y + (22.0 - (asc + T.descent(f, 12))) * 0.5 + asc
 	var x0 := c.x - s.length() * T.MONO_ADVANCE * 12.0 * 0.5
+	for i in s.length():
+		draw_char(f, Vector2(x0 + i * T.MONO_ADVANCE * 12.0, base), s[i], 12, T.CYAN_HI)
+
+
+func _pill_badge(top_left: Vector2, s: String) -> void:
+	var size := badge_size(s)
+	var box := StyleBoxFlat.new()
+	box.bg_color = T.BG2
+	box.set_border_width_all(1)
+	box.border_color = T.CYAN
+	box.set_corner_radius_all(11)
+	draw_style_box(box, Rect2(top_left, size))
+	var f := T.font("mono", 0)
+	var asc := T.ascent(f, 12)
+	var base := top_left.y + (22.0 - (asc + T.descent(f, 12))) * 0.5 + asc
+	var x0 := top_left.x + (size.x - s.length() * T.MONO_ADVANCE * 12.0) * 0.5
 	for i in s.length():
 		draw_char(f, Vector2(x0 + i * T.MONO_ADVANCE * 12.0, base), s[i], 12, T.CYAN_HI)
 

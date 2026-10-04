@@ -183,6 +183,60 @@ static func wave_board() -> Dictionary:
 	}
 
 
+## Board 8 (MapOverlays): the Logistics tab on the Power lens. The data is the committed Kestrel snapshot with the player's
+## base laid out where the board draws it; legend, summary and marks come from overlay_feed.gd, the same code the live game
+## runs. Not built (no data): the supply list, supply routes, the grid ledger, node pins, tile-yield numbers, alert rows.
+static func logistics_snapshot() -> Dictionary:
+	var snap: Dictionary = JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
+	var base := [
+		[1, "PowerPlant", 4, 6, 1000, {"river_kw": 0}], [2, "PowerPlant", 3, 9, 1000, {"river_kw": 12}], [3, "ResearchLab", 15, 4, 750, {}],
+		[4, "Refinery", 14, 9, 1000, {"ore_bonus": true}], [5, "Barracks", 10, 11, 300, {}], [6, "GunTurret", 17, 6, 1000, {}],
+		[7, "GunTurret", 21, 10, 1000, {}], [8, "SupplyDepot", 8, 2, 1000, {}],
+	]
+	var entities: Array = []
+	var services: Array = []
+	for row in base:
+		var sx: float = float(row[2]) * 0.75 + 0.5
+		var sz: float = float(row[3]) + 0.5 + (0.5 if int(row[2]) % 2 != 0 else 0.0)
+		var e := {"id": row[0], "owner": 0, "category": "building", "kind": row[1], "x_bits": int(sx * 65536.0), "z_bits": int(sz * 65536.0),
+			"construction": 0, "idle": false}
+		e.merge(row[5], true)
+		entities.append(e)
+		services.append({"id": row[0], "power": row[4], "ammo": 90, "stock": 0, "ore": 0, "ore_capacity": 300, "prototype": false, "alien_relay": false})
+	snap["entities"] = entities + (snap["entities"] as Array).filter(func(e): return int(e["owner"]) != 0)
+	snap["services"] = services
+	return snap
+
+
+static func logistics_board() -> Dictionary:
+	var feed = load("res://scripts/world/overlay_feed.gd")
+	var snap := logistics_snapshot()
+	var drawn: Array = feed.marks(snap, "power")
+	var lenses: Array = []
+	for id in feed.available(snap):
+		lenses.append({"id": id, "label": feed.LABELS[id], "on": id == "power"})
+	return {
+		"minimap": {"keys": [], "name": "Kestrel Reach"},
+		"lens": {"on": "land"},
+		"deck": {
+			"tabs": [{"id": "build", "label": "Build", "icon": "build"}, {"id": "units", "label": "Units", "icon": "units"},
+				{"id": "orders", "label": "Orders", "icon": "orders"}, {"id": "science", "label": "Science", "icon": "flask"},
+				{"id": "logistics", "label": "Logistics", "icon": "logistics", "on": true}],
+			"body": {"kind": "logistics", "lenses": lenses, "lens": "power", "legend": feed.legend(snap, "power"),
+				"summary": feed.summary(snap, "power", drawn), "note": feed.note("power")},
+		},
+	}
+
+
+## The overlay marks of board 8 in screen pixels, through a flat stand-in projector (no 3D scene in the gallery).
+static func logistics_marks() -> Array:
+	var feed = load("res://scripts/world/overlay_feed.gd")
+	var project := func(x: int, y: int) -> Vector2: return Vector2(60.0 + x * 42.0, 80.0 + y * 52.0 + (26.0 if x % 2 != 0 else 0.0))
+	var snap := logistics_snapshot()
+	var hex: Array = feed.marks(snap, "power") + feed.marks(snap, "borders") + feed.marks(snap, "coverage") + feed.marks(snap, "yield")
+	return feed.project(hex, project)
+
+
 static func _enemy_cells() -> Array:
 	var cells: Array = []
 	for i in 8:
