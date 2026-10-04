@@ -342,7 +342,8 @@ const LENSES := ["land", "res", "bdr", "thr"]
 
 
 ## What a minimap lens draws, in hex coordinates: dots [{x, y, k}] (res: deposits k ore or alloy), cells [{x, y, k}]
-## (bdr: k own for the construction zone, k enemy for enemy_border) and route [[x, y]] (thr: the expected wave route).
+## (bdr: k own for the construction zone and k enemy for enemy_border; thr: the enemy cells alone) and route [[x, y]]
+## (thr: the expected wave route).
 ## Land and unknown lenses draw nothing: {}.
 static func lens_hexes(snap: Dictionary, lens: String) -> Dictionary:
 	match lens:
@@ -361,8 +362,17 @@ static func lens_hexes(snap: Dictionary, lens: String) -> Dictionary:
 				cells.append({"x": int(c[0]), "y": int(c[1]), "k": "enemy"})
 			return {"cells": cells} if not cells.is_empty() else {}
 		"thr":
+			# The expected wave route and the enemy territory it leads to (R6: hexes within BORDER_RADIUS of alien structures).
+			var out := {}
 			var inbound := wave_inbound(snap)
-			return {"route": inbound["route"]} if not inbound.is_empty() else {}
+			if not inbound.is_empty():
+				out["route"] = inbound["route"]
+			var cells: Array = []
+			for c in enemy_border(snap):
+				cells.append({"x": int(c[0]), "y": int(c[1]), "k": "enemy"})
+			if not cells.is_empty():
+				out["cells"] = cells
+			return out
 	return {}
 
 
@@ -377,3 +387,256 @@ static func army(snap: Dictionary) -> Dictionary:
 	if count == 0 and idle.is_empty():
 		return {}
 	return {"count": count, "idle": int(idle.get("count", 0)), "first_idle": int(idle.get("first_id", -1))}
+
+
+# ------------------------------------------------------------------ boards 2 and 3 (task 12B)
+
+## What the sim gives: a Power Plant beside a River or Ford hex draws +12 kW, a Refinery within one hex of Ore +20%
+## (earthfront.rs river_bonus_kw / refinery_near_ore). test_vm_gameplay_boards23.gd asserts these have not drifted.
+const RIVER_BONUS_KW := 12
+const ORE_BONUS_PCT := 20
+
+
+static func _wet_neighbour(ground_model, x: int, y: int) -> bool:
+	for ny in range(y - 1, y + 2):
+		for nx in range(x - 1, x + 2):
+			if hex_distance(x, y, nx, ny) == 1 and nx >= 0 and ny >= 0 and nx < ground_model.width and ny < ground_model.height:
+				var n: String = ground_model.name_at(nx, ny)
+				if n == "River" or n == "Ford":
+					return true
+	return false
+
+
+static func _kind_label(kind: String) -> String:
+	return str(load("res://scripts/ui/live_adapter.gd").KIND_NAMES.get(kind, kind))
+
+
+static func _thousands(n: int) -> String:
+	return load("res://scripts/ui/live_screens.gd").thousands(n)
+
+
+## The placement card under the cursor (board 2): the armed building on hex (x, y). `kw` is the card's draw (positive) or
+## output (negative). Every row comes from the snapshot or the ground table: the board's 4 x 3 footprint and slope are not
+## built (footprints are single hexes, R1, and the snapshot has no slope). {} off the map or without a ground model.
+static func placing(snap: Dictionary, ground_model, kind: String, label: String, x: int, y: int, valid: bool, kw: int) -> Dictionary:
+	if ground_model == null or x < 0 or y < 0 or x >= ground_model.width or y >= ground_model.height:
+		return {}
+	var props: Dictionary = ground_model.props_at(x, y)
+	var ground_name := str(props.get("name", "ground"))
+	var rows: Array = []
+	var earthfront := bool(snap.get("earthfront", false))
+	if kind == "Refinery" and earthfront:
+		var best: Dictionary = {}
+		for d in snap.get("deposits", []):
+			if d is Dictionary and str(d.get("kind", "")) == "Ore" and int(d.get("remaining", 0)) > 0 and hex_distance(x, y, int(d.get("x", -99)), int(d.get("y", -99))) <= ORE_BONUS_RADIUS:
+				if best.is_empty() or int(d["remaining"]) > int(best["remaining"]):
+					best = d
+		if best.is_empty():
+			rows.append({"label": "Ore in range", "value": "None within 1 hex, no bonus", "tone": "dim"})
+		else:
+			rows.append({"label": "Ore in range", "value": "Ore, %s left, +%d%% output" % [_thousands(int(best["remaining"])), ORE_BONUS_PCT], "tone": "good"})
+	if kind == "PowerPlant" and earthfront:
+		if _wet_neighbour(ground_model, x, y):
+			rows.append({"label": "River", "value": "River or ford beside it, +%d kW" % RIVER_BONUS_KW, "tone": "good"})
+		else:
+			rows.append({"label": "River", "value": "No river or ford beside it", "tone": "dim"})
+	if not bool(props.get("buildable", false)):
+		rows.append({"label": "Blocked tile", "value": "%s, cannot build" % ground_name, "tone": "bad"})
+	var zone: Array = snap.get("construction_zone", [])
+	if not zone.is_empty():
+		var inside := false
+		for c in zone:
+			if c is Array and c.size() >= 2 and int(c[0]) == x and int(c[1]) == y:
+				inside = true
+				break
+		if not inside:
+			rows.append({"label": "Territory", "value": "Outside the construction zone", "tone": "bad"})
+	if kw < 0:
+		rows.append({"label": "Power", "value": "+%d kW generation" % -kw, "tone": "good"})
+	elif kw > 0:
+		var over := int(snap.get("power_demand", 0)) + kw > int(snap.get("power_generation", 0))
+		rows.append({"label": "Power", "value": "-%d kW, %s" % [kw, "grid over capacity" if over else "within capacity"], "tone": "warn" if over else "good"})
+	return {
+		"title": label,
+		"valid": valid,
+		"status": "1 hex is clear" if valid else "1 hex is blocked",
+		"tone": "good" if valid else "warn",
+		"footprint": "Footprint 1 hex on %s" % ground_name,
+		"rows": rows,
+	}
+
+
+## The projected grid panel (board 2): the Build screen's own bar maths (build_logic.projection) with the one-line advice
+## under it. "Build a Reactor beside the river" appears only when a River or Ford hex really borders the construction
+## zone. {} when the snapshot carries no power figures.
+static func power_grid(snap: Dictionary, ground_model, _kind: String, kw: int) -> Dictionary:
+	if not snap.has("power_generation") or not snap.has("power_demand"):
+		return {}
+	var generation := int(snap["power_generation"]) + maxi(-kw, 0)
+	var after: Dictionary = preload("res://scripts/ui/build_logic.gd").projection(generation, int(snap["power_demand"]), maxi(kw, 0))
+	var over := int(after["over"])
+	var out := {"value": after["value"], "tone": after["tone"], "segments": after["segments"], "marker": after["marker"], "over": over, "lead": "", "text": ""}
+	if over > 0:
+		out["lead"] = "%d kW over." % over
+		var river := ground_model != null and _river_by_zone(snap, ground_model)
+		out["text"] = "Build a Reactor beside the river for +%d kW cooling." % RIVER_BONUS_KW if river else "Defence keeps priority; industry shares the deficit."
+	return out
+
+
+## Whether a River or Ford hex borders any hex of the construction zone. Called every frame while a building is armed, so
+## the answer is kept until the zone or the map changes (the scan is hundreds of hexes).
+static var _river_cache := {"key": 0, "has": false}
+
+
+static func _river_by_zone(snap: Dictionary, ground_model) -> bool:
+	var zone: Array = snap.get("construction_zone", [])
+	var key := hash([zone, str(snap.get("map_name", "")), snap.get("ground", "").length()])
+	if int(_river_cache["key"]) == key:
+		return bool(_river_cache["has"])
+	var found := false
+	for c in zone:
+		if c is Array and c.size() >= 2 and _wet_neighbour(ground_model, int(c[0]), int(c[1])):
+			found = true
+			break
+	_river_cache = {"key": key, "has": found}
+	return found
+
+
+## "1:30" for a minute or more, "45 s" below.
+static func _clock(seconds: int) -> String:
+	return "%d s" % seconds if seconds < 60 else "%d:%02d" % [seconds / 60, seconds % 60]
+
+
+## Enemy territory card (board 3): what the snapshot holds of the alien side. There is no fog in the sim, so the board's
+## "partly seen" and "~14 est." are not built; counts are exact. {} when no alien entity exists.
+static func enemy_intel(snap: Dictionary, ground_model) -> Dictionary:
+	var guns := 0
+	var aa := 0
+	var walls := 0
+	var units := 0
+	for e in _entities(snap):
+		if not (e is Dictionary) or int(e.get("owner", HUMAN)) == HUMAN:
+			continue
+		if str(e.get("category", "")) == "unit":
+			units += 1
+		else:
+			match str(e.get("kind", "")):
+				"GunTurret": guns += 1
+				"AaTurret": aa += 1
+				"Wall": walls += 1
+	var hostile := false
+	for e in _entities(snap):
+		if e is Dictionary and int(e.get("owner", HUMAN)) != HUMAN:
+			hostile = true
+			break
+	if not hostile:
+		return {}
+	var rows: Array = []
+	var defences: Array = []
+	if guns > 0:
+		defences.append("%d gun" % guns)
+	if aa > 0:
+		defences.append("%d AA" % aa)
+	if walls > 0:
+		defences.append("%d wall%s" % [walls, "" if walls == 1 else "s"])
+	rows.append({"label": "Defences", "value": ", ".join(defences) if not defences.is_empty() else "None", "tone": ""})
+	rows.append({"label": "Garrison", "value": "%d unit%s" % [units, "" if units == 1 else "s"], "tone": ""})
+	if ground_model != null:
+		var counts := {}
+		for c in enemy_border(snap):
+			var n: String = ground_model.name_at(int(c[0]), int(c[1]))
+			counts[n] = int(counts.get(n, 0)) + 1
+		var names: Array = counts.keys()
+		names.sort_custom(func(a, b): return int(counts[a]) > int(counts[b]) or (int(counts[a]) == int(counts[b]) and str(a) < str(b)))
+		if not names.is_empty():
+			rows.append({"label": "Terrain", "value": ", ".join(names.slice(0, 2)), "tone": ""})
+	if int(snap.get("next_wave_ticks", -1)) >= 0:
+		var value := _clock(_seconds(int(snap["next_wave_ticks"])))
+		if int(snap.get("next_expedition_size", 0)) > 0:
+			value += ", %d units" % int(snap["next_expedition_size"])
+		rows.append({"label": "Reinforce", "value": value, "tone": "warn"})
+	return {"rows": rows}
+
+
+const FOOT_KINDS := ["Infantry", "AntiArmor"]
+const AIR_KINDS := ["Helicopter"]
+
+
+static func _entity_by_id(snap: Dictionary, id: int) -> Dictionary:
+	for e in _entities(snap):
+		if e is Dictionary and int(e.get("id", -1)) == id:
+			return e
+	return {}
+
+
+static func _speed_text(pct: int) -> String:
+	if pct == 100:
+		return "normal speed"
+	return "speed %s%d%%" % ["+" if pct > 100 else "-", absi(pct - 100)]
+
+
+## Combat preview (board 3, Civ-style): the selected human units `attacker_ids` against the alien entity standing on
+## `target` hex. Only what the data backs: the matchup, the speed and range the attackers' ground gives, and the cover the
+## target's ground gives. The snapshot has no weapon, armour or range data, so health forecasts, damage and "range 7 tiles"
+## are not built, nor the board's "walls in the line" (no line-of-fire data). {} without attackers or a hostile target.
+static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, target: Array) -> Dictionary:
+	if ground_model == null or target.size() < 2:
+		return {}
+	var foe: Dictionary = {}
+	for e in _entities(snap):
+		if e is Dictionary and int(e.get("owner", HUMAN)) != HUMAN:
+			var c := entity_cell(e)
+			if int(c[0]) == int(target[0]) and int(c[1]) == int(target[1]):
+				foe = e
+				break
+	if foe.is_empty():
+		return {}
+	var kinds := {}
+	var ground_votes := {}
+	var stand_at := {}
+	var foot := 0
+	var wheels := 0
+	for id in attacker_ids:
+		var a := _entity_by_id(snap, int(id))
+		if a.is_empty() or int(a.get("owner", -1)) != HUMAN or str(a.get("category", "")) != "unit":
+			continue
+		var kind := str(a.get("kind", ""))
+		kinds[kind] = int(kinds.get(kind, 0)) + 1
+		if kind in AIR_KINDS:
+			continue
+		var cell := entity_cell(a)
+		var glyph: String = ground_model.glyph_at(int(cell[0]), int(cell[1]))
+		ground_votes[glyph] = int(ground_votes.get(glyph, 0)) + 1
+		if not stand_at.has(glyph):
+			stand_at[glyph] = cell
+		if kind in FOOT_KINDS:
+			foot += 1
+		else:
+			wheels += 1
+	if kinds.is_empty():
+		return {}
+	var parts: Array = []
+	var order: Array = kinds.keys()
+	order.sort()
+	for k in order:
+		parts.append("%d x %s" % [int(kinds[k]), _kind_label(str(k))])
+	var out := {"sub": "%s vs Alien %s" % [", ".join(parts), _kind_label(str(foe.get("kind", ""))).to_lower()], "rows": []}
+	var rows: Array = out["rows"]
+	if not ground_votes.is_empty():
+		var best := ""
+		for glyph in ground_votes:
+			if best == "" or int(ground_votes[glyph]) > int(ground_votes[best]):
+				best = glyph
+		var spot: Array = stand_at[best]
+		var here: Dictionary = ground_model.props_at(int(spot[0]), int(spot[1]))
+		var name := str(here.get("name", "ground"))
+		var pct := int(here.get("infantry_pct", 100)) if foot >= wheels else int(here.get("vehicle_pct", 100))
+		rows.append({"label": "Standing on %s" % name, "value": _speed_text(pct), "tone": "good" if pct > 100 else ("bad" if pct < 100 else "dim")})
+		if int(here.get("range_pct", 0)) > 0:
+			rows.append({"label": "Holding %s" % name, "value": "+%d%% range" % int(here["range_pct"]), "tone": "good"})
+	var fc := entity_cell(foe)
+	var there: Dictionary = ground_model.props_at(int(fc[0]), int(fc[1]))
+	var cover := int(there.get("cover_pct", 0))
+	rows.append({"label": "Target on %s" % str(there.get("name", "ground")), "value": "-%d%% damage" % cover if cover > 0 else "no cover", "tone": "bad" if cover > 0 else "dim"})
+	return out
+

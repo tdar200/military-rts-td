@@ -15,6 +15,7 @@ const TextBox = preload("res://scripts/ui/components/text_box.gd")
 const Kbd = preload("res://scripts/ui/components/kbd.gd")
 const HatchFill = preload("res://scripts/ui/components/hatch_fill.gd")
 const Logic = preload("res://scripts/ui/build_logic.gd")
+const PlacementHint = preload("res://scripts/ui/sections/placement_hint.gd")
 
 const NONE := Color(0, 0, 0, 0)
 const MAX_ALERT_ROWS := 5
@@ -29,6 +30,7 @@ static func register(hud: Control) -> void:
 	hud.register_section("build_minimap", func(layer: Control, vm: Variant) -> void: _minimap(hud, layer, vm), "minimap_slot")
 	hud.register_section("build_placement", func(layer: Control, vm: Variant) -> void: _placement(layer, vm))
 	hud.register_section("build_world", func(layer: Control, vm: Variant) -> void: _world(layer, vm))
+	hud.register_section("placement_hint", func(layer: Control, vm: Variant) -> void: PlacementHint.build(layer, vm))
 	hud.register_body("build", func(layer: Control, vm: Variant) -> void: _deck(hud, layer, vm))
 
 

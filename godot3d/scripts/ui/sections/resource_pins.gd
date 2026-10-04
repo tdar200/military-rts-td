@@ -3,6 +3,9 @@ extends RefCounted
 ## "Alloy 15,000 left". Driven by vm["pins"]: [{x, y, kind, remaining, claimed, cell}] where x, y is the deposit's screen
 ## point. Each pin is a Button that emits "focus_deposit" with its hex cell (the game centres the camera there). The
 ## board's "+4" haul figure and the worker "Harvesting" tags have no data behind them and are not built.
+## Two variants from boards 2 and 3: `in_range` (a deposit within a refinery's ore reach of the hex being placed on) reads
+## "Ore" + dim "in range"; `hostile` (the alien entity a combat preview is about) has a red edge and is a plain label,
+## never a Button, because clicking it would have to mean something the game does not define.
 const T = preload("res://scripts/ui/tokens.gd")
 const LiveScreens = preload("res://scripts/ui/live_screens.gd")
 const K = preload("res://scripts/ui/kit.gd")
@@ -17,6 +20,10 @@ const FILL := Color(6.0 / 255.0, 12.0 / 255.0, 20.0 / 255.0, 0.88)
 ## The pin's visible text: [main, dim] (dim may be "").
 static func parts(pin: Dictionary) -> Array:
 	var kind := str(pin.get("kind", "Ore"))
+	if bool(pin.get("hostile", false)):
+		return [kind, ""]
+	if bool(pin.get("in_range", false)):
+		return [kind, "in range"]
 	if kind == "Ore" and not bool(pin.get("claimed", false)):
 		return ["Ore, unclaimed", ""]
 	return [kind, "%s left" % LiveScreens.thousands(int(pin.get("remaining", 0)))]
@@ -51,8 +58,10 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 		if not (pin is Dictionary):
 			continue
 		var kind := str(pin.get("kind", "Ore"))
-		var unclaimed: bool = kind == "Ore" and not bool(pin.get("claimed", false))
-		var edge: Color = T.FAINT if unclaimed else (T.VIOLET if kind == "Alloy" else T.CYAN)
+		var hostile := bool(pin.get("hostile", false))
+		var in_range := bool(pin.get("in_range", false))
+		var unclaimed: bool = kind == "Ore" and not bool(pin.get("claimed", false)) and not hostile and not in_range
+		var edge: Color = T.BAD if hostile else (T.FAINT if unclaimed else (T.VIOLET if kind == "Alloy" else T.CYAN))
 		var text_col: Color = T.DIM if unclaimed else T.TEXT_HI
 		var p := parts(pin)
 		var body := Body.new()
@@ -81,7 +90,9 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 		badge.position = Vector2(x, (H - 16.0) * 0.5)
 		badge.size = Vector2(16, 16)
 		body.add_child(badge)
-		var label := ("%s, unclaimed" % kind) if unclaimed else "%s %s" % [kind, p[1]]
+		if hostile:
+			continue
+		var label := ("%s, unclaimed" % kind) if unclaimed else ("%s in range" % kind if in_range else "%s %s" % [kind, p[1]])
 		var hit := K.hit(parent, body.position.x, body.position.y, w, H, label)
 		if emit.is_valid():
 			hit.pressed.connect(emit.bind("focus_deposit", pin.get("cell", [])))

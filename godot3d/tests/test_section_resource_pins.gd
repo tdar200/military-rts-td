@@ -47,3 +47,26 @@ func test_absent_slice_builds_nothing(t) -> void:
 	Section.build(root, {"pins": []})
 	t.eq(root.get_child_count(), 0, "no pins, no nodes")
 	root.free()
+
+
+func test_in_range_pin_reads_ore_in_range_without_a_haul_figure(t) -> void:
+	var root := Control.new()
+	var calls: Array = []
+	Section.build(root, {"pins": [{"x": 800, "y": 400, "kind": "Ore", "remaining": 24000, "claimed": false, "in_range": true, "cell": [19, 10]}]}, func(action, arg): calls.append([action, arg]))
+	t.ok(U.has_text(root, "Ore"), "ore")
+	t.ok(U.has_text(root, "in range"), "the dim 'in range'")
+	t.ok(not U.has_text(root, "unclaimed") and not U.has_text(root, "+4"), "no unclaimed label, no invented +4")
+	var hit := U.button_with(root, "Ore in range")
+	t.ok(hit != null, "a Button with human text")
+	hit.pressed.emit()
+	t.eq(calls, [["focus_deposit", [19, 10]]], "still centres the camera")
+	root.free()
+
+
+func test_hostile_pin_names_the_target_and_is_not_clickable(t) -> void:
+	var root := Control.new()
+	Section.build(root, {"pins": [{"x": 1040, "y": 330, "kind": "Gun turret", "hostile": true}]})
+	t.ok(U.has_text(root, "Gun turret"), "target kind")
+	t.ok(not U.has_text(root, "left"), "no deposit amounts on a hostile pin")
+	t.eq(U.buttons(root).size(), 0, "hostile pins are labels, not buttons")
+	root.free()

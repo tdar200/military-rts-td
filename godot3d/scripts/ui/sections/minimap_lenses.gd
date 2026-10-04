@@ -59,7 +59,11 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 	var x := RIGHT - total
 	for k in KEYS:
 		var on: bool = str(lens.get("on", "land")) == str(k[0])
-		var cap := K.key(parent, str(k[1]), x, KEY_Y, {"border": T.CYAN if on else T.LINE, "col": T.CYAN_HI if on else T.TEXT, "fill": T.ACTIVE if on else T.KEY_BG})
+		var opts := {"border": T.CYAN if on else T.LINE, "col": T.CYAN_HI if on else T.TEXT, "fill": T.ACTIVE if on else T.KEY_BG}
+		if on and str(k[0]) == "thr":
+			# Board 3: the threat lens is red (border #f04e46, text #ffd6d2) on the plain key fill.
+			opts = {"border": T.BAD, "col": T.BAD_HI, "fill": T.KEY_BG}
+		var cap := K.key(parent, str(k[1]), x, KEY_Y, opts)
 		var hit := K.hit(parent, x, KEY_Y, cap.size.x, 22, str(k[1]))
 		if emit.is_valid():
 			hit.pressed.connect(emit.bind("minimap_lens", str(k[0])))

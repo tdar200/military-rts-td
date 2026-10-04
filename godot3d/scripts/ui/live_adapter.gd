@@ -55,6 +55,15 @@ const BUILD_CARDS := [
 	["battery", "Battery", "Battery", "", 120, 0, "Stores surplus power", "power_plant_v2.png"],
 ]
 
+## Where the board 2 and 3 cards sit, and the heights the adapter keeps them clear with (the sections measure the real ones).
+const PLACING_CARD_W := 340
+const PLACING_CARD_H := 260
+const GRID_CARD_H := 116
+const COMBAT_CARD_H := 170
+const MAX_ALERT_ROWS := 5
+## Below the core assault objective panel (20,72) at its tallest.
+const ENEMY_CARD_Y := 280
+
 var g  # earthfront_3d.gd, or a stub with the same members in tests
 const LiveAssault = preload("res://scripts/ui/live_assault.gd")
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
@@ -131,7 +140,7 @@ func hud_vm(now: float) -> Dictionary:
 		_deficit_since = -1.0
 	assault.update(now)
 	if assault_active():
-		return assault.vm(now, _alerts, _tabs(), _selection(), g.attack_move_armed)
+		return _with_hostile(assault.vm(now, _alerts, _tabs(), _selection(), g.attack_move_armed), true)
 	if tab == "build":
 		return _with_gameplay(_build_vm(now, deficit))
 	var vm := {
@@ -197,6 +206,9 @@ func _with_gameplay(vm: Dictionary) -> Dictionary:
 	for key in slices:
 		if not slices[key].is_empty():
 			vm[key] = slices[key]
+	if not main_layout:
+		_placing_slices(vm, snap, ground)
+	_hostile_slices(vm, snap, ground)
 	if main_layout and vm.has("minimap") and vm["minimap"] is Dictionary and str(snap.get("map_name", "")) != "":
 		vm["minimap"]["name"] = str(snap["map_name"])
 	if str(snap.get("map_name", "")) != "" and vm.has("brand") and vm["brand"] is Dictionary:
@@ -207,6 +219,108 @@ func _with_gameplay(vm: Dictionary) -> Dictionary:
 		for key in inbound:
 			vm["wave"][key] = inbound[key]
 	return vm
+
+
+## The assault layout keeps its own panels; it only gains what board 3 adds on top: the enemy territory card and, over a
+## hostile hex with units selected, the combat preview and its pin.
+func _with_hostile(vm: Dictionary, enemy_card: bool) -> Dictionary:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or snap.is_empty():
+		return vm
+	var ground = g.get("ground_model")
+	if ground == null:
+		ground = preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
+	if enemy_card:
+		var intel := VmGameplay.enemy_intel(snap, ground)
+		if not intel.is_empty():
+			intel["y"] = ENEMY_CARD_Y
+			vm["enemy"] = intel
+	_hostile_slices(vm, snap, ground)
+	return vm
+
+
+## Combat preview and hostile pin: the hovered hex holds an alien entity and human units are selected. Needs a game that
+## can project a hex; nothing is added otherwise.
+func _hostile_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
+	var hovered = g.get("hover_cell")
+	if not (hovered is Vector2i) or ground == null or not g.has_method("screen_point_of_hex"):
+		return
+	var ids: Array = []
+	for n in g.selected_units:
+		if is_instance_valid(n) and n.has_meta("bridge_id"):
+			ids.append(int(n.get_meta("bridge_id")))
+	if ids.is_empty():
+		return
+	var combat := VmGameplay.combat_preview(snap, ground, ids, [hovered.x, hovered.y])
+	if combat.is_empty():
+		return
+	var at: Vector2 = g.screen_point_of_hex(hovered.x, hovered.y)
+	if at == Vector2.INF:
+		return
+	combat["x"] = clampi(roundi(at.x) + 40, 12, 1920 - 12 - 330)
+	combat["y"] = clampi(roundi(at.y) + 74, 70, 1080 - 12 - COMBAT_CARD_H)
+	vm["combat"] = combat
+	var kind := ""
+	for e in snap.get("entities", []):
+		if e is Dictionary and int(e.get("owner", 0)) != VmGameplay.HUMAN:
+			var c := VmGameplay.entity_cell(e)
+			if int(c[0]) == hovered.x and int(c[1]) == hovered.y:
+				kind = str(KIND_NAMES.get(str(e.get("kind", "")), str(e.get("kind", ""))))
+				break
+	if kind != "" and at.x >= 20.0 and at.x <= 1900.0 and at.y >= 110.0 and at.y <= 760.0:
+		var pins: Array = vm.get("pins", [])
+		pins = pins.duplicate()
+		pins.append({"x": roundf(at.x), "y": roundf(at.y), "kind": kind, "hostile": true})
+		vm["pins"] = pins
+
+
+## Right edge for the top-strip placement hint chip: left of the wave chip, whose width is estimated from its text (the strip
+## is laid out from the right edge by build_deck.gd, which does not report widths).
+func _hint_right(vm: Dictionary) -> float:
+	var top = vm.get("build_top", {})
+	var wave = top.get("wave", {}) if top is Dictionary else {}
+	if not (wave is Dictionary) or wave.is_empty():
+		return 1892.0
+	var width := 22.0 + 60.5 + 8.0 + 50.0
+	var note := str(wave.get("note", ""))
+	if note != "":
+		width += 8.0 + 7.8 * note.length()
+	return 1904.0 - width - 12.0 - 8.0
+
+
+## The Build board's placement card and projected grid, in place of the old 728px preview panel. Both need the hovered hex
+## and its ground; without them (no snapshot, pointer off the map or over the HUD) the old panel stays.
+func _placing_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
+	var armed := _armed_card()
+	var hovered = g.get("hover_cell")
+	if armed.is_empty() or ground == null or not (hovered is Vector2i) or not g.has_method("screen_point_of_hex"):
+		return
+	var ghost = g.get("build_ghost")
+	if ghost is Node3D and is_instance_valid(ghost) and not ghost.visible:
+		return
+	var card := VmGameplay.placing(snap, ground, armed[1], armed[2], hovered.x, hovered.y, g.build_cursor_valid(), armed[5])
+	var at: Vector2 = g.screen_point_of_hex(hovered.x, hovered.y)
+	if card.is_empty() or at == Vector2.INF:
+		return
+	# The board puts the card 138px below and 76px left of the cursor; it is kept on screen and clear of the deck (x 1124+).
+	card["x"] = clampi(roundi(at.x) - 76, 12, 1124 - PLACING_CARD_W - 12)
+	card["y"] = clampi(roundi(at.y) + 138, 70, 1068 - PLACING_CARD_H)
+	vm["placement_hint"] = {"right": _hint_right(vm)}
+	vm["placing"] = card
+	var grid := VmGameplay.power_grid(snap, ground, armed[1], armed[5])
+	if not grid.is_empty():
+		var rows: Array = []
+		if vm.get("build_alerts") is Dictionary:
+			rows = vm["build_alerts"].get("rows", [])
+		var n := mini(rows.size(), MAX_ALERT_ROWS)
+		var rows_top := 736.0 - 46.0 * (n - 1) if n > 0 else 736.0
+		grid["y"] = mini(560, int(rows_top - 14.0 - GRID_CARD_H))
+		vm["power_grid"] = grid
+	vm.erase("build_placement")
+	if armed[1] == "Refinery" and vm.get("pins") is Array:
+		for pin in vm["pins"]:
+			if str(pin.get("kind", "")) == "Ore" and pin.has("cell") and VmGameplay.hex_distance(hovered.x, hovered.y, int(pin["cell"][0]), int(pin["cell"][1])) <= VmGameplay.ORE_BONUS_RADIUS:
+				pin["in_range"] = true
 
 
 ## Deposit pins: the deposits on screen, anchored to where the camera sees them. Needs a game that can project a hex.

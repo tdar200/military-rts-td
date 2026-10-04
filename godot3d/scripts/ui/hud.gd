@@ -15,6 +15,10 @@ const ColonyLedger = preload("res://scripts/ui/sections/colony_ledger.gd")
 const ArmyOrders = preload("res://scripts/ui/sections/army_orders.gd")
 const AlertChips = preload("res://scripts/ui/sections/alert_chips.gd")
 const MinimapLenses = preload("res://scripts/ui/sections/minimap_lenses.gd")
+const GridProjection = preload("res://scripts/ui/sections/grid_projection.gd")
+const EnemyIntel = preload("res://scripts/ui/sections/enemy_intel.gd")
+const PlacementCard = preload("res://scripts/ui/sections/placement_card.gd")
+const CombatPreview = preload("res://scripts/ui/sections/combat_preview.gd")
 
 signal action(name: String, arg: Variant)
 
@@ -46,6 +50,10 @@ const GAMEPLAY_KEYS := {
 	"army_orders": ["army"],
 	"alert_chips": ["idle", "alert"],
 	"minimap_lenses": ["lens"],
+	"grid_projection": ["power_grid"],
+	"enemy_intel": ["enemy"],
+	"placement_card": ["placing"],
+	"combat_preview": ["combat"],
 }
 
 ## Where the live minimap is drawn. A layout that builds its own slot (core assault) sets this; once that layout's nodes
@@ -91,6 +99,11 @@ func _register_gameplay() -> void:
 	register_section("army_orders", func(layer: Control, slice: Variant) -> void: ArmyOrders.build(layer, slice, emit))
 	register_section("alert_chips", func(layer: Control, slice: Variant) -> void: AlertChips.build(layer, slice, emit))
 	register_section("minimap_lenses", func(layer: Control, slice: Variant) -> void: MinimapLenses.build(layer, slice, emit))
+	# Boards 2 and 3. The cards float over the map, so they come last (on top of the panels).
+	register_section("grid_projection", func(layer: Control, slice: Variant) -> void: GridProjection.build(layer, slice))
+	register_section("enemy_intel", func(layer: Control, slice: Variant) -> void: EnemyIntel.build(layer, slice))
+	register_section("placement_card", func(layer: Control, slice: Variant) -> void: PlacementCard.build(layer, slice))
+	register_section("combat_preview", func(layer: Control, slice: Variant) -> void: CombatPreview.build(layer, slice))
 
 
 func _layer(key: String) -> Control:

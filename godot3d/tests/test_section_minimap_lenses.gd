@@ -53,3 +53,27 @@ func test_absent_slice_builds_nothing(t) -> void:
 	Section.build(root, {"lens": {}})
 	t.eq(root.get_child_count(), 0, "no lens slice, no keys")
 	root.free()
+
+
+func _cap(root: Node, label: String) -> Control:
+	for n in root.find_children("*", "Control", true, false):
+		if n.get_script() != null and str(n.get("label")) == label:
+			return n
+	return null
+
+
+func test_threat_lens_is_drawn_red_not_cyan(t) -> void:
+	var root := Control.new()
+	Section.build(root, {"lens": {"on": "thr"}})
+	var thr := _cap(root, "Thr")
+	t.eq(thr.tone, Section.T.BAD, "Thr key border is the threat red")
+	t.eq(thr.text_color, Section.T.BAD_HI, "Thr key text is the pale red")
+	t.eq(thr.fill, Section.T.KEY_BG, "the mock keeps the plain key fill on Thr")
+	var land := _cap(root, "Land")
+	t.eq(land.tone, Section.T.LINE, "no other key is lit")
+	root.free()
+	var res := Control.new()
+	Section.build(res, {"lens": {"on": "res"}})
+	t.eq(_cap(res, "Res").tone, Section.T.CYAN, "the other lenses stay cyan")
+	t.eq(_cap(res, "Thr").tone, Section.T.LINE, "Thr is a plain key while off")
+	res.free()

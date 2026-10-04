@@ -108,6 +108,41 @@ behind them:
   tile_inspector_title (15.99) are high because of mono text anti-aliasing on short strings. army_orders is 13.17 (limit
   16.2) because the mock's Ctrl A key cap is deliberately not drawn (see above); it was 9.04 with the cap.
 
+### Gameplay boards 2 and 3 (Build deck gp02, Core assault gp03), decided 2026-10-04 (Task 12B)
+Built from live data: placing card, projected power grid, placement hint chip, "Ore in range" pin tag, enemy territory
+card, combat preview card, hostile pin, thr lens with enemy cells. Not built, or reduced, because the snapshot, the ground
+table or the bridge has nothing behind them:
+- Footprints are single hexes (R1). The mock's 4x3 footprint grid is not drawn; the card says "1 hex is clear" or "1 hex
+  is blocked".
+- Placing card rows are Ore in range, River, Blocked tile, Territory and Power. The mock's Slope row and its "Ore +4"
+  figure are dropped (no slope or haul data). Ore, river and power numbers come only from the deposit entities, the
+  ground table and the sim bonuses (Refinery +20% within 1 hex of ore, Power Plant +12 kW beside river or ford). A test
+  reads `earthfront.rs` so these constants cannot drift.
+- Placement hint chip: "PLACEMENT", Click "place", Esc "cancel". The mock's rotate and Enter entries are dropped
+  (footprints do not rotate and Enter is not a placement key). No key was bound. The chip's right edge is an estimate
+  from the top strip.
+- Projected grid: shows generation, demand and the real post-placement values only. No per-minute deltas.
+- Enemy territory card: counts and kinds from alien entities (units, gun and AA defences) plus terrain cover and range
+  from the ground table. Not built: "partly seen", "~14 est." and "east shore" lines (no fog, explored or discovery
+  state, no sight range, no direction data) and any river attack penalty (not a sim mechanic).
+- Combat preview is terrain-only: the damage-type multiplier, rank bonus and terrain cover that the sim has. The mock's
+  health bars, damage numbers, "range 7" and "walls in the line" are not drawn (no weapon, armour, range or line of
+  sight data in the snapshot). The harness rect covers only the header and sub line (`combat_head`), not the body rows.
+- Pins: the "Alloy +6 on high ground" pin is not built (no haul claims). The hostile pin shows the kind only. Both pin
+  positions in the gallery fixtures were moved a few pixels to sit clear of the map texture, as in gp01; this is a
+  fixture detail, not a layout change.
+- The thr lens now draws enemy cells as well as the route.
+- Not built here, left to Task 12C or later: objective panel, core bar, alert rows, selection roster, attack-move banner,
+  wave panel, structure panel, the Logistics tab, the world-layer route and territory border, and the top-strip chips of
+  boards 2 and 3. The build and assault layouts keep their old minimap, alerts and queue panels.
+- Live wiring: the placing card follows the hovered hex (below and left of it, clamped to the screen) and hides when the
+  pointer is over the HUD; the old build_placement panel remains when there is no hover. The enemy card is live only in
+  the assault layout; the combat preview and hostile pin work in every layout. Per-frame cost in the stub benchmark was
+  about 1.0 ms (build layout) and 0.7 ms (main layout) per `hud_vm` call; no pre-change baseline was obtained.
+- Harness limits are achieved percent plus 3. Highest rects: placement_card 22.10 (limit 25.1; the mock has an extra Slope
+  row and different wording, so its title and rows wrap differently), hostile_pin 20.12, ore_pin 17.12, placement_hint
+  16.98 (words differ from the mock). Mock-vs-Godot text noise is 5 to 11 percent per rect elsewhere.
+
 ## 5. Known cosmetic items
 
 - The research screen has an empty band at the top where the era-gate block would sit.
