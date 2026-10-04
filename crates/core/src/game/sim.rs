@@ -2151,6 +2151,13 @@ impl Sim {
             h.write_i64(pl.center.y.to_bits());
             h.write_i64(pl.radius.to_bits());
         }
+        // Ground layer — Earthfront only, appended last so the legacy hash is
+        // untouched (legacy maps are all-Grass and never fold this in).
+        if self.earthfront {
+            for g in self.map.ground_iter() {
+                h.write_u64(u64::from(g.tag()));
+            }
+        }
         h.finish()
     }
 
@@ -5334,6 +5341,30 @@ impl Sim {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_maps_have_all_grass_ground() {
+        let sim = crate::game::scenario::Scenario::LaneDefense.build(7);
+        assert!(sim
+            .map()
+            .ground_iter()
+            .all(|g| g == crate::game::map::Ground::Grass));
+    }
+
+    #[test]
+    fn earthfront_hash_depends_on_ground_but_legacy_does_not() {
+        use crate::game::map::Ground;
+        let mut a = crate::game::scenario::Scenario::Survival.build(2026);
+        let b = crate::game::scenario::Scenario::Survival.build(2026);
+        assert_eq!(a.state_hash(), b.state_hash());
+        a.map_mut().set_ground(3, 3, Ground::Flats);
+        assert_ne!(a.state_hash(), b.state_hash());
+
+        let mut l1 = crate::game::scenario::Scenario::OpenClash.build(5);
+        let l2 = crate::game::scenario::Scenario::OpenClash.build(5);
+        l1.map_mut().set_ground(0, 0, Ground::Flats); // legacy must not hash ground
+        assert_eq!(l1.state_hash(), l2.state_hash());
+    }
+
     use super::{
         ascend_cost, tile_center, BuildingKind, Command, EntityId, EntityKindView, Kind, PlayerId,
         Sim, UnitKind, WaveConfig, SUPPLY_DECAY_FLOOR, UPKEEP_STEP,
