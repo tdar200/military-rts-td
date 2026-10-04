@@ -9,7 +9,7 @@
 
 #[path = "earthfront.rs"]
 mod earthfront;
-pub use earthfront::EconomyView;
+pub use earthfront::{EconomyView, SupplyLink, SupplyState};
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;

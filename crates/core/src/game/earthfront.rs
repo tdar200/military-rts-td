@@ -6,6 +6,23 @@ use crate::game::hex;
 use crate::game::map::{DepositKind, Ground};
 use crate::game::tech_grid::{GridNode, RealityClass, Unlock, UnlockFamily};
 
+/// Whether a depot-to-building supply route holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupplyState {
+    /// `supply_route` holds: the depot feeds this building.
+    Supplied,
+    /// A ready depot is in reach but walls or terrain cut the route.
+    Severed,
+}
+
+/// One display link from a depot to a building it serves (or fails to reach).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupplyLink {
+    pub depot: EntityId,
+    pub target: EntityId,
+    pub state: SupplyState,
+}
+
 /// Authored scenario role, independent of a building's production or supply behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ObjectiveRole {
@@ -612,6 +629,85 @@ impl Sim {
             .is_some_and(|route| route.len() <= radius as usize + 2)
     }
 
+    /// A depot that can feed ammunition this beat: finished, powered and stocked.
+    /// Shared by the supply beat and `earthfront_supply_links` so they cannot drift.
+    const fn supply_depot_ready(e: &Entity) -> bool {
+        e.alive && e.construction_remaining == 0 && e.power_fraction >= 500 && e.supply_stock > 0
+    }
+
+    /// Supply reach in tiles for `owner`: 7 with the supply technology (5), otherwise 5.
+    fn supply_radius(&self, owner: PlayerId) -> u32 {
+        if self.civs[usize::from(owner.0)].researched_techs.get(5) {
+            7
+        } else {
+            5
+        }
+    }
+
+    /// Read-only supply picture for display: for each finished `owner` building (ascending
+    /// index), the first ready depot that serves it. A link is `Supplied` when
+    /// `supply_route` holds and `Severed` when a ready depot is within reach but a wall or
+    /// terrain cuts the route (the first such depot is named). Buildings with no ready depot
+    /// in reach have no link. Mobile units are left out (their endpoints move) and so are walls
+    /// (they hold no ammunition and are what cuts routes).
+    /// Not hashed, never mutates, and costs one path search per depot tried per building,
+    /// so callers should throttle it (the supply beat itself runs every 30 ticks).
+    #[must_use]
+    pub fn earthfront_supply_links(&self, owner: PlayerId) -> Vec<SupplyLink> {
+        let mut links = Vec::new();
+        if !self.earthfront {
+            return links;
+        }
+        let radius = self.supply_radius(owner);
+        let reach = Fixed::from_int(i32::try_from(radius * radius).unwrap_or(0));
+        let depots: Vec<usize> = self
+            .entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.owner == owner && Self::supply_depot_ready(e))
+            .map(|(i, _)| i)
+            .collect();
+        if depots.is_empty() {
+            return links;
+        }
+        for (idx, e) in self.entities.iter().enumerate() {
+            if !e.alive
+                || e.owner != owner
+                || e.construction_remaining > 0
+                || !matches!(e.kind, Kind::Building(b) if b != BuildingKind::Wall)
+            {
+                continue;
+            }
+            let mut severed: Option<usize> = None;
+            let mut served: Option<usize> = None;
+            for &d in &depots {
+                if d == idx {
+                    continue;
+                }
+                let pos = self.entities[d].pos;
+                if (pos - e.pos).length_squared() > reach {
+                    continue;
+                }
+                if self.supply_route(pos, e.pos, radius) {
+                    served = Some(d);
+                    break;
+                }
+                severed.get_or_insert(d);
+            }
+            let (depot, state) = match (served, severed) {
+                (Some(d), _) => (d, SupplyState::Supplied),
+                (None, Some(d)) => (d, SupplyState::Severed),
+                (None, None) => continue,
+            };
+            links.push(SupplyLink {
+                depot: EntityId(u32::try_from(depot).unwrap_or(u32::MAX)),
+                target: EntityId(u32::try_from(idx).unwrap_or(u32::MAX)),
+                state,
+            });
+        }
+        links
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "ordered power allocation, processing and local ammunition transfers share one deterministic service boundary"
@@ -732,12 +828,7 @@ impl Sim {
             .entities
             .iter()
             .enumerate()
-            .filter(|(_, e)| {
-                e.alive
-                    && e.construction_remaining == 0
-                    && e.power_fraction >= 500
-                    && e.supply_stock > 0
-            })
+            .filter(|(_, e)| Self::supply_depot_ready(e))
             .map(|(i, _)| i)
             .collect();
         for idx in 0..self.entities.len() {
@@ -747,11 +838,7 @@ impl Sim {
             }
             let owner = e.owner;
             let position = e.pos;
-            let radius = if self.civs[usize::from(owner.0)].researched_techs.get(5) {
-                7
-            } else {
-                5
-            };
+            let radius = self.supply_radius(owner);
             for &d in &depots {
                 if self.entities[d].owner == owner
                     && self.entities[d].supply_stock > 0
@@ -1407,6 +1494,128 @@ mod tests {
             sim.map.set_tile(12, y, Tile::BLOCKED);
         }
         assert!(!sim.supply_route(from, to, 7));
+    }
+
+    /// A depot at (10,10) ready to serve (stocked and powered) plus a barracks at `tx`.
+    fn supply_fixture(tx: u16) -> (Sim, EntityId, EntityId) {
+        let mut sim = operation();
+        let depot = sim.add_building(HUMAN, BuildingKind::SupplyDepot, 10, 10);
+        sim.entities[depot.0 as usize].supply_stock = 24;
+        sim.entities[depot.0 as usize].power_fraction = 1000;
+        let target = sim.add_building(HUMAN, BuildingKind::Barracks, tx, 10);
+        (sim, depot, target)
+    }
+
+    fn links_to(sim: &Sim, target: EntityId) -> Vec<SupplyLink> {
+        sim.earthfront_supply_links(HUMAN)
+            .into_iter()
+            .filter(|l| l.target == target)
+            .collect()
+    }
+
+    #[test]
+    fn supply_links_report_a_supplied_building() {
+        let (sim, depot, target) = supply_fixture(13);
+        assert_eq!(
+            links_to(&sim, target),
+            [SupplyLink {
+                depot,
+                target,
+                state: SupplyState::Supplied
+            }]
+        );
+        // The depot never links to itself and the output is deterministic.
+        assert!(sim
+            .earthfront_supply_links(HUMAN)
+            .iter()
+            .all(|l| l.target != depot || l.depot != depot));
+        assert_eq!(
+            sim.earthfront_supply_links(HUMAN),
+            sim.earthfront_supply_links(HUMAN)
+        );
+        // Other owners and non-Earthfront sims have no links.
+        assert!(sim.earthfront_supply_links(ALIEN).is_empty());
+    }
+
+    #[test]
+    fn supply_links_skip_walls() {
+        let (mut sim, _, _) = supply_fixture(13);
+        let wall = sim.add_building(HUMAN, BuildingKind::Wall, 12, 10);
+        assert!(links_to(&sim, wall).is_empty());
+    }
+
+    #[test]
+    fn supply_links_turn_severed_when_walls_cut_the_route() {
+        let (mut sim, depot, target) = supply_fixture(13);
+        for y in 0..26 {
+            sim.map.set_tile(12, y, Tile::BLOCKED);
+        }
+        assert_eq!(
+            links_to(&sim, target),
+            [SupplyLink {
+                depot,
+                target,
+                state: SupplyState::Severed
+            }]
+        );
+    }
+
+    #[test]
+    fn supply_links_need_a_ready_depot() {
+        let (mut sim, depot, target) = supply_fixture(13);
+        sim.entities[depot.0 as usize].supply_stock = 0;
+        assert!(links_to(&sim, target).is_empty());
+        sim.entities[depot.0 as usize].supply_stock = 24;
+        sim.entities[depot.0 as usize].power_fraction = 499;
+        assert!(links_to(&sim, target).is_empty());
+        sim.entities[depot.0 as usize].power_fraction = 500;
+        assert_eq!(links_to(&sim, target).len(), 1);
+        sim.entities[depot.0 as usize].construction_remaining = 5;
+        assert!(links_to(&sim, target).is_empty());
+        sim.entities[depot.0 as usize].construction_remaining = 0;
+        sim.entities[depot.0 as usize].alive = false;
+        assert!(links_to(&sim, target).is_empty());
+    }
+
+    #[test]
+    fn supply_links_radius_is_five_and_seven_with_the_supply_tech() {
+        // Hex columns are 0.75 apart in world units: 7 columns is 5.25 away, outside
+        // radius 5 but inside radius 7.
+        let (mut sim, _, target) = supply_fixture(17);
+        assert!(links_to(&sim, target).is_empty());
+        sim.civs[0].researched_techs.set(5);
+        assert_eq!(links_to(&sim, target).len(), 1);
+        // Six columns (4.5 away) is inside the base radius.
+        let (sim, _, target) = supply_fixture(16);
+        assert_eq!(links_to(&sim, target).len(), 1);
+        // Ten columns (7.5 away) is out of reach even with the technology.
+        let (mut sim, _, target) = supply_fixture(20);
+        sim.civs[0].researched_techs.set(5);
+        assert!(links_to(&sim, target).is_empty());
+    }
+
+    #[test]
+    fn supply_links_agree_with_the_supply_beat() {
+        // Pins the shared predicate: Supplied exactly when the beat refills ammunition.
+        for (walled, expect_refill) in [(false, true), (true, false)] {
+            let (mut sim, _, target) = supply_fixture(13);
+            if walled {
+                for y in 0..26 {
+                    sim.map.set_tile(12, y, Tile::BLOCKED);
+                }
+            }
+            sim.entities[target.0 as usize].ammunition = 0;
+            let state = links_to(&sim, target)[0].state;
+            assert_eq!(state == SupplyState::Supplied, expect_refill);
+            for _ in 0..61 {
+                sim.step(&[]);
+            }
+            assert_eq!(
+                sim.entities[target.0 as usize].ammunition > 0,
+                expect_refill,
+                "walled={walled}"
+            );
+        }
     }
 
     #[test]

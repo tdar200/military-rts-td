@@ -8,15 +8,78 @@ use rts_core::fixed::Fixed;
 use rts_core::game::kestrel;
 use rts_core::game::map::Ground;
 use rts_core::game::scenario::Scenario;
-use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId};
+use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, SupplyState};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
+
+fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
+    snapshot_json_with(sim, &supply_links_json(sim))
+}
+
+/// The human's depot-to-building supply links as a JSON array (see `SupplyLinkCache`).
+fn supply_links_json(sim: &rts_core::game::sim::Sim) -> String {
+    let mut out = String::from("[");
+    for (i, link) in sim
+        .earthfront_supply_links(PlayerId(0))
+        .into_iter()
+        .enumerate()
+    {
+        if i > 0 {
+            out.push(',');
+        }
+        let state = match link.state {
+            SupplyState::Supplied => "ok",
+            SupplyState::Severed => "severed",
+        };
+        write!(
+            out,
+            "{{\"depot\":{},\"target\":{},\"state\":\"{state}\"}}",
+            link.depot.0, link.target.0
+        )
+        .expect("string write");
+    }
+    out.push(']');
+    out
+}
+
+/// Throttle for `supply_links_json`: each link costs path searches, so the live loop
+/// recomputes only on the supply beat (the sim feeds ammunition every 30 ticks) and
+/// serves the cached array in between. The loop writes one snapshot per tick, so the
+/// array shown at tick T is always the sim's links at the last multiple of 30 at or
+/// below T (or at the first snapshot after a start or restart): deterministic per tick.
+struct SupplyLinkCache {
+    tick: Option<u64>,
+    json: String,
+}
+
+impl SupplyLinkCache {
+    const BEAT: u64 = 30;
+
+    const fn new() -> Self {
+        Self {
+            tick: None,
+            json: String::new(),
+        }
+    }
+
+    fn get(&mut self, sim: &rts_core::game::sim::Sim) -> &str {
+        let now = sim.tick();
+        let stale = self
+            .tick
+            .is_none_or(|t| now < t || now / Self::BEAT != t / Self::BEAT);
+        if stale {
+            self.json = supply_links_json(sim);
+            self.tick = Some(now);
+        }
+        &self.json
+    }
+}
 
 #[allow(
     clippy::too_many_lines,
     reason = "one explicit JSON frame keeps the dependency-free bridge schema easy to audit"
 )]
-fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
+fn snapshot_json_with(sim: &rts_core::game::sim::Sim, supply_links: &str) -> String {
     let views = sim.views();
     let mut out = String::with_capacity(512 + views.len() * 240);
     let human = PlayerId(0);
@@ -273,6 +336,8 @@ fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
     }
     out.push(']');
     write_additive_fields(&mut out, sim);
+    out.push_str(",\"supply_links\":");
+    out.push_str(supply_links);
     out.push('}');
     out
 }
@@ -622,6 +687,7 @@ fn main() -> std::io::Result<()> {
     let _ = std::fs::remove_file(&restart_path);
     clear_command_packets(&command_path)?;
     let mut mission_started = false;
+    let mut supply_cache = SupplyLinkCache::new();
 
     for _ in 0..frame_limit {
         if restart_path.exists() {
@@ -633,13 +699,14 @@ fn main() -> std::io::Result<()> {
             sim = scenario.build(2026);
             sim.set_balance(rts_data::load_default());
             mission_started = false;
+            supply_cache = SupplyLinkCache::new();
         }
         if !mission_started {
             if start_path.exists() {
                 let _ = std::fs::remove_file(&start_path);
                 mission_started = true;
             } else {
-                write_atomic(&output, &snapshot_json(&sim))?;
+                write_atomic(&output, &snapshot_json_with(&sim, supply_cache.get(&sim)))?;
                 std::thread::sleep(frame_time);
                 continue;
             }
@@ -661,7 +728,7 @@ fn main() -> std::io::Result<()> {
         }
         commands.extend(player_commands);
         sim.step(&commands);
-        write_atomic(&output, &snapshot_json(&sim))?;
+        write_atomic(&output, &snapshot_json_with(&sim, supply_cache.get(&sim)))?;
         std::thread::sleep(frame_time.saturating_sub(started.elapsed()));
     }
     Ok(())
@@ -670,7 +737,8 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_args, snapshot_json, take_commands, BuildingKind, Command, EntityId, UnitKind,
+        parse_args, snapshot_json, supply_links_json, take_commands, BuildingKind, Command,
+        EntityId, PlayerId, SupplyLinkCache, UnitKind,
     };
     use rts_core::game::scenario::Scenario;
 
@@ -774,6 +842,7 @@ mod tests {
         assert!(json.contains("\"production_name\":"));
         assert!(json.contains("\"entities\":[{"));
         assert!(json.ends_with("]}"));
+        assert!(json.ends_with("\"supply_links\":[]}"));
     }
 
     #[test]
@@ -789,6 +858,7 @@ mod tests {
         assert!(g.chars().all(|c| c == 'g'));
         assert!(json.contains("\"ground_table\":["));
         assert!(json.contains("\"wave_route\":[]"));
+        assert!(json.ends_with("\"supply_links\":[]}"));
     }
 
     #[test]
@@ -804,6 +874,57 @@ mod tests {
         let g = extract_str(&json, "ground");
         assert_eq!(g.len(), 44 * 26);
         assert!(g.contains('r') && g.contains('w') && g.contains('h'));
+        // Additive and last: the lone Command Center has nothing to serve at the start.
+        assert!(json.ends_with("\"core_node\":[37,8],\"supply_links\":[]}"));
+        assert!(json.starts_with("{\"schema\":5,"));
+    }
+
+    /// A Kestrel sim where the home Command Center (id 0) has stock and a turret in reach.
+    fn kestrel_with_a_served_turret() -> (rts_core::game::sim::Sim, EntityId) {
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let turret = sim.add_building(PlayerId(0), BuildingKind::GunTurret, 9, 10);
+        while sim.tick() < 30 {
+            sim.step(&[]);
+        }
+        (sim, turret)
+    }
+
+    #[test]
+    fn supply_links_key_lists_a_supplied_building() {
+        let (sim, turret) = kestrel_with_a_served_turret();
+        let json = snapshot_json(&sim);
+        let link = format!("{{\"depot\":0,\"target\":{},\"state\":\"ok\"}}", turret.0);
+        assert!(json.contains(&link), "{link} missing");
+        assert!(
+            json.ends_with(&format!("\"supply_links\":[{link}]}}")),
+            "last key"
+        );
+        // Pure and deterministic for a given sim state.
+        assert_eq!(supply_links_json(&sim), supply_links_json(&sim));
+    }
+
+    #[test]
+    fn supply_link_cache_recomputes_only_on_the_beat() {
+        let (mut sim, turret) = kestrel_with_a_served_turret();
+        let mut cache = SupplyLinkCache::new();
+        let at_beat = cache.get(&sim).to_owned();
+        assert_eq!(at_beat, supply_links_json(&sim));
+        assert!(at_beat.contains(&format!("\"target\":{}", turret.0)));
+        // A second building in reach appears fresh immediately but not in the cache...
+        sim.step(&[]);
+        let late = sim.add_building(PlayerId(0), BuildingKind::GunTurret, 9, 12);
+        let fresh = supply_links_json(&sim);
+        assert!(fresh.contains(&format!("\"target\":{}", late.0)));
+        assert_eq!(cache.get(&sim), at_beat);
+        while sim.tick() < 59 {
+            sim.step(&[]);
+            assert_eq!(cache.get(&sim), at_beat, "tick {}", sim.tick());
+        }
+        // ...until the next supply beat.
+        sim.step(&[]);
+        assert_eq!(sim.tick(), 60);
+        assert!(cache.get(&sim).contains(&format!("\"target\":{}", late.0)));
     }
 
     #[test]
