@@ -826,6 +826,30 @@ const fn max_hp(balance: &Balance, kind: Kind) -> Fixed {
 }
 
 /// World-space center of hex cell `(x, y)`.
+/// Vehicles (wheeled/tracked) follow `vehicle_pct`; foot units follow `infantry_pct`.
+const fn is_vehicle(k: UnitKind) -> bool {
+    matches!(k, UnitKind::Harvester | UnitKind::Tank | UnitKind::Capital)
+}
+
+/// Floor on the ground speed multiplier so no unit ever freezes in place.
+const MIN_GROUND_SPEED_PCT: u32 = 30;
+
+/// Speed percent (Earthfront) for a unit of kind `uk` standing at `pos`: 100 for air units,
+/// else the standing tile's infantry/vehicle percent, clamped to `MIN_GROUND_SPEED_PCT`.
+fn ground_speed_pct(map: &Map, pos: Vec2, uk: UnitKind) -> u32 {
+    if uk.stats().is_air {
+        return 100;
+    }
+    let (tx, ty) = crate::game::hex::from_world(pos, map.width(), map.height());
+    let g = map.ground_at(i32::from(tx), i32::from(ty)).props();
+    let pct = if is_vehicle(uk) {
+        g.vehicle_pct
+    } else {
+        g.infantry_pct
+    };
+    pct.max(MIN_GROUND_SPEED_PCT)
+}
+
 fn tile_center(x: u16, y: u16) -> Vec2 {
     crate::game::hex::center(x, y)
 }
@@ -4028,7 +4052,12 @@ impl Sim {
                     continue;
                 }
             }
-            let speed = uk.stats().speed + mobility[usize::from(e.owner.0)];
+            let base = uk.stats().speed + mobility[usize::from(e.owner.0)];
+            let speed = if self.earthfront {
+                base * Fixed::from_ratio(i64::from(ground_speed_pct(&self.map, e.pos, uk)), 100)
+            } else {
+                base
+            };
             // Head to the next waypoint, or straight to the target once the path
             // is exhausted.
             let subgoal = e
@@ -5371,7 +5400,7 @@ mod tests {
     };
     use crate::fixed::Fixed;
     use crate::game::civ::ColonyId;
-    use crate::game::map::{Map, TerrainKind};
+    use crate::game::map::{Ground, Map, TerrainKind};
     use crate::game::planet::{Planet, PlanetId};
     use crate::vec::Vec2;
 
@@ -6061,6 +6090,51 @@ mod tests {
             s.step(&[]);
         }
         assert_eq!(s.position(u), Some(v(10, 0)));
+    }
+
+    fn first_tick_dx(ground: Ground, earthfront: bool, kind: UnitKind) -> i64 {
+        let mut m = Map::new(32, 8);
+        for x in 0..32u16 {
+            m.set_ground(x, 2, ground);
+        }
+        let mut s = Sim::new(m, 1, f(0));
+        if earthfront {
+            s.enable_earthfront();
+        }
+        let u = s.add_unit(P0, kind, tile_center(2, 2));
+        let before = s.position(u).unwrap().x;
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: u,
+            target: tile_center(20, 2),
+        }]);
+        (s.position(u).unwrap().x - before).to_bits()
+    }
+
+    #[test]
+    fn tanks_slow_on_highland_and_ford_and_speed_up_on_flats_in_earthfront() {
+        let grass = first_tick_dx(Ground::Grass, true, UnitKind::Tank);
+        assert!(first_tick_dx(Ground::Flats, true, UnitKind::Tank) > grass);
+        let hi = first_tick_dx(Ground::Highland, true, UnitKind::Tank);
+        assert!(hi < grass);
+        assert!(first_tick_dx(Ground::Ford, true, UnitKind::Tank) < hi);
+    }
+
+    #[test]
+    fn ford_slows_tanks_more_than_infantry() {
+        let tank = first_tick_dx(Ground::Ford, true, UnitKind::Tank) * 100
+            / first_tick_dx(Ground::Grass, true, UnitKind::Tank);
+        let inf = first_tick_dx(Ground::Ford, true, UnitKind::Infantry) * 100
+            / first_tick_dx(Ground::Grass, true, UnitKind::Infantry);
+        assert!(tank < inf);
+    }
+
+    #[test]
+    fn ground_never_changes_speed_outside_earthfront() {
+        assert_eq!(
+            first_tick_dx(Ground::Highland, false, UnitKind::Tank),
+            first_tick_dx(Ground::Grass, false, UnitKind::Tank)
+        );
     }
 
     #[test]
