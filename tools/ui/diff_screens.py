@@ -3,6 +3,8 @@
 
 usage: diff_screens.py <screen> <mock.png> <godot.png> <outdir> [--threshold PCT]
 Rect lists come from compare.json: {"screen": {"rects": [{"name","x","y","w","h","max"}], "ignore": [[x,y,w,h]]}}.
+A rect with "mask": true is not compared: it excludes its area (the 3D battlefield). Rects are applied in order, so a
+later compared rect punches through an earlier mask (full-board mask first, then one rect per chrome section).
 A pixel is bad when any channel differs by more than TOL. Exit 1 if any rect exceeds its max (or --threshold).
 """
 import json, sys
@@ -34,6 +36,10 @@ def main():
     keep = np.ones(a.shape[:2], bool)
     for x, y, w, h in spec.get("ignore", []):
         keep[y:y + h, x:x + w] = False
+    rmask = np.ones(a.shape[:2], bool)
+    for r in spec["rects"]:
+        rmask[r["y"]:r["y"] + r["h"], r["x"]:r["x"] + r["w"]] = not r.get("mask", False)
+    keep &= rmask
     bad = (np.abs(a - b).max(axis=2) > TOL) & keep
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
@@ -41,6 +47,9 @@ def main():
     print(f"{'rect':28s} {'bad%':>6s} {'max%':>6s}")
     for r in spec["rects"]:
         x, y, w, h = r["x"], r["y"], r["w"], r["h"]
+        if r.get("mask"):
+            print(f"{r['name']:28s} {'masked':>6s}")
+            continue
         k = keep[y:y + h, x:x + w]
         n = int(k.sum())
         pct = 100.0 * int(bad[y:y + h, x:x + w].sum()) / max(n, 1)

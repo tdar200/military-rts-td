@@ -1,0 +1,15 @@
+{
+ "gp09": {
+  "ignore": [],
+  "rects": [
+   {
+    "name": "battlefield",
+    "x": 0,
+    "y": 0,
+    "w": 1920,
+    "h": 1080,
+    "mask": true
+   }
+  ]
+ }
+}

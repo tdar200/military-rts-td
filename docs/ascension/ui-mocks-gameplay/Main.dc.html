@@ -16,13 +16,8 @@
 <!-- LAND: Kestrel Reach, camera at world 0,0 -->
 <div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
 
-<!-- vision: everything outside the colony's sight is dimmed (explored, not visible) -->
+<!-- territory border -->
 <svg class="a" style="left:0;top:0" width="1920" height="1080">
-  <defs>
-    <filter id="bl"><feGaussianBlur stdDeviation="40"/></filter>
-    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="470" cy="470" r="640"/><circle cx="1000" cy="520" r="260"/><circle cx="880" cy="330" r="220"/></g></mask>
-  </defs>
-  <rect width="1920" height="1080" fill="#050b12" opacity=".46" mask="url(#vis)"/>
   <!-- player territory border -->
   <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="rgba(64,220,235,.07)" stroke="#40dceb" stroke-width="3" stroke-linejoin="round"/>
   <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="none" stroke="rgba(64,220,235,.28)" stroke-width="16" stroke-linejoin="round"/>
@@ -85,7 +80,7 @@
 <div class="a panel" style="left:12px;top:274px;width:332px;padding:12px 14px;z-index:3000">
   <div style="display:flex;align-items:center;justify-content:space-between"><div class="cap t-cyan">Territory</div><span class="cap">38 tiles</span></div>
   <div style="display:flex;height:10px;margin-top:8px;border-radius:2px;overflow:hidden;border:1px solid #1b3342"><i style="width:44%;background:#6a9a3a"></i><i style="width:24%;background:#97a64a"></i><i style="width:14%;background:#2f8a52"></i><i style="width:10%;background:#2e86ac"></i><i style="width:8%;background:#c9b27a"></i></div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;margin-top:8px;font-size:13px;color:#8fb0bf"><span>Grassland 44%</span><span>Meadow 24%</span><span>Forest 14%</span><span>River 10%</span><span>Shore 8%</span><span class="t-hi">Explored 34%</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;margin-top:8px;font-size:13px;color:#8fb0bf"><span>Grassland 44%</span><span>Meadow 24%</span><span>Forest 14%</span><span>River 10%</span><span>Shore 8%</span></div>
   <div style="display:flex;gap:6px;margin-top:10px"><span class="yl y-m"><i></i>+38 M</span><span class="yl y-d"><i></i>+4 ore haul</span><span class="yl y-p"><i></i>+168 kW</span></div>
 </div>
 
@@ -108,8 +103,7 @@
   <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
   <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
     <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
-    <!-- unexplored + enemy -->
-    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <!-- enemy -->
     <div class="a" style="left:170px;top:26px;width:60px;height:46px;border:1.5px solid #f04e46;background:rgba(240,78,70,.16);border-radius:6px"></div>
     <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
     <div class="a" style="left:22px;top:30px;width:9px;height:9px;background:#40dceb"></div><div class="a" style="left:46px;top:50px;width:6px;height:6px;background:#40dceb"></div><div class="a" style="left:58px;top:70px;width:6px;height:6px;background:#40dceb"></div>

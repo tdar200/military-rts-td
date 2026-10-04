@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>First minutes</title>
+<title>First minutes: briefing, objectives</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -17,12 +17,8 @@
 
 <svg class="a" style="left:0;top:0" width="1920" height="1080">
   <defs>
-    <filter id="bl"><feGaussianBlur stdDeviation="46"/></filter>
-    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="470" cy="440" r="470"/><circle cx="800" cy="360" r="170"/></g></mask>
     <pattern id="tg" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"/></pattern>
   </defs>
-  <!-- unexplored: nothing known yet -->
-  <rect width="1920" height="1080" fill="#050b12" opacity=".95" mask="url(#vis)"/>
   <!-- first territory, small -->
   <circle cx="470" cy="440" r="330" fill="rgba(64,220,235,.07)" stroke="#40dceb" stroke-width="3"/>
   <circle cx="470" cy="440" r="330" fill="none" stroke="rgba(64,220,235,.28)" stroke-width="14"/>
@@ -32,11 +28,11 @@
   <path d="M816 360 C830 366 838 372 850 380" fill="none" stroke="#96f5ff" stroke-width="3" stroke-dasharray="6 5"/>
 </svg>
 
-<!-- names that are already discovered -->
+<!-- place names -->
 <div class="lbl" style="left:70px;top:70px;font-size:20px">Sunfield</div>
 <div class="lbl w" style="left:775px;top:288px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
-<div class="lbl" style="left:1290px;top:480px;font-size:30px;color:rgba(150,245,255,.4)">?</div>
-<div class="lbl" style="left:1600px;top:300px;font-size:30px;color:rgba(150,245,255,.4)">?</div>
+<div class="lbl" style="left:380px;top:845px;font-size:18px">Hollow Wood</div>
+<div class="lbl" style="left:1480px;top:620px;font-size:22px">The Dry Flats</div>
 
 <sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
   <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
@@ -46,7 +42,7 @@
   <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
 </sc-for>
 <img class="spr" src="/_blob/b32b316f8a54cfb3e4e96b8ab7a2f79e" alt="" style="left:660px;top:250px;width:190px;height:190px;opacity:.85;z-index:1500;filter:drop-shadow(0 0 16px rgba(80,230,160,.6))">
-<div class="pin" style="left:792px;top:392px;z-index:2000"><span class="dot"></span>Ore +4 / found</div>
+<div class="pin" style="left:792px;top:392px;z-index:2000"><span class="dot"></span>Ore +4 / haul</div>
 
 <!-- placement card -->
 <div class="a panel" style="left:880px;top:130px;width:340px;padding:12px 14px;z-index:2600;border-color:#50e6a0">
@@ -89,41 +85,42 @@
   <div class="bar" style="margin-top:12px"><i style="width:22%"></i></div>
 </div>
 
-<!-- DISCOVERY TOASTS -->
+<!-- NOTIFICATIONS (right) -->
 <div class="a" style="right:12px;top:76px;width:380px;display:flex;flex-direction:column;gap:6px;z-index:3000">
-  <div class="notif" style="border-left-color:#d4b8ff"><svg class="ic" style="color:#d4b8ff" viewBox="0 0 24 24"><path d="M12 3l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6L7.1 18l.9-5.5-4-3.9 5.5-.8z"/></svg><div>Discovered: Calder River<small>Reactors beside it gain +12 kW cooling</small></div></div>
-  <div class="notif" style="border-left-color:#50e6a0"><svg class="ic t-good" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/></svg><div>Resource found: Ore deposit<small>River bank, 1,800 units</small></div></div>
+  <div class="notif" style="border-left-color:#50e6a0"><svg class="ic t-good" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/></svg><div>Reactor site is valid<small>Beside Calder River, +12 kW cooling</small></div></div>
   <div class="notif"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg><div>Mission updated<small>Raise power, step 2 of 9</small></div></div>
 </div>
 
-<!-- MINIMAP, mostly unexplored -->
+<!-- MINIMAP -->
 <div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
-  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Unexplored</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
-  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#050b12">
-    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat;-webkit-mask-image:radial-gradient(circle at 60px 52px,#000 0,#000 52px,transparent 78px);mask-image:radial-gradient(circle at 60px 52px,#000 0,#000 52px,transparent 78px)"></div>
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
     <div class="a" style="left:30px;top:48px;width:8px;height:8px;background:#40dceb"></div>
     <div class="a" style="left:-20px;top:0;width:200px;height:112px;border:1.5px solid #fff"></div>
   </div>
 </div>
 
-<!-- BOTTOM: nothing selected, survey -->
+<!-- BOTTOM: nothing selected, tile under cursor -->
 <div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 16px;z-index:3000;display:grid;grid-template-columns:1fr 1fr 220px;gap:16px">
   <div>
-    <div class="cap t-cyan">Terrain survey</div>
-    <div style="display:flex;height:10px;margin-top:8px;border:1px solid #1b3342;overflow:hidden"><i style="width:9%;background:#6a9a3a"></i><i style="width:91%;background:#0b1620"></i></div>
-    <div class="sub" style="margin-top:4px">9% of Kestrel Reach explored</div>
-    <div style="margin-top:8px">
-      <div class="row"><span>Calder River</span><span class="tag t-good">Found</span></div>
-      <div class="row"><span>Ore, river bank</span><span class="tag t-good">Found</span></div>
-      <div class="row"><span class="t-dim">Hollow Wood</span><span class="tag t-dim">Unknown</span></div>
-      <div class="row"><span class="t-dim">Ironback Ridge</span><span class="tag t-dim">Unknown</span></div>
+    <div class="cap t-cyan">Tile under cursor</div>
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <div style="width:84px;height:84px;border:1px solid #284e60;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) -175px -66px/900px 600px no-repeat;border-radius:2px;flex:none"></div>
+      <div><div class="disp" style="font-size:24px;color:#e8fcff;line-height:26px">Grassland</div><div class="sub">Tile 15,9 / flat / Player territory</div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><span class="yl y-p"><i></i>River adjacent</span></div></div>
+    </div>
+    <div style="margin-top:10px">
+      <div class="row"><span class="t-dim">Movement</span><span class="mono">1.0x</span></div>
+      <div class="row"><span class="t-dim">Cover</span><span class="mono t-warn">None, open ground</span></div>
+      <div class="row"><span class="t-dim">Build here</span><span class="mono t-good">Reactor +12 kW cooling</span></div>
     </div>
   </div>
   <div style="border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 16px">
     <div class="cap t-cyan">Command Centre</div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:8px"><img src="/_blob/5828f353f51d19ec36c3c638831bfb96" style="width:64px;height:64px;object-fit:contain" alt=""><div><div class="disp" style="font-size:22px;color:#e8fcff">Command Centre</div><div class="sub">Founds the colony, trains crews</div></div></div>
     <div style="display:flex;gap:6px;margin-top:10px"><span class="yl y-m"><i></i>+6 M /m</span><span class="yl y-p"><i></i>12 kW</span><span class="yl y-d"><i></i>sight 8</span></div>
-    <div class="sub" style="margin-top:10px">Send a Scout east to reveal the ford and the flats.</div>
+    <div class="sub" style="margin-top:10px">Train a Scout to watch the ford and the flats.</div>
   </div>
   <div style="display:flex;flex-direction:column;gap:8px;justify-content:center">
     <span class="btn pri">Build Reactor <span class="key">P</span></span>

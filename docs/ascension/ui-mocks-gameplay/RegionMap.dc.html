@@ -20,12 +20,8 @@
 <svg class="a" style="left:0;top:0" width="1620" height="1080" fill="none">
   <defs>
     <pattern id="hx" width="54" height="94" patternUnits="userSpaceOnUse" patternTransform="scale(1)"><path d="M27 0 L54 15.6 V46.8 L27 62.4 L0 46.8 V15.6Z M27 62.4 V94 M0 46.8 L-27 62.4 M54 46.8 L81 62.4" stroke="rgba(255,255,255,.09)" stroke-width="1"/></pattern>
-    <filter id="bl"><feGaussianBlur stdDeviation="14"/></filter>
-    <mask id="fog"><rect width="1620" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><path d="M-40 -40 H1330 V420 L1180 520 L1000 640 L760 760 L520 840 L-40 1000 Z"/></g></mask>
   </defs>
   <rect width="1620" height="1080" fill="url(#hx)"/>
-  <!-- unexplored -->
-  <rect width="1620" height="1080" fill="#050b12" opacity=".86" mask="url(#fog)"/>
   <!-- player border -->
   <path d="M-10 -10 L252 -10 L333 68 L383 130 L432 189 L468 234 L490 288 L517 351 L531 405 L504 450 L270 477 L-10 477 Z" fill="rgba(64,220,235,.10)" stroke="#40dceb" stroke-width="3.5" stroke-linejoin="round"/>
   <!-- alien border -->
@@ -59,8 +55,7 @@
 <div class="pin" style="left:640px;top:344px;z-index:5;border-color:#5f8191;color:#8fb0bf"><span class="dot" style="background:#5f8191"></span>Ore, unclaimed</div>
 <div class="pin" style="left:1020px;top:60px;z-index:5;border-color:#d4b8ff;top:100px"><span class="dot" style="background:#d4b8ff"></span>Alloy +6</div>
 <div class="pin" style="left:1170px;top:128px;z-index:5;border-color:#f04e46;height:30px;font-size:13px"><span class="dot" style="background:#f04e46"></span>Alien holdfast</div>
-<div class="pin" style="left:1088px;top:496px;z-index:5;border-color:#7fd4e0;color:#8fb0bf"><span class="dot" style="background:#7fd4e0"></span>Islet, unvisited</div>
-<div class="pin" style="left:1230px;top:300px;z-index:5;border-color:#5f8191;color:#8fb0bf">Unexplored</div>
+<div class="pin" style="left:1088px;top:496px;z-index:5;border-color:#7fd4e0;color:#8fb0bf"><span class="dot" style="background:#7fd4e0"></span>Islet</div>
 <div class="pin" style="left:690px;top:176px;z-index:5;border-color:#f04e46;height:30px"><span class="dot" style="background:#f04e46"></span>Wave 03 route, 01:52</div>
 
 <!-- compass -->
@@ -83,13 +78,8 @@
     <div class="cap">Composition</div>
     <div style="display:flex;height:10px;margin-top:8px;border:1px solid #1b3342;overflow:hidden"><i style="width:34%;background:#6a9a3a"></i><i style="width:20%;background:#97a64a"></i><i style="width:14%;background:#c9923a"></i><i style="width:10%;background:#6e747a"></i><i style="width:8%;background:#2f8a52"></i><i style="width:8%;background:#2e86ac"></i><i style="width:6%;background:#c9b27a"></i></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-top:8px;font-size:12px;color:#8fb0bf"><span>Grassland 34%</span><span>Meadow 20%</span><span>Dry flats 14%</span><span>Highland 10%</span><span>Forest 8%</span><span>River 8%</span></div>
-  </div>
-  <div class="panel" style="padding:12px">
-    <div style="display:flex;justify-content:space-between"><div class="cap">Explored</div><span class="mono" style="font-size:13px">34%</span></div>
-    <div class="bar" style="margin-top:6px"><i style="width:34%"></i></div>
     <div class="row" style="margin-top:8px"><span class="t-dim">Territory</span><span class="mono">38 tiles</span></div>
-    <div class="row"><span class="t-dim">Resources seen</span><span class="mono">3 of ?</span></div>
-    <div class="row"><span class="t-dim">Hostile sites</span><span class="mono t-bad">1 known</span></div>
+    <div class="row"><span class="t-dim">Hostile sites</span><span class="mono t-bad">1</span></div>
   </div>
   <div class="panel" style="padding:12px">
     <div class="cap">Yields per minute</div>
@@ -107,7 +97,7 @@
   <div class="panel" style="padding:12px;margin-top:auto">
     <div class="cap">Lenses</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
-      <span class="btn sm pri">Terrain</span><span class="btn sm">Resources</span><span class="btn sm pri">Borders</span><span class="btn sm">Threat</span><span class="btn sm pri">Fog</span><span class="btn sm">Hex grid</span>
+      <span class="btn sm pri">Terrain</span><span class="btn sm">Resources</span><span class="btn sm pri">Borders</span><span class="btn sm">Threat</span><span class="btn sm" style="grid-column:span 2">Hex grid</span>
     </div>
   </div>
 </div>

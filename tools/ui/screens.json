@@ -30,5 +30,89 @@
     "mock": "Debrief.dc.html",
     "strip_until": null,
     "ground": "#060910"
+  },
+  "gp01": {
+    "mock": "Main.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp02": {
+    "mock": "BuildDeck.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp03": {
+    "mock": "CoreAssault.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp04": {
+    "mock": "StructureSelected.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp05": {
+    "mock": "OrdersArmed.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp06": {
+    "mock": "EarlyMission.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp07": {
+    "mock": "WaveInbound.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp08": {
+    "mock": "MapOverlays.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp09": {
+    "mock": "PauseMenu.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp10": {
+    "mock": "Controls.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp11": {
+    "mock": "RegionMap.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "gp12": {
+    "mock": "TerrainGuide.dc.html",
+    "dir": "ui-mocks-gameplay",
+    "strip_until": null,
+    "ground": "#30332a",
+    "flatten": true
   }
 }

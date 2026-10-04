@@ -4,6 +4,8 @@ import json, pathlib, re, subprocess, sys
 HERE = pathlib.Path(__file__).absolute().parent
 REPO = HERE.parents[1]
 MOCKS = REPO / "docs/ascension/ui-mocks"
+GAMEPLAY = REPO / "docs/ascension/ui-mocks-gameplay"
+LAND_BLOB = "4439b34dc8ac1316a28492d84cfe9efd"  # shared Kestrel Reach world image used by every gameplay board
 ASSETS = REPO / "assets"
 FONTS = REPO / "godot3d/assets/fonts"
 ROOT_TAG = re.compile(r'<div style="position:relative;width:1920px;height:1080px[^>]*>')
@@ -38,13 +40,21 @@ def screens():
 def prepare(screen, extra_head=""):
     """Return runnable HTML for a screen key from screens.json."""
     cfg = screens()[screen]
+    gameplay = cfg.get("dir") == "ui-mocks-gameplay"
+    src = (GAMEPLAY if gameplay else MOCKS) / cfg["mock"]
     if cfg.get("flatten"):
-        html = subprocess.run(["node", str(HERE / "flatten_dc.mjs"), str(MOCKS / cfg["mock"])],
+        html = subprocess.run(["node", str(HERE / "flatten_dc.mjs"), str(src)],
                               check=True, capture_output=True, text=True).stdout
     else:
-        html = (MOCKS / cfg["mock"]).read_text(encoding="utf8")
+        html = src.read_text(encoding="utf8")
+    if gameplay:
+        # gameplay boards link a shared stylesheet and the world image by relative / artifact paths
+        css = (GAMEPLAY / "hud.css").read_text(encoding="utf8")
+        html = html.replace('<link rel="stylesheet" href="./hud.css">', "<style>" + css + "</style>")
     blob = json.loads((MOCKS / "blob-map.json").read_text())
     def sprite(m):
+        if gameplay and m.group(1) == LAND_BLOB:
+            return "file://" + str(GAMEPLAY / "terrain/land.jpg")
         name = blob.get(m.group(1))
         return "file://" + str(ASSETS / name) if name else "data:image/gif;base64,R0lGODlhAQABAAAAACw="
     html = re.sub(r"/_blob/([0-9a-f]{32})", sprite, html)

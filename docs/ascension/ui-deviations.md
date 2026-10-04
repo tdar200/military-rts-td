@@ -71,6 +71,11 @@ Title:
   "Replay" and "Restart" on victory, and "Retry from checkpoint", "Review replay" and "Restart" on defeat. The client has
   no next chapter, checkpoint or replay to offer.
 
+### Gameplay boards, R7 (decided 2026-10-04)
+- Veteran chevrons: BUILT. Source: per-unit `rank` (0..3) already in the sim.
+- Combat preview: BUILT as damage-type multiplier and rank bonus only. Hit chance and
+  "across the river -25%" are NOT shown (no such mechanic).
+
 ## 5. Known cosmetic items
 
 - The research screen has an empty band at the top where the era-gate block would sit.
