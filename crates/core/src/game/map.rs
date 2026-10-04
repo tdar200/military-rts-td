@@ -124,7 +124,8 @@ impl Ground {
         Self::Sea,
         Self::Crater,
     ];
-    /// Lowest `path_cost` among passable grounds: the A* heuristic factor.
+    /// Lowest `path_cost` among passable grounds: the floor every passable ground must
+    /// respect. The A* heuristic scales by the map's own cheapest tile, never below this.
     pub const MIN_PASSABLE_COST: u32 = 9;
 
     #[must_use]

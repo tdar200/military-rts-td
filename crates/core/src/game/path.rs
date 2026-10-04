@@ -20,23 +20,30 @@ fn step_cost(map: &Map, x: u16, y: u16) -> i64 {
 
 /// Cheapest step cost of any passable tile on `map`: the heuristic's per-hex factor.
 ///
-/// Scaling by the map's own cheapest tile (never below [`Ground::MIN_PASSABLE_COST`])
-/// keeps the heuristic admissible while leaving all-grass maps at the legacy factor of
-/// 10, so their expansion order and tie-breaking, hence their paths, are unchanged.
+/// Scaling by the map's own cheapest tile keeps the heuristic admissible while leaving
+/// all-grass maps at the legacy factor of 10, so their expansion order and tie-breaking,
+/// hence their paths, are unchanged. [`Ground::MIN_PASSABLE_COST`] is the lower bound
+/// every passable ground must respect, so the scan stops as soon as it is reached.
+/// Callers guarantee a passable tile exists (the goal), so the result is a real cost.
 fn min_step_cost(map: &Map) -> i64 {
     let floor = i64::from(Ground::MIN_PASSABLE_COST);
     let mut min = i64::MAX;
     for y in 0..map.height() {
         for x in 0..map.width() {
             if passable(map, i32::from(x), i32::from(y)) {
-                min = min.min(step_cost(map, x, y));
+                let cost = step_cost(map, x, y);
+                debug_assert!(
+                    cost >= floor,
+                    "passable ground cheaper than MIN_PASSABLE_COST"
+                );
+                min = min.min(cost);
                 if min <= floor {
-                    return floor;
+                    return min;
                 }
             }
         }
     }
-    min.max(floor)
+    min
 }
 
 /// Hex-distance heuristic in the same integer units as the step cost (admissible, so A*
@@ -231,21 +238,140 @@ mod ground_cost_tests {
 
     #[test]
     fn unreachable_goal_returns_none_without_hanging() {
-        let mut m = Map::new(6, 6);
-        m.set_ground(5, 5, Ground::Sea);
-        assert!(find_path(&m, (0, 0), (5, 5)).is_none());
+        // A passable goal enclosed by a ring of River/Sea: the search must exhaust the
+        // reachable region and report None, not stop early on an impassable goal.
+        let mut m = Map::new(9, 9);
+        let goal = (4u16, 4u16);
+        for (nx, ny) in crate::game::hex::neighbors(goal.0, goal.1) {
+            let (x, y) = (u16::try_from(nx).unwrap(), u16::try_from(ny).unwrap());
+            m.set_ground(
+                x,
+                y,
+                if (x + y) % 2 == 0 {
+                    Ground::River
+                } else {
+                    Ground::Sea
+                },
+            );
+        }
+        assert!(m.tile(4, 4).unwrap().passable, "goal itself is passable");
+        assert!(find_path(&m, (0, 0), goal).is_none());
+    }
+
+    /// Dijkstra oracle: cheapest total entered-tile cost from `start` to `goal`, or None.
+    /// Same rules as `find_path` (hex neighbours, passable tiles, cost of the tile entered).
+    fn oracle(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<i64> {
+        let (w, h) = (usize::from(map.width()), usize::from(map.height()));
+        let mut dist = vec![i64::MAX; w * h];
+        let mut done = vec![false; w * h];
+        dist[usize::from(start.1) * w + usize::from(start.0)] = 0;
+        loop {
+            let mut best = None;
+            for i in 0..w * h {
+                if !done[i] && dist[i] != i64::MAX && best.is_none_or(|b: usize| dist[i] < dist[b])
+                {
+                    best = Some(i);
+                }
+            }
+            let cur = best?;
+            done[cur] = true;
+            let (cx, cy) = (
+                u16::try_from(cur % w).unwrap(),
+                u16::try_from(cur / w).unwrap(),
+            );
+            if (cx, cy) == goal {
+                return Some(dist[cur]);
+            }
+            for (nx, ny) in crate::game::hex::neighbors(cx, cy) {
+                if nx < 0 || ny < 0 || nx >= i32::from(map.width()) || ny >= i32::from(map.height())
+                {
+                    continue;
+                }
+                if !map.tile(nx, ny).is_some_and(|t| t.passable) {
+                    continue;
+                }
+                let ni = usize::try_from(ny).unwrap() * w + usize::try_from(nx).unwrap();
+                let step = i64::from(map.ground_at(nx, ny).props().path_cost);
+                dist[ni] = dist[ni].min(dist[cur] + step);
+            }
+        }
     }
 
     #[test]
-    fn heuristic_is_admissible_on_a_mixed_map() {
-        let mut m = Map::new(16, 10);
-        for x in 0..16u16 {
-            m.set_ground(x, 5, Ground::Flats);
+    fn find_path_is_optimal_against_a_dijkstra_oracle_on_mixed_ground() {
+        const MIX: [Ground; 13] = [
+            Ground::Grass,
+            Ground::Grass,
+            Ground::Grass,
+            Ground::Flats,
+            Ground::Flats,
+            Ground::Flats,
+            Ground::Highland,
+            Ground::Highland,
+            Ground::Forest,
+            Ground::Forest,
+            Ground::Ford,
+            Ground::River,
+            Ground::Sea,
+        ];
+        let mut seed: u64 = 0x5EED_0003;
+        let mut roll = |bound: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from((seed >> 33) % bound as u64).unwrap()
+        };
+        let (mut reachable, mut unreachable) = (0, 0);
+        for _ in 0..200 {
+            let width = u16::try_from(8 + roll(9)).unwrap();
+            let height = u16::try_from(8 + roll(9)).unwrap();
+            let mut map = Map::new(width, height);
+            for y in 0..height {
+                for x in 0..width {
+                    map.set_ground(x, y, MIX[roll(MIX.len())]);
+                }
+            }
+            for _ in 0..6 {
+                let start = (
+                    u16::try_from(roll(usize::from(width))).unwrap(),
+                    u16::try_from(roll(usize::from(height))).unwrap(),
+                );
+                let goal = (
+                    u16::try_from(roll(usize::from(width))).unwrap(),
+                    u16::try_from(roll(usize::from(height))).unwrap(),
+                );
+                let found = find_path(&map, start, goal);
+                let goal_ok = map
+                    .tile(i32::from(goal.0), i32::from(goal.1))
+                    .unwrap()
+                    .passable;
+                // find_path never checks the start tile, so the oracle matches it by
+                // searching from `start` regardless of its own ground.
+                let want = if goal_ok {
+                    oracle(&map, start, goal)
+                } else {
+                    None
+                };
+                assert_eq!(found.is_some(), want.is_some(), "{start:?}->{goal:?}");
+                if let (Some(path), Some(best)) = (found, want) {
+                    reachable += 1;
+                    assert_eq!(cost(&map, &path), best, "suboptimal {start:?}->{goal:?}");
+                    let mut prev = start;
+                    for &step in &path {
+                        let adjacent = crate::game::hex::neighbors(prev.0, prev.1)
+                            .contains(&(i32::from(step.0), i32::from(step.1)));
+                        assert!(adjacent, "non-adjacent step {prev:?}->{step:?}");
+                        prev = step;
+                    }
+                } else {
+                    unreachable += 1;
+                }
+            }
         }
-        // Cheapest possible cost per step is MIN_PASSABLE_COST, so the heuristic never
-        // overestimates. The path excludes `start`, so a 15-step row path has 15 waypoints.
-        let p = find_path(&m, (0, 5), (15, 5)).unwrap();
-        assert_eq!(p.len(), 15);
+        assert!(
+            reachable > 300 && unreachable > 50,
+            "{reachable}/{unreachable}"
+        );
     }
 
     /// Legacy (uniform step 10, heuristic 10/hex) path pinned from before ground costs
