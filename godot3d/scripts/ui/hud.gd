@@ -19,6 +19,12 @@ const GridProjection = preload("res://scripts/ui/sections/grid_projection.gd")
 const EnemyIntel = preload("res://scripts/ui/sections/enemy_intel.gd")
 const PlacementCard = preload("res://scripts/ui/sections/placement_card.gd")
 const CombatPreview = preload("res://scripts/ui/sections/combat_preview.gd")
+const StructurePanel = preload("res://scripts/ui/sections/structure_panel.gd")
+const SiteCard = preload("res://scripts/ui/sections/site_card.gd")
+const SelectionRoster = preload("res://scripts/ui/sections/selection_roster.gd")
+const AttackMoveBanner = preload("res://scripts/ui/sections/attack_move_banner.gd")
+const WavePanel = preload("res://scripts/ui/sections/wave_panel.gd")
+const ControlGroups = preload("res://scripts/ui/sections/control_groups.gd")
 
 signal action(name: String, arg: Variant)
 
@@ -54,6 +60,12 @@ const GAMEPLAY_KEYS := {
 	"enemy_intel": ["enemy"],
 	"placement_card": ["placing"],
 	"combat_preview": ["combat"],
+	"structure_panel": ["structure"],
+	"selection_roster": ["roster"],
+	"site_card": ["site"],
+	"wave_panel": ["wave_panel"],
+	"control_groups": ["control_groups"],
+	"attack_move_banner": ["armed"],
 }
 
 ## Where the live minimap is drawn. A layout that builds its own slot (core assault) sets this; once that layout's nodes
@@ -104,6 +116,13 @@ func _register_gameplay() -> void:
 	register_section("enemy_intel", func(layer: Control, slice: Variant) -> void: EnemyIntel.build(layer, slice))
 	register_section("placement_card", func(layer: Control, slice: Variant) -> void: PlacementCard.build(layer, slice))
 	register_section("combat_preview", func(layer: Control, slice: Variant) -> void: CombatPreview.build(layer, slice))
+	# Boards 4, 5 and 7: the selected structure and the roster take the bottom frame, the cards stack down the left side.
+	register_section("structure_panel", func(layer: Control, slice: Variant) -> void: StructurePanel.build(layer, slice, emit))
+	register_section("selection_roster", func(layer: Control, slice: Variant) -> void: SelectionRoster.build(layer, slice, emit))
+	register_section("site_card", func(layer: Control, slice: Variant) -> void: SiteCard.build(layer, slice))
+	register_section("wave_panel", func(layer: Control, slice: Variant) -> void: WavePanel.build(layer, slice))
+	register_section("control_groups", func(layer: Control, slice: Variant) -> void: ControlGroups.build(layer, slice, emit))
+	register_section("attack_move_banner", func(layer: Control, slice: Variant) -> void: AttackMoveBanner.build(layer, slice))
 
 
 func _layer(key: String) -> Control:

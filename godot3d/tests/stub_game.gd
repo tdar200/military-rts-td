@@ -34,6 +34,8 @@ var tutorial_stage := 8
 var selected: Node3D
 var selected_units: Array = []
 var attack_move_armed := false
+var rally_armed := false
+var control_groups: Dictionary = {}
 var build_mode := ""
 var mouse := Vector2(900, 500)
 var camera: Camera3D
@@ -103,6 +105,14 @@ func view_ground_rect() -> Rect2:
 
 func focus_camera(pos: Vector3, zoom: float) -> void:
 	calls.append(["focus", pos, zoom])
+
+
+func arm_rally() -> void:
+	calls.append(["arm_rally"])
+
+
+func recall_control_group(group: int) -> void:
+	calls.append(["recall_group", group])
 
 
 func _on_command_button(action: String) -> void:

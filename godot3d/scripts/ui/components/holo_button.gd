@@ -8,6 +8,8 @@ const TextBox = preload("res://scripts/ui/components/text_box.gd")
 
 var variant := "btn"
 var primary := false
+## The mock's .btn.danger: a dull red edge and pale red ink (Demolish).
+var danger := false
 var active := false
 var key_text := ""
 var icon_name := ""
@@ -39,11 +41,12 @@ func _init() -> void:
 	button_up.connect(queue_redraw)
 
 
-## Options: variant, primary, key, icon, column, px, sp, min_h, pad, w, h (explicit size), tab_on.
+## Options: variant, primary, danger, key, icon, column, px, sp, min_h, pad, w, h (explicit size), tab_on.
 func setup(label: String, o := {}) -> Control:
 	text = label
 	variant = o.get("variant", variant)
 	primary = o.get("primary", primary)
+	danger = o.get("danger", danger)
 	active = o.get("on", active)
 	key_text = str(o.get("key", key_text)).to_upper()
 	icon_name = o.get("icon", icon_name)
@@ -132,8 +135,8 @@ func _draw() -> void:
 		ink = T.TEXT_HI
 	else:
 		fill = T.HOVER if is_hovered() and not disabled else T.RAISED
-		edge = T.LINE
-		ink = T.TEXT
+		edge = T.DANGER_EDGE if danger else T.LINE
+		ink = T.BAD_HI if danger else T.TEXT
 	if is_pressed() and not disabled:
 		fill = fill.lightened(0.12)
 	var fade := 0.45 if disabled else 1.0

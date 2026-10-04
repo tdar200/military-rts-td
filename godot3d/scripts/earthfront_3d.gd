@@ -56,6 +56,8 @@ var selection_box: Control
 var ui: Node  # GameUI: every on-screen surface
 var build_cursor_is_valid := false
 var attack_move_armed := false
+## True after the structure panel's Set rally button: the next left click on the map sets the selected producer's rally point.
+var rally_armed := false
 var build_mode := ""
 var selection_ring: MeshInstance3D
 var objective_label: Label
@@ -1208,6 +1210,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera_focus_zoom = minf(24.0, camera_focus_zoom + 1.25)
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
+				if rally_armed:
+					rally_armed = false
+					var rally_ground := _screen_to_ground(event.position)
+					if rally_ground != Vector3.INF and is_instance_valid(selected) and String(selected.get_meta("category", "unit")) == "building":
+						_write_bridge_rally(selected, rally_ground)
+					return
 				if build_mode != "":
 					var build_ground := _screen_to_ground(event.position)
 					if build_ground != Vector3.INF:
@@ -1253,10 +1261,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			select_idle_crew()
 		elif event.keycode == KEY_A:
 			attack_move_armed = true
+			rally_armed = false
 			build_mode = ""
 			objective_label.text = "ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION"
 		elif event.keycode == KEY_ESCAPE:
 			attack_move_armed = false
+			rally_armed = false
 			build_mode = ""
 			if is_instance_valid(build_ghost):
 				build_ghost.visible = false
@@ -1268,9 +1278,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.ctrl_pressed:
 				control_groups[group] = selected_units.duplicate()
 				objective_label.text = "CONTROL GROUP %d ASSIGNED" % group
-			elif control_groups.has(group):
-				_set_selection(control_groups[group])
-				objective_label.text = "CONTROL GROUP %d RECALLED" % group
+			else:
+				recall_control_group(group)
 		elif event.keycode == KEY_T:
 			_write_bridge_train("Infantry")
 		elif event.keycode == KEY_K:
@@ -1358,7 +1367,27 @@ func _select_at(screen_position: Vector2, additive := false, similar := false) -
 	_set_selection(found)
 
 
+## Selects control group `group` (the number keys and the control group list both end here).
+func recall_control_group(group: int) -> void:
+	if control_groups.has(group):
+		_set_selection(control_groups[group])
+		objective_label.text = "CONTROL GROUP %d RECALLED" % group
+
+
+## Structure panel's Set rally: the next left click on the map sets the selected producer's rally point (the existing
+## `rally` bridge command; right click on the map does the same). Esc cancels.
+func arm_rally() -> void:
+	if not is_instance_valid(selected) or String(selected.get_meta("kind_name", "")) not in ["Barracks", "Refinery", "VehicleFactory", "Airfield"]:
+		objective_label.text = "SELECT A BARRACKS OR REFINERY TO SET A RALLY POINT"
+		return
+	rally_armed = true
+	attack_move_armed = false
+	build_mode = ""
+	objective_label.text = "SET RALLY ARMED: CLICK A TILE, ESC CANCELS"
+
+
 func _set_selection(selection: Array) -> void:
+	rally_armed = false
 	selected_units.clear()
 	for candidate in selection:
 		if is_instance_valid(candidate) and candidate is Node3D:
@@ -2218,8 +2247,16 @@ func _on_command_button(action: String) -> void:
 	match action:
 		"attack":
 			attack_move_armed = true
+			rally_armed = false
 			build_mode = ""
 			objective_label.text = "ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION"
+		"cancel_orders":
+			attack_move_armed = false
+			rally_armed = false
+			build_mode = ""
+			if is_instance_valid(build_ghost):
+				build_ghost.visible = false
+			objective_label.text = "COMMAND MODE CANCELLED"
 		"train_infantry":
 			_write_bridge_train("Infantry")
 		"train_tank":
@@ -2542,6 +2579,7 @@ func _restart_mission() -> void:
 func _arm_build(kind_name: String) -> void:
 	build_mode = kind_name
 	attack_move_armed = false
+	rally_armed = false
 	if not is_instance_valid(build_ghost):
 		var ghost_mesh := CylinderMesh.new()
 		ghost_mesh.top_radius = 0.58

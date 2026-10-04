@@ -95,6 +95,94 @@ static func assault_board() -> Dictionary:
 	}
 
 
+const SPR := "res://assets/ui/sprites/"
+
+
+## Board 4 (StructureSelected): Barracks 04 selected. The board's per-unit queue names, "Queue cost", "Cancel last", "Supply
+## range", "Ore +4" and the rally walk time have no data and are not here; the queue is the running job and a queued count.
+static func structure_board() -> Dictionary:
+	return {
+		"minimap": {"keys": [], "name": "Kestrel Reach"},
+		"lens": {"on": "land"},
+		"site": {"cap": "Barracks 04 site", "rows": [
+			{"label": "Terrain", "value": "Grassland", "tone": ""},
+			{"label": "Forest edge", "value": "3 tiles S, 20% cover", "tone": ""},
+			{"label": "Ford", "value": "18 tiles E", "tone": ""},
+		]},
+		"structure": {
+			"id": 50, "kind": "Barracks", "name": "Barracks 04", "sprite": SPR + "barracks_v2.png",
+			"tag": {"text": "Online", "tone": "good"},
+			"hp": {"now": 480, "max": 480, "ratio": 1.0, "tone": "good"},
+			"rows": [
+				{"label": "Power", "value": "100% supplied", "tone": "good"},
+				{"label": "Output", "value": "1 unit / 18 s", "tone": ""},
+				{"label": "Rally", "value": "River bank", "tone": "good"},
+			],
+			"queue": {"cells": [{"name": "Infantry", "ratio": 0.38, "note": "0:11", "sprite": SPR + "infantry_v2.png"}], "queued": 2},
+			"buttons": [
+				{"label": "Set rally", "action": "set_rally", "arg": 50, "primary": true},
+				{"label": "Repair", "key": "U", "action": "order", "arg": "repair"},
+				{"label": "Focus building", "key": "F", "action": "order", "arg": "focus"},
+				{"label": "Demolish", "key": "Del", "action": "order", "arg": "sell", "danger": true},
+			],
+		},
+	}
+
+
+## Board 5 (OrdersArmed): nine units selected with attack-move armed. Group names are the board's; the live game names a
+## group after its commonest unit. The armed hint is the game's real wording (right click). "Confirm target", "Queue
+## waypoint" and "Ford ahead" have no data and are not here.
+static func orders_board() -> Dictionary:
+	var kinds := [["Tank", "Tank", "tank_v2.png", 0.92], ["Tank", "Tank", "tank_v2.png", 0.74], ["Tank", "Tank", "tank_v2.png", 0.58], ["Tank", "Tank", "tank_v2.png", 1.0],
+		["AntiArmor", "Anti-armour", "anti_armor_v2.png", 0.88], ["AntiArmor", "Anti-armour", "anti_armor_v2.png", 0.41],
+		["Infantry", "Infantry", "infantry_v2.png", 1.0], ["Infantry", "Infantry", "infantry_v2.png", 0.66], ["AaTurret", "AA", "aa_turret_v2.png", 1.0]]
+	var cards: Array = []
+	for i in kinds.size():
+		var k: Array = kinds[i]
+		var ratio: float = k[3]
+		cards.append({"id": i + 1, "kind": k[0], "name": k[1], "ratio": ratio, "tone": "bad" if ratio < 0.5 else ("warn" if ratio < 0.75 else "good"), "rank": 0, "sprite": SPR + str(k[2])})
+	return {
+		"minimap": {"keys": [], "name": "Kestrel Reach"},
+		"lens": {"on": "land"},
+		"armed": {"hint": "Right click a tile to go, Esc to cancel"},
+		"control_groups": {"slots": [
+			{"n": 1, "count": 9, "label": "Vanguard", "on": true},
+			{"n": 2, "count": 3, "label": "Gun line", "on": false},
+			{"n": 3, "count": 2, "label": "Harvesters", "on": false},
+			{"n": 4, "count": 0, "label": "", "on": false},
+		]},
+		"roster": {"title": "Vanguard", "count": "9 units", "armed": true, "more": 0, "cards": cards, "standing": "Grassland", "speed": "speed 1.0x", "speed_tone": "good"},
+	}
+
+
+## Board 7 (WaveInbound): Gun turret 01 selected while the next wave is inside its window. The board's hostile count, prong
+## count, "Suggested" list, turret targets, ammo percentage and "Fire across the river" row have no data and are not here.
+static func wave_board() -> Dictionary:
+	return {
+		"minimap": {"keys": [], "name": "Kestrel Reach"},
+		"lens": {"on": "thr"},
+		"wave_panel": {"cap": "Wave 02", "tag": "Inbound", "title": "Hold Wyllow Ford", "rows": [
+			{"label": "Next wave", "value": "03:20", "tone": "warn"},
+			{"label": "Direction", "value": "From the east", "tone": ""},
+		]},
+		"structure": {
+			"id": 61, "kind": "GunTurret", "name": "Gun turret 01", "sprite": SPR + "gun_turret_v2.png",
+			"tag": {"text": "Critical", "tone": "bad"},
+			"hp": {"now": 128, "max": 320, "ratio": 0.4, "tone": "bad"},
+			"rows": [{"label": "Power", "value": "100% supplied", "tone": "good"}],
+			"terrain": {"glyph": "g", "title": "River bank, Grassland", "sub": "Tile 17,9 / your territory", "rows": [
+				{"label": "Movement", "value": "Foot 100%, vehicles 100%", "tone": ""},
+				{"label": "Cover", "value": "None, open ground", "tone": "warn"},
+			]},
+			"buttons": [
+				{"label": "Repair", "key": "U", "action": "order", "arg": "repair", "primary": true},
+				{"label": "Focus building", "key": "F", "action": "order", "arg": "focus"},
+				{"label": "Demolish", "key": "Del", "action": "order", "arg": "sell", "danger": true},
+			],
+		},
+	}
+
+
 static func _enemy_cells() -> Array:
 	var cells: Array = []
 	for i in 8:

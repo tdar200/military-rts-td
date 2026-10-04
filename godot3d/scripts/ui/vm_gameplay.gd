@@ -596,10 +596,7 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 		return {}
 	var kinds := {}
 	var ranks := {}
-	var ground_votes := {}
-	var stand_at := {}
-	var foot := 0
-	var wheels := 0
+	var grounded: Array = []
 	for id in attacker_ids:
 		var a := _entity_by_id(snap, int(id))
 		if a.is_empty() or int(a.get("owner", -1)) != HUMAN or str(a.get("category", "")) != "unit":
@@ -609,17 +606,8 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 		if int(a.get("rank", 0)) > 0 and Rules.damage_of(kind) != "":
 			var rk := mini(int(a["rank"]), Rules.VETERANCY_PCT.size() - 1)
 			ranks[rk] = int(ranks.get(rk, 0)) + 1
-		if kind in AIR_KINDS:
-			continue
-		var cell := entity_cell(a)
-		var glyph: String = ground_model.glyph_at(int(cell[0]), int(cell[1]))
-		ground_votes[glyph] = int(ground_votes.get(glyph, 0)) + 1
-		if not stand_at.has(glyph):
-			stand_at[glyph] = cell
-		if kind in FOOT_KINDS:
-			foot += 1
-		else:
-			wheels += 1
+		if not (kind in AIR_KINDS):
+			grounded.append(a)
 	if kinds.is_empty():
 		return {}
 	var parts: Array = []
@@ -644,15 +632,12 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 	for rk in rank_order:
 		var n := int(ranks[rk])
 		rows.append({"label": "Veteran rank %d%s" % [rk, ", %d units" % n if n > 1 else ""], "value": "+%d%% damage" % Rules.veterancy_pct(int(rk)), "tone": "good"})
-	if not ground_votes.is_empty():
-		var best := ""
-		for glyph in ground_votes:
-			if best == "" or int(ground_votes[glyph]) > int(ground_votes[best]):
-				best = glyph
-		var spot: Array = stand_at[best]
+	var under := ground_under(ground_model, grounded)
+	if not under.is_empty():
+		var spot: Array = under["spot"]
 		var here: Dictionary = ground_model.props_at(int(spot[0]), int(spot[1]))
 		var name := str(here.get("name", "ground"))
-		var pct := int(here.get("infantry_pct", 100)) if foot >= wheels else int(here.get("vehicle_pct", 100))
+		var pct := int(here.get("infantry_pct", 100)) if int(under["foot"]) >= int(under["wheels"]) else int(here.get("vehicle_pct", 100))
 		rows.append({"label": "Standing on %s" % name, "value": _speed_text(pct), "tone": "good" if pct > 100 else ("bad" if pct < 100 else "dim")})
 		if int(here.get("range_pct", 0)) > 0:
 			rows.append({"label": "Holding %s" % name, "value": "+%d%% range" % int(here["range_pct"]), "tone": "good"})
@@ -662,3 +647,414 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 	rows.append({"label": "Target on %s" % str(there.get("name", "ground")), "value": "-%d%% damage" % cover if cover > 0 else "no cover", "tone": "bad" if cover > 0 else "dim"})
 	return out
 
+
+
+# ------------------------------------------------------------------ boards 4, 5 and 7 (task 12C)
+
+## Buildings the sim lets the player set a rally point on (earthfront_3d.gd _write_bridge_rally) and that run a queue.
+const PRODUCER_KINDS := ["Barracks", "VehicleFactory", "Airfield", "Refinery"]
+## The roster draws at most this many unit cards in its row; the rest is a count.
+const ROSTER_MAX := 12
+## The wave panel shows for the same window as the top bar's wave card (live_adapter.gd _wave_card): 90 s at 30 ticks a second.
+const WAVE_PANEL_WINDOW := 2700
+## Weapon ranges of the two turrets, in sim distance (stats.rs BuildingKind::stats); test_vm_gameplay_boards457.gd parses
+## the Rust source so a rebalance fails a test here instead of drifting.
+const GUN_TURRET_RANGE := 5
+const AA_TURRET_RANGE := 6
+## Control group keys the game binds (earthfront_3d.gd KEY_1 to KEY_4).
+const CONTROL_SLOTS := 4
+## Route arrows are drawn between every this-many route hexes.
+const WAVE_ARROW_STEP := 6
+## The fortify hint looks this many route hexes back from where the route enters the player's zone for a named crossing.
+const WAVE_FORTIFY_LOOKBACK := 4
+const COMPASS := ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
+const COMPASS_WORDS := ["east", "south-east", "south", "south-west", "west", "north-west", "north", "north-east"]
+## Region kinds (snapshot `regions`) and the ground names that really belong to them: a route hex counts as crossing a
+## region only when its ground matches, because a region is a bounding box and the river's covers most of the map.
+const REGION_GROUNDS := {
+	"grassland": ["Grassland", "Meadow"], "forest": ["Forest"], "river": ["River", "Ford"], "ford": ["Ford"],
+	"flats": ["Dry flats"], "highland": ["Highland"], "sea": ["Sea", "Shore"],
+}
+const QUIET_REGIONS := ["grassland", "colony", "sea"]
+
+
+static func _service_of(snap: Dictionary, id: int) -> Dictionary:
+	for s in snap.get("services", []):
+		if s is Dictionary and int(s.get("id", -1)) == id:
+			return s
+	return {}
+
+
+static func _hp_tone(ratio: float) -> String:
+	return "bad" if ratio < 0.5 else ("warn" if ratio < 0.75 else "good")
+
+
+## Hex a pair of 16.16 sim coordinates falls in (same maths as entity_cell).
+static func cell_of_bits(x_bits: int, z_bits: int) -> Array:
+	return entity_cell({"x_bits": x_bits, "z_bits": z_bits})
+
+
+## Compass index 0..7 (E, SE, S, SW, W, NW, N, NE) from hex a to hex b; rows grow southward, odd columns sit half a row lower.
+static func _compass(a: Array, b: Array) -> int:
+	var dx := (int(b[0]) - int(a[0])) * SIM_HEX_X
+	var dz := float(int(b[1]) - int(a[1])) + 0.5 * float((int(b[0]) & 1) - (int(a[0]) & 1))
+	var sector := roundi(rad_to_deg(atan2(dz, dx)) / 45.0)
+	return posmod(sector, 8)
+
+
+static func _sprite_path(kind: String) -> String:
+	var adapter = load("res://scripts/ui/live_adapter.gd")
+	if kind == "CommandCenter":
+		return adapter.SPR + "command_center_v2.png"
+	for card in adapter.BUILD_CARDS:
+		if str(card[1]) == kind:
+			return adapter.SPR + str(card[7])
+	for card in adapter.UNIT_CARDS:
+		if str(card[3]) == kind and str(card[7]) != "":
+			return adapter.SPR + str(card[7])
+	return ""
+
+
+## The name a human building of `kind` shows: numbered (Barracks 2) only when the player has several of that kind, in
+## snapshot entity order, as the colony ledger numbers its producers.
+static func _structure_name(snap: Dictionary, e: Dictionary) -> String:
+	var kind := str(e.get("kind", ""))
+	var total := 0
+	var index := 0
+	for o in _entities(snap):
+		if o is Dictionary and int(o.get("owner", -1)) == HUMAN and str(o.get("category", "")) == "building" and str(o.get("kind", "")) == kind:
+			total += 1
+			if int(o.get("id", -1)) == int(e.get("id", -2)):
+				index = total
+	var label := _kind_label(kind)
+	return label if total <= 1 else "%s %d" % [label, index]
+
+
+## The selected structure panel (board 4 and 7): one of the player's own buildings. Everything is read from its entity, its
+## service row and the ground under it. Buttons are only those the bridge can carry out: Set rally (producers), Repair, Focus
+## building and Demolish (the sim's Sell, refused for the HQ). "Cancel last" is not built, the sim has no cancel command.
+## {} for units, alien buildings and unknown ids.
+static func structure(snap: Dictionary, ground_model, id: int) -> Dictionary:
+	var e := _entity_by_id(snap, id)
+	if e.is_empty() or int(e.get("owner", -1)) != HUMAN or str(e.get("category", "")) != "building":
+		return {}
+	var kind := str(e.get("kind", ""))
+	var construction := int(e.get("construction", 0))
+	var service := _service_of(snap, id)
+	var out := {"id": id, "kind": kind, "name": _structure_name(snap, e), "sprite": _sprite_path(kind)}
+	var ratio := 1.0
+	var max_hp := float(int(e.get("max_hp_bits", 0))) / 65536.0
+	if max_hp > 0.0:
+		var now := float(int(e.get("hp_bits", 0))) / 65536.0
+		ratio = clampf(now / max_hp, 0.0, 1.0)
+		out["hp"] = {"now": roundi(now), "max": roundi(max_hp), "ratio": ratio, "tone": _hp_tone(ratio)}
+	var power := float(int(service.get("power", 1000))) / 1000.0 if not service.is_empty() else 1.0
+	if construction > 0:
+		out["tag"] = {"text": "Under construction", "tone": "cyan"}
+	elif ratio < 0.5:
+		out["tag"] = {"text": "Critical", "tone": "bad"}
+	elif not service.is_empty() and power < 0.5:
+		out["tag"] = {"text": "Underpowered", "tone": "warn"}
+	elif ratio < 0.75:
+		out["tag"] = {"text": "Damaged", "tone": "warn"}
+	else:
+		out["tag"] = {"text": "Online", "tone": "good"}
+	var rows: Array = []
+	if construction > 0:
+		var done := 1.0 - float(construction) / maxf(1.0, float(int(e.get("construction_total", 1))))
+		rows.append({"label": "Construction", "value": "%d%%" % roundi(clampf(done, 0.0, 1.0) * 100.0), "tone": "dim"})
+	if not service.is_empty():
+		rows.append({"label": "Power", "value": "%d%% supplied" % roundi(power * 100.0), "tone": "good" if power >= 0.95 else "warn"})
+	var duration := int(e.get("production_duration", 0))
+	var producing := str(e.get("production_name", "")) != "" and duration > 0
+	if producing:
+		rows.append({"label": "Output", "value": "1 unit / %d s" % _seconds(duration), "tone": ""})
+	if kind == "Refinery" and not service.is_empty():
+		rows.append({"label": "Ore stored", "value": "%d / %d" % [int(service.get("ore", 0)), int(service.get("ore_capacity", 300))], "tone": ""})
+	if int(service.get("stock", 0)) > 0:
+		rows.append({"label": "Ammunition stock", "value": "%d rounds" % int(service["stock"]), "tone": ""})
+	if bool(service.get("prototype", false)):
+		rows.append({"label": "Prototype testing", "value": "Queue paused", "tone": "warn"})
+	var producer := kind in PRODUCER_KINDS
+	if producer:
+		var rally_at := int(e.get("rally_x_bits", -1))
+		if rally_at >= 0 and ground_model != null:
+			var cell := cell_of_bits(rally_at, int(e.get("rally_z_bits", 0)))
+			rows.append({"label": "Rally", "value": str(ground_model.name_at(int(cell[0]), int(cell[1]))), "tone": "good"})
+		else:
+			rows.append({"label": "Rally", "value": "Not set", "tone": "dim"})
+	out["rows"] = rows
+	if producer and construction == 0:
+		var cells: Array = []
+		if producing:
+			var left := maxi(0, duration - int(e.get("production_progress", 0)))
+			var unit := str(e.get("production_name", ""))
+			cells.append({"name": _kind_label(unit), "ratio": clampf(float(int(e.get("production_progress", 0))) / float(duration), 0.0, 1.0), "note": "%d:%02d" % [_seconds(left) / 60, _seconds(left) % 60], "sprite": _sprite_path(unit)})
+		out["queue"] = {"cells": cells, "queued": int(e.get("production_queued", 0))}
+	elif ground_model != null:
+		var cell := entity_cell(e)
+		var props: Dictionary = ground_model.props_at(int(cell[0]), int(cell[1]))
+		if not props.is_empty():
+			var inside := false
+			for c in snap.get("construction_zone", []):
+				if c is Array and c.size() >= 2 and int(c[0]) == int(cell[0]) and int(c[1]) == int(cell[1]):
+					inside = true
+					break
+			var foot := int(props.get("infantry_pct", 100))
+			var wheels := int(props.get("vehicle_pct", 100))
+			var cover := int(props.get("cover_pct", 0))
+			var trows: Array = [
+				{"label": "Movement", "value": "Foot %d%%, vehicles %d%%" % [foot, wheels] if foot + wheels > 0 else "Impassable", "tone": "" if foot + wheels > 0 else "warn"},
+				{"label": "Cover", "value": "%d%% less damage taken" % cover if cover > 0 else "None, open ground", "tone": "good" if cover > 0 else "warn"},
+			]
+			if int(props.get("range_pct", 0)) > 0:
+				trows.append({"label": "Range", "value": "+%d%% weapon range" % int(props["range_pct"]), "tone": "good"})
+			out["terrain"] = {"glyph": ground_model.glyph_at(int(cell[0]), int(cell[1])), "title": str(props.get("name", "")), "sub": "Tile %d,%d / %s" % [int(cell[0]), int(cell[1]), "your territory" if inside else "outside your territory"], "rows": trows}
+	var buttons: Array = []
+	if producer and construction == 0:
+		buttons.append({"label": "Set rally", "action": "set_rally", "arg": id})
+	buttons.append({"label": "Repair", "key": "U", "action": "order", "arg": "repair"})
+	buttons.append({"label": "Focus building", "key": "F", "action": "order", "arg": "focus"})
+	if kind != "CommandCenter":
+		buttons.append({"label": "Demolish", "key": "Del", "action": "order", "arg": "sell", "danger": true})
+	buttons[0]["primary"] = true
+	out["buttons"] = buttons
+	return out
+
+
+## The card on the left of board 4: what surrounds the selected building. Terrain from the ground table, then the nearest
+## Forest and Ford tile as a hex count and compass direction (the board's "Supply range" row has no data and is not built).
+## {} for unknown ids or without a ground model.
+static func site_card(snap: Dictionary, ground_model, id: int) -> Dictionary:
+	var e := _entity_by_id(snap, id)
+	if ground_model == null or e.is_empty() or int(e.get("owner", -1)) != HUMAN or str(e.get("category", "")) != "building":
+		return {}
+	var at := entity_cell(e)
+	var rows: Array = [{"label": "Terrain", "value": ground_model.name_at(int(at[0]), int(at[1])), "tone": ""}]
+	for pair in [["Forest edge", "Forest"], ["Ford", "Ford"]]:
+		var best := 1 << 30
+		var spot: Array = []
+		for y in ground_model.height:
+			for x in ground_model.width:
+				if ground_model.name_at(x, y) != str(pair[1]):
+					continue
+				var d := hex_distance(int(at[0]), int(at[1]), x, y)
+				if d > 0 and d < best:
+					best = d
+					spot = [x, y]
+		if spot.is_empty():
+			continue
+		var value := "%d tile%s %s" % [best, "" if best == 1 else "s", COMPASS[_compass(at, spot)]]
+		var cover := int(ground_model.props_at(int(spot[0]), int(spot[1])).get("cover_pct", 0))
+		if cover > 0:
+			value += ", %d%% cover" % cover
+		rows.append({"label": pair[0], "value": value, "tone": ""})
+	return {"cap": "%s site" % _structure_name(snap, e), "rows": rows}
+
+
+## The player's units among `ids`, as the shared "where do they stand" answer: the ground most of the ground units are on,
+## a hex that has it, and how many are foot units against wheeled. {} when none are ground units.
+static func ground_under(ground_model, units: Array) -> Dictionary:
+	var votes := {}
+	var stand_at := {}
+	var foot := 0
+	var wheels := 0
+	for u in units:
+		var cell := entity_cell(u)
+		var glyph: String = ground_model.glyph_at(int(cell[0]), int(cell[1]))
+		votes[glyph] = int(votes.get(glyph, 0)) + 1
+		if not stand_at.has(glyph):
+			stand_at[glyph] = cell
+		if str(u.get("kind", "")) in FOOT_KINDS:
+			foot += 1
+		else:
+			wheels += 1
+	if votes.is_empty():
+		return {}
+	var best := ""
+	for glyph in votes:
+		if best == "" or int(votes[glyph]) > int(votes[best]):
+			best = glyph
+	return {"spot": stand_at[best], "foot": foot, "wheels": wheels}
+
+
+## The selection roster (board 5): one card per selected player unit with its real health and rank, capped at ROSTER_MAX.
+## `veterans` is the veterans slice ({unit id: rank}). With a ground model it also says what the group stands on and how fast
+## it moves there. {} when none of `ids` is a player unit.
+static func roster(snap: Dictionary, ground_model, ids: Array, armed: bool, vets: Dictionary) -> Dictionary:
+	var units: Array = []
+	for id in ids:
+		var e := _entity_by_id(snap, int(id))
+		if not e.is_empty() and int(e.get("owner", -1)) == HUMAN and str(e.get("category", "")) == "unit":
+			units.append(e)
+	if units.is_empty():
+		return {}
+	var cards: Array = []
+	for e in units:
+		var max_hp := float(int(e.get("max_hp_bits", 0))) / 65536.0
+		var ratio := clampf(float(int(e.get("hp_bits", 0))) / 65536.0 / max_hp, 0.0, 1.0) if max_hp > 0.0 else 1.0
+		var kind := str(e.get("kind", ""))
+		cards.append({"id": int(e.get("id", -1)), "kind": kind, "name": _kind_label(kind), "ratio": ratio, "tone": _hp_tone(ratio), "rank": int(vets.get(int(e.get("id", -1)), 0)), "sprite": _sprite_path(kind)})
+	var out := {
+		"title": str(cards[0]["name"]) if units.size() == 1 else "Strike group",
+		"count": "1 unit" if units.size() == 1 else "%d units" % units.size(),
+		"armed": armed,
+		"cards": cards.slice(0, ROSTER_MAX),
+		"more": maxi(0, cards.size() - ROSTER_MAX),
+	}
+	if ground_model != null:
+		var grounded := units.filter(func(u): return not (str(u.get("kind", "")) in AIR_KINDS))
+		var under := ground_under(ground_model, grounded)
+		if not under.is_empty():
+			var spot: Array = under["spot"]
+			var here: Dictionary = ground_model.props_at(int(spot[0]), int(spot[1]))
+			var pct := int(here.get("infantry_pct", 100)) if int(under["foot"]) >= int(under["wheels"]) else int(here.get("vehicle_pct", 100))
+			out["standing"] = str(here.get("name", "ground"))
+			out["speed"] = "speed %.1fx" % (float(pct) / 100.0)
+			out["speed_tone"] = "good" if pct >= 100 else "warn"
+	return out
+
+
+## The smallest named region whose box and ground kind both fit this route hex ("" when none). `quiet` leaves out regions
+## that are not worth a mention (home grassland, the colony, the sea).
+static func _region_of(regions: Array, ground_model, x: int, y: int, quiet: bool) -> String:
+	var best := ""
+	var best_area := 1 << 30
+	var ground_name: String = ground_model.name_at(x, y) if ground_model != null else ""
+	for r in regions:
+		if x < int(r["x0"]) or x > int(r["x1"]) or y < int(r["y0"]) or y > int(r["y1"]):
+			continue
+		var kind := str(r["kind"])
+		if quiet and kind in QUIET_REGIONS:
+			continue
+		if ground_model != null and REGION_GROUNDS.has(kind) and not (ground_name in REGION_GROUNDS[kind]):
+			continue
+		var area := (int(r["x1"]) - int(r["x0"]) + 1) * (int(r["y1"]) - int(r["y0"]) + 1)
+		if area < best_area:
+			best_area = area
+			best = str(r["name"])
+	return best
+
+
+## True when the next wave is inside WAVE_PANEL_WINDOW ticks of arriving.
+static func wave_in_window(snap: Dictionary) -> bool:
+	return snap.has("next_wave_ticks") and int(snap["next_wave_ticks"]) >= 0 and int(snap["next_wave_ticks"]) <= WAVE_PANEL_WINDOW
+
+
+## The wave panel (board 7, left): the next wave from the snapshot's own fields (timer, size, doctrine, route). It shows
+## only inside WAVE_PANEL_WINDOW of the wave arriving. Title: "Fortify <region>" for the named crossing (not home grassland)
+## within WAVE_FORTIFY_LOOKBACK hexes before the route enters the player's construction zone ("Fortify tile x,y" for the
+## hex before it when none is named), else the doctrine. The board's
+## "5 left of 12" and "East bank, 2 prongs" have no data, so no hostile count and no prong count are built.
+static func wave_panel(snap: Dictionary, ground_model) -> Dictionary:
+	if not wave_in_window(snap):
+		return {}
+	var seconds := _seconds(int(snap["next_wave_ticks"]))
+	var rows: Array = [{"label": "Next wave", "value": "%02d:%02d" % [seconds / 60, seconds % 60], "tone": "warn"}]
+	var out := {"cap": "Wave %02d" % (int(snap.get("waves_survived", 0)) + 1), "tag": "Inbound", "title": "", "rows": rows}
+	var doctrine := str(snap.get("incoming_doctrine", ""))
+	var route: Array = []
+	for c in snap.get("wave_route", []):
+		if c is Array and c.size() >= 2:
+			route.append([int(c[0]), int(c[1])])
+	var regions := regions(snap)
+	if int(snap.get("next_expedition_size", 0)) > 0:
+		rows.append({"label": "Expected", "value": "%d units" % int(snap["next_expedition_size"]), "tone": ""})
+	if doctrine != "":
+		rows.append({"label": "Doctrine", "value": doctrine, "tone": ""})
+	out["title"] = doctrine
+	if route.size() >= 2:
+		var home: Array = route[route.size() - 1]
+		rows.append({"label": "Direction", "value": "From the %s" % COMPASS_WORDS[_compass(home, route[0])], "tone": ""})
+		var crossed: Array = []
+		for hex in route:
+			var name := _region_of(regions, ground_model, int(hex[0]), int(hex[1]), true)
+			if name != "" and not (name in crossed):
+				crossed.append(name)
+		if not crossed.is_empty():
+			rows.append({"label": "Crosses", "value": ", ".join(crossed), "tone": "warn"})
+		var zone := {}
+		for c in snap.get("construction_zone", []):
+			if c is Array and c.size() >= 2:
+				zone[Vector2i(int(c[0]), int(c[1]))] = true
+		for i in range(1, route.size()):
+			if zone.has(Vector2i(int(route[i][0]), int(route[i][1]))):
+				var before: Array = route[i - 1]
+				if not zone.has(Vector2i(int(before[0]), int(before[1]))):
+					# The nearest named crossing just before the zone (the ford the wave wades), else the tile itself.
+					var region := ""
+					for k in range(i - 1, maxi(i - 1 - WAVE_FORTIFY_LOOKBACK, -1), -1):
+						region = _region_of(regions, ground_model, int(route[k][0]), int(route[k][1]), true)
+						if region != "":
+							break
+					out["title"] = "Fortify %s" % region if region != "" else "Fortify tile %d,%d" % [int(before[0]), int(before[1])]
+				break
+	if int(snap.get("active_alien_relays", 0)) > 0:
+		rows.append({"label": "Relays", "value": "%d operating" % int(snap["active_alien_relays"]), "tone": "warn"})
+	return out
+
+
+## The control group list (board 5, left). `groups` is [{n, kinds: [kind names of the live units]}]; the four bound slots are
+## always listed once any has units, an unassigned slot reads "empty". `active` is the slot whose units are selected (or -1).
+## {} when no slot has units.
+static func control_groups(groups: Array, active: int) -> Dictionary:
+	var any := false
+	var slots: Array = []
+	for n in range(1, CONTROL_SLOTS + 1):
+		var kinds: Array = []
+		for g in groups:
+			if int(g.get("n", 0)) == n:
+				kinds = g.get("kinds", [])
+		var label := ""
+		if not kinds.is_empty():
+			any = true
+			var counts := {}
+			for k in kinds:
+				counts[str(k)] = int(counts.get(str(k), 0)) + 1
+			var best := ""
+			for k in counts:
+				if best == "" or int(counts[k]) > int(counts[best]) or (int(counts[k]) == int(counts[best]) and k < best):
+					best = k
+			label = _kind_label(best)
+		slots.append({"n": n, "count": kinds.size(), "label": label, "on": n == active and not kinds.is_empty()})
+	return {"slots": slots} if any else {}
+
+
+## World overlay data (hex space, projected by the adapter): the line from a producer to its rally point.
+static func rally_hexes(snap: Dictionary, id: int) -> Dictionary:
+	var e := _entity_by_id(snap, id)
+	if e.is_empty() or int(e.get("owner", -1)) != HUMAN or str(e.get("category", "")) != "building" or int(e.get("rally_x_bits", -1)) < 0:
+		return {}
+	return {"from": entity_cell(e), "to": cell_of_bits(int(e.get("rally_x_bits", 0)), int(e.get("rally_z_bits", 0)))}
+
+
+## World overlay data: the expected wave route as segments between every WAVE_ARROW_STEP-th hex, in travel order (alien end
+## first, home last). [] without a route.
+static func wave_arrows(snap: Dictionary) -> Array:
+	var route: Array = []
+	for c in snap.get("wave_route", []):
+		if c is Array and c.size() >= 2:
+			route.append([int(c[0]), int(c[1])])
+	var out: Array = []
+	if route.size() < 2:
+		return out
+	var i := 0
+	while i < route.size() - 1:
+		var j := mini(i + WAVE_ARROW_STEP, route.size() - 1)
+		out.append({"from": route[i], "to": route[j]})
+		i = j
+	return out
+
+
+## World overlay data: the player's finished turrets with the sim's weapon range.
+static func turret_fields(snap: Dictionary) -> Array:
+	var out: Array = []
+	for e in _entities(snap):
+		if not (e is Dictionary) or int(e.get("owner", -1)) != HUMAN or str(e.get("category", "")) != "building" or int(e.get("construction", 0)) != 0:
+			continue
+		var kind := str(e.get("kind", ""))
+		if kind == "GunTurret":
+			out.append({"id": int(e.get("id", -1)), "cell": entity_cell(e), "range": GUN_TURRET_RANGE, "kind": kind})
+		elif kind == "AaTurret":
+			out.append({"id": int(e.get("id", -1)), "cell": entity_cell(e), "range": AA_TURRET_RANGE, "kind": kind})
+	return out

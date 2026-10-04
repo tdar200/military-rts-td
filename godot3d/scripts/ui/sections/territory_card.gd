@@ -1,6 +1,6 @@
 extends RefCounted
 ## Territory card (board 1, left): tile count, a ground composition bar and its legend, then the yield pills.
-## Driven by vm["territory"] ({tiles, composition: [{glyph, name, pct}]}); builds nothing without it.
+## Driven by vm["territory"] ({tiles, composition: [{glyph, name, pct}], y}); builds nothing without it. `y` is optional (default 274).
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const TopYields = preload("res://scripts/ui/sections/top_yields.gd")
@@ -51,10 +51,12 @@ static func build(parent: Control, vm: Dictionary) -> void:
 	if not (data is Dictionary) or data.is_empty():
 		return
 	var rows: Array = data.get("composition", [])
-	var panel := K.panel(parent, X, Y, W, 10.0)
+	# The adapter moves the card down when the board 4, 5 and 7 cards (site, wave, control groups) take the top of the stack.
+	var top := float(data.get("y", Y))
+	var panel := K.panel(parent, X, top, W, 10.0)
 	var cx := X + 1.0 + PAD_X
 	var cw := W - 2.0 - 2.0 * PAD_X
-	var y := Y + 1.0 + PAD_Y
+	var y := top + 1.0 + PAD_Y
 	var cap := K.text(parent, "Territory", {"x": cx, "y": y, "f": "mono", "px": 12, "sp": 0.12, "col": T.CYAN, "up": true})
 	var tiles := K.text(parent, "%d tiles" % int(data.get("tiles", 0)), {"x": 0, "y": y, "f": "mono", "px": 12, "sp": 0.12, "col": T.DIM, "up": true})
 	tiles.position.x = roundf(cx + cw - tiles.size.x)
@@ -84,5 +86,5 @@ static func build(parent: Control, vm: Dictionary) -> void:
 		parent.add_child(holder)
 		TopYields.build(holder, vm)
 		y += pills_h
-	panel.size.y = roundf(y + PAD_Y + 1.0 - Y)
+	panel.size.y = roundf(y + PAD_Y + 1.0 - top)
 	panel.queue_redraw()

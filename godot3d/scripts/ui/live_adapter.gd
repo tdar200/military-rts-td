@@ -63,6 +63,11 @@ const COMBAT_CARD_H := 170
 const MAX_ALERT_ROWS := 5
 ## Below the core assault objective panel (20,72) at its tallest.
 const ENEMY_CARD_Y := 280
+## Boards 4, 5 and 7: the left cards start at y 76, under the objectives panel when it is up. The heights are the cards' own
+## (CONTROL_GROUPS_H is fixed: four rows), the others are estimated from their row counts in _board_slices.
+const LEFT_STACK_TOP := 76.0
+const LEFT_STACK_GAP := 8.0
+const CONTROL_GROUPS_H := 148.0
 
 var g  # earthfront_3d.gd, or a stub with the same members in tests
 const LiveAssault = preload("res://scripts/ui/live_assault.gd")
@@ -218,7 +223,124 @@ func _with_gameplay(vm: Dictionary) -> Dictionary:
 	if not inbound.is_empty() and vm.has("wave") and vm["wave"] is Dictionary:
 		for key in inbound:
 			vm["wave"][key] = inbound[key]
+	if main_layout:
+		_board_slices(vm, snap, ground)
 	return vm
+
+
+## Boards 4, 5 and 7: the selected-structure frame and site card, the armed banner and roster, the wave panel and the control
+## group list. The left cards stack under the objectives panel (and push the territory card below them); a structure frame or
+## roster replaces the old selection panel at the bottom centre. Needs the snapshot: without it nothing here is added.
+func _board_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
+	var ids: Array = []
+	for n in g.selected_units:
+		if is_instance_valid(n) and n.has_meta("bridge_id"):
+			ids.append(int(n.get_meta("bridge_id")))
+	var top := LEFT_STACK_TOP
+	var objectives = vm.get("objectives", null)
+	if objectives is Dictionary:
+		top = LEFT_STACK_TOP + 42.0 + 25.0 * (objectives.get("items", []) as Array).size() + LEFT_STACK_GAP
+	var y := top
+	var wave := VmGameplay.wave_panel(snap, ground)
+	if not wave.is_empty():
+		wave["y"] = y
+		vm["wave_panel"] = wave
+		# The panel carries the same time, size and doctrine as the top card, so the card steps aside.
+		vm.erase("wave_card")
+		y += 47.0 + (30.0 if str(wave.get("title", "")) != "" else 0.0) + 29.5 * (wave["rows"] as Array).size() + LEFT_STACK_GAP
+	if ids.size() == 1:
+		var structure := VmGameplay.structure(snap, ground, int(ids[0]))
+		if not structure.is_empty():
+			vm["structure"] = structure
+			vm.erase("selection")
+			var site := VmGameplay.site_card(snap, ground, int(ids[0]))
+			if not site.is_empty():
+				site["y"] = y
+				vm["site"] = site
+				y += 38.0 + 29.5 * (site["rows"] as Array).size() + LEFT_STACK_GAP
+				# The site card stands in for the territory card, as on board 4.
+				vm.erase("territory")
+				vm.erase("yields")
+	var groups := _control_groups()
+	if not groups.is_empty():
+		groups["y"] = y
+		vm["control_groups"] = groups
+		y += CONTROL_GROUPS_H + LEFT_STACK_GAP
+	if y > top and vm.has("territory") and vm["territory"] is Dictionary:
+		vm["territory"]["y"] = maxf(float(vm["territory"].get("y", 274.0)), y)
+	if g.attack_move_armed:
+		vm["armed"] = {"hint": "Right click a tile to go, Esc to cancel"}
+		if not ids.is_empty():
+			var roster := VmGameplay.roster(snap, ground, ids, true, vm.get("veterans", {}))
+			if not roster.is_empty():
+				vm["roster"] = roster
+				vm.erase("selection")
+	elif g.get("rally_armed") == true:
+		vm["armed"] = {"title": "Set rally armed", "hint": "Left click a tile to set it, Esc to cancel", "tone": "cyan", "icon": "flag"}
+
+
+## World marks for the selected building and the inbound wave, from the snapshot only (vm_gameplay.gd rally_hexes, wave_arrows,
+## turret_fields). `project` is Callable(hex_x, hex_y) -> screen Vector2, Vector2.INF when behind the camera. A selected
+## producer with a rally point gets a dotted path to it; a selected turret gets its weapon range as a ring (columns are 0.75
+## of a row apart in sim space, so the horizontal radius counts columns); while the wave panel is up the expected route is
+## drawn as red dashed segments. [] without a snapshot.
+func board_marks(project: Callable) -> Array:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or snap.is_empty():
+		return []
+	var marks: Array = []
+	var picked: Array = []
+	for n in g.selected_units:
+		if is_instance_valid(n) and n.has_meta("bridge_id"):
+			picked.append(int(n.get_meta("bridge_id")))
+	if picked.size() == 1:
+		var rally := VmGameplay.rally_hexes(snap, picked[0])
+		if not rally.is_empty():
+			var a: Vector2 = project.call(rally["from"][0], rally["from"][1])
+			var b: Vector2 = project.call(rally["to"][0], rally["to"][1])
+			if a != Vector2.INF and b != Vector2.INF:
+				marks.append({"kind": "arrow", "x": a.x, "y": a.y, "c1": a.lerp(b, 1.0 / 3.0), "c2": a.lerp(b, 2.0 / 3.0), "to": b, "queued": true})
+		for field in VmGameplay.turret_fields(snap):
+			if int(field["id"]) != picked[0]:
+				continue
+			var cell: Array = field["cell"]
+			var c: Vector2 = project.call(cell[0], cell[1])
+			var east: Vector2 = project.call(int(cell[0]) + roundi(float(field["range"]) / VmGameplay.SIM_HEX_X), cell[1])
+			var south: Vector2 = project.call(cell[0], int(cell[1]) + int(field["range"]))
+			if c != Vector2.INF and east != Vector2.INF and south != Vector2.INF:
+				marks.append({"kind": "ring", "x": c.x, "y": c.y, "rx": absf(east.x - c.x), "ry": absf(south.y - c.y)})
+	if VmGameplay.wave_in_window(snap):
+		for seg in VmGameplay.wave_arrows(snap):
+			var a: Vector2 = project.call(seg["from"][0], seg["from"][1])
+			var b: Vector2 = project.call(seg["to"][0], seg["to"][1])
+			if a != Vector2.INF and b != Vector2.INF:
+				marks.append({"kind": "beam", "x": a.x, "y": a.y, "c1": a.lerp(b, 1.0 / 3.0), "c2": a.lerp(b, 2.0 / 3.0), "to": b})
+	return marks
+
+
+## The four control group slots as the list needs them: the kinds of each group's live units, and which group is the current
+## selection. {} when no group holds a unit.
+func _control_groups() -> Dictionary:
+	var groups: Array = []
+	var active := -1
+	var picked: Array = []
+	for n in g.selected_units:
+		if is_instance_valid(n):
+			picked.append(n)
+	var table = g.get("control_groups")
+	if not (table is Dictionary):
+		return {}
+	for n in table:
+		var kinds: Array = []
+		var live: Array = []
+		for node in table[n]:
+			if is_instance_valid(node):
+				kinds.append(String(node.get_meta("kind_name", "")))
+				live.append(node)
+		groups.append({"n": int(n), "kinds": kinds})
+		if not live.is_empty() and live.size() == picked.size() and live.all(func(node): return picked.has(node)):
+			active = int(n)
+	return VmGameplay.control_groups(groups, active)
 
 
 ## The assault layout keeps its own panels; it only gains what board 3 adds on top: the enemy territory card and, over a
@@ -792,6 +914,12 @@ func on_action(name: String, arg: Variant) -> void:
 			g._on_command_button("build_power")
 		"order":
 			_order(str(arg))
+		"set_rally":
+			if g.has_method("arm_rally"):
+				g.arm_rally()
+		"recall_group":
+			if g.has_method("recall_control_group"):
+				g.recall_control_group(int(arg))
 		"select_group":
 			var same: Array = g.selected_units.filter(func(n): return is_instance_valid(n) and String(n.get_meta("kind_name", "")) == str(arg))
 			if not same.is_empty():
@@ -827,6 +955,8 @@ func _order(verb: String) -> void:
 			g._on_command_button("attack")
 		"repair", "sell":
 			g._on_command_button(verb)
+		"cancel_armed":
+			g._on_command_button("cancel_orders")
 		"focus":
 			if is_instance_valid(g.selected):
 				g.focus_camera(g.selected.global_position, 8.2)

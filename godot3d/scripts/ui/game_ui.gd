@@ -133,15 +133,24 @@ func process(delta: float) -> void:
 	minimap_view.size = hud.map_slot.size  # the Build layout reshapes the slot
 
 
-## Hostile marks follow the 3D scene every frame while the assault layout is up, and are cleared otherwise.
+## World marks follow the 3D scene every frame: the assault layout's hostile marks there, otherwise the selected building's
+## rally path or turret range and the inbound wave's route (live_adapter.gd board_marks). Cleared when neither applies.
 func _update_marks() -> void:
 	var cam: Camera3D = g.camera
-	if hud.visible and cam != null and adapter.assault_active():
-		var view := Rect2(Vector2.ZERO, g.get_viewport().get_visible_rect().size)
-		marks.set_marks(adapter.assault.marks(cam.unproject_position, view, cam.is_position_behind))
-	elif _marks_drawn:
+	var drawn := false
+	if hud.visible and cam != null:
+		if adapter.assault_active():
+			var view := Rect2(Vector2.ZERO, g.get_viewport().get_visible_rect().size)
+			marks.set_marks(adapter.assault.marks(cam.unproject_position, view, cam.is_position_behind))
+			drawn = true
+		elif g.has_method("screen_point_of_hex"):
+			var board: Array = adapter.board_marks(func(x: int, y: int) -> Vector2: return g.screen_point_of_hex(x, y))
+			if not board.is_empty():
+				marks.set_marks(board)
+				drawn = true
+	if not drawn and _marks_drawn:
 		marks.set_marks([])
-	_marks_drawn = hud.visible and cam != null and adapter.assault_active()
+	_marks_drawn = drawn
 
 
 ## True when the point (viewport pixels) is over any UI surface, so the 3D scene must not react to it.

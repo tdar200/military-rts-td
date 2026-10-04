@@ -65,7 +65,7 @@ to exposed finite ore fields and must return their cargo before it becomes usabl
 credits. Construction,
 production, movement, research, and combat all continue in real time. Touch uses
 the same command system through tap-to-select and tap-to-move.
-Select a Barracks or Refinery and right-click to set its rally point. Select an
+Select a Barracks or Refinery and right-click to set its rally point (or press the Set rally button in the structure panel, then left-click a tile; Esc cancels). Select an
 owned structure and press `U` to repair it or `Delete` to sell it for a partial
 refund. Unit production pauses at zero Energy and resumes automatically when
 power generation restores the stockpile.

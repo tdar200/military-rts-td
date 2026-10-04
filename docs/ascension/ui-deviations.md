@@ -138,8 +138,7 @@ table or the bridge has nothing behind them:
   positions in the gallery fixtures were moved a few pixels to sit clear of the map texture, as in gp01; this is a
   fixture detail, not a layout change.
 - The thr lens now draws enemy cells as well as the route.
-- Not built here, left to Task 12C or later: objective panel, core bar, alert rows, selection roster, attack-move banner,
-  wave panel, structure panel, the Logistics tab, the world-layer route and territory border, and the top-strip chips of
+- Not built here, left to later tasks: objective panel, core bar, alert rows, the Logistics tab, the world-layer route and territory border, and the top-strip chips of
   boards 2 and 3. The build and assault layouts keep their old minimap, alerts and queue panels.
 - Live wiring: the placing card follows the hovered hex (below and left of it, clamped to the screen) and hides when the
   pointer is over the HUD; the old build_placement panel remains when there is no hover. The enemy card is live only in
@@ -148,6 +147,58 @@ table or the bridge has nothing behind them:
 - Harness limits are achieved percent plus 3. Highest rects: placement_card 22.10 (limit 25.1; the mock has an extra Slope
   row and different wording, so its title and rows wrap differently), hostile_pin 20.12, ore_pin 17.12, placement_hint
   16.98 (words differ from the mock). Mock-vs-Godot text noise is 5 to 11 percent per rect elsewhere.
+
+### Gameplay boards 4, 5 and 7 (Structure selected gp04, Orders armed gp05, Wave inbound gp07), decided 2026-10-05 (Task 12C)
+Built from live data: structure panel (name, tag, health, rows, queue, terrain, order buttons), site card, selection
+roster with status strip, attack-move banner, control groups card, wave panel, and three world marks (rally arrow,
+turret range ring, wave route beams). Not built, or reduced, because the snapshot, the ground table or the bridge has
+nothing behind them:
+- Structure order buttons are wired to the existing bridge command CSV: Set rally (`rally,producer,xbits,zbits`, only for
+  Barracks, Refinery, Vehicle Factory and Airfield), Repair (`repair`, key U), Demolish (`sell`, key Del, hidden for the
+  HQ, which cannot be sold) and Focus (camera, key F). A button the bridge cannot honour is hidden, never drawn dead.
+  Not built: "Cancel last" (the bridge has no cancel command, so the queue cannot be unwound) and board 7's "Resupply" and
+  "Focus fire" (no such commands).
+- Set rally has no key. It arms the next left click as the rally destination (new `rally_armed` flag in
+  `earthfront_3d.gd`); A, Esc, building placement, a new selection and an attack order clear it. Right-click with a
+  building selected still sets the rally directly, as before. No key was added or rebound.
+- Queue column: the running item (name, "Training" or "Building" note, progress bar) and a "N more queued" cell. Not built:
+  the per-unit name list of the waiting queue ("Queue cost 520 M" and the like, no per-item data in the snapshot).
+- Left column rows are only values the snapshot holds. Not built: "Supply range", "Rally 11 s walk", "Ore +4", the
+  turret Targets and Ammo rows (no such data), "Fire across the river +10%" and "Ford ahead" (no sim effect behind them).
+- Terrain column: a ground-colour swatch stands in for the mock's rendered terrain thumbnail, and its box is an ignore
+  rect in the harness. The sprite boxes in the structure and roster cards are ignore rects too (a rendered building sprite
+  is not a UI section).
+- The structure name is numbered ("Barracks 2") only when several of one kind exist. The site card replaces the territory
+  card, and the wave panel replaces the top wave card, while they are shown. For a single own building the old selection,
+  territory and yields panels are removed so nothing stacks twice; the old selection panel's building orders (Repair, Sell,
+  Focus) are exactly the new buttons.
+- Attack-move banner: the mock says "Left click to confirm". Attack-move takes a RIGHT click, so the hint reads "Right
+  click a tile to go, Esc to cancel". The mock's "Confirm target" and "Queue waypoint" lines are not built (no support).
+  The same banner shows "Set rally armed" (cyan, flag icon) in rally mode. It ignores the mouse. Its harness rect is the
+  highest at 22.67 (limit 25.7) because the longer real hint moves the banner edges and text about 4.5 px against the mock,
+  and the hint text is an ignore rect.
+- Selection roster: it replaces the old selection panel only while attack-move is armed and units are selected. Title is
+  "Strike group" in the live game (fixtures use the mock's "Vanguard"), "+N more" past nine cards, a "Vet" chevron only
+  for rank above 0, and the hp bar follows health tone (the mock is always green). The strip reads "Standing on <ground>"
+  with the real speed. The Cancel button sits at the board's third slot, shows Esc and emits `order,cancel_armed`, which
+  runs the existing `cancel_orders` handling. Not built: the cursor read-out (path, ETA, ammo) next to the banner.
+- Control groups: four slots with real counts and the commonest unit kind as the label; "empty" for empty slots. Filled
+  slots are Buttons that recall the group (the same code as the 1-4 keys).
+- Wave panel: countdown, wave number and size come from the snapshot. Not built: the hostile count "5 left of 12", "East
+  line breaking", "2 prongs", and the mock's Suggested panel (no per-wave composition or lane data). The "WAVE INBOUND"
+  tag is an ignore rect (the mock tag is wider than the real wording).
+- World marks only use existing `world_marks.gd` kinds, from real data: a cyan `arrow` from a selected producer to its real
+  rally hex, a `ring` for the selected turret's real range (rx from the hex columns, ry from the rows, range from
+  `stats.rs`, pinned by a test), and red dashed `beam` segments for the wave route while the wave is inside its warning
+  window. The route beams have no arrowhead (the arrow head kind is cyan). Pure functions are tested in
+  `test_live_boards457.gd`.
+- Left-stack heights (the panels stacked under the objectives, then the territory card) are estimated from row counts,
+  not measured, so a very unusual row count could overlap by a few pixels. The estimates match the three fixtures.
+- Harness limits are achieved percent plus 3. gp04: structure_head 8.79, structure_health 8.78, queue_cap 11.75,
+  queue_running 9.47, btn_set_rally 13.59, btn_repair 4.79, site_card 6.38, minimap 7.55. gp05: banner 22.67,
+  control_groups 6.83, roster_head 9.26, roster_cards 4.82, roster_status 12.39, btn_cancel 4.85, minimap 7.54. gp07:
+  wave_head 9.64, structure_head 8.95, structure_health 9.41, terrain_head 7.50, btn_repair 5.22, minimap 10.04.
+  The minimap rects exclude the terrain interior and compare only the frame.
 
 ## 5. Known cosmetic items
 
