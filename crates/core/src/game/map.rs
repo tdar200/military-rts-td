@@ -62,6 +62,159 @@ pub struct Deposit {
     pub remaining: u32,
 }
 
+/// Ground type of one tile. Hashed (Earthfront only) because it changes behaviour.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Ground {
+    Grass,
+    Meadow,
+    Flats,
+    Highland,
+    Forest,
+    River,
+    Ford,
+    Shore,
+    Sea,
+    Crater,
+}
+
+/// Per-ground rules. Integer percents; `cover_pct` removes that share of incoming damage,
+/// `range_pct` extends the shooter's range. One table, easy to retune.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GroundProps {
+    pub path_cost: u32,
+    pub infantry_pct: u32,
+    pub vehicle_pct: u32,
+    pub cover_pct: u32,
+    pub range_pct: u32,
+    pub buildable: bool,
+    pub passable: bool,
+}
+
+const fn gp(
+    path_cost: u32,
+    infantry_pct: u32,
+    vehicle_pct: u32,
+    cover_pct: u32,
+    range_pct: u32,
+    buildable: bool,
+    passable: bool,
+) -> GroundProps {
+    GroundProps {
+        path_cost,
+        infantry_pct,
+        vehicle_pct,
+        cover_pct,
+        range_pct,
+        buildable,
+        passable,
+    }
+}
+
+impl Ground {
+    pub const ALL: [Self; 10] = [
+        Self::Grass,
+        Self::Meadow,
+        Self::Flats,
+        Self::Highland,
+        Self::Forest,
+        Self::River,
+        Self::Ford,
+        Self::Shore,
+        Self::Sea,
+        Self::Crater,
+    ];
+    /// Lowest `path_cost` among passable grounds: the A* heuristic factor.
+    pub const MIN_PASSABLE_COST: u32 = 9;
+
+    #[must_use]
+    pub const fn props(self) -> GroundProps {
+        match self {
+            Self::Grass => gp(10, 100, 100, 0, 0, true, true),
+            Self::Meadow => gp(10, 100, 100, 5, 0, true, true),
+            Self::Flats => gp(9, 110, 110, 0, 0, true, true),
+            Self::Highland => gp(14, 70, 70, 25, 25, true, true),
+            Self::Forest => gp(12, 80, 80, 20, 0, true, true),
+            Self::River | Self::Sea => gp(0, 0, 0, 0, 0, false, false),
+            Self::Ford => gp(20, 70, 50, 0, 0, false, true),
+            Self::Shore => gp(12, 80, 80, 0, 0, false, true),
+            Self::Crater => gp(12, 80, 80, 15, 0, false, true),
+        }
+    }
+
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
+    #[must_use]
+    pub const fn from_tag(t: u8) -> Option<Self> {
+        match t {
+            0 => Some(Self::Grass),
+            1 => Some(Self::Meadow),
+            2 => Some(Self::Flats),
+            3 => Some(Self::Highland),
+            4 => Some(Self::Forest),
+            5 => Some(Self::River),
+            6 => Some(Self::Ford),
+            7 => Some(Self::Shore),
+            8 => Some(Self::Sea),
+            9 => Some(Self::Crater),
+            _ => None,
+        }
+    }
+
+    /// One ASCII char per ground, used by the scenario text map and the snapshot.
+    #[must_use]
+    pub const fn glyph(self) -> char {
+        match self {
+            Self::Grass => 'g',
+            Self::Meadow => 'm',
+            Self::Flats => 'f',
+            Self::Highland => 'h',
+            Self::Forest => 't',
+            Self::River => 'r',
+            Self::Ford => 'w',
+            Self::Shore => 's',
+            Self::Sea => 'o',
+            Self::Crater => 'c',
+        }
+    }
+
+    #[must_use]
+    pub const fn from_glyph(c: char) -> Option<Self> {
+        match c {
+            'g' => Some(Self::Grass),
+            'm' => Some(Self::Meadow),
+            'f' => Some(Self::Flats),
+            'h' => Some(Self::Highland),
+            't' => Some(Self::Forest),
+            'r' => Some(Self::River),
+            'w' => Some(Self::Ford),
+            's' => Some(Self::Shore),
+            'o' => Some(Self::Sea),
+            'c' => Some(Self::Crater),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Grass => "Grassland",
+            Self::Meadow => "Meadow",
+            Self::Flats => "Dry flats",
+            Self::Highland => "Highland",
+            Self::Forest => "Forest",
+            Self::River => "River",
+            Self::Ford => "Ford",
+            Self::Shore => "Shore",
+            Self::Sea => "Sea",
+            Self::Crater => "Crater",
+        }
+    }
+}
+
 /// A rectangular grid of [`Tile`]s.
 #[derive(Clone, Debug)]
 pub struct Map {
@@ -73,6 +226,8 @@ pub struct Map {
     /// Static per-tile terrain class. A new map layer — NOT folded into
     /// `state_hash` (like `deposits` / `planet_of`).
     terrain: Vec<TerrainKind>,
+    /// Per-tile ground type (row-major). Not hashed yet.
+    ground: Vec<Ground>,
 }
 
 impl Map {
@@ -89,6 +244,7 @@ impl Map {
             deposits: alloc::vec![None; count],
             planet_of: alloc::vec![None; count],
             terrain: alloc::vec![TerrainKind::Barren; count],
+            ground: alloc::vec![Ground::Grass; count],
         }
     }
 
@@ -198,6 +354,40 @@ impl Map {
         }
     }
 
+    /// The ground type at `(x, y)`, or [`Ground::Grass`] if out of bounds.
+    #[must_use]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "coordinates are bounds-checked non-negative before the cast"
+    )]
+    pub fn ground_at(&self, x: i32, y: i32) -> Ground {
+        if self.in_bounds(x, y) {
+            let index = (y as usize) * usize::from(self.width) + (x as usize);
+            self.ground[index]
+        } else {
+            Ground::Grass
+        }
+    }
+
+    /// Iterates over every tile's ground in row-major order.
+    pub fn ground_iter(&self) -> impl Iterator<Item = Ground> + '_ {
+        self.ground.iter().copied()
+    }
+
+    /// Sets the ground at `(x, y)` and updates the tile's `passable`/`buildable`
+    /// flags from the ground's rules. Out-of-bounds coordinates are ignored.
+    pub fn set_ground(&mut self, x: u16, y: u16, g: Ground) {
+        if x < self.width && y < self.height {
+            let index = usize::from(y) * usize::from(self.width) + usize::from(x);
+            self.ground[index] = g;
+            let p = g.props();
+            self.tiles[index] = Tile {
+                passable: p.passable,
+                buildable: p.buildable,
+            };
+        }
+    }
+
     /// Iterates over all placed deposits as `(x, y, deposit)` in row-major order.
     pub fn deposits(&self) -> impl Iterator<Item = (u16, u16, Deposit)> + '_ {
         let width = usize::from(self.width);
@@ -235,7 +425,7 @@ impl Map {
 
 #[cfg(test)]
 mod tests {
-    use super::{Deposit, DepositKind, Map, Tile};
+    use super::{Deposit, DepositKind, Ground, Map, Tile};
 
     #[test]
     fn new_map_has_dimensions_and_is_open() {
@@ -330,5 +520,49 @@ mod tests {
         assert_eq!(m.mine(2, 1, 999), 300); // clamps to remaining
         assert_eq!(m.deposit(2, 1), None); // exhausted -> cleared
         assert_eq!(m.mine(5, 5, 10), 0); // out of bounds / no deposit
+    }
+
+    #[test]
+    fn ground_defaults_to_grass_and_out_of_bounds_is_grass() {
+        let m = Map::new(4, 4);
+        assert_eq!(m.ground_at(1, 1), Ground::Grass);
+        assert_eq!(m.ground_at(-1, 0), Ground::Grass);
+        assert_eq!(m.ground_at(99, 99), Ground::Grass);
+    }
+
+    #[test]
+    fn set_ground_updates_tile_flags_from_the_table() {
+        let mut m = Map::new(4, 4);
+        m.set_ground(2, 2, Ground::River);
+        let t = m.tile(2, 2).unwrap();
+        assert!(!t.passable && !t.buildable);
+        m.set_ground(2, 2, Ground::Shore);
+        let t = m.tile(2, 2).unwrap();
+        assert!(t.passable && !t.buildable);
+        m.set_ground(2, 2, Ground::Grass);
+        assert!(m.tile(2, 2).unwrap().buildable);
+    }
+
+    #[test]
+    fn ground_tags_round_trip_and_glyphs_are_unique() {
+        for g in Ground::ALL {
+            assert_eq!(Ground::from_tag(g.tag()), Some(g));
+        }
+        let mut glyphs: Vec<char> = Ground::ALL.iter().map(|g| g.glyph()).collect();
+        glyphs.sort_unstable();
+        glyphs.dedup();
+        assert_eq!(glyphs.len(), Ground::ALL.len());
+        assert_eq!(Ground::from_tag(200), None);
+    }
+
+    #[test]
+    fn heuristic_floor_is_the_cheapest_passable_cost() {
+        let min = Ground::ALL
+            .iter()
+            .filter(|g| g.props().passable)
+            .map(|g| g.props().path_cost)
+            .min()
+            .unwrap();
+        assert_eq!(min, Ground::MIN_PASSABLE_COST);
     }
 }
