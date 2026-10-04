@@ -221,3 +221,38 @@ func test_earthfront_exposes_the_members_the_adapter_reads(t) -> void:
 		t.ok(src.contains(needle), "earthfront_3d.gd declares " + needle)
 	var names: Array = script.get_script_property_list().map(func(p): return p["name"])
 	t.ok("hover_cell" in names and "bridge_snapshot" in names, "both are real script members")
+
+
+# ------------------------------------------------------------------ key chords (real InputMap, plus source needles)
+
+func _key(code: Key, ctrl := false) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.physical_keycode = code
+	ev.ctrl_pressed = ctrl
+	ev.pressed = true
+	return ev
+
+
+func test_new_chords_are_bound_to_no_input_action(t) -> void:
+	for action in InputMap.get_actions():
+		if not str(action).begins_with("camera_"):
+			continue
+		t.ok(not InputMap.event_is_action(_key(KEY_F2), action), "F2 is not " + str(action))
+		t.ok(not InputMap.event_is_action(_key(KEY_PERIOD), action), "period is not " + str(action))
+	t.ok(InputMap.event_is_action(_key(KEY_A), "camera_left"), "A still pans left")
+	t.ok(InputMap.event_is_action(_key(KEY_A, true), "camera_left", false), "Ctrl+A is still the camera_left key, as before")
+	t.eq(InputMap.action_get_events("camera_left").size(), 1, "camera_left has no extra binding")
+
+
+func test_earthfront_key_handler_keeps_ctrl_a_attack_move_and_puts_army_on_f2(t) -> void:
+	# A real input test would need the whole 3D scene; the handler is pinned at source level instead.
+	var src: String = (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
+	t.ok(not src.contains("KEY_A and event.ctrl_pressed"), "no Ctrl+A branch ahead of attack-move")
+	t.ok(src.contains("if event.keycode == KEY_F2:\n\t\t\tif select_army() > 0:"), "F2 selects the army")
+	t.ok(src.contains("elif event.keycode == KEY_PERIOD:\n\t\t\tselect_idle_crew()"), "period selects an idle crew")
+	t.ok(src.contains("elif event.keycode == KEY_A:\n\t\t\tattack_move_armed = true"), "A (with or without Ctrl) still arms attack-move")
+	var f2s := src.split("KEY_F2").size() - 1
+	var periods := src.split("KEY_PERIOD").size() - 1
+	t.eq(f2s, 1, "F2 is handled in exactly one place")
+	t.eq(periods, 1, "period is handled in exactly one place")

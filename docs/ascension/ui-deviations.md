@@ -91,15 +91,22 @@ behind them:
   production extras.
 - "Open lab L" button: there is no bridge command that opens the lab from the colony panel, so no button is drawn. A
   Button with no command behind it is never built.
-- "Select army" and "Idle crews N" are Buttons backed by new adapter actions (select_army, select_idle). The Ctrl A key
-  cap is shown because the game now binds Ctrl+A; the "." key on the idle chip is bound too.
+- "Select army" and "Idle crews N" are Buttons backed by new adapter actions (select_army, select_idle). The board's
+  "Ctrl A" key cap is NOT drawn: Ctrl+A would collide with camera pan (physical A is camera_left, polled by
+  Input.get_axis) and with the existing A / Ctrl+A attack-move arming, which is unchanged. Select army is bound to F2 (the
+  same key the web client uses) and the button shows no key text. The idle crews chip keeps the board's "." cap; the
+  period key is bound nowhere else.
+- Brand sub: whenever the snapshot carries `map_name`, the brand sub shows it ("Kestrel Reach") instead of "Era 1 /
+  Earthfront". Every gameplay board, including the build deck, prints "Kestrel Reach" there, so this is not limited to the
+  main layout. Without a map_name the old text stays.
 - Deposit pins are Buttons that centre the camera (focus_deposit). Only the first pin is compared by the harness: the
   mock's second pin sits over a deposit the fixture does not have.
 - Excluded from the pixel gate: the minimap terrain image (an ignore rect; the 3D view is not a UI section), the tile
   inspector thumbnail (a rendered terrain swatch), the alert chip's "Next alert / Space" cap and the army column's third
   button slot (no counterpart, see above).
 - Harness limits are achieved percent rounded to 0.1 plus 3, as for the original six screens. idle_chip (17.13) and
-  tile_inspector_title (15.99) are high because of mono text anti-aliasing on short strings.
+  tile_inspector_title (15.99) are high because of mono text anti-aliasing on short strings. army_orders is 13.17 (limit
+  16.2) because the mock's Ctrl A key cap is deliberately not drawn (see above); it was 9.04 with the cap.
 
 ## 5. Known cosmetic items
 

@@ -36,3 +36,10 @@ func test_absent_slice_builds_nothing(t) -> void:
 	Section.build(root, {"army": {"count": 0, "idle": 0, "first_idle": -1}})
 	t.eq(root.get_child_count(), 0, "no units, no buttons, no fake zeros")
 	root.free()
+
+
+func test_select_army_shows_no_ctrl_a_key_cap(t) -> void:
+	var root := Control.new()
+	Section.build(root, {"army": {"count": 5, "idle": 1, "first_idle": 3}})
+	t.ok(not U.has_text(root, "Ctrl"), "Ctrl+A would collide with camera pan, so no key text")
+	root.free()

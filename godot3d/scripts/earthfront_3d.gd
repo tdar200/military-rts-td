@@ -1246,7 +1246,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					_show_order_path(selected_units, ground, attack_move_armed)
 				attack_move_armed = false
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_A and event.ctrl_pressed:
+		if event.keycode == KEY_F2:
 			if select_army() > 0:
 				objective_label.text = "ARMY SELECTED"
 		elif event.keycode == KEY_PERIOD:

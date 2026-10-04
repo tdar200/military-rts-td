@@ -3,6 +3,7 @@ extends RefCounted
 ## adapter's context (x, y, glyph, zone, deposit). Every row comes from the ground table; bonus_text and the deposit pill
 ## appear only when the snapshot reports them. Builds nothing without the slice. The frame is bottom_panel.gd's.
 const T = preload("res://scripts/ui/tokens.gd")
+const LiveScreens = preload("res://scripts/ui/live_screens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const Pill = preload("res://scripts/ui/sections/pill.gd")
 const Territory = preload("res://scripts/ui/sections/territory_card.gd")
@@ -10,17 +11,6 @@ const Frame = preload("res://scripts/ui/sections/bottom_panel.gd")
 
 const COL_W := 330.0
 const THUMB := 84.0
-
-
-## Grouped thousands, as the boards write them ("1,800 left").
-static func thousands(n: int) -> String:
-	var s := str(absi(n))
-	var out := ""
-	for i in s.length():
-		if i > 0 and (s.length() - i) % 3 == 0:
-			out += ","
-		out += s[i]
-	return ("-" if n < 0 else "") + out
 
 
 static func build(parent: Control, vm: Dictionary) -> void:
@@ -68,7 +58,7 @@ static func build(parent: Control, vm: Dictionary) -> void:
 	if bonus != "":
 		pills.append([bonus, T.WARN if bonus.contains("kW") else T.CYAN_HI])
 	if deposit is Dictionary and int(deposit.get("remaining", 0)) > 0:
-		pills.append(["%s left" % thousands(int(deposit["remaining"])), T.GOOD])
+		pills.append(["%s left" % LiveScreens.thousands(int(deposit["remaining"])), T.GOOD])
 	if not pills.is_empty():
 		var px := text_x
 		var py := y + block + 8.0

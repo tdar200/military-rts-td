@@ -4,6 +4,7 @@ extends RefCounted
 ## point. Each pin is a Button that emits "focus_deposit" with its hex cell (the game centres the camera there). The
 ## board's "+4" haul figure and the worker "Harvesting" tags have no data behind them and are not built.
 const T = preload("res://scripts/ui/tokens.gd")
+const LiveScreens = preload("res://scripts/ui/live_screens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const TextBox = preload("res://scripts/ui/components/text_box.gd")
 
@@ -13,22 +14,12 @@ const LIFT := 16.0
 const FILL := Color(6.0 / 255.0, 12.0 / 255.0, 20.0 / 255.0, 0.88)
 
 
-static func thousands(n: int) -> String:
-	var s := str(absi(n))
-	var out := ""
-	for i in s.length():
-		if i > 0 and (s.length() - i) % 3 == 0:
-			out += ","
-		out += s[i]
-	return out
-
-
 ## The pin's visible text: [main, dim] (dim may be "").
 static func parts(pin: Dictionary) -> Array:
 	var kind := str(pin.get("kind", "Ore"))
 	if kind == "Ore" and not bool(pin.get("claimed", false)):
 		return ["Ore, unclaimed", ""]
-	return [kind, "%s left" % thousands(int(pin.get("remaining", 0)))]
+	return [kind, "%s left" % LiveScreens.thousands(int(pin.get("remaining", 0)))]
 
 
 class Body extends Control:

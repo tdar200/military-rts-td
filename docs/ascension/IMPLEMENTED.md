@@ -18,7 +18,7 @@ Launch from the repository with `./run-3d.sh`. The script builds the authoritati
 
 ## Controls
 
-Godot: WASD pans, Z/E rotates, wheel zooms, F focuses selection, Home returns to base. Left-click or drag selects; right-click issues contextual orders; A issues attack-move. Use Build, Units, Orders and Science panels for the full roster. U repairs and Delete sells. Traditional fog of war is absent.
+Godot: WASD pans, Z/E rotates, wheel zooms, F focuses selection, Home returns to base. Left-click or drag selects; right-click issues contextual orders; A issues attack-move; F2 selects the whole army; . selects the next idle crew and centres the camera on it. Use Build, Units, Orders and Science panels for the full roster. U repairs and Delete sells. Traditional fog of war is absent.
 
 ## Technical boundaries
 

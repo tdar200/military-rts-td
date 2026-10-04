@@ -14,7 +14,7 @@ Run it with:
 
 Controls: WASD pan, Z/E rotate, mouse wheel zoom, left-click or drag-select,
 right-click to move units or set producer rally points, A attack-move,
-T/K/V/H/X train infantry/armour/anti-armour/gunships/capital units,
+F2 select the whole army, . select an idle crew, T/K/V/H/X train infantry/armour/anti-armour/gunships/capital units,
 P/R/B/G/J/C/L place power/refinery/barracks/turret/AA/wall/lab, Y opens the
 real-time science directorate, Q casts tactical abilities, U repairs, and Delete sells. The entire battlefield remains
 visible; there is no fog of war. Press `F` to focus the current selection and `Home` to return to the Earthfront command district.

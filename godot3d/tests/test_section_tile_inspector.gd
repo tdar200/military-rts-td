@@ -64,10 +64,3 @@ func test_absent_slice_builds_nothing_and_no_clickables(t) -> void:
 	Section.build(full, _with({}))
 	t.eq(U.buttons(full).size(), 0, "the inspector is read-only")
 	full.free()
-
-
-func test_thousands_helper(t) -> void:
-	t.eq(Section.thousands(0), "0", "zero")
-	t.eq(Section.thousands(999), "999", "under a thousand")
-	t.eq(Section.thousands(1800), "1,800", "four digits")
-	t.eq(Section.thousands(1234567), "1,234,567", "seven digits")

@@ -1,8 +1,9 @@
 extends RefCounted
 ## Army orders column (board 1, bottom centre, right column): "Select army" and "Idle crews N", real Buttons that emit
 ## their action through the supplied callback. Driven by vm["army"] ({count, idle, first_idle}); each button exists only
-## when its own count is above zero, and nothing is built otherwise. The "Ctrl A" key cap is shown
-## because the game binds Ctrl+A to select-army; the board's "Open lab" button has no matching command and is not built.
+## when its own count is above zero, and nothing is built otherwise. The board's "Ctrl A" key cap is not drawn: Ctrl+A
+## still arms attack-move and A pans the camera, so select-army sits on F2 and the board shows no key text. The board's
+## "Open lab" button has no matching command and is not built.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const Frame = preload("res://scripts/ui/sections/bottom_panel.gd")
@@ -23,7 +24,7 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 	# The board centres three buttons in the column; the first one sits here whatever number are present.
 	var y := Frame.COL_TOP + (Frame.COL_H - (3.0 * BTN_H + 2.0 * GAP)) * 0.5
 	if has_army:
-		var b := K.button(parent, "Select army", X, y, {"w": W, "h": BTN_H, "primary": true, "key": "Ctrl A"})
+		var b := K.button(parent, "Select army", X, y, {"w": W, "h": BTN_H, "primary": true})
 		_wire(b, emit, "select_army", null)
 		y += BTN_H + GAP
 	if has_idle:
