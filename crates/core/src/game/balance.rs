@@ -21,7 +21,7 @@ use crate::game::stats::{
 /// `Sim`'s existing call sites are unaffected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
-    units: [[[UnitStats; 5]; FACTION_COUNT]; ERA_COUNT],
+    units: [[[UnitStats; 6]; FACTION_COUNT]; ERA_COUNT],
     buildings: [[[BuildingStats; 9]; FACTION_COUNT]; ERA_COUNT],
     /// Fraction of a `CommandCenter`'s max HP that a captured planet seat is left
     /// at when conquered (Civ-style intact capture). Config only — read during a
@@ -41,6 +41,7 @@ impl Balance {
                 UnitKind::AntiArmor.stats(),
                 UnitKind::Helicopter.stats(),
                 UnitKind::Capital.stats(),
+                UnitKind::Harvester.stats(),
             ],
             [
                 BuildingKind::CommandCenter.stats(),
@@ -62,7 +63,7 @@ impl Balance {
     /// introduced in a later phase.
     #[must_use]
     pub const fn from_tables(
-        units: [UnitStats; 5],
+        units: [UnitStats; 6],
         buildings: [BuildingStats; 9],
         capture_hp_fraction: Fixed,
     ) -> Self {
@@ -83,6 +84,7 @@ impl Balance {
             UnitKind::AntiArmor => tier[2],
             UnitKind::Helicopter => tier[3],
             UnitKind::Capital => tier[4],
+            UnitKind::Harvester => tier[5],
         }
     }
 
@@ -105,6 +107,10 @@ impl Balance {
             BuildingKind::Wall => tier[6],
             BuildingKind::ResearchLab => tier[7],
             BuildingKind::AntimatterPlant => tier[8],
+            BuildingKind::VehicleFactory
+            | BuildingKind::Airfield
+            | BuildingKind::SupplyDepot
+            | BuildingKind::Battery => kind.stats(),
         }
     }
 

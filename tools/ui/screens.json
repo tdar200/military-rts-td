@@ -1,0 +1,34 @@
+{
+  "main": {
+    "mock": "Main.dc.html",
+    "strip_until": "<!-- ============ TOP BAR ============ -->",
+    "ground": "#30332a"
+  },
+  "builddeck": {
+    "mock": "BuildDeck.dc.html",
+    "strip_until": "<!-- TOP BAR -->",
+    "ground": "#30332a",
+    "flatten": true
+  },
+  "coreassault": {
+    "mock": "CoreAssault.dc.html",
+    "strip_until": null,
+    "drop_sprites": "<!-- impact zone (under units) -->",
+    "ground": "#30332a"
+  },
+  "research": {
+    "mock": "Research.dc.html",
+    "strip_until": null,
+    "ground": "#060910"
+  },
+  "title": {
+    "mock": "Title.dc.html",
+    "strip_until": null,
+    "ground": "#060910"
+  },
+  "debrief": {
+    "mock": "Debrief.dc.html",
+    "strip_until": null,
+    "ground": "#060910"
+  }
+}

@@ -1,0 +1,4 @@
+{"mode":"sustained","spawned":100,"ticks":900,"seconds":0.047462671,"p50_ms":0.047458,"p95_ms":0.065797,"max_ms":3.382053,"rss_before_kb":2624,"rss_after_kb":2936,"survivors":100,"hash":5200292241161012564}
+{"mode":"sustained","spawned":1000,"ticks":900,"seconds":2.10935233,"p50_ms":2.2920369999999997,"p95_ms":3.216969,"max_ms":5.423838,"rss_before_kb":2824,"rss_after_kb":3136,"survivors":1000,"hash":14985652062677508352}
+{"mode":"sustained","spawned":5000,"ticks":900,"seconds":33.241680035,"p50_ms":35.591643,"p95_ms":46.248469,"max_ms":55.875317,"rss_before_kb":3740,"rss_after_kb":4008,"survivors":5000,"hash":9758034118643005816}
+{"mode":"sustained","spawned":10000,"ticks":900,"seconds":119.516205261,"p50_ms":126.95013599999999,"p95_ms":170.721765,"max_ms":324.693915,"rss_before_kb":4736,"rss_after_kb":5280,"survivors":10000,"hash":10325540618448490508}

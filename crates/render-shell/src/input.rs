@@ -18,6 +18,8 @@ const SELECT_RADIUS_SQ: f32 = 2.25;
 /// Below this screen-space drag distance (px) a left release counts as a click,
 /// not a box-select.
 const CLICK_SLOP_PX: f32 = 6.0;
+/// Spacing between destinations in a multi-unit formation, in world tiles.
+const FORMATION_SPACING: f32 = 1.35;
 
 #[must_use]
 fn f32_to_fixed(v: f32) -> Fixed {
@@ -64,6 +66,7 @@ pub fn gather_commands(
     // `ox`/`wtop` come from the shared camera transform (zoom + pan), so this
     // screen→world conversion is identical to what `draw` used this frame.
     let (wx, wy) = ((mx - ox) / cell, (my - wtop) / cell);
+    let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
 
     // Drop dead/recycled ids so stale selections never command a reused slot.
     if !selected.units.is_empty() {
@@ -94,7 +97,25 @@ pub fn gather_commands(
         *build_mode = Some(BuildingKind::ResearchLab);
     }
     if is_key_pressed(KeyCode::N) {
-        *build_mode = Some(BuildingKind::AntimatterPlant);
+        *build_mode = Some(if sim.is_earthfront() {
+            BuildingKind::SupplyDepot
+        } else {
+            BuildingKind::AntimatterPlant
+        });
+    }
+    if sim.is_earthfront() {
+        for (key, kind) in [
+            (KeyCode::F, BuildingKind::VehicleFactory),
+            (KeyCode::O, BuildingKind::Airfield),
+            (KeyCode::I, BuildingKind::Battery),
+        ] {
+            if is_key_pressed(key) {
+                *build_mode = Some(kind);
+            }
+        }
+    }
+    if is_key_pressed(KeyCode::W) {
+        *build_mode = Some(BuildingKind::Wall);
     }
     // A arms ATTACK-MOVE (StarCraft convention): the next left/right click issues
     // an AttackMove for the whole group. Arming a build placement cancels it, and
@@ -109,6 +130,37 @@ pub fn gather_commands(
     if is_key_pressed(KeyCode::Escape) {
         *build_mode = None;
         *attack_move_armed = false;
+    }
+
+    // F2 selects the whole living army, matching the quick army-selection
+    // convention of classic base-building RTS games.
+    if is_key_pressed(KeyCode::F2) {
+        selected.units = sim
+            .views()
+            .into_iter()
+            .filter(|v| {
+                v.owner == HUMAN
+                    && matches!(v.kind, EntityKindView::Unit(k) if k != UnitKind::Harvester)
+            })
+            .map(|v| v.id)
+            .collect();
+        selected.planet = None;
+    }
+
+    // Stop immediately cancels movement and attack-move stances. A Move to the
+    // unit's current deterministic position uses the core's normal validated
+    // command path and clears the old order on the next simulation tick.
+    if is_key_pressed(KeyCode::S) && !selected.units.is_empty() {
+        let views = sim.views();
+        for &unit in &selected.units {
+            if let Some(v) = views.iter().find(|v| v.id == unit && v.owner == HUMAN) {
+                cmds.push(Command::Move {
+                    owner: HUMAN,
+                    unit,
+                    target: v.pos,
+                });
+            }
+        }
     }
 
     // Left press: arm a box-select (the anchor) unless a build is being placed —
@@ -126,15 +178,7 @@ pub fn gather_commands(
         && !selected.units.is_empty()
     {
         let target = SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy));
-        for &unit in &selected.units {
-            if sim.entity_alive(unit) {
-                cmds.push(Command::AttackMove {
-                    owner: HUMAN,
-                    unit,
-                    target,
-                });
-            }
-        }
+        cmds.extend(group_orders(sim, &selected.units, target, true));
         *attack_move_armed = false;
         return cmds;
     }
@@ -152,13 +196,21 @@ pub fn gather_commands(
                 x: col,
                 y: row,
             });
-        } else if let Some(unit) = nearest_friendly_unit(sim, wx, wy) {
-            selected.units = vec![unit];
+        } else if let Some(unit) = nearest_friendly_entity(sim, wx, wy) {
+            if shift {
+                if let Some(i) = selected.units.iter().position(|&id| id == unit) {
+                    selected.units.remove(i);
+                } else {
+                    selected.units.push(unit);
+                }
+            } else {
+                selected.units = vec![unit];
+            }
             selected.planet = None;
         } else if let Some(pid) = planet_at_world(sim, wx, wy) {
             selected.planet = Some(pid);
             selected.units.clear();
-        } else {
+        } else if !shift {
             selected.units.clear();
             selected.planet = None;
         }
@@ -170,7 +222,7 @@ pub fn gather_commands(
                 let (w0x, w0y) = ((sxp - ox) / cell, (syp - wtop) / cell);
                 let (lo_x, hi_x) = (w0x.min(wx), w0x.max(wx));
                 let (lo_y, hi_y) = (w0y.min(wy), w0y.max(wy));
-                selected.units = sim
+                let boxed: Vec<_> = sim
                     .views()
                     .into_iter()
                     .filter(|v| v.owner == HUMAN && matches!(v.kind, EntityKindView::Unit(_)))
@@ -180,6 +232,15 @@ pub fn gather_commands(
                     })
                     .map(|v| v.id)
                     .collect();
+                if shift {
+                    for id in boxed {
+                        if !selected.units.contains(&id) {
+                            selected.units.push(id);
+                        }
+                    }
+                } else {
+                    selected.units = boxed;
+                }
                 selected.planet = None;
             }
         }
@@ -191,38 +252,75 @@ pub fn gather_commands(
         let attack_move = *attack_move_armed;
         *attack_move_armed = false;
         if !selected.units.is_empty() {
-            // Assault: a right-click on an enemy/neutral planet orders the whole
-            // group to that planet's seat (else its center). Otherwise it's a plain
-            // group move to the cursor.
-            let assault = planet_at_world(sim, wx, wy)
-                .and_then(|pid| (sim.planet_owner(pid) != Some(HUMAN)).then_some(pid));
-            let cursor = SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy));
-            let target = assault.map_or(cursor, |pid| {
-                seat_pos(sim, pid)
-                    .or_else(|| sim.planet_center(pid))
-                    .unwrap_or(cursor)
-            });
-            for &unit in &selected.units {
-                if sim.entity_alive(unit) {
-                    cmds.push(if attack_move {
-                        Command::AttackMove {
-                            owner: HUMAN,
-                            unit,
-                            target,
-                        }
-                    } else {
-                        Command::Move {
-                            owner: HUMAN,
-                            unit,
-                            target,
-                        }
-                    });
-                }
+            let selected_producer = (selected.units.len() == 1)
+                .then(|| selected.units[0])
+                .filter(|&id| {
+                    sim.views().into_iter().any(|view| {
+                        view.id == id
+                            && view.owner == HUMAN
+                            && matches!(
+                                view.kind,
+                                EntityKindView::Building(
+                                    BuildingKind::Barracks
+                                        | BuildingKind::Refinery
+                                        | BuildingKind::VehicleFactory
+                                        | BuildingKind::Airfield
+                                )
+                            )
+                    })
+                });
+            if let Some(producer) = selected_producer {
+                cmds.push(Command::SetRally {
+                    owner: HUMAN,
+                    producer,
+                    target: SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy)),
+                });
+            } else {
+                // Contextual classic-RTS order: right-clicking an enemy attacks it;
+                // right-clicking hostile territory assaults its seat; empty ground is
+                // a move. A explicitly forces attack-move even on empty ground.
+                let assault = planet_at_world(sim, wx, wy)
+                    .and_then(|pid| (sim.planet_owner(pid) != Some(HUMAN)).then_some(pid));
+                let cursor = SimVec::new(f32_to_fixed(wx), f32_to_fixed(wy));
+                let enemy = nearest_enemy_position(sim, wx, wy);
+                let target = enemy.or_else(|| {
+                    assault.map(|pid| {
+                        seat_pos(sim, pid)
+                            .or_else(|| sim.planet_center(pid))
+                            .unwrap_or(cursor)
+                    })
+                });
+                let hostile = target.is_some();
+                cmds.extend(group_orders(
+                    sim,
+                    &selected.units,
+                    target.unwrap_or(cursor),
+                    attack_move || hostile,
+                ));
             }
         }
     }
+    // U repairs selected structures in paid 20% chunks. Delete sells selected
+    // non-HQ structures for a 50% refund; both are validated by the core.
+    if is_key_pressed(KeyCode::U) {
+        for &building in &selected.units {
+            cmds.push(Command::Repair {
+                owner: HUMAN,
+                building,
+            });
+        }
+    }
+    if is_key_pressed(KeyCode::Delete) {
+        for &building in &selected.units {
+            cmds.push(Command::Sell {
+                owner: HUMAN,
+                building,
+            });
+        }
+        selected.units.clear();
+    }
     if is_key_pressed(KeyCode::T) {
-        if let Some(barracks) = first_friendly_barracks(sim) {
+        if let Some(barracks) = first_friendly_producer(sim, UnitKind::Infantry) {
             cmds.push(Command::Train {
                 owner: HUMAN,
                 barracks,
@@ -231,7 +329,7 @@ pub fn gather_commands(
         }
     }
     if is_key_pressed(KeyCode::V) {
-        if let Some(barracks) = first_friendly_barracks(sim) {
+        if let Some(barracks) = first_friendly_producer(sim, UnitKind::AntiArmor) {
             cmds.push(Command::Train {
                 owner: HUMAN,
                 barracks,
@@ -240,7 +338,7 @@ pub fn gather_commands(
         }
     }
     if is_key_pressed(KeyCode::K) {
-        if let Some(barracks) = first_friendly_barracks(sim) {
+        if let Some(barracks) = first_friendly_producer(sim, UnitKind::Tank) {
             cmds.push(Command::Train {
                 owner: HUMAN,
                 barracks,
@@ -249,7 +347,7 @@ pub fn gather_commands(
         }
     }
     if is_key_pressed(KeyCode::H) {
-        if let Some(barracks) = first_friendly_barracks(sim) {
+        if let Some(barracks) = first_friendly_producer(sim, UnitKind::Helicopter) {
             cmds.push(Command::Train {
                 owner: HUMAN,
                 barracks,
@@ -258,11 +356,20 @@ pub fn gather_commands(
         }
     }
     if is_key_pressed(KeyCode::C) {
-        if let Some(barracks) = first_friendly_barracks(sim) {
+        if let Some(barracks) = first_friendly_producer(sim, UnitKind::Capital) {
             cmds.push(Command::Train {
                 owner: HUMAN,
                 barracks,
                 kind: UnitKind::Capital,
+            });
+        }
+    }
+    if is_key_pressed(KeyCode::D) {
+        if let Some(refinery) = first_friendly_refinery(sim) {
+            cmds.push(Command::Train {
+                owner: HUMAN,
+                barracks: refinery,
+                kind: UnitKind::Harvester,
             });
         }
     }
@@ -305,20 +412,13 @@ pub fn gather_commands(
         }
         let tx = (touch.position.x - ox) / cell;
         let ty = (touch.position.y - wtop) / cell;
-        if let Some(unit) = nearest_friendly_unit(sim, tx, ty) {
+        if let Some(unit) = nearest_friendly_entity(sim, tx, ty) {
             selected.units = vec![unit];
             selected.planet = None;
         } else if !selected.units.is_empty() {
             let target = SimVec::new(f32_to_fixed(tx), f32_to_fixed(ty));
-            for &unit in &selected.units {
-                if sim.entity_alive(unit) {
-                    cmds.push(Command::Move {
-                        owner: HUMAN,
-                        unit,
-                        target,
-                    });
-                }
-            }
+            let hostile = nearest_enemy_position(sim, tx, ty).is_some();
+            cmds.extend(group_orders(sim, &selected.units, target, hostile));
         }
     }
     cmds
@@ -362,10 +462,10 @@ pub fn cursor_tile(sim: &Sim, cell: f32, origin: (f32, f32)) -> (u16, u16) {
 }
 
 #[must_use]
-fn nearest_friendly_unit(sim: &Sim, wx: f32, wy: f32) -> Option<EntityId> {
+fn nearest_friendly_entity(sim: &Sim, wx: f32, wy: f32) -> Option<EntityId> {
     let mut best: Option<(EntityId, f32)> = None;
     for v in sim.views() {
-        if v.owner != HUMAN || !matches!(v.kind, EntityKindView::Unit(_)) {
+        if v.owner != HUMAN {
             continue;
         }
         let dx = fixed_to_tiles(v.pos.x) - wx;
@@ -379,12 +479,174 @@ fn nearest_friendly_unit(sim: &Sim, wx: f32, wy: f32) -> Option<EntityId> {
         .map(|(id, _)| id)
 }
 
+/// The clicked enemy's exact world position. Units and buildings are both valid
+/// contextual attack targets; the deterministic core still chooses what each
+/// attacker can actually damage.
 #[must_use]
-fn first_friendly_barracks(sim: &Sim) -> Option<EntityId> {
+fn nearest_enemy_position(sim: &Sim, wx: f32, wy: f32) -> Option<SimVec> {
+    let mut best: Option<(SimVec, f32)> = None;
+    for v in sim.views() {
+        if v.owner == HUMAN {
+            continue;
+        }
+        let dx = fixed_to_tiles(v.pos.x) - wx;
+        let dy = fixed_to_tiles(v.pos.y) - wy;
+        let dist_sq = dx * dx + dy * dy;
+        if best.is_none_or(|(_, bd)| dist_sq < bd) {
+            best = Some((v.pos, dist_sq));
+        }
+    }
+    best.filter(|&(_, d)| d <= SELECT_RADIUS_SQ)
+        .map(|(pos, _)| pos)
+}
+
+/// Produces a centered square formation around an order point. Giving every unit
+/// the same destination creates an unreadable blob; stable entity-order slots
+/// instead preserve army shape without changing deterministic simulation rules.
+#[must_use]
+fn group_orders(sim: &Sim, units: &[EntityId], center: SimVec, attack: bool) -> Vec<Command> {
+    let views = sim.views();
+    let living: Vec<_> = units
+        .iter()
+        .copied()
+        .filter(|&id| {
+            sim.entity_alive(id)
+                && views
+                    .iter()
+                    .any(|view| view.id == id && matches!(view.kind, EntityKindView::Unit(_)))
+        })
+        .collect();
+    let count = living.len();
+    if count == 0 {
+        return Vec::new();
+    }
+    let cols = (count as f32).sqrt().ceil() as usize;
+    let rows = count.div_ceil(cols);
+    let cx = fixed_to_tiles(center.x);
+    let cy = fixed_to_tiles(center.y);
+    let max_x = f32::from(sim.map().width()).max(1.0) - 0.25;
+    let max_y = f32::from(sim.map().height()).max(1.0) - 0.25;
+    living
+        .into_iter()
+        .enumerate()
+        .map(|(i, unit)| {
+            let col = i % cols;
+            let row = i / cols;
+            let x = (cx + (col as f32 - (cols - 1) as f32 / 2.0) * FORMATION_SPACING)
+                .clamp(0.25, max_x);
+            let y = (cy + (row as f32 - (rows - 1) as f32 / 2.0) * FORMATION_SPACING)
+                .clamp(0.25, max_y);
+            let target = SimVec::new(f32_to_fixed(x), f32_to_fixed(y));
+            if attack {
+                Command::AttackMove {
+                    owner: HUMAN,
+                    unit,
+                    target,
+                }
+            } else {
+                Command::Move {
+                    owner: HUMAN,
+                    unit,
+                    target,
+                }
+            }
+        })
+        .collect()
+}
+
+#[must_use]
+fn first_friendly_producer(sim: &Sim, unit: UnitKind) -> Option<EntityId> {
+    let kind = if sim.is_earthfront() {
+        Sim::earthfront_producer(unit)
+    } else {
+        BuildingKind::Barracks
+    };
+    sim.views()
+        .into_iter()
+        .find(|v| v.owner == HUMAN && v.kind == EntityKindView::Building(kind))
+        .map(|v| v.id)
+}
+
+#[must_use]
+fn first_friendly_refinery(sim: &Sim) -> Option<EntityId> {
     sim.views()
         .into_iter()
         .find(|v| {
-            v.owner == HUMAN && matches!(v.kind, EntityKindView::Building(BuildingKind::Barracks))
+            v.owner == HUMAN && matches!(v.kind, EntityKindView::Building(BuildingKind::Refinery))
         })
         .map(|v| v.id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        fixed_to_tiles, group_orders, nearest_enemy_position, nearest_friendly_entity, HUMAN,
+    };
+    use rts_core::fixed::Fixed;
+    use rts_core::game::map::Map;
+    use rts_core::game::sim::{Command, PlayerId, Sim};
+    use rts_core::game::stats::{BuildingKind, UnitKind};
+    use rts_core::vec::Vec2;
+
+    fn point(x: i32, y: i32) -> Vec2 {
+        Vec2::new(Fixed::from_int(x), Fixed::from_int(y))
+    }
+
+    #[test]
+    fn group_orders_assign_distinct_formation_slots() {
+        let mut sim = Sim::new(Map::new(20, 20), 7, Fixed::from_int(500));
+        let units: Vec<_> = (0..4)
+            .map(|x| sim.add_unit(HUMAN, UnitKind::Infantry, point(x, 1)))
+            .collect();
+        let orders = group_orders(&sim, &units, point(10, 10), false);
+        assert_eq!(orders.len(), units.len());
+        let targets: Vec<_> = orders
+            .into_iter()
+            .map(|order| match order {
+                Command::Move { target, .. } => target,
+                _ => panic!("formation move emitted the wrong command kind"),
+            })
+            .collect();
+        for i in 0..targets.len() {
+            for j in i + 1..targets.len() {
+                assert_ne!(
+                    targets[i], targets[j],
+                    "units were assigned one blob target"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buildings_are_selectable_but_excluded_from_army_orders() {
+        let mut sim = Sim::new(Map::new(20, 20), 7, Fixed::from_int(500));
+        let barracks = sim.add_building(HUMAN, BuildingKind::Barracks, 4, 4);
+        assert_eq!(nearest_friendly_entity(&sim, 4.0, 4.0), Some(barracks));
+        assert!(group_orders(&sim, &[barracks], point(10, 10), false).is_empty());
+    }
+
+    #[test]
+    fn contextual_targeting_finds_visible_enemy_units_and_buildings() {
+        let mut sim = Sim::new(Map::new(20, 20), 7, Fixed::from_int(500));
+        sim.add_unit(HUMAN, UnitKind::Infantry, point(2, 2));
+        let enemy = point(8, 9);
+        sim.add_unit(PlayerId(1), UnitKind::Tank, enemy);
+        assert_eq!(nearest_enemy_position(&sim, 8.0, 9.0), Some(enemy));
+        let turret = sim.add_building(PlayerId(1), BuildingKind::GunTurret, 14, 14);
+        let turret_pos = sim
+            .views()
+            .into_iter()
+            .find(|v| v.id == turret)
+            .expect("new turret must be visible")
+            .pos;
+        assert_eq!(
+            nearest_enemy_position(
+                &sim,
+                fixed_to_tiles(turret_pos.x),
+                fixed_to_tiles(turret_pos.y)
+            ),
+            Some(turret_pos)
+        );
+        assert_eq!(nearest_enemy_position(&sim, 1.0, 1.0), None);
+    }
 }

@@ -53,13 +53,11 @@ from that review remain open:
   per-attack flags would default to ground-only. New entries are required fields
   (so they fail loudly), but a version tag / validation would be tidier.
 
-### Fog of war
-Per-player visibility so you only see what your units/buildings reveal. Path:
-- Compute a per-player visible tile set each tick from entity positions + sight
-  radius (deterministic, in-core).
-- Extend `views()` with a `for_player` variant that hides entities on
-  non-visible tiles; the shell renders unseen areas dimmed.
-- Keep it out of the state hash (visibility is derived).
+### Full battlefield intelligence — locked direction
+Ascension deliberately has **no fog of war**. Full visibility is a defining rule:
+strategy comes from economy, force composition, positioning, wave pressure, and
+real-time science choices rather than hidden information. Do not add a
+per-player visibility system.
 
 ## Deferred (bigger / environment-bound)
 

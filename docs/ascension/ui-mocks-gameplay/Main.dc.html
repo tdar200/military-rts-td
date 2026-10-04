@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Base overview</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<!-- LAND: Kestrel Reach, camera at world 0,0 -->
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
+
+<!-- vision: everything outside the colony's sight is dimmed (explored, not visible) -->
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <defs>
+    <filter id="bl"><feGaussianBlur stdDeviation="40"/></filter>
+    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="470" cy="470" r="640"/><circle cx="1000" cy="520" r="260"/><circle cx="880" cy="330" r="220"/></g></mask>
+  </defs>
+  <rect width="1920" height="1080" fill="#050b12" opacity=".46" mask="url(#vis)"/>
+  <!-- player territory border -->
+  <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="rgba(64,220,235,.07)" stroke="#40dceb" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="none" stroke="rgba(64,220,235,.28)" stroke-width="16" stroke-linejoin="round"/>
+  <!-- road -->
+  <path d="M740 500 C900 520 1060 545 1180 560" fill="none" stroke="rgba(240,176,64,.0)"/>
+</svg>
+
+<!-- place names -->
+<div class="lbl" style="left:70px;top:70px;font-size:20px">Sunfield</div>
+<div class="lbl w" style="left:775px;top:288px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
+<div class="lbl w" style="left:1090px;top:610px;font-size:15px;letter-spacing:.3em;transform:rotate(60deg);transform-origin:left center">Wyllow Ford</div>
+<div class="lbl" style="left:380px;top:845px;font-size:18px">Hollow Wood</div>
+<div class="lbl" style="left:1480px;top:620px;font-size:22px">The Dry Flats</div>
+<div class="lbl w" style="left:1560px;top:1010px;font-size:18px">Kestrel Bay</div>
+
+<!-- sprites, depth sorted -->
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+
+<!-- resource pins -->
+<div class="pin" style="left:792px;top:392px;z-index:2000"><span class="dot"></span>Ore +4<span class="t-dim">1,800 left</span></div>
+<div class="pin" style="left:1378px;top:752px;border-color:#5f8191;color:#8fb0bf;z-index:2000"><span class="dot" style="background:#5f8191"></span>Ore, unclaimed</div>
+
+<!-- worker tags -->
+<div class="pin" style="left:690px;top:545px;border-color:#50e6a0;z-index:2000;font-size:11px"><span class="dot" style="background:#50e6a0;width:12px;height:12px"></span>Harvesting</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5zM3 7l9 5 9-5M12 12v10"/></svg><span class="t-dim">MATERIAL</span><b>840</b><span class="d">+38/m</span></div>
+  <div class="chip"><svg class="ic t-dim" viewBox="0 0 24 24"><path d="M14 6l4 4-9 9H5v-4zM12 8l4 4"/></svg><span class="t-dim">WORK</span><b>612</b><span class="d">+22/m</span></div>
+  <div class="chip"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg><span class="t-dim">POWER</span><b>160 / 168 kW</b></div>
+  <div class="chip"><svg class="ic t-dim" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-4 3-6 6-6s6 2 6 6M16 6a3 3 0 010 6M18 14c2 1 3 3 3 6"/></svg><span class="t-dim">CREW</span><b>23 / 60</b></div>
+  <div class="chip" style="gap:10px;border-color:#3d3a68"><svg class="ic" style="color:#d4b8ff" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 002 3h10a2 2 0 002-3l-5-9V3"/></svg><span style="color:#d4b8ff">RADAR MK I</span><span style="width:74px"><span class="bar" style="display:block"><i style="width:62%;background:#d4b8ff;display:block"></i></span></span><b>62%</b><span class="t-dim">1:40</span></div>
+  <div style="flex:1"></div>
+  <div class="chip"><span class="t-dim">ERA 01</span><b>Contemporary</b><span class="t-dim">4 / 12 techs</span></div>
+  <div class="chip" style="height:36px;gap:12px;border-color:#f0b040"><span class="t-warn" style="letter-spacing:.1em">WAVE 03</span><span class="disp" style="font-size:22px;color:#e8fcff">01:52</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<!-- OBJECTIVE + TERRITORY (left) -->
+<div class="a panel" style="left:12px;top:76px;width:332px;padding:12px 14px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between"><div class="cap t-cyan">Objective</div><span class="tag t-cyan">Wave 2 of 5</span></div>
+  <div class="disp" style="font-size:22px;color:#e8fcff;margin-top:4px">Hold Kestrel Reach</div>
+  <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;font-size:14px">
+    <div style="display:flex;gap:8px;align-items:center"><span class="t-good">&#10003;</span><span class="t-dim">Found the colony</span></div>
+    <div style="display:flex;gap:8px;align-items:center"><span class="t-good">&#10003;</span><span class="t-dim">Claim the river ore</span></div>
+    <div style="display:flex;gap:8px;align-items:center"><span class="t-cyan">&#9679;</span><span>Fortify Wyllow Ford</span><span class="mono t-dim" style="margin-left:auto">1 / 2 turrets</span></div>
+    <div style="display:flex;gap:8px;align-items:center"><span class="t-dim">&#9675;</span><span class="t-dim">Survive wave 05</span></div>
+  </div>
+</div>
+<div class="a panel" style="left:12px;top:274px;width:332px;padding:12px 14px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between"><div class="cap t-cyan">Territory</div><span class="cap">38 tiles</span></div>
+  <div style="display:flex;height:10px;margin-top:8px;border-radius:2px;overflow:hidden;border:1px solid #1b3342"><i style="width:44%;background:#6a9a3a"></i><i style="width:24%;background:#97a64a"></i><i style="width:14%;background:#2f8a52"></i><i style="width:10%;background:#2e86ac"></i><i style="width:8%;background:#c9b27a"></i></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px;margin-top:8px;font-size:13px;color:#8fb0bf"><span>Grassland 44%</span><span>Meadow 24%</span><span>Forest 14%</span><span>River 10%</span><span>Shore 8%</span><span class="t-hi">Explored 34%</span></div>
+  <div style="display:flex;gap:6px;margin-top:10px"><span class="yl y-m"><i></i>+38 M</span><span class="yl y-d"><i></i>+4 ore haul</span><span class="yl y-p"><i></i>+168 kW</span></div>
+</div>
+
+<!-- NOTIFICATIONS (right) -->
+<div class="a" style="right:12px;top:76px;width:360px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="notif" style="border-left-color:#f0b040"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M3 12c2.5-4 4.5-4 7 0s4.5 4 7 0"/></svg><div>Wave 03 sighted on the Dry Flats<small>Contact in 01:52, from the east bank</small></div></div>
+  <div class="notif" style="border-left-color:#50e6a0"><svg class="ic t-good" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg><div>Ore claimed at the river bank<small>Refinery harvest route opened</small></div></div>
+  <div class="notif"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg><div>Barracks 04 is idle<small>Queue infantry or anti-armour</small></div></div>
+  <div style="display:flex;gap:6px;margin-top:2px"><span class="chip" style="height:30px;border-color:#40dceb"><span class="t-cyan">3 idle crews</span><span class="key">.</span></span><span class="chip" style="height:30px"><span class="t-dim">Next alert</span><span class="key">Space</span></span></div>
+</div>
+
+<!-- ALERT QUEUE -->
+<div class="a" style="left:12px;top:655px;width:320px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #f0b040;font-size:14px"><b style="font-weight:600;color:#ffd78a">Power margin low</b><div class="sub">8 kW headroom, build a reactor</div></div>
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #40dceb;font-size:14px"><b style="font-weight:600;color:#96f5ff">Supply depot foundation placed</b><div class="sub">Crew 03 en route</div></div>
+</div>
+
+<!-- MINIMAP -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
+    <!-- unexplored + enemy -->
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <div class="a" style="left:170px;top:26px;width:60px;height:46px;border:1.5px solid #f04e46;background:rgba(240,78,70,.16);border-radius:6px"></div>
+    <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
+    <div class="a" style="left:22px;top:30px;width:9px;height:9px;background:#40dceb"></div><div class="a" style="left:46px;top:50px;width:6px;height:6px;background:#40dceb"></div><div class="a" style="left:58px;top:70px;width:6px;height:6px;background:#40dceb"></div>
+    <div class="a" style="left:-20px;top:0;width:200px;height:112px;border:1.5px solid #fff;box-shadow:0 0 10px rgba(255,255,255,.4)"></div>
+  </div>
+</div>
+
+<!-- BOTTOM CENTRE: nothing selected, tile under cursor -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 16px;display:grid;grid-template-columns:330px 1fr 230px;gap:16px;z-index:3000">
+  <div>
+    <div class="cap t-cyan">Tile under cursor</div>
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <div style="width:84px;height:84px;border:1px solid #284e60;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) -175px -66px/900px 600px no-repeat;border-radius:2px;flex:none"></div>
+      <div><div class="disp" style="font-size:24px;color:#e8fcff;line-height:26px">River bank, Ore</div><div class="sub">Tile 21,10 / flat / Player territory</div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><span class="yl y-m"><i></i>+4 haul</span><span class="yl y-d"><i></i>1,800 left</span></div></div>
+    </div>
+    <div style="margin-top:10px">
+      <div class="row"><span class="t-dim">Movement</span><span class="mono">1.0x, shore sand 0.8x</span></div>
+      <div class="row"><span class="t-dim">Cover</span><span class="mono t-warn">None, open ground</span></div>
+      <div class="row"><span class="t-dim">Build here</span><span class="mono t-good">Refinery +20% output</span></div>
+    </div>
+  </div>
+  <div style="border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 16px">
+    <div class="cap t-cyan">Colony ledger</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 18px;margin-top:6px">
+      <div class="row"><span class="t-dim">Structures</span><span class="mono">11</span></div><div class="row"><span class="t-dim">Units</span><span class="mono">23</span></div>
+      <div class="row"><span class="t-dim">Supply</span><span class="mono t-good">72%</span></div><div class="row"><span class="t-dim">Battery</span><span class="mono">62%</span></div>
+    </div>
+    <div class="cap" style="margin-top:10px">Production</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;font-size:14px">
+      <div style="display:flex;align-items:center;gap:10px"><span style="width:100px">Barracks 04</span><span class="tag t-warn">Idle</span><span class="sub" style="margin-left:auto">queue empty</span></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="width:100px">Factory 02</span><div class="bar" style="flex:1"><i style="width:48%"></i></div><span class="mono sub">Tank 0:41</span></div>
+      <div style="display:flex;align-items:center;gap:10px"><span style="width:100px">Lab</span><div class="bar" style="flex:1"><i style="width:62%;background:#d4b8ff"></i></div><span class="mono sub">Radar 1:40</span></div>
+    </div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+    <span class="btn pri">Select army <span class="key">Ctrl A</span></span>
+    <span class="btn">Idle crews 3 <span class="key">.</span></span>
+    <span class="btn">Open lab <span class="key">L</span></span>
+  </div>
+</div>
+
+<!-- DECK: Build -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab on">Build</span><span class="tab">Units</span><span class="tab">Orders</span><span class="tab">Science</span><span class="tab">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:10px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <sc-for list="{{cards}}" as="c" hint-placeholder-count="12">
+        <div style="height:72px;border:1px solid {{c.bd}};background:rgba(8,17,26,.92);border-radius:3px;padding:6px 8px;display:flex;gap:8px;overflow:hidden;opacity:{{c.op}}">
+          <img src="{{c.img}}" alt="" style="width:34px;height:34px;object-fit:contain;flex:none">
+          <div style="min-width:0"><div class="disp" style="font-size:15px;line-height:16px;color:#e8fcff;white-space:nowrap">{{c.name}}</div><div class="mono" style="font-size:11px;color:#8fb0bf;white-space:nowrap">{{c.cost}}</div><div style="font-size:11px;color:{{c.nc}};white-space:nowrap">{{c.note}}</div></div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+
+<!-- cursor on the ore -->
+<svg class="a" style="left:838px;top:452px;z-index:2500" width="22" height="28" viewBox="0 0 22 28"><path d="M2 2l16 14-7 1 4 8-3 1-4-8-6 5z" fill="#fff" stroke="#000" stroke-width="1.2"/></svg>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const I = { pp:'b32b316f8a54cfb3e4e96b8ab7a2f79e', cc:'5828f353f51d19ec36c3c638831bfb96', ref:'6c29c5788f12d88cfae3914221f234a9', bar:'c28b4de3839198732e73d3041feec1e6', fnd:'bbb3bae9af99ea696ff5f34401784754', fl:'b68e987fd5fe7400ef76a4e86344f108', gt:'508d97c7b872d6502bb31b3fe2de001c', aa:'318ba1a2dd09b4736f000e8ba021bf70', hv:'439ac4aa47c8b40430b3ce1b7550277d', tank:'87aab1971d525ecad863691237ae2a71', at:'004852755ece3a8e81b95a9e93489852', inf:'0cff440ac0f27a92e113ec4de32ee9a8', lab:'8cb9cb29d95752ec982142bf671a1e6d', heli:'df45512203a3212ed1030c81c397e959', wall:'a208753ee858587a05fa96e19584d2f8', ore:'f7ec8be19aeb99fc5975b38136419d82', fac:'c28b4de3839198732e73d3041feec1e6' };
+    const cam = { x: 0, y: 0 };
+    const w = [
+      ['pp',150,310,170],['pp',110,450,160],['cc',360,300,250],['fnd',330,100,170],['fl',570,360,80],
+      ['ref',560,470,200],['bar',400,570,200],['lab',610,230,150],
+      ['gt',735,330,115],['gt',880,560,115],['aa',780,430,85],
+      ['hv',790,455,110],['hv',700,620,105],
+      ['tank',690,700,140],['tank',760,745,140],['tank',640,760,140],['at',830,690,90],['at',890,750,90],['inf',940,700,80],['inf',600,690,80]
+    ];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1] - cam.x, top: a[2] - cam.y, w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    const mk = (name, img, cost, note, o) => Object.assign({ name, img: B + I[img], cost, note, nc: '#8fb0bf', bd: '#1b3342', op: 1 }, o || {});
+    const cards = [
+      mk('Reactor','pp','220 M 240 W','+80 kW, river +12',{nc:'#50e6a0'}),
+      mk('Refinery','ref','300 M 300 W','+20% on ore',{nc:'#50e6a0'}),
+      mk('Barracks','bar','180 M 200 W','Trains infantry'),
+      mk('Vehicle Fac.','fac','280 M 360 W','Needs Barracks',{bd:'#40dceb'}),
+      mk('Laser Turret','gt','150 M 120 W','+25% high ground'),
+      mk('AA Turret','aa','170 M 140 W','Locked',{op:.5}),
+      mk('Wall','wall','20 M 20 W','Forest +cover'),
+      mk('Supply Depot','fnd','140 M 160 W','Feeds 9 tiles'),
+      mk('Lab','lab','320 M 320 W','Needs Reactor'),
+      mk('Battery','pp','160 M 180 W','Locked',{op:.5}),
+      mk('Floodlight','fl','60 M 40 W','Night vision +4'),
+      mk('Airfield','heli','360 M 400 W','Locked',{op:.5})
+    ];
+    return { sprites, cards };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+   Compiling rts-server v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/server)
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.67s
+     Running unittests src/bin/godot-bridge.rs (target/debug/deps/godot_bridge-e36cfb70b341a0de)
+
+running 4 tests
+test tests::godot_command_file_covers_the_complete_combat_roster ... ok
+test tests::godot_command_file_supports_rts_orders ... ok
+test tests::snapshot_is_parseable_shape_and_contains_entities ... ok
+test tests::qa_concurrent_command_transport_preserves_every_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+

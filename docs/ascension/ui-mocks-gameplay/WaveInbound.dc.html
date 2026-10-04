@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wave inbound</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<!-- LAND: camera at world 650,100 (Wyllow Ford) -->
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) -650px -100px/3600px 2400px no-repeat"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <defs>
+    <radialGradient id="rv" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="#f04e46" stop-opacity="0"/><stop offset="1" stop-color="#f04e46" stop-opacity=".30"/></radialGradient>
+  </defs>
+  <!-- territory edge -->
+  <path d="M-20 -20 L-20 40 L110 190 L220 320 L310 430 L360 520 L420 660 L450 780 L380 880 L-20 940 Z" fill="rgba(64,220,235,.06)" stroke="#40dceb" stroke-width="3"/>
+  <!-- enemy approach -->
+  <path d="M1900 380 C1500 400 1100 440 760 470 C640 484 560 470 500 450" fill="none" stroke="#f04e46" stroke-width="3" stroke-dasharray="14 9"/>
+  <path d="M1500 120 C1200 200 900 260 620 330" fill="none" stroke="#f04e46" stroke-width="3" stroke-dasharray="14 9"/>
+  <ellipse cx="520" cy="450" rx="110" ry="70" fill="rgba(240,176,64,.12)" stroke="#f0b040" stroke-width="2" stroke-dasharray="5 5"/>
+  <!-- turret fields of fire -->
+  <circle cx="330" cy="380" r="230" fill="none" stroke="rgba(64,220,235,.35)" stroke-dasharray="10 8"/>
+  <circle cx="330" cy="560" r="230" fill="none" stroke="rgba(64,220,235,.35)" stroke-dasharray="10 8"/>
+  <!-- combat flashes -->
+  <g fill="#ffd78a" opacity=".9"><circle cx="470" cy="420" r="6"/><circle cx="560" cy="470" r="5"/><circle cx="400" cy="400" r="4"/></g>
+  <g stroke="#ffd78a" stroke-width="2" opacity=".7"><path d="M340 380L470 420"/><path d="M340 560L560 470"/></g>
+  <rect width="1920" height="1080" fill="url(#rv)"/>
+</svg>
+
+<div class="lbl w" style="left:180px;top:230px;font-size:22px;transform:rotate(52deg);transform-origin:left center">Calder River</div>
+<div class="lbl" style="left:570px;top:540px;font-size:15px;letter-spacing:.3em;color:rgba(255,215,138,.9)">Wyllow Ford</div>
+<div class="lbl" style="left:980px;top:560px;font-size:22px">The Dry Flats</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+
+<!-- structure health bars -->
+<div class="a" style="left:250px;top:335px;width:100px;z-index:2000"><div class="hp"><i style="width:40%;background:#f04e46"></i></div><div class="mono" style="font-size:10px;text-align:center">TURRET 01</div></div>
+<div class="a" style="left:250px;top:515px;width:100px;z-index:2000"><div class="hp"><i style="width:72%;background:#f0b040"></i></div><div class="mono" style="font-size:10px;text-align:center">TURRET 02</div></div>
+<div class="a" style="left:290px;top:430px;width:90px;z-index:2000"><div class="hp"><i style="width:28%;background:#f04e46"></i></div><div class="mono" style="font-size:10px;text-align:center">WALL</div></div>
+<div class="pin" style="left:430px;top:352px;border-color:#f04e46;z-index:2000"><span class="dot" style="background:#f04e46"></span>12 hostiles, 7 down</div>
+<div class="pin" style="left:446px;top:540px;border-color:#f0b040;z-index:2000"><span class="dot" style="background:#f0b040"></span>Ford: enemy at 0.5x</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>620</b><span class="d">+38/m</span></div>
+  <div class="chip" style="border-color:#f0b040"><span class="t-dim">POWER</span><b class="t-warn">150 / 168 kW</b></div>
+  <div class="chip"><span class="t-dim">CREW</span><b>19 / 60</b></div>
+  <div class="chip" style="border-color:#f04e46"><span class="t-bad">AMMO</span><b>34%</b><span class="t-bad" style="font-size:11px">low</span></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="height:36px;gap:12px;border-color:#f04e46;box-shadow:0 0 18px rgba(240,78,70,.35)"><span class="t-bad" style="letter-spacing:.1em">WAVE 02 ENGAGED</span><span class="disp" style="font-size:22px;color:#e8fcff">12</span><span class="sub">hostiles</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<!-- LEFT: wave panel -->
+<div class="a panel" style="left:12px;top:76px;width:332px;padding:12px 14px;z-index:3000;border-color:#7a2f2b">
+  <div style="display:flex;justify-content:space-between;align-items:center"><div class="cap t-bad">Wave 02</div><span class="tag t-bad">East line breaking</span></div>
+  <div class="disp" style="font-size:22px;color:#e8fcff;margin-top:4px">Hold Wyllow Ford</div>
+  <div class="row"><span class="t-dim">Hostiles</span><span class="mono">5 left of 12</span></div>
+  <div class="row"><span class="t-dim">Direction</span><span class="mono">East bank, 2 prongs</span></div>
+  <div class="row"><span class="t-dim">Next wave</span><span class="mono">03:20</span></div>
+</div>
+
+<!-- NOTIFICATIONS -->
+<div class="a" style="right:12px;top:76px;width:360px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="notif" style="border-left-color:#f04e46"><svg class="ic t-bad" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/></svg><div>Turret 01 critical<small>40% health, taking fire from the ford</small></div></div>
+  <div class="notif" style="border-left-color:#f0b040"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/></svg><div>Ammo low at the ford<small>Depot 02 is 9 tiles back</small></div></div>
+  <div class="glass" style="padding:10px 12px"><div class="cap t-cyan">Suggested</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+      <div style="display:flex;align-items:center;gap:10px;font-size:14px"><span class="key">G</span>Rally Vanguard to the ford</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:14px"><span class="key">R</span>Repair Turret 01 (60 M)</div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:14px"><span class="key">W</span>Wall the west bank</div>
+    </div></div>
+</div>
+
+<!-- MINIMAP threat lens -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key" style="border-color:#f04e46;color:#ffd6d2;background:#4a1d1b">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat;filter:saturate(.6) brightness(.8)"></div>
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
+    <svg class="a" style="left:0;top:0" width="288" height="250"><path d="M230 38 C190 52 150 58 118 62" stroke="#f04e46" stroke-width="2" fill="none" stroke-dasharray="4 3"/><path d="M200 12 C170 24 140 34 112 44" stroke="#f04e46" stroke-width="2" fill="none" stroke-dasharray="4 3"/></svg>
+    <div class="a" style="left:110px;top:48px;width:20px;height:20px;border-radius:50%;background:rgba(240,78,70,.5)"></div>
+    <div class="a" style="left:56px;top:18px;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<!-- SELECTION: turret 01 -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 16px;z-index:3000;display:grid;grid-template-columns:260px 1fr 210px;gap:16px">
+  <div>
+    <div style="display:flex;gap:12px;align-items:center"><div class="glass" style="width:86px;height:86px;display:flex;align-items:center;justify-content:center"><img src="/_blob/508d97c7b872d6502bb31b3fe2de001c" style="width:76px;height:76px;object-fit:contain" alt=""></div><div><div class="disp" style="font-size:26px;color:#e8fcff;line-height:26px">Gun turret 01</div><span class="tag t-bad" style="margin-top:4px">Critical</span></div></div>
+    <div style="margin-top:12px"><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Health</span><span class="mono t-bad">128 / 320</span></div><div class="hp"><i style="width:40%;background:#f04e46"></i></div></div>
+    <div class="row"><span class="t-dim">Ammo</span><span class="mono t-warn">34%</span></div>
+    <div class="row"><span class="t-dim">Targets</span><span class="mono">3 tanks in range</span></div>
+  </div>
+  <div style="border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 16px">
+    <div class="cap t-cyan">Terrain at this tile</div>
+    <div style="display:flex;gap:12px;margin-top:8px;align-items:center">
+      <div style="width:70px;height:70px;border:1px solid #284e60;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) -190px -100px/900px 600px no-repeat;flex:none"></div>
+      <div><div class="disp" style="font-size:20px;color:#e8fcff">River bank, Grassland</div><div class="sub">Tile 17,9 / flat / Player</div></div>
+    </div>
+    <div style="margin-top:6px">
+      <div class="row"><span class="t-dim">Attackers wading the ford</span><span class="mono t-good">-50% speed</span></div>
+      <div class="row"><span class="t-dim">Fire across the river</span><span class="mono t-good">+10% defence</span></div>
+      <div class="row"><span class="t-dim">Cover</span><span class="mono t-bad">None, open ground</span></div>
+    </div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <span class="btn pri sm">Repair <span class="key">R</span></span>
+    <span class="btn sm">Resupply <span class="key">E</span></span>
+    <span class="btn sm">Focus fire <span class="key">F</span></span>
+    <span class="btn sm danger">Demolish</span>
+  </div>
+</div>
+
+<!-- DECK: Orders -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab">Build</span><span class="tab">Units</span><span class="tab on">Orders</span><span class="tab">Science</span><span class="tab">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:12px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Attack-move</span><span class="key">A</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Stop</span><span class="key">S</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Hold</span><span class="key">H</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Focus</span><span class="key">F</span></span>
+      <span class="btn pri" style="flex-direction:column;min-height:72px;gap:2px"><span>Resupply</span><span class="key">E</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Spread</span><span class="key">X</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Queue</span><span class="key">Shift</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>HQ</span><span class="key">G</span></span>
+    </div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const cam = { x: 650, y: 100 };
+    const I = { gt:'508d97c7b872d6502bb31b3fe2de001c', aa:'318ba1a2dd09b4736f000e8ba021bf70', wall:'a208753ee858587a05fa96e19584d2f8', conc:'dd84ec04431e6bc7a5bbc71c8d82019f', sand:'da391d1df1491ea1875475d3e439e791', tank:'87aab1971d525ecad863691237ae2a71', at:'004852755ece3a8e81b95a9e93489852', inf:'0cff440ac0f27a92e113ec4de32ee9a8', hv:'439ac4aa47c8b40430b3ce1b7550277d', atank:'73037d5e6ad6e787627e98ef11935b3c', ainf:'10188eed0323bf70c0aa84a87d3bbcb9', aheli:'7290d27eb185c00fe39d20c0df565b94', crater:'ecef6e4a5fce7ea118d71be333bc0d36', ref:'6c29c5788f12d88cfae3914221f234a9' };
+    const w = [
+      ['gt',900,440,110],['gt',915,600,110],['wall',960,520,100],['wall',990,570,100],['conc',860,380,100],['sand',930,700,100],['aa',840,520,84],
+      ['tank',800,640,140],['tank',760,700,140],['at',870,740,90],['inf',820,780,80],['inf',760,570,80],
+      ['atank',1170,540,140],['atank',1240,600,140],['atank',1330,500,140],['ainf',1220,500,80],['ainf',1290,550,80],['ainf',1380,590,80],['ainf',1420,520,80],['aheli',1000,230,190],
+      ['crater',1160,680,110],['crater',1450,420,110]
+    ];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1] - cam.x, top: a[2] - cam.y, w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    return { sprites };
+  }
+}
+</script>
+</body>
+</html>

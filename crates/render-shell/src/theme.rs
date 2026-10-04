@@ -20,24 +20,24 @@ use macroquad::prelude::*;
 /// Title/menu clear color — the deepest space-black-blue. Also the letterbox
 /// outside the battlefield play area.
 pub const BASE_CHARCOAL: Color = color_u8!(6, 9, 16, 255);
-/// Battlefield ground tile (base shade) — dark blue-slate.
-pub const GROUND: Color = color_u8!(10, 16, 26, 255);
-/// Alternating ground tile — a step lighter so the grid reads as a surface.
-pub const GROUND_ALT: Color = color_u8!(14, 22, 34, 255);
-/// Coarse macro-sector overlay, breaking the field into 4x4 blocks (translucent).
-pub const GROUND_MACRO: Color = color_u8!(18, 34, 52, 40);
-/// Tile grid over the ground — cyan, low alpha, reads as a holographic graticule.
-pub const GRID: Color = color_u8!(40, 120, 150, 70);
-/// Brighter grid pulse line (used for the moving graticule sweep on the board).
-pub const GRID_HOT: Color = color_u8!(70, 200, 235, 110);
-/// Impassable terrain (walls) — dark crystalline body (middle face).
-pub const TERRAIN_WALL: Color = color_u8!(14, 30, 44, 255);
+/// Earthfront battlefield soil.
+pub const GROUND: Color = color_u8!(48, 51, 42, 255);
+/// Alternating ground tile used in the minimap and subtle terrain variation.
+pub const GROUND_ALT: Color = color_u8!(59, 61, 48, 255);
+/// Coarse natural variation breaking the field into readable regions.
+pub const GROUND_MACRO: Color = color_u8!(132, 118, 76, 18);
+/// Tile grid: deliberately faint so terrain reads before the simulation lattice.
+pub const GRID: Color = color_u8!(176, 190, 154, 26);
+/// Soft command scan used as momentary spatial feedback.
+pub const GRID_HOT: Color = color_u8!(90, 210, 190, 55);
+/// Impassable rock body.
+pub const TERRAIN_WALL: Color = color_u8!(65, 67, 62, 255);
 /// Lit top face of a wall/pylon block.
-pub const WALL_TOP: Color = color_u8!(24, 90, 110, 255);
+pub const WALL_TOP: Color = color_u8!(94, 91, 76, 255);
 /// Bright highlight line along a wall's top edge.
-pub const WALL_HI: Color = color_u8!(64, 220, 235, 255);
+pub const WALL_HI: Color = color_u8!(138, 130, 101, 255);
 /// Wall outline / dark groove.
-pub const WALL_EDGE: Color = color_u8!(3, 5, 10, 255);
+pub const WALL_EDGE: Color = color_u8!(29, 31, 29, 255);
 /// Soft drop-shadow under a unit/building (translucent, stacked for soft edge).
 pub const PIECE_SHADOW: Color = color_u8!(0, 0, 0, 90);
 
@@ -166,15 +166,15 @@ pub const DECO_GOLD_HI: Color = color_u8!(150, 245, 255, 255);
 // the holographic board (varnish/vignette wash over them) while still showing
 // clear regions: cool grey rock, warm savanna, green vegetation, mineral teal.
 /// Barren: cool grey rock / dust (the default open-space floor).
-pub const TERRAIN_BARREN: Color = color_u8!(34, 41, 48, 255);
+pub const TERRAIN_BARREN: Color = color_u8!(83, 79, 67, 255);
 /// Plains: warm tan / savanna.
-pub const TERRAIN_PLAINS: Color = color_u8!(58, 52, 34, 255);
+pub const TERRAIN_PLAINS: Color = color_u8!(100, 91, 59, 255);
 /// Fertile: green vegetation.
-pub const TERRAIN_FERTILE: Color = color_u8!(30, 58, 36, 255);
+pub const TERRAIN_FERTILE: Color = color_u8!(56, 83, 53, 255);
 /// Rich: a valuable mineral teal-cyan tint so resource worlds stand out.
-pub const TERRAIN_RICH: Color = color_u8!(30, 64, 70, 255);
-/// Cool holographic center-bloom wash unifying the board.
-pub const VARNISH: Color = color_u8!(64, 220, 235, 30);
+pub const TERRAIN_RICH: Color = color_u8!(54, 82, 76, 255);
+/// Warm atmospheric wash unifying the terrain.
+pub const VARNISH: Color = color_u8!(220, 190, 120, 15);
 
 /// Health-bar fill color by remaining fraction: green → amber → red. Used by both
 /// the on-map bars and the selection panel so they read identically.

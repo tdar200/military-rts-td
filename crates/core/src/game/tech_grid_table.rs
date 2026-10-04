@@ -5,7 +5,7 @@
 //! (`era*50 + branch*5 + step`, fixing the authored slotting bugs), prereqs
 //! derived as a clean structural DAG (within-cell chain + per-era Energy spine),
 //! reality clamped so nothing past era 4 is Achieved/Emerging. Edit the
-//! generator, not this file. Dormant in M1 — not yet wired into gameplay.
+//! generator, not this file. The table is live in research, era advancement, and unlocks.
 
 use super::tech_grid::{GridNode, RealityClass, Unlock, UnlockFamily, TECH_MAX};
 

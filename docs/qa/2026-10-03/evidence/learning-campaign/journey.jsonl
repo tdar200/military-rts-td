@@ -1,0 +1,95 @@
+{"action": "build REFINERY", "tick": 1217, "money": 950.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 2, "Barracks": 1, "ResearchLab": 1, "GunTurret": 2, "Harvester": 1}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"error": "No enabled button BUILD"}
+{"action": "build REFINERY", "tick": 2155, "money": 1448.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 2, "Harvester": 2}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build GUN TURRET", "tick": 2238, "money": 1400.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 3, "Harvester": 2}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build GUN TURRET", "tick": 2312, "money": 1364.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 4, "Harvester": 3}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build GUN TURRET", "tick": 2394, "money": 1316.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 5, "Harvester": 3}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build GUN TURRET", "tick": 2471, "money": 1304.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build SUPPLY DEPOT", "tick": 2542, "money": 1276.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 1}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build SUPPLY DEPOT", "tick": 2612, "money": 1284.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build GENERATOR", "tick": 2684, "money": 1256.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "build GENERATOR", "tick": 2758, "money": 1327.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2}}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button Guided Anti-Armour"}
+{"error": "No enabled button Guided Anti-Armour"}
+{"action": "research Guided Anti-Armour", "tick": 3108, "money": 1636.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2}}
+{"action": "checkpoint", "tick": 3123, "money": 1620.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 4, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "ResearchLab": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2}}
+{"action": "checkpoint", "tick": 4924, "money": 3313.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2}}
+{"action": "build RESEARCH LAB", "tick": 5283, "money": 3495.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1}}
+{"action": "checkpoint", "tick": 5291, "money": 3495.0, "era": 0, "research": 0, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1}}
+{"action": "research Armoured Vehicle Tooling", "tick": 6250, "money": 4487.0, "era": 0, "research": 1, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1}}
+{"action": "checkpoint", "tick": 7107, "money": 4175.0, "era": 0, "research": 1, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 5}}
+{"action": "build VEHICLE FACTORY", "tick": 7477, "money": 4423.0, "era": 0, "research": 2, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 8, "VehicleFactory": 1}}
+{"action": "research Integrated Air Defence", "tick": 7502, "money": 4359.0, "era": 0, "research": 2, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 8, "VehicleFactory": 1}}
+{"action": "build VEHICLE FACTORY", "tick": 7569, "money": 4211.0, "era": 0, "research": 2, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 8, "VehicleFactory": 2}}
+{"action": "build AA BATTERY", "tick": 8466, "money": 3351.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 1, "AaTurret": 1}}
+{"action": "research Battery Buffering", "tick": 8488, "money": 3251.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 2, "AaTurret": 1}}
+{"action": "build AA BATTERY", "tick": 8562, "money": 3019.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 2, "AaTurret": 2}}
+{"action": "build AA BATTERY", "tick": 8718, "money": 3059.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "AaTurret": 2, "Tank": 2}}
+{"action": "build AA BATTERY", "tick": 8834, "money": 2862.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 3, "AaTurret": 1}}
+{"action": "build AA BATTERY", "tick": 8909, "money": 2792.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 3, "AaTurret": 1}}
+{"action": "checkpoint", "tick": 8923, "money": 2827.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 3, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 3, "AaTurret": 1}}
+{"action": "build AA BATTERY", "tick": 8997, "money": 2759.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "AaTurret": 1, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2, "Tank": 3}}
+{"action": "build GENERATOR", "tick": 9071, "money": 2866.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 14, "PowerPlant": 1, "Refinery": 3, "Barracks": 1, "GunTurret": 6, "Tank": 4, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9136, "money": 2613.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 4, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9203, "money": 2659.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 4, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9274, "money": 2755.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 4, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9346, "money": 2827.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 4, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9418, "money": 2899.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 4, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9492, "money": 3007.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 5, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9556, "money": 2879.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 5, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9630, "money": 2951.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 5, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9704, "money": 3059.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 5, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9774, "money": 2931.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 6, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9845, "money": 3039.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 6, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9919, "money": 3111.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 6, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 9996, "money": 3219.0, "era": 0, "research": 3, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 7, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 10063, "money": 3091.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 7, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "research Field Supply Networks", "tick": 10087, "money": 3127.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 7, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 10154, "money": 3199.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 7, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "research Field Supply Networks", "tick": 10176, "money": 3235.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 7, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 10243, "money": 3307.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 7, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "research Field Supply Networks", "tick": 10268, "money": 3343.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 8, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 10334, "money": 3215.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 8, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "research Field Supply Networks", "tick": 10361, "money": 3251.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 8, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 10436, "money": 3323.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 8, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "research Field Supply Networks", "tick": 10460, "money": 3359.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 8, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "build GENERATOR", "tick": 10532, "money": 3467.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 9, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}
+{"action": "research Field Supply Networks", "tick": 10559, "money": 3467.0, "era": 0, "research": 4, "winner": -1, "counts": {"CommandCenter": 1, "Infantry": 13, "PowerPlant": 2, "Refinery": 3, "Barracks": 1, "Tank": 9, "GunTurret": 5, "Harvester": 3, "SupplyDepot": 2, "ResearchLab": 1, "AntiArmor": 12, "VehicleFactory": 2}}

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Strategic map</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<!-- the whole of Kestrel Reach at 0.45 scale -->
+<div class="a" style="left:0;top:0;width:1620px;height:1080px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/1620px 1080px no-repeat"></div>
+<div class="a" style="left:1620px;top:0;right:0;bottom:0;background:#08101a"></div>
+
+<svg class="a" style="left:0;top:0" width="1620" height="1080" fill="none">
+  <defs>
+    <pattern id="hx" width="54" height="94" patternUnits="userSpaceOnUse" patternTransform="scale(1)"><path d="M27 0 L54 15.6 V46.8 L27 62.4 L0 46.8 V15.6Z M27 62.4 V94 M0 46.8 L-27 62.4 M54 46.8 L81 62.4" stroke="rgba(255,255,255,.09)" stroke-width="1"/></pattern>
+    <filter id="bl"><feGaussianBlur stdDeviation="14"/></filter>
+    <mask id="fog"><rect width="1620" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><path d="M-40 -40 H1330 V420 L1180 520 L1000 640 L760 760 L520 840 L-40 1000 Z"/></g></mask>
+  </defs>
+  <rect width="1620" height="1080" fill="url(#hx)"/>
+  <!-- unexplored -->
+  <rect width="1620" height="1080" fill="#050b12" opacity=".86" mask="url(#fog)"/>
+  <!-- player border -->
+  <path d="M-10 -10 L252 -10 L333 68 L383 130 L432 189 L468 234 L490 288 L517 351 L531 405 L504 450 L270 477 L-10 477 Z" fill="rgba(64,220,235,.10)" stroke="#40dceb" stroke-width="3.5" stroke-linejoin="round"/>
+  <!-- alien border -->
+  <path d="M1035 27 L1485 27 L1485 288 L1350 315 L1170 315 L1035 288 Z" fill="rgba(240,78,70,.10)" stroke="#f04e46" stroke-width="3.5" stroke-linejoin="round"/>
+  <!-- track and ford -->
+  <path d="M333 212 C400 222 480 238 536 252 C700 266 900 270 1030 262" stroke="rgba(240,220,160,.55)" stroke-width="3" stroke-dasharray="8 6"/>
+  <!-- expected assault routes -->
+  <path d="M1250 150 C1100 190 880 230 560 250" stroke="#f04e46" stroke-width="3" stroke-dasharray="12 8"/>
+  <path d="M1230 230 L1170 235 L1100 245" stroke="#f04e46" stroke-width="3"/>
+  <path d="M1250 150 C1100 190 880 230 560 250" stroke="rgba(240,78,70,.18)" stroke-width="22"/>
+  <!-- ridge high-ground zone -->
+  <path d="M760 -10 L1560 -10 L1560 120 C1380 160 1160 150 1020 130 C880 110 800 70 760 40 Z" stroke="rgba(240,176,64,.55)" stroke-width="2" stroke-dasharray="10 8"/>
+  <!-- scale -->
+  <path d="M40 1034 H190" stroke="#e8fcff" stroke-width="2"/><path d="M40 1028v12M190 1028v12M115 1030v8" stroke="#e8fcff" stroke-width="2"/>
+</svg>
+<div class="cap" style="position:absolute;left:40px;top:1042px;color:#e8fcff;z-index:5">0 &nbsp; 330 m</div>
+
+<!-- region names -->
+<div class="lbl" style="left:540px;top:20px;font-size:40px;letter-spacing:.5em;color:rgba(255,255,255,.7)">Kestrel Reach</div>
+<div class="lbl" style="left:100px;top:56px;font-size:20px">Sunfield</div>
+<div class="lbl" style="left:190px;top:392px;font-size:18px">Hollow Wood</div>
+<div class="lbl w" style="left:395px;top:120px;font-size:18px;transform:rotate(52deg);transform-origin:left center;letter-spacing:.3em">Calder River</div>
+<div class="lbl" style="left:830px;top:268px;font-size:24px">The Dry Flats</div>
+<div class="lbl" style="left:1015px;top:62px;font-size:22px">Ironback Ridge</div>
+<div class="lbl w" style="left:880px;top:610px;font-size:26px">Kestrel Bay</div>
+<div class="lbl w" style="left:480px;top:222px;font-size:11px;letter-spacing:.25em;color:#ffd78a">Wyllow Ford</div>
+
+<!-- sites and markers -->
+<div class="pin" style="left:178px;top:150px;z-index:5;border-color:#40dceb;height:30px;font-size:13px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#96f5ff" stroke-width="2"><path d="M5 21V4M5 4l12 4-12 5"/></svg>Colony, Command Centre</div>
+<div class="pin" style="left:370px;top:166px;z-index:5;border-color:#96f5ff"><span class="dot"></span>Ore +4</div>
+<div class="pin" style="left:640px;top:344px;z-index:5;border-color:#5f8191;color:#8fb0bf"><span class="dot" style="background:#5f8191"></span>Ore, unclaimed</div>
+<div class="pin" style="left:1020px;top:60px;z-index:5;border-color:#d4b8ff;top:100px"><span class="dot" style="background:#d4b8ff"></span>Alloy +6</div>
+<div class="pin" style="left:1170px;top:128px;z-index:5;border-color:#f04e46;height:30px;font-size:13px"><span class="dot" style="background:#f04e46"></span>Alien holdfast</div>
+<div class="pin" style="left:1088px;top:496px;z-index:5;border-color:#7fd4e0;color:#8fb0bf"><span class="dot" style="background:#7fd4e0"></span>Islet, unvisited</div>
+<div class="pin" style="left:1230px;top:300px;z-index:5;border-color:#5f8191;color:#8fb0bf">Unexplored</div>
+<div class="pin" style="left:690px;top:176px;z-index:5;border-color:#f04e46;height:30px"><span class="dot" style="background:#f04e46"></span>Wave 03 route, 01:52</div>
+
+<!-- compass -->
+<svg class="a" style="left:1540px;top:970px;z-index:5" width="64" height="64" viewBox="0 0 64 64" fill="none"><circle cx="32" cy="32" r="28" fill="rgba(8,15,24,.8)" stroke="#284e60"/><path d="M32 8l6 24-6-4-6 4z" fill="#e8fcff"/><path d="M32 56l-6-24 6 4 6-4z" fill="#5f8191"/><text x="32" y="7" font-family="Rajdhani" font-size="9" fill="#96f5ff" text-anchor="middle">N</text></svg>
+
+<!-- title bar -->
+<div class="a panel" style="left:12px;top:10px;width:380px;height:44px;display:flex;align-items:center;gap:12px;padding:0 14px;z-index:6">
+  <svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/></svg>
+  <span class="disp" style="font-size:20px;color:#e8fcff;letter-spacing:.1em">Strategic map</span><span class="cap">M to close</span>
+</div>
+
+<!-- RIGHT PANEL -->
+<div class="a" style="left:1620px;top:0;right:0;bottom:0;padding:16px;display:flex;flex-direction:column;gap:12px;z-index:6">
+  <div>
+    <div class="cap t-cyan">Region</div>
+    <div class="disp" style="font-size:34px;line-height:36px;color:#e8fcff;margin-top:2px">Kestrel Reach</div>
+    <div class="sub">Coastal river basin / Era 01</div>
+  </div>
+  <div class="panel" style="padding:12px">
+    <div class="cap">Composition</div>
+    <div style="display:flex;height:10px;margin-top:8px;border:1px solid #1b3342;overflow:hidden"><i style="width:34%;background:#6a9a3a"></i><i style="width:20%;background:#97a64a"></i><i style="width:14%;background:#c9923a"></i><i style="width:10%;background:#6e747a"></i><i style="width:8%;background:#2f8a52"></i><i style="width:8%;background:#2e86ac"></i><i style="width:6%;background:#c9b27a"></i></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-top:8px;font-size:12px;color:#8fb0bf"><span>Grassland 34%</span><span>Meadow 20%</span><span>Dry flats 14%</span><span>Highland 10%</span><span>Forest 8%</span><span>River 8%</span></div>
+  </div>
+  <div class="panel" style="padding:12px">
+    <div style="display:flex;justify-content:space-between"><div class="cap">Explored</div><span class="mono" style="font-size:13px">34%</span></div>
+    <div class="bar" style="margin-top:6px"><i style="width:34%"></i></div>
+    <div class="row" style="margin-top:8px"><span class="t-dim">Territory</span><span class="mono">38 tiles</span></div>
+    <div class="row"><span class="t-dim">Resources seen</span><span class="mono">3 of ?</span></div>
+    <div class="row"><span class="t-dim">Hostile sites</span><span class="mono t-bad">1 known</span></div>
+  </div>
+  <div class="panel" style="padding:12px">
+    <div class="cap">Yields per minute</div>
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"><span class="yl y-m"><i></i>+38 M</span><span class="yl y-d"><i></i>+22 W</span><span class="yl y-p"><i></i>+168 kW</span><span class="yl y-r"><i></i>Radar 62%</span></div>
+  </div>
+  <div class="panel" style="padding:12px">
+    <div class="cap t-cyan">Next goals</div>
+    <div style="display:flex;flex-direction:column;gap:7px;margin-top:8px;font-size:14px">
+      <div style="display:flex;gap:8px"><span class="t-cyan">&#9679;</span><span>Fortify Wyllow Ford</span></div>
+      <div style="display:flex;gap:8px"><span class="t-dim">&#9675;</span><span>Claim the east bank ore</span></div>
+      <div style="display:flex;gap:8px"><span class="t-dim">&#9675;</span><span>Scout the alien holdfast</span></div>
+      <div style="display:flex;gap:8px"><span class="t-dim">&#9675;</span><span>Take Ironback Ridge</span></div>
+    </div>
+  </div>
+  <div class="panel" style="padding:12px;margin-top:auto">
+    <div class="cap">Lenses</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+      <span class="btn sm pri">Terrain</span><span class="btn sm">Resources</span><span class="btn sm pri">Borders</span><span class="btn sm">Threat</span><span class="btn sm pri">Fog</span><span class="btn sm">Hex grid</span>
+    </div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

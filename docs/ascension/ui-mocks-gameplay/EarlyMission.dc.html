@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First minutes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <defs>
+    <filter id="bl"><feGaussianBlur stdDeviation="46"/></filter>
+    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="470" cy="440" r="470"/><circle cx="800" cy="360" r="170"/></g></mask>
+    <pattern id="tg" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"/></pattern>
+  </defs>
+  <!-- unexplored: nothing known yet -->
+  <rect width="1920" height="1080" fill="#050b12" opacity=".95" mask="url(#vis)"/>
+  <!-- first territory, small -->
+  <circle cx="470" cy="440" r="330" fill="rgba(64,220,235,.07)" stroke="#40dceb" stroke-width="3"/>
+  <circle cx="470" cy="440" r="330" fill="none" stroke="rgba(64,220,235,.28)" stroke-width="14"/>
+  <!-- placement grid and footprint, reactor 3x3 at (672,288) -->
+  <rect x="528" y="192" width="384" height="336" fill="url(#tg)"/>
+  <rect x="672" y="288" width="144" height="144" fill="rgba(80,230,160,.30)" stroke="#50e6a0" stroke-width="2"/>
+  <path d="M816 360 C830 366 838 372 850 380" fill="none" stroke="#96f5ff" stroke-width="3" stroke-dasharray="6 5"/>
+</svg>
+
+<!-- names that are already discovered -->
+<div class="lbl" style="left:70px;top:70px;font-size:20px">Sunfield</div>
+<div class="lbl w" style="left:775px;top:288px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
+<div class="lbl" style="left:1290px;top:480px;font-size:30px;color:rgba(150,245,255,.4)">?</div>
+<div class="lbl" style="left:1600px;top:300px;font-size:30px;color:rgba(150,245,255,.4)">?</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="8">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+<img class="spr" src="/_blob/b32b316f8a54cfb3e4e96b8ab7a2f79e" alt="" style="left:660px;top:250px;width:190px;height:190px;opacity:.85;z-index:1500;filter:drop-shadow(0 0 16px rgba(80,230,160,.6))">
+<div class="pin" style="left:792px;top:392px;z-index:2000"><span class="dot"></span>Ore +4 / found</div>
+
+<!-- placement card -->
+<div class="a panel" style="left:880px;top:130px;width:340px;padding:12px 14px;z-index:2600;border-color:#50e6a0">
+  <div style="display:flex;align-items:center;justify-content:space-between"><div class="disp" style="font-size:22px;color:#e8fcff">Placing Reactor</div><span class="tag t-good">Valid</span></div>
+  <div class="sub" style="margin-top:2px">3 x 3 tiles on Grassland, flat</div>
+  <div style="margin-top:8px">
+    <div class="row"><span class="t-dim">Adjacent: river</span><span class="mono t-good">+12 kW cooling</span></div>
+    <div class="row"><span class="t-dim">Output</span><span class="mono t-good">+80 kW (92 total)</span></div>
+    <div class="row"><span class="t-dim">Cost</span><span class="mono">220 M 240 W</span></div>
+    <div class="row"><span class="t-dim">Build time</span><span class="mono">0:45 with 1 crew</span></div>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Unknown coast</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>400</b><span class="d">+6/m</span></div>
+  <div class="chip"><span class="t-dim">WORK</span><b>380</b><span class="d">+4/m</span></div>
+  <div class="chip" style="border-color:#f0b040"><span class="t-dim">POWER</span><b class="t-warn">12 / 12 kW</b></div>
+  <div class="chip"><span class="t-dim">CREW</span><b>4 / 20</b></div>
+  <div style="flex:1"></div>
+  <div class="chip"><span class="t-dim">ERA 01</span><b>Contemporary</b></div>
+  <div class="chip" style="height:36px"><span class="t-dim">FIRST WAVE</span><span class="disp" style="font-size:22px;color:#e8fcff">06:00</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<!-- BRIEFING -->
+<div class="a panel" style="left:12px;top:76px;width:360px;padding:14px 16px;z-index:3000;border-color:#40dceb">
+  <div style="display:flex;align-items:center;justify-content:space-between"><div class="cap t-cyan">Briefing</div><span class="tag t-cyan">Step 2 of 9</span></div>
+  <div class="disp" style="font-size:24px;color:#e8fcff;margin-top:4px">Raise power</div>
+  <div style="font-size:14px;margin-top:6px;color:#cee8f0">Your colony runs on 12 kW and nothing else can start. The river bank cools a Reactor, so build one on it for extra output.</div>
+  <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:14px">
+    <div style="display:flex;gap:8px"><span class="t-good">&#10003;</span><span class="t-dim">Place the Command Centre</span></div>
+    <div style="display:flex;gap:8px"><span class="t-cyan">&#9679;</span><span>Place a Reactor beside the river</span></div>
+    <div style="display:flex;gap:8px"><span class="t-dim">&#9675;</span><span class="t-dim">Claim the river ore with a Refinery</span></div>
+  </div>
+  <div class="bar" style="margin-top:12px"><i style="width:22%"></i></div>
+</div>
+
+<!-- DISCOVERY TOASTS -->
+<div class="a" style="right:12px;top:76px;width:380px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="notif" style="border-left-color:#d4b8ff"><svg class="ic" style="color:#d4b8ff" viewBox="0 0 24 24"><path d="M12 3l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6L7.1 18l.9-5.5-4-3.9 5.5-.8z"/></svg><div>Discovered: Calder River<small>Reactors beside it gain +12 kW cooling</small></div></div>
+  <div class="notif" style="border-left-color:#50e6a0"><svg class="ic t-good" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7z"/></svg><div>Resource found: Ore deposit<small>River bank, 1,800 units</small></div></div>
+  <div class="notif"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg><div>Mission updated<small>Raise power, step 2 of 9</small></div></div>
+</div>
+
+<!-- MINIMAP, mostly unexplored -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Unexplored</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#050b12">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat;-webkit-mask-image:radial-gradient(circle at 60px 52px,#000 0,#000 52px,transparent 78px);mask-image:radial-gradient(circle at 60px 52px,#000 0,#000 52px,transparent 78px)"></div>
+    <div class="a" style="left:30px;top:48px;width:8px;height:8px;background:#40dceb"></div>
+    <div class="a" style="left:-20px;top:0;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<!-- BOTTOM: nothing selected, survey -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 16px;z-index:3000;display:grid;grid-template-columns:1fr 1fr 220px;gap:16px">
+  <div>
+    <div class="cap t-cyan">Terrain survey</div>
+    <div style="display:flex;height:10px;margin-top:8px;border:1px solid #1b3342;overflow:hidden"><i style="width:9%;background:#6a9a3a"></i><i style="width:91%;background:#0b1620"></i></div>
+    <div class="sub" style="margin-top:4px">9% of Kestrel Reach explored</div>
+    <div style="margin-top:8px">
+      <div class="row"><span>Calder River</span><span class="tag t-good">Found</span></div>
+      <div class="row"><span>Ore, river bank</span><span class="tag t-good">Found</span></div>
+      <div class="row"><span class="t-dim">Hollow Wood</span><span class="tag t-dim">Unknown</span></div>
+      <div class="row"><span class="t-dim">Ironback Ridge</span><span class="tag t-dim">Unknown</span></div>
+    </div>
+  </div>
+  <div style="border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 16px">
+    <div class="cap t-cyan">Command Centre</div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:8px"><img src="/_blob/5828f353f51d19ec36c3c638831bfb96" style="width:64px;height:64px;object-fit:contain" alt=""><div><div class="disp" style="font-size:22px;color:#e8fcff">Command Centre</div><div class="sub">Founds the colony, trains crews</div></div></div>
+    <div style="display:flex;gap:6px;margin-top:10px"><span class="yl y-m"><i></i>+6 M /m</span><span class="yl y-p"><i></i>12 kW</span><span class="yl y-d"><i></i>sight 8</span></div>
+    <div class="sub" style="margin-top:10px">Send a Scout east to reveal the ford and the flats.</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+    <span class="btn pri">Build Reactor <span class="key">P</span></span>
+    <span class="btn">Train scout <span class="key">T</span></span>
+    <span class="btn">Show hints <span class="key">F2</span></span>
+  </div>
+</div>
+
+<!-- DECK: Build with Reactor pulsing -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab on">Build</span><span class="tab" style="opacity:.5">Units</span><span class="tab" style="opacity:.5">Orders</span><span class="tab" style="opacity:.4">Science</span><span class="tab" style="opacity:.4">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:10px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <sc-for list="{{cards}}" as="c" hint-placeholder-count="8">
+        <div style="height:72px;border:1px solid {{c.bd}};background:rgba(8,17,26,.92);border-radius:3px;padding:6px 8px;display:flex;gap:8px;overflow:hidden;opacity:{{c.op}};box-shadow:{{c.sh}}">
+          <img src="{{c.img}}" alt="" style="width:34px;height:34px;object-fit:contain;flex:none">
+          <div style="min-width:0"><div class="disp" style="font-size:15px;line-height:16px;color:#e8fcff;white-space:nowrap">{{c.name}}</div><div class="mono" style="font-size:11px;color:#8fb0bf;white-space:nowrap">{{c.cost}}</div><div style="font-size:11px;color:{{c.nc}};white-space:nowrap">{{c.note}}</div></div>
+        </div>
+      </sc-for>
+    </div>
+    <div class="glass" style="margin-top:10px;padding:8px 12px;font-size:13px;border-color:#40dceb">Highlighted: the Reactor is the next step. Other cards unlock as you progress.</div>
+  </div>
+</div>
+
+<!-- cursor -->
+<svg class="a" style="left:748px;top:350px;z-index:2700" width="22" height="28" viewBox="0 0 22 28"><path d="M2 2l16 14-7 1 4 8-3 1-4-8-6 5z" fill="#fff" stroke="#000" stroke-width="1.2"/></svg>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const I = { pp:'b32b316f8a54cfb3e4e96b8ab7a2f79e', cc:'5828f353f51d19ec36c3c638831bfb96', ref:'6c29c5788f12d88cfae3914221f234a9', bar:'c28b4de3839198732e73d3041feec1e6', fnd:'bbb3bae9af99ea696ff5f34401784754', gt:'508d97c7b872d6502bb31b3fe2de001c', hv:'439ac4aa47c8b40430b3ce1b7550277d', inf:'0cff440ac0f27a92e113ec4de32ee9a8', lab:'8cb9cb29d95752ec982142bf671a1e6d', wall:'a208753ee858587a05fa96e19584d2f8' };
+    const w = [['cc',340,300,250],['inf',560,600,80],['inf',620,630,80],['inf',500,640,80],['hv',700,470,105],['fnd',200,430,150]];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1], top: a[2], w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    const mk = (name, img, cost, note, o) => Object.assign({ name, img: B + I[img], cost, note, nc: '#8fb0bf', bd: '#1b3342', op: 1, sh: 'none' }, o || {});
+    const cards = [
+      mk('Reactor','pp','220 M 240 W','+80 kW, river +12',{bd:'#96f5ff',nc:'#50e6a0',sh:'0 0 0 2px rgba(64,220,235,.55), 0 0 18px rgba(64,220,235,.4)'}),
+      mk('Refinery','ref','300 M 300 W','Needs Reactor',{op:.5}),
+      mk('Barracks','bar','180 M 200 W','Needs Reactor',{op:.5}),
+      mk('Wall','wall','20 M 20 W','Forest gives cover',{op:.5}),
+      mk('Laser Turret','gt','150 M 120 W','Needs Barracks',{op:.35}),
+      mk('Supply Depot','fnd','140 M 160 W','Needs Refinery',{op:.35}),
+      mk('Lab','lab','320 M 320 W','Needs Reactor',{op:.35}),
+      mk('More','hv','','Unlocks later',{op:.35})
+    ];
+    return { sprites, cards };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Research Graph</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}.t-blue{color:#78b4ff}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.ico{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.nd{position:absolute;width:232px;height:134px;padding:10px;display:flex;flex-direction:column;gap:6px;border-radius:3px}
+.nh{display:flex;align-items:center;gap:8px;height:24px}
+.nn{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.01em;color:#e8fcff;white-space:nowrap}
+.nc{display:flex;gap:6px;align-items:center;height:22px}
+.nc .tag{padding:0 6px;letter-spacing:.03em}
+.sg{display:flex;gap:5px;margin-top:2px}
+.sg i{flex:1;height:8px;background:#0b1620;border:1px solid #284e60;display:block}
+.sl{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8fb0bf;letter-spacing:.02em}
+.nf{font-size:13px;color:#8fb0bf;white-space:nowrap}
+.st-imp{border:1px solid #2f6a5a;background:linear-gradient(180deg,#10262a,#0a1a1e)}
+.st-act{border:2px solid #40dceb;background:linear-gradient(180deg,#0f3340,#0a202c);box-shadow:0 0 22px rgba(64,220,235,.18)}
+.st-open{border:1px solid #40dceb;background:#0b1d2a}
+.st-blk{border:2px solid #f0b040;background:repeating-linear-gradient(135deg,rgba(240,176,64,.10) 0,rgba(240,176,64,.10) 6px,rgba(8,17,26,.95) 6px,rgba(8,17,26,.95) 12px)}
+.st-pln{border:1.5px dashed #6d93a4;background:#08111a}
+.st-unk{border:2px dashed #b79cff;background:#150f26}
+.bdg{position:absolute;right:-10px;top:-10px;width:26px;height:26px;border-radius:50%;background:#96f5ff;color:#03181d;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:17px;display:flex;align-items:center;justify-content:center;box-shadow:0 0 14px rgba(150,245,255,.6)}
+.fr{display:flex;align-items:center;gap:10px;height:30px;font-size:14px;color:#cee8f0}
+.cb{width:18px;height:18px;border:1.5px solid #5f8191;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.cb.on{background:#104656;border-color:#40dceb}
+.cb svg{width:14px;height:14px;stroke:#e8fcff;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.rowct{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#8fb0bf}
+.step{display:flex;align-items:center;gap:10px;height:34px;font-size:14px;border-bottom:1px solid #1b3342}
+.step .n{width:22px;height:22px;border-radius:50%;background:#96f5ff;color:#03181d;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:center;flex:none}
+.kind{width:86px;flex:none;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;color:#8fb0bf}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:radial-gradient(1200px 700px at 800px 500px,#0b1a26,#060910 70%)">
+<div class="scan" style="position:absolute;inset:0;pointer-events:none"></div>
+
+<!-- ===== HEADER ===== -->
+<div style="position:absolute;left:0;top:0;width:1920px;height:64px;border-bottom:1px solid #284e60;background:rgba(3,5,10,.9);display:flex;align-items:center;gap:20px;padding:0 20px">
+<span class="disp" style="font-size:32px;color:#e8fcff;letter-spacing:.14em">Science</span>
+<span style="width:1px;height:30px;background:#284e60"></span>
+<div style="display:flex;align-items:center;gap:8px" aria-label="Zoom breadcrumb">
+<span class="cap" style="padding:6px 12px;border:1px solid #40dceb;background:#104656;color:#e8fcff">Node</span>
+<span class="mono" style="color:#5f8191">&gt;</span>
+<span class="cap" style="padding:6px 12px;border:1px solid #1b3342">Domain</span>
+<span class="mono" style="color:#5f8191">&gt;</span>
+<span class="cap" style="padding:6px 12px;border:1px solid #1b3342">Era</span>
+</div>
+<span class="cap" style="color:#5f8191">Close view</span>
+<span style="flex:1"></span>
+<span class="chip"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg>POWER 30 kW needed</span>
+<span class="chip">SCIENCE 62% theory</span>
+<span class="chip">PROTOTYPE 0 / 1</span>
+<span class="chip" style="border-color:#f0b040"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>FACTORY 01 reserved</span>
+<span class="chip" style="color:#8fb0bf">Y close</span>
+</div>
+
+<!-- ===== ERA GATE STRIP ===== -->
+<div class="panel" style="position:absolute;left:16px;top:72px;width:1888px;height:96px;display:flex;align-items:center;gap:26px;padding:0 20px">
+<div style="display:flex;flex-direction:column;gap:6px">
+<span class="cap" style="color:#96f5ff">Era gate</span>
+<div style="display:flex;align-items:center;gap:10px">
+<span class="chip" style="border-color:#8fb0bf"><b class="disp" style="font-size:16px;color:#e8fcff">Era 1</b>Contemporary Humanity</span>
+<svg width="34" height="20" viewBox="0 0 34 20"><path d="M2 10h26M22 4l7 6-7 6" fill="none" stroke="#96f5ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<span class="chip" style="border-color:#40dceb;border-style:dashed"><svg class="ico" style="color:#40dceb;width:16px;height:16px" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><b class="disp" style="font-size:16px;color:#e8fcff">Era 2</b>Advanced Industrial</span>
+</div>
+</div>
+<span style="width:1px;height:60px;background:#1b3342"></span>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 28px;width:760px">
+<div class="fr" style="height:28px"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>Supplied base held for 120 s<span class="rowct t-good">Done</span></div>
+<div class="fr" style="height:28px"><svg class="ico" style="color:#40dceb" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Core wartime projects deployed<span class="rowct" style="color:#96f5ff">6 / 7</span></div>
+<div class="fr" style="height:28px"><svg class="ico" style="color:#8fb0bf" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/></svg>Robotic workcell prototype validated<span class="rowct">0 / 1</span></div>
+<div class="fr" style="height:28px"><svg class="ico" style="color:#8fb0bf" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/></svg>First workcell commissioned<span class="rowct">Pending</span></div>
+</div>
+<span style="width:1px;height:60px;background:#1b3342"></span>
+<div style="flex:1;font-size:14px;line-height:1.45;color:#8fb0bf">The gate tests sustained delivered capacity over an observation window. Knowledge is never revoked if infrastructure is later damaged. Entering Era 2 completes no technology by itself.</div>
+</div>
+
+<!-- ===== LEFT FILTER RAIL ===== -->
+<div class="panel" style="position:absolute;left:16px;top:184px;width:280px;height:880px;padding:16px;display:flex;flex-direction:column;gap:12px">
+<div class="glass" style="height:38px;display:flex;align-items:center;gap:10px;padding:0 12px;color:#8fb0bf;font-size:14px"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/></svg>Search projects</div>
+
+<span class="cap" style="color:#96f5ff">State</span>
+<div>
+<div class="fr"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>Implemented<span class="rowct">6</span></div>
+<div class="fr"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span><svg class="ico" style="color:#40dceb" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>In progress<span class="rowct">2</span></div>
+<div class="fr"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span><svg class="ico" style="color:#40dceb" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>Available<span class="rowct">1</span></div>
+<div class="fr"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Blocked<span class="rowct">2</span></div>
+<div class="fr"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span><svg class="ico" style="color:#8fb0bf" viewBox="0 0 24 24"><path d="M6 21V4M6 5h11l-2 4 2 4H6"/></svg>Planned<span class="rowct">1</span></div>
+<div class="fr"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span><svg class="ico" style="color:#b79cff" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.5"/></svg>Unknown<span class="rowct">1</span></div>
+</div>
+
+<span style="height:1px;background:#1b3342"></span>
+<span class="cap" style="color:#96f5ff">Physics category</span>
+<div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Mechanics and materials</div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Electromagnetism and power</div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Computation and control</div>
+<div class="fr" style="height:28px"><span class="cb"></span><span style="color:#8fb0bf">Thermodynamics</span></div>
+</div>
+
+<span style="height:1px;background:#1b3342"></span>
+<span class="cap" style="color:#96f5ff">Strategic effect</span>
+<div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Defence</div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Industry and throughput</div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Logistics</div>
+<div class="fr" style="height:28px"><span class="cb on"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>Era gate</div>
+</div>
+
+<span style="height:1px;background:#1b3342"></span>
+<span class="cap" style="color:#96f5ff">Honesty label</span>
+<div style="display:flex;flex-direction:column;gap:7px;align-items:flex-start">
+<span class="tag t-good">Established</span>
+<span class="tag t-blue">Engineering extrapolation</span>
+<span class="tag t-violet">Speculative</span>
+<span class="tag t-violet" style="border-style:dashed">Unknown</span>
+</div>
+</div>
+
+<!-- ===== GRAPH ===== -->
+<div class="panel" style="position:absolute;left:312px;top:184px;width:1080px;height:736px;overflow:hidden;background:radial-gradient(700px 400px at 560px 360px,rgba(24,90,110,.16),rgba(6,9,16,.9) 75%),#060b12">
+<div style="position:absolute;inset:0;background-image:radial-gradient(rgba(143,176,191,.16) 1px,transparent 1px);background-size:24px 24px"></div>
+
+<svg style="position:absolute;left:0;top:0" width="1080" height="736" viewBox="0 0 1080 736">
+<defs>
+<marker id="rs-a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M1 1 9 5 1 9z" fill="#5f8191"/></marker>
+<marker id="rs-h" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1 9 5 1 9z" fill="#96f5ff"/></marker>
+<marker id="rs-v" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M1 1 9 5 1 9z" fill="#b79cff"/></marker>
+</defs>
+<g fill="none" stroke="#3a6a7e" stroke-width="2" stroke-linecap="round">
+<path d="M236 79 H282" marker-end="url(#rs-a)"/>
+<path d="M236 517 H282" marker-end="url(#rs-a)"/>
+<path d="M516 371 C 540 371 540 517 562 517" marker-end="url(#rs-a)"/>
+<path d="M516 517 H562" marker-end="url(#rs-a)"/>
+<path d="M516 517 C 540 517 540 663 562 663" marker-end="url(#rs-a)"/>
+<path d="M236 663 H562" marker-end="url(#rs-a)"/>
+<path d="M796 371 H842" marker-end="url(#rs-a)"/>
+<path d="M796 517 C 820 517 820 371 842 371" marker-end="url(#rs-a)"/>
+</g>
+<path d="M516 79 H562" fill="none" stroke="#b79cff" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#rs-v)"/>
+<!-- highlighted path to capability -->
+<g fill="none" stroke="#96f5ff" stroke-width="4" stroke-linecap="round" style="filter:drop-shadow(0 0 6px rgba(150,245,255,.7))">
+<path d="M236 371 H282" marker-end="url(#rs-h)"/>
+<path d="M516 371 H562" marker-end="url(#rs-h)"/>
+</g>
+</svg>
+
+<!-- era 3 horizon -->
+<div style="position:absolute;left:844px;top:12px;width:232px;height:280px;border:1.5px dashed #284e60;border-radius:3px;padding:14px;display:flex;flex-direction:column;gap:10px;background:rgba(8,17,26,.5)">
+<div style="display:flex;align-items:center;gap:8px;color:#8fb0bf"><svg class="ico" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="cap">Horizon</span></div>
+<div class="disp" style="font-size:24px;color:#cee8f0;line-height:1.05">Era 3<br>Fusion</div>
+<div style="font-size:14px;line-height:1.45;color:#8fb0bf">Gate: demonstrate net delivered fusion power, a breeding chain and maintainable components.</div>
+<span class="tag t-dim" style="align-self:flex-start">Design only</span>
+</div>
+
+<!-- NODES: column 0 -->
+<div class="nd st-imp" style="left:4px;top:12px">
+<div class="nh"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg><span class="nn">Aircraft</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-good" style="margin-left:auto">Implemented</span></div>
+<div class="sg"><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Airfield</div>
+</div>
+<div class="nd st-imp" style="left:4px;top:158px">
+<div class="nh"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg><span class="nn">Guided anti-armour</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-good" style="margin-left:auto">Implemented</span></div>
+<div class="sg"><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Barracks</div>
+</div>
+<div class="nd st-imp" style="left:4px;top:304px">
+<span class="bdg">1</span>
+<div class="nh"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg><span class="nn">Vehicle tooling</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-good" style="margin-left:auto">Implemented</span></div>
+<div class="sg"><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Vehicle factory</div>
+</div>
+<div class="nd st-imp" style="left:4px;top:450px">
+<div class="nh"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg><span class="nn">Batteries</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-good" style="margin-left:auto">Implemented</span></div>
+<div class="sg"><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Grid storage</div>
+</div>
+<div class="nd st-imp" style="left:4px;top:596px">
+<div class="nh"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg><span class="nn">Field supply</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-good" style="margin-left:auto">Implemented</span></div>
+<div class="sg"><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Supply depot</div>
+</div>
+
+<!-- column 1 -->
+<div class="nd st-imp" style="left:284px;top:12px">
+<div class="nh"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg><span class="nn">Air defence</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-good" style="margin-left:auto">Implemented</span></div>
+<div class="sg"><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i><i style="background:#50e6a0;border-color:#50e6a0"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">AA turret</div>
+</div>
+<div class="nd st-act" style="left:284px;top:304px">
+<span class="bdg">2</span>
+<div class="nh"><svg class="ico" style="color:#40dceb" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="nn">Precision manufacturing</span></div>
+<div class="nc"><span class="tag t-good">Established</span><span class="tag t-cyan" style="margin-left:auto">In progress</span></div>
+<div class="sg"><i style="background:#40dceb;border-color:#40dceb"></i><i style="background:linear-gradient(90deg,#40dceb 45%,#0b1620 45%)"></i><i></i></div>
+<div class="sl"><span>Theory</span><span>Prototype 45%</span><span>Deploy</span></div>
+<div class="nf">Powered lab, built</div>
+</div>
+<div class="nd st-open" style="left:284px;top:450px">
+<div class="nh"><svg class="ico" style="color:#40dceb" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg><span class="nn">Smart grids</span></div>
+<div class="nc"><span class="tag t-blue">Engineering</span><span class="tag t-cyan" style="margin-left:auto">Available</span></div>
+<div class="sg"><i></i><i></i><i></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Powered lab</div>
+</div>
+
+<!-- column 2 -->
+<div class="nd st-unk" style="left:564px;top:12px">
+<div class="nh"><svg class="ico" style="color:#b79cff" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.5"/></svg><span class="nn" style="color:#e4daff">Unknown function</span></div>
+<div class="nc"><span class="tag t-violet" style="border-style:dashed">Unknown</span><span class="tag t-violet" style="margin-left:auto;border-style:dashed">Not studied</span></div>
+<div style="font-size:13px;line-height:1.4;color:#cfc3f2;padding-top:2px">Alien relay emitter. Evidence 0 / 1 wreck analysed. Never labelled discovered.</div>
+<div class="nf" style="margin-top:auto">Lab + relay wreck</div>
+</div>
+<div class="nd st-act glow" style="left:564px;top:304px;border-color:#96f5ff;box-shadow:0 0 0 3px rgba(150,245,255,.25),0 0 30px rgba(64,220,235,.35)">
+<span class="bdg">3</span>
+<div class="nh"><svg class="ico" style="color:#96f5ff" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="nn">Robotic workcells</span></div>
+<div class="nc"><span class="tag t-blue">Engineering</span><span class="tag t-cyan" style="margin-left:auto">In progress</span></div>
+<div class="sg"><i style="background:linear-gradient(90deg,#40dceb 62%,#0b1620 62%)"></i><i></i><i></i></div>
+<div class="sl"><span>Theory 62%</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf" style="color:#f0b040">Factory 01 reserved</div>
+</div>
+<div class="nd st-blk" style="left:564px;top:450px">
+<div class="nh"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="nn">AI-assisted science</span></div>
+<div class="nc"><span class="tag t-blue">Engineering</span><span class="tag t-warn" style="margin-left:auto">Blocked</span></div>
+<div class="sg"><i></i><i></i><i></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf" style="color:#f0c872">Needs precision prototype</div>
+</div>
+<div class="nd st-pln" style="left:564px;top:596px">
+<div class="nh"><svg class="ico" style="color:#8fb0bf" viewBox="0 0 24 24"><path d="M6 21V4M6 5h11l-2 4 2 4H6"/></svg><span class="nn">Industrial resilience</span></div>
+<div class="nc"><span class="tag t-blue">Engineering</span><span class="tag t-dim" style="margin-left:auto;border-style:dashed">Planned</span></div>
+<div class="sg"><i style="border-style:dashed"></i><i style="border-style:dashed"></i><i style="border-style:dashed"></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf">Smart grid + depots</div>
+</div>
+
+<!-- column 3 -->
+<div class="nd st-blk" style="left:844px;top:304px">
+<div class="nh"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="nn">Autonomous supply</span></div>
+<div class="nc"><span class="tag t-blue">Engineering</span><span class="tag t-warn" style="margin-left:auto">Blocked</span></div>
+<div class="sg"><i></i><i></i><i></i></div>
+<div class="sl"><span>Theory</span><span>Prototype</span><span>Deploy</span></div>
+<div class="nf" style="color:#f0c872">Needs workcells + AI</div>
+</div>
+
+<!-- zoom hint -->
+<div style="position:absolute;left:844px;top:600px;width:232px;font-size:13px;line-height:1.45;color:#8fb0bf;padding:12px;border:1px solid #1b3342;border-radius:3px;background:rgba(8,17,26,.7)">
+<span class="cap" style="color:#96f5ff;display:block;margin-bottom:6px">Reading the graph</span>
+Square corner = project. Number badge = step on the highlighted path to Robotic workcells.</div>
+</div>
+
+<!-- ===== FAR VIEW / ZOOM ===== -->
+<div class="panel" style="position:absolute;left:312px;top:936px;width:1080px;height:128px;padding:12px 16px;display:flex;gap:18px">
+<div style="width:196px;display:flex;flex-direction:column;gap:10px">
+<span class="cap" style="color:#96f5ff">Zoom</span>
+<div style="display:flex;align-items:center;gap:8px">
+<button type="button" class="btn" style="min-height:36px;padding:0 12px;font-size:20px" aria-label="Zoom out">-</button>
+<div style="flex:1;height:4px;background:#1b3342;position:relative"><i style="position:absolute;left:0;top:-5px;width:14px;height:14px;background:#96f5ff;border-radius:50%;box-shadow:0 0 10px rgba(150,245,255,.7)"></i></div>
+<button type="button" class="btn" style="min-height:36px;padding:0 12px;font-size:20px" aria-label="Zoom in">+</button>
+</div>
+<span class="mono" style="font-size:12px;color:#8fb0bf">Wheel zooms. Far view = eras.</span>
+</div>
+<span style="width:1px;background:#1b3342"></span>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px;min-width:0">
+<div style="display:flex;justify-content:space-between"><span class="cap" style="color:#96f5ff">Far view: era band</span><span class="cap">Milestones, not nodes</span></div>
+<div style="display:flex;gap:4px;flex:1">
+<div style="flex:1;border:1px solid #96f5ff;background:#104656;padding:6px 6px;display:flex;flex-direction:column;gap:2px;position:relative"><b class="disp" style="font-size:16px;color:#e8fcff">1</b><span style="font-size:12px;color:#e8fcff;line-height:1.15">Contemporary</span><span style="position:absolute;left:6px;right:6px;bottom:4px;height:3px;background:linear-gradient(90deg,#96f5ff 86%,#0b1620 86%)"></span></div>
+<div style="flex:1;border:1px dashed #40dceb;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#cee8f0">2</b><span style="font-size:12px;color:#cee8f0;line-height:1.15">Advanced Industrial</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">3</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Fusion</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">4</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Solar</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">5</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Interstellar</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">6</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Stellar Eng.</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">7</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Post-Biological</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">8</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Spacetime</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">9</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Galactic</span></div>
+<div style="flex:1;border:1px solid #1b3342;padding:6px;display:flex;flex-direction:column;gap:2px"><b class="disp" style="font-size:16px;color:#8fb0bf">10</b><span style="font-size:12px;color:#8fb0bf;line-height:1.15">Cosmic</span></div>
+</div>
+</div>
+</div>
+
+<!-- ===== RIGHT DETAIL DRAWER ===== -->
+<div class="panel glow" style="position:absolute;left:1408px;top:184px;width:496px;height:880px;padding:18px 20px;display:flex;flex-direction:column;gap:12px;border-color:#40dceb">
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;justify-content:space-between;align-items:center"><span class="cap" style="color:#96f5ff">Selected project</span><span class="tag t-cyan">In progress</span></div>
+<div class="disp" style="font-size:34px;line-height:1;color:#e8fcff">Robotic workcells</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="tag t-blue">Engineering extrapolation</span><span class="tag t-dim">Era gate</span><span class="tag t-dim">Industry</span></div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+<div class="glass" style="padding:8px 10px;display:flex;flex-direction:column;gap:5px"><span class="cap">Theory</span><span class="disp" style="font-size:22px;color:#96f5ff">62%</span><div class="bar"><i style="width:62%"></i></div></div>
+<div class="glass" style="padding:8px 10px;display:flex;flex-direction:column;gap:5px"><span class="cap">Prototype</span><span class="disp" style="font-size:22px;color:#8fb0bf">0 / 1</span><div class="bar"><i style="width:0"></i></div></div>
+<div class="glass" style="padding:8px 10px;display:flex;flex-direction:column;gap:5px"><span class="cap">Deploy</span><span class="disp" style="font-size:22px;color:#8fb0bf">Locked</span><div class="bar"><i style="width:0"></i></div></div>
+</div>
+
+<div style="border:1px solid #f0b040;border-radius:3px;background:rgba(240,176,64,.08);padding:10px 12px;display:flex;flex-direction:column;gap:5px">
+<div style="display:flex;align-items:center;gap:8px"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="1"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span class="cap" style="color:#f0b040">Bottleneck</span></div>
+<div style="font-size:14px;line-height:1.45;color:#cee8f0">FACTORY 01 reserved for the prototype. Factory 02 keeps its tank queue. Theory is lab-bound now; more power alone cannot replace experiments.</div>
+</div>
+
+<div>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px"><span class="cap" style="color:#96f5ff">Path to capability</span><span class="mono" style="font-size:12px;color:#8fb0bf">5 steps, shortest feasible</span></div>
+<div class="step"><span class="n" style="background:#50e6a0">1</span><span class="kind">Research</span><span style="flex:1">Vehicle tooling</span><span class="tag t-good">Done</span></div>
+<div class="step"><span class="n">2</span><span class="kind">Research</span><span style="flex:1">Precision manufacturing</span><span class="tag t-cyan">Proto 45%</span></div>
+<div class="step"><span class="n" style="background:#50e6a0">3</span><span class="kind">Construct</span><span style="flex:1">Powered laboratory, 30 kW</span><span class="tag t-good">Built</span></div>
+<div class="step"><span class="n" style="background:#b8c9d1">4</span><span class="kind">Evidence</span><span style="flex:1">Prototype validated, Factory 01</span><span class="tag t-dim">Pending</span></div>
+<div class="step" style="border-bottom:0"><span class="n" style="background:#b8c9d1">5</span><span class="kind">Construct</span><span style="flex:1">Commission first workcell</span><span class="tag t-dim">Pending</span></div>
+</div>
+
+<div>
+<div class="cap" style="color:#96f5ff;margin-bottom:6px">Retrofit per facility (proposed)</div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+<div class="glass" style="padding:8px 10px"><div class="cap">Materials</div><div class="disp" style="font-size:24px;color:#e8fcff">120</div></div>
+<div class="glass" style="padding:8px 10px"><div class="cap">Downtime</div><div class="disp" style="font-size:24px;color:#e8fcff">20 s</div></div>
+<div class="glass" style="padding:8px 10px"><div class="cap">Power</div><div class="disp" style="font-size:24px;color:#f0b040">+30 kW</div></div>
+</div>
+</div>
+
+<div style="font-size:14px;line-height:1.5;color:#cee8f0"><span class="cap" style="color:#96f5ff;display:block;margin-bottom:4px">Effect</span>Compatible work rate +25% on each retrofitted line. Commissioning the first workcell unlocks Era 2 infrastructure. Existing tanks keep their model and role.</div>
+
+<div style="font-size:13px;line-height:1.45;color:#8fb0bf;border-top:1px solid #1b3342;padding-top:10px">Robotics is established; flexible, reliable automation at this scale depends on engineering and energy. Design values, not current balance.</div>
+
+<div style="display:flex;gap:10px;margin-top:auto">
+<button type="button" class="btn pri" style="flex:1"><svg class="ico" viewBox="0 0 24 24"><path d="M4 18c4 0 4-12 8-12s4 12 8 12"/></svg>Path to capability</button>
+<button type="button" class="btn" style="flex:1">Fund theory</button>
+</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

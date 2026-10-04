@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Core assault</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<!-- LAND: camera at world 1450,100 (east bank, the Dry Flats) -->
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) -1450px -100px/3600px 2400px no-repeat"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <!-- enemy territory, world (2300..3300) minus cam -->
+  <path d="M850 -40 L1850 -40 L1850 540 L1550 600 L1150 600 L850 540 Z" fill="rgba(240,78,70,.08)" stroke="#f04e46" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M850 -40 L1850 -40 L1850 540 L1550 600 L1150 600 L850 540 Z" fill="none" stroke="rgba(240,78,70,.28)" stroke-width="16" stroke-linejoin="round"/>
+  <!-- ridge contour emphasis: high ground bonus zone -->
+  <path d="M250 -20 L1750 -20 L1750 170 C1400 230 1000 220 650 170 C500 140 330 100 250 60 Z" fill="none" stroke="rgba(240,176,64,.5)" stroke-width="2" stroke-dasharray="10 8"/>
+  <!-- approach route -->
+  <path d="M330 520 C520 500 700 470 860 430 C940 410 990 390 1030 350" fill="none" stroke="#96f5ff" stroke-width="3" stroke-dasharray="14 8"/>
+  <path d="M1030 350 m-14 -4 l16 -8 l-2 18 z" fill="#96f5ff"/>
+  <circle cx="1030" cy="350" r="18" fill="none" stroke="#f04e46" stroke-width="2.5"/>
+  <circle cx="1030" cy="350" r="5" fill="#f04e46"/>
+  <!-- unexplored shroud -->
+  <path d="M1580 -40 L1980 -40 L1980 1100 L1700 1100 L1760 600 L1580 540 Z" fill="#050b12" opacity=".78"/>
+</svg>
+
+<div class="lbl" style="left:620px;top:100px;font-size:22px">Ironback Ridge</div>
+<div class="lbl" style="left:130px;top:640px;font-size:22px">The Dry Flats</div>
+<div class="lbl" style="left:1000px;top:100px;font-size:15px;letter-spacing:.3em;color:rgba(255,200,196,.8)">Alien holdfast</div>
+<div class="lbl w" style="left:1040px;top:930px;font-size:18px">Kestrel Bay</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+
+<!-- selection rings on Vanguard -->
+<svg class="a" style="left:0;top:0;z-index:1400" width="1920" height="1080"><g fill="none" stroke="#40dceb" stroke-width="2"><ellipse cx="505" cy="590" rx="58" ry="22"/><ellipse cx="575" cy="640" rx="58" ry="22"/><ellipse cx="435" cy="640" rx="58" ry="22"/><ellipse cx="640" cy="560" rx="58" ry="22"/></g></svg>
+
+<!-- pins -->
+<div class="pin" style="left:760px;top:146px;z-index:2000"><span class="dot" style="background:#d4b8ff"></span>Alloy +6<span class="t-dim">on high ground</span></div>
+<div class="pin" style="left:1020px;top:286px;border-color:#f04e46;z-index:2000"><span class="dot" style="background:#f04e46"></span>Gun turret</div>
+
+<!-- COMBAT PREVIEW (Civ-style) -->
+<div class="a panel" style="left:1060px;top:360px;width:330px;padding:12px 14px;z-index:2600;border-color:#f04e46">
+  <div style="display:flex;justify-content:space-between;align-items:center"><div class="disp" style="font-size:20px;color:#e8fcff">Combat preview</div><span class="tag t-bad">Attack</span></div>
+  <div class="sub">4 Tanks vs Alien gun turret, range 7 tiles</div>
+  <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+    <div><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Turret health</span><span class="mono">320 &rarr; 110</span></div><div class="hp"><i style="width:34%;background:#f04e46"></i></div></div>
+    <div><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Your health lost</span><span class="mono">-96 spread over 4</span></div><div class="hp"><i style="width:80%"></i></div></div>
+  </div>
+  <div style="margin-top:8px;font-size:13px">
+    <div class="row"><span class="t-dim">Open Dry Flats</span><span class="mono t-good">speed +10%</span></div>
+    <div class="row"><span class="t-dim">Target on high ground</span><span class="mono t-bad">-15% damage</span></div>
+    <div class="row"><span class="t-dim">Walls in the line</span><span class="mono t-warn">-20% to infantry</span></div>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>1,120</b><span class="d">+38/m</span></div>
+  <div class="chip"><span class="t-dim">POWER</span><b>210 / 248 kW</b></div>
+  <div class="chip"><span class="t-dim">CREW</span><b>34 / 60</b></div>
+  <div class="chip" style="border-color:#f0b040"><span class="t-warn">AMMO</span><b>61%</b><span class="t-dim">supply line 2.4 km</span></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="height:36px;gap:12px;border-color:#f0b040"><span class="t-warn">WAVE 05</span><span class="disp" style="font-size:22px;color:#e8fcff">cleared</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<!-- ENEMY CORE BAR (top centre) -->
+<div class="a panel" style="left:620px;top:76px;width:420px;padding:8px 14px;z-index:3000;border-color:#7a2f2b">
+  <div style="display:flex;justify-content:space-between;align-items:center"><div class="disp" style="font-size:18px;color:#ffd6d2;letter-spacing:.08em">Alien core</div><span class="mono" style="font-size:13px;color:#ffd6d2">2,340 / 3,000</span></div>
+  <div class="hp" style="height:8px;margin-top:4px"><i style="width:78%;background:#f04e46"></i></div>
+</div>
+
+<!-- LEFT: objective + intel -->
+<div class="a panel" style="left:12px;top:76px;width:332px;padding:12px 14px;z-index:3000">
+  <div style="display:flex;justify-content:space-between"><div class="cap t-cyan">Objective</div><span class="tag t-cyan">Final push</span></div>
+  <div class="disp" style="font-size:22px;color:#e8fcff;margin-top:4px">Destroy the Alien core</div>
+  <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;font-size:14px">
+    <div style="display:flex;gap:8px"><span class="t-good">&#10003;</span><span class="t-dim">Cross Wyllow Ford</span></div>
+    <div style="display:flex;gap:8px"><span class="t-good">&#10003;</span><span class="t-dim">Scout the holdfast</span></div>
+    <div style="display:flex;gap:8px"><span class="t-cyan">&#9679;</span><span>Break the east gun line</span><span class="mono t-dim" style="margin-left:auto">1 / 2</span></div>
+  </div>
+</div>
+<div class="a panel" style="left:12px;top:262px;width:332px;padding:12px 14px;z-index:3000">
+  <div class="cap t-bad">Enemy territory, partly seen</div>
+  <div class="row"><span class="t-dim">Defences</span><span class="mono">2 gun, 1 AA, 4 walls</span></div>
+  <div class="row"><span class="t-dim">Garrison</span><span class="mono">8 seen, ~14 est.</span></div>
+  <div class="row"><span class="t-dim">Terrain</span><span class="mono">Flats, ridge behind</span></div>
+  <div class="row"><span class="t-dim">Reinforce</span><span class="mono t-warn">45 s, east shore</span></div>
+</div>
+
+<!-- NOTIFICATIONS -->
+<div class="a" style="right:12px;top:76px;width:340px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="notif" style="border-left-color:#f04e46"><svg class="ic t-bad" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/></svg><div>Vanguard under fire<small>Gun turret, range 7</small></div></div>
+  <div class="notif" style="border-left-color:#f0b040"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/></svg><div>Ammo at 61%<small>Build a depot on the east bank</small></div></div>
+</div>
+
+<!-- MINIMAP -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key" style="border-color:#f04e46;color:#ffd6d2">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
+    <div class="a" style="left:196px;top:0;width:100px;height:62px;border:1.5px solid #f04e46;background:rgba(240,78,70,.22)"></div>
+    <div class="a" style="left:131px;top:10px;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<!-- SELECTION: Vanguard -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:12px 16px;z-index:3000;display:grid;grid-template-columns:1fr 250px;gap:16px">
+  <div style="min-width:0">
+    <div style="display:flex;align-items:center;gap:12px"><div class="disp" style="font-size:26px;color:#e8fcff;line-height:26px">Vanguard</div><span class="tag t-cyan">9 units</span><span class="tag t-dim">Attack-move</span><span class="vet" style="margin-left:6px"><i></i><i></i></span><span class="sub">Veteran II</span></div>
+    <div style="display:flex;gap:4px;margin-top:10px;min-width:0">
+      <sc-for list="{{roster}}" as="u" hint-placeholder-count="9">
+        <div class="glass" style="flex:1;min-width:0;padding:5px 3px;display:flex;flex-direction:column;align-items:center;gap:3px">
+          <img src="{{u.img}}" alt="" style="width:38px;height:38px;object-fit:contain"><span style="font-size:10px;white-space:nowrap;color:#cee8f0">{{u.name}}</span>
+          <div class="hp" style="width:100%"><i style="width:{{u.hp}}%;background:{{u.c}}"></i></div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px 16px;margin-top:10px">
+      <div class="row"><span class="t-dim">Damage</span><span class="mono">34</span></div><div class="row"><span class="t-dim">Armour</span><span class="mono">12</span></div><div class="row"><span class="t-dim">Range</span><span class="mono">7</span></div><div class="row"><span class="t-dim">Ammo</span><span class="mono t-warn">61%</span></div>
+    </div>
+    <div class="glass" style="margin-top:8px;padding:6px 10px;display:flex;gap:16px;font-size:13px"><span class="t-dim">Standing on</span><b style="font-weight:500">Dry Flats</b><span class="t-good">speed +10%</span><span class="t-warn">no cover</span><span class="t-dim">Ridge ahead: +25% range for whoever holds it</span></div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+    <span class="btn pri">Attack-move <span class="key">A</span></span>
+    <span class="btn">Focus fire <span class="key">F</span></span>
+    <span class="btn">Fall back to ford <span class="key">G</span></span>
+  </div>
+</div>
+
+<!-- DECK: Orders -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab">Build</span><span class="tab">Units</span><span class="tab on">Orders</span><span class="tab">Science</span><span class="tab">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:12px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <span class="btn pri" style="flex-direction:column;min-height:72px;gap:2px"><span>Attack-move</span><span class="key">A</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Stop</span><span class="key">S</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Hold</span><span class="key">H</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Focus</span><span class="key">F</span></span>
+      <span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Resupply</span><span class="key">E</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Spread</span><span class="key">X</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Queue</span><span class="key">Shift</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>HQ</span><span class="key">G</span></span>
+    </div>
+    <div class="sub" style="margin-top:10px">Attack-move engages anything on the way. Units on the ridge get +25% range.</div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const cam = { x: 1450, y: 100 };
+    const I = { tank:'87aab1971d525ecad863691237ae2a71', at:'004852755ece3a8e81b95a9e93489852', inf:'0cff440ac0f27a92e113ec4de32ee9a8', aa:'318ba1a2dd09b4736f000e8ba021bf70', heli:'df45512203a3212ed1030c81c397e959', acap:'78e61f98c011d522897cd27a878b8b66', apw:'8ca8156819c69b8820bad06f2c16b569', agt:'992e20da27a46fee7526831f11ebecff', aaa:'a4eaf3d750fb4f6ea76eabd82202f198', aat:'0c1162f156a5a2751d5e1bf04d886a38', atank:'73037d5e6ad6e787627e98ef11935b3c', awall:'a2f24d2a3b0741c42aa6cda8914ef309', rock:'5424ebd27e4afeb6edf08fa6c06bfcda', crater:'ecef6e4a5fce7ea118d71be333bc0d36', wreck:'991214c0cce9696bd809eb293c3b9804', sand:'da391d1df1491ea1875475d3e439e791' };
+    const w = [
+      ['acap',2620,270,330],['apw',2950,250,150],['agt',2445,325,130],['agt',2425,535,130],['aaa',2810,560,120],['aat',2505,430,110],
+      ['atank',2640,520,150],['atank',2870,560,140],['awall',2360,430,110],['awall',2355,590,110],['awall',2360,300,110],
+      ['tank',1860,590,140],['tank',1930,640,140],['tank',1790,640,140],['tank',1995,560,140],['at',2095,510,100],['at',2040,620,100],['inf',1760,590,90],['inf',1720,680,90],['aa',1880,700,84],
+      ['heli',2090,200,190],['crater',2200,560,120],['wreck',2120,700,120],['sand',2180,500,100]
+    ];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1] - cam.x, top: a[2] - cam.y, w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    const r = (name, img, hp) => ({ name, img: B + I[img], hp, c: hp > 60 ? '#50e6a0' : (hp > 35 ? '#f0b040' : '#f04e46') });
+    const roster = [r('Tank','tank',92),r('Tank','tank',74),r('Tank','tank',58),r('Tank','tank',100),r('Anti-armour','at',88),r('Anti-armour','at',41),r('Infantry','inf',100),r('Infantry','inf',66),r('AA','aa',100)];
+    return { sprites, roster };
+  }
+}
+</script>
+</body>
+</html>

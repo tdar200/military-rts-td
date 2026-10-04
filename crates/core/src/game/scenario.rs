@@ -191,8 +191,8 @@ pub fn survival(seed: u64) -> Sim {
     let mut map = procgen::generate(seed);
     let w = map.width();
     let mid = map.height() / 2;
-    // A rich HOME ore deposit under the starting Extractor, so the base mines from
-    // the first tick; the player expands to the procgen deposits as it depletes.
+    // Finite home ore: harvesters must deliver it to powered refineries.
+    // Other deposits support longer games and exposed expansion routes.
     map.set_deposit(
         2,
         mid + 2,
@@ -208,8 +208,9 @@ pub fn survival(seed: u64) -> Sim {
     // deposit above is one premium option among the procgen sites). The wave
     // clock starts at the founding tick.
     sim.begin_survey();
-    // The human starts with only a founding kit; the tech tree unlocks the rest
-    // (Barracks/Infantry via Mobilization, turrets/lab/capitals deeper in). The
+    // Earthfront starts with the complete BASIC RTS loop: economy, a production
+    // building, and infantry. Research expands the roster and defences; it must
+    // never be a prerequisite for issuing the player's first army command. The
     // alien beachhead (P1) stays fully unlocked.
     sim.set_starting_unlocks(
         HUMAN,
@@ -217,31 +218,70 @@ pub fn survival(seed: u64) -> Sim {
             BuildingKind::CommandCenter,
             BuildingKind::PowerPlant,
             BuildingKind::Refinery,
+            BuildingKind::Barracks,
             BuildingKind::Wall,
         ],
-        &[],
+        &[UnitKind::Harvester, UnitKind::Infantry],
     );
 
-    // Endurance run: you outlast the waves rather than race to a win. Losing your
-    // own Command Center ends it; the alien beachhead is just the wave source.
+    // Defend-and-counterattack mission: losing your Command Center is defeat;
+    // destroying the alien Core Node is victory. Waves prevent a cheap unchecked
+    // rush and force the player to establish an economy and combined-arms force.
     sim.set_survival_mode(true);
+    sim.enable_earthfront();
 
-    // Alien beachhead (right margin): a Core Node + power that pours out the waves.
+    // Alien beachhead (right margin): a defended base, not a naked wave spawner.
+    // Static guns and a garrison prevent a single early rifle squad from ending
+    // the mission before its economy/tech decisions matter.
     sim.add_building(ENEMY, BuildingKind::CommandCenter, w - 4, mid);
     sim.add_building(ENEMY, BuildingKind::PowerPlant, w - 3, mid - 2);
+    sim.add_building(ENEMY, BuildingKind::Barracks, w - 3, mid + 2);
+    sim.add_building(ENEMY, BuildingKind::GunTurret, w - 7, mid - 2);
+    sim.add_building(ENEMY, BuildingKind::GunTurret, w - 7, mid + 2);
+    for dy in [-2, -1, 1, 2] {
+        sim.add_unit(
+            ENEMY,
+            UnitKind::Infantry,
+            Vec2::new(
+                Fixed::from_int(i32::from(w) - 6),
+                Fixed::from_int(i32::from(mid) + dy),
+            ),
+        );
+    }
+
+    // Optional logistical objectives screen the two approaches to the Core Node.
+    // Clear small pads without filling the central route with impassable structures.
+    for y in [mid - 5, mid + 5] {
+        let x = w - 13;
+        for dy in y - 2..=y + 2 {
+            for dx in x - 2..=x + 2 {
+                sim.map_mut().set_tile(dx, dy, Tile::OPEN);
+            }
+        }
+        sim.add_alien_relay(ENEMY, x, y);
+        sim.add_building(ENEMY, BuildingKind::GunTurret, x - 1, y - 1);
+        sim.add_building(ENEMY, BuildingKind::AaTurret, x + 1, y + 1);
+        sim.add_unit(
+            ENEMY,
+            UnitKind::AntiArmor,
+            Vec2::new(
+                Fixed::from_int(i32::from(x)),
+                Fixed::from_int(i32::from(y + 1)),
+            ),
+        );
+    }
+    sim.add_building(ENEMY, BuildingKind::PowerPlant, w - 2, mid + 4);
 
     // Escalating waves from the beachhead toward the player.
     sim.set_waves(WaveConfig {
-        // Tighter pace so the run has real stakes: ~90s to found and build an
-        // opening, then a TELEGRAPHED siege roughly every ~3 minutes. Each siege
-        // escalates hard (size + an adapting, doctrine-stacking swarm) so a
-        // teched army is genuinely tested rather than coasting.
+        // Ninety-second founding grace, then three-minute expeditions.
+        // Earthfront locks tactical doctrine 45 seconds before arrival.
         first_delay: 2_700,
         interval: 5_400,
-        // `size = base_size + growth * wave`, plus a Capital boss every 5th wave,
-        // plus the adapting swarm (each wave hardens the attacker — run_waves).
-        base_size: 12,
-        growth: 6,
+        // Earthfront uses bounded escalation plus two units per powered relay;
+        // these base values also describe the baseline without relay support.
+        base_size: 6,
+        growth: 2,
         spawn: Vec2::new(
             Fixed::from_int(i32::from(w) - 5),
             Fixed::from_int(i32::from(mid)),
@@ -592,7 +632,7 @@ pub enum Scenario {
     OpenClash,
     /// [`crossroads`] — a central fortress forcing flank pushes, with waves.
     Crossroads,
-    /// [`survival`] — procedural map, endless escalating waves (the solo run).
+    /// [`survival`] — procedural Earth defence, endless escalating alien waves.
     /// Deliberately excluded from [`Scenario::ALL`] (the skirmish roster): it is
     /// its own mode with its own tests, launched separately by the shell.
     Survival,
@@ -609,7 +649,7 @@ impl Scenario {
             Self::LaneDefense => "Orbital Siege",
             Self::OpenClash => "Open Front",
             Self::Crossroads => "Crater Crossroads",
-            Self::Survival => "Beachhead",
+            Self::Survival => "Earthfront",
         }
     }
 
@@ -620,7 +660,7 @@ impl Scenario {
             Self::LaneDefense => "Hold the approach lanes against alien waves",
             Self::OpenClash => "Open-field clash — no walls, no waves",
             Self::Crossroads => "Flank a central wreck under pressure",
-            Self::Survival => "Endless escalating waves on a procedural front",
+            Self::Survival => "Build, command, defend Earth, and counterattack in real time",
         }
     }
 
@@ -644,6 +684,7 @@ mod tests {
     use crate::game::path::find_path;
     use crate::game::planet::PlanetId;
     use crate::game::sim::{Command, PlayerId};
+    use crate::game::stats::{BuildingKind, UnitKind};
     use alloc::vec::Vec;
 
     #[test]
@@ -842,10 +883,8 @@ mod tests {
     #[test]
     fn every_scenario_resolves_decisively() {
         // Guard against a soft-lock: every scenario must field units (so combat is
-        // actually happening) and not panic. The two wave-pressured maps must also
-        // reach a decisive winner. Open Clash has no waves, so two identical AIs
-        // reach a deterministic attrition stalemate — that is expected (a human
-        // breaks the symmetry), so it is only required to stay live, not resolve.
+        // actually happening), not panic, and reach a decisive winner. A selectable
+        // skirmish which can attrition-loop forever is not a complete RTS match.
         for &sc in &Scenario::ALL {
             let mut s = sc.build(7);
             let mut peak = 0;
@@ -865,10 +904,7 @@ mod tests {
                 "{}: no units were ever fielded (soft-lock)",
                 sc.name()
             );
-            if sc == Scenario::OpenClash {
-                continue; // no-wave symmetric map: stalemate is the expected AI-vs-AI result
-            }
-            assert!(resolved_at.is_some(), "{}: wave map soft-locked", sc.name());
+            assert!(resolved_at.is_some(), "{}: scenario soft-locked", sc.name());
             assert!(
                 resolved_at.unwrap() > 60,
                 "{}: resolved implausibly fast",
@@ -992,15 +1028,29 @@ mod tests {
         let mut s = survival(7);
         assert!(s.surveying(), "survival opens in the survey phase");
         assert_eq!(s.winner(), None, "no base yet is not a loss");
-        // Only the alien beachhead is pre-placed (CC + power); the human founds.
-        assert_eq!(s.entity_count(), 2, "only the beachhead is pre-placed");
+        assert!(
+            s.building_unlocked(PlayerId(0), BuildingKind::Barracks),
+            "Earthfront must expose basic production before research"
+        );
+        assert!(
+            s.unit_unlocked(PlayerId(0), UnitKind::Infantry),
+            "Earthfront must expose a basic combat unit before research"
+        );
+        // The Core district and two relay outposts are pre-placed; the human
+        // still chooses where to deploy.
+        assert_eq!(
+            s.entity_count(),
+            18,
+            "Core district plus two defended relays"
+        );
+        assert_eq!(s.alien_relay_count(PlayerId(1), false), 2);
         let cmds = s.ai_commands(PlayerId(0));
         s.step(&cmds);
         assert!(!s.surveying(), "founding ends survey");
         assert_eq!(
             s.entity_count(),
-            3,
-            "the human CC now exists (2 beachhead + 1)"
+            23,
+            "the human CC and four starting squads now exist"
         );
         let start = corner_passable(s.map(), false);
         let goal = corner_passable(s.map(), true);
@@ -1060,9 +1110,9 @@ mod tests {
 
     #[test]
     fn restricted_human_progresses_through_the_tech_tree() {
-        // The survival human starts with no army and a 3-building kit; driven by
-        // ai_commands it must research its way to a lab, an era, and a standing
-        // army — proving the progression is not soft-locked.
+        // The survival human starts with basic infantry production; driven by
+        // ai_commands it must still research its way to a lab and a later era,
+        // while fielding a standing army — proving progression is not soft-locked.
         //
         // We track each milestone the FIRST time it's reached over the run rather
         // than only sampling the final tick: the late game is a deliberately
@@ -1080,9 +1130,12 @@ mod tests {
             got_lab |= s.has_research_lab(PlayerId(0));
             got_era |= s.player_era(PlayerId(0)) >= 1;
             got_army |= s.unit_count(PlayerId(0)) > 0;
+            if got_lab && got_era && got_army {
+                break;
+            }
         }
         assert!(got_lab, "human should research the Lab (Orbital Logistics)");
-        assert!(got_era, "human should advance at least one era");
+        assert!(got_era, "human should advance at least one era: economy={:?}, research={:?}, money={:?}, winner={:?}", s.economy_view(PlayerId(0)), s.research_state(PlayerId(0)), s.money(PlayerId(0)), s.winner());
         assert!(got_army, "human should unlock + train an army");
     }
 
@@ -1116,20 +1169,23 @@ mod tests {
         let mut s = survival(7);
         let cmds = s.ai_commands(PlayerId(0)); // found, starting the wave clock
         s.step(&cmds);
-        // 30 Hz -> first_delay 2_700 ticks (~90s) from founding. None before.
+        let garrison = s.unit_count(PlayerId(1));
+        assert_eq!(garrison, 6, "Core and relay garrisons are defensive");
+        // 30 Hz -> first_delay 2_700 ticks (~90s) from founding. The garrison
+        // remains, but no additional attack wave appears before that deadline.
         for _ in 0..2_500 {
             s.step(&[]);
         }
         assert_eq!(
             s.unit_count(PlayerId(1)),
-            0,
+            garrison,
             "no waves should spawn during the grace period"
         );
         for _ in 0..600 {
             s.step(&[]);
         }
         assert!(
-            s.unit_count(PlayerId(1)) > 0,
+            s.unit_count(PlayerId(1)) > garrison,
             "waves should begin after the grace period"
         );
     }
@@ -1195,18 +1251,32 @@ mod tests {
         let cmds = s.ai_commands(PlayerId(0)); // founds
         s.step(&cmds);
         let start = s.money(PlayerId(0)).to_bits();
+        let mut investment = 0_i64;
         for _ in 0..2400 {
             let c = s.ai_commands(PlayerId(0));
+            investment += c
+                .iter()
+                .map(|command| match *command {
+                    crate::game::sim::Command::Build { kind, .. } => {
+                        s.building_cost(kind).to_bits()
+                    }
+                    crate::game::sim::Command::Train { kind, .. } => s.unit_cost(kind).to_bits(),
+                    crate::game::sim::Command::Research { tech_id, .. } => s
+                        .technology(tech_id)
+                        .map_or(0, |n| i64::from(n.money) * 65536),
+                    _ => 0,
+                })
+                .sum::<i64>();
             s.step(&c);
         }
         assert!(
-            s.money(PlayerId(0)).to_bits() > start,
+            s.money(PlayerId(0)).to_bits() + investment > start,
             "post-founding economy should mine money"
         );
         assert_eq!(
             s.unit_count(PlayerId(1)),
-            0,
-            "no enemy units during the founding peace window"
+            6,
+            "the base and relay garrisons remain, but no attack wave spawns during the peace window"
         );
     }
 

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Style Guide</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.sec{padding:14px 16px;display:flex;flex-direction:column;gap:10px;overflow:hidden;position:relative}
+.sec-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.sec-n{font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.12em;color:#40dceb}
+.sec-t{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:20px;letter-spacing:.06em;text-transform:uppercase;color:#cee8f0}
+.sw{display:flex;flex-direction:column;gap:5px;width:92px}
+.sw-c{height:28px;border:1px solid rgba(206,232,240,.22);border-radius:2px}
+.sw-n{font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;line-height:1.1}
+.sw-h{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8fb0bf;line-height:1.2}
+.sw-r{font-size:12px;color:#8fb0bf;line-height:1.25}
+.grp{display:flex;flex-direction:column;gap:6px}
+.grp-t{font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#40dceb}
+.sws{display:flex;gap:10px}
+.brk{position:absolute;inset:-1px;pointer-events:none;background:linear-gradient(#40dceb,#40dceb) top left/12px 2px no-repeat,linear-gradient(#40dceb,#40dceb) top left/2px 12px no-repeat,linear-gradient(#40dceb,#40dceb) top right/12px 2px no-repeat,linear-gradient(#40dceb,#40dceb) top right/2px 12px no-repeat,linear-gradient(#40dceb,#40dceb) bottom left/12px 2px no-repeat,linear-gradient(#40dceb,#40dceb) bottom left/2px 12px no-repeat,linear-gradient(#40dceb,#40dceb) bottom right/12px 2px no-repeat,linear-gradient(#40dceb,#40dceb) bottom right/2px 12px no-repeat}
+.ic{display:flex;flex-direction:column;align-items:center;gap:5px;width:92px}
+.ic-b{width:46px;height:46px;display:flex;align-items:center;justify-content:center;border:1px solid #1b3342;border-radius:2px;background:#08111a;color:#96f5ff}
+.ic-l{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8fb0bf;text-align:center;line-height:1.15;height:28px}
+.st{display:flex;align-items:center;gap:12px;height:40px}
+.st-t{font-size:14px;line-height:1.3;color:#cee8f0}
+.rule{display:flex;gap:10px;align-items:flex-start;font-size:14px;line-height:1.35;color:#cee8f0}
+.rule b{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#96f5ff;font-size:15px}
+.lbl{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8fb0bf;letter-spacing:.06em}
+</style>
+</helmet>
+<div style="width:1920px;height:1400px;overflow:hidden;box-sizing:border-box;padding:36px 64px;display:flex;flex-direction:column;gap:16px;background:radial-gradient(1200px 600px at 78% -10%,#0e2230 0%,#060910 62%);position:relative">
+
+  <!-- HEADER -->
+  <div style="height:92px;display:flex;align-items:flex-end;justify-content:space-between;gap:48px;flex:none">
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="cap" style="color:#40dceb">Ascension / Design language v1 / Earthfront slice</div>
+      <div class="disp" style="font-size:64px;line-height:.95;font-weight:700;color:#e8fcff;letter-spacing:.05em">Holographic Tactical Command</div>
+    </div>
+    <div style="max-width:620px;font-size:16px;line-height:1.5;color:#8fb0bf;padding-bottom:4px">A deep space-black field lit by cyan holographic glow. Cyan means live and friendly. Red is reserved for hostile and alert. Everything else is cool steel, so threat reads instantly and nothing important hides in colour alone.</div>
+  </div>
+
+  <!-- ROW A: COLOR -->
+  <div class="panel sec" style="height:318px;flex:none">
+    <div class="sec-h"><span class="sec-t">Color tokens</span><span class="sec-n">01 / CONTRAST MEASURED ON PANEL #0A121C</span></div>
+    <div style="display:flex;gap:30px;align-items:flex-start">
+      <div class="grp">
+        <div class="grp-t">Surfaces</div>
+        <div class="sws" style="gap:8px">
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#03050a"></div><div class="sw-n">well</div><div class="sw-h">#03050A</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#060910"></div><div class="sw-n">field</div><div class="sw-h">#060910</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#08111a"></div><div class="sw-n">inset</div><div class="sw-h">#08111A</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#0a121c"></div><div class="sw-n">panel</div><div class="sw-h">#0A121C</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#101c2a"></div><div class="sw-n">raised</div><div class="sw-h">#101C2A</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#183446"></div><div class="sw-n">hover</div><div class="sw-h">#183446</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#104656"></div><div class="sw-n">active</div><div class="sw-h">#104656</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#284e60"></div><div class="sw-n">line</div><div class="sw-h">#284E60</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#1b3342"></div><div class="sw-n">line-dim</div><div class="sw-h">#1B3342</div></div>
+          <div class="sw" style="width:84px"><div class="sw-c" style="background:#30332a"></div><div class="sw-n">ground</div><div class="sw-h">#30332A</div></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="grp-t">Holo accent</div>
+        <div class="sws">
+          <div class="sw"><div class="sw-c" style="background:#40dceb"></div><div class="sw-n">cyan</div><div class="sw-h">#40DCEB</div><div class="sw-r">11.4:1 live, friendly</div></div>
+          <div class="sw"><div class="sw-c" style="background:#96f5ff"></div><div class="sw-n">cyan-hi</div><div class="sw-h">#96F5FF</div><div class="sw-r">wordmark, crest</div></div>
+          <div class="sw"><div class="sw-c" style="background:#185a6e"></div><div class="sw-n">cyan-dk</div><div class="sw-h">#185A6E</div><div class="sw-r">bevel shadow</div></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="grp-t">Text</div>
+        <div class="sws">
+          <div class="sw"><div class="sw-c" style="background:#cee8f0"></div><div class="sw-n">text</div><div class="sw-h">#CEE8F0</div><div class="sw-r">14.7:1 primary</div></div>
+          <div class="sw"><div class="sw-c" style="background:#8fb0bf"></div><div class="sw-n">dim</div><div class="sw-h">#8FB0BF</div><div class="sw-r">8.2:1 captions</div></div>
+          <div class="sw"><div class="sw-c" style="background:#5f8191"></div><div class="sw-n">faint</div><div class="sw-h">#5F8191</div><div class="sw-r">4.5:1 decor only</div></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:30px;align-items:flex-start">
+      <div class="grp">
+        <div class="grp-t">Semantic</div>
+        <div class="sws">
+          <div class="sw"><div class="sw-c" style="background:#50e6a0"></div><div class="sw-n">good</div><div class="sw-h">#50E6A0</div><div class="sw-r">11.8:1 surplus</div></div>
+          <div class="sw"><div class="sw-c" style="background:#f0b040"></div><div class="sw-n">warn</div><div class="sw-h">#F0B040</div><div class="sw-r">9.9:1 countdown</div></div>
+          <div class="sw"><div class="sw-c" style="background:#f04e46"></div><div class="sw-n">bad</div><div class="sw-h">#F04E46</div><div class="sw-r">5.3:1 threat</div></div>
+          <div class="sw"><div class="sw-c" style="background:#b79cff"></div><div class="sw-n">violet</div><div class="sw-h">#B79CFF</div><div class="sw-r">8.3:1 unproven</div></div>
+          <div class="sw"><div class="sw-c" style="background:#78b4ff"></div><div class="sw-n">shield</div><div class="sw-h">#78B4FF</div><div class="sw-r">8.7:1 shields</div></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="grp-t">Faction</div>
+        <div class="sws">
+          <div class="sw"><div class="sw-c" style="background:#46c8eb"></div><div class="sw-n">player</div><div class="sw-h">#46C8EB</div><div class="sw-r">9.6:1 square mark</div></div>
+          <div class="sw"><div class="sw-c" style="background:#f06050"></div><div class="sw-n">hostile</div><div class="sw-h">#F06050</div><div class="sw-r">5.8:1 diamond mark</div></div>
+        </div>
+      </div>
+      <div class="grp" style="flex:1;min-width:0">
+        <div class="grp-t">Era chips (small glyphs only, never chrome)</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#8fb0bf"></span><span class="mono" style="font-size:12px">E1</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#40dceb"></span><span class="mono" style="font-size:12px">E2</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#7ee0c4"></span><span class="mono" style="font-size:12px">E3</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#f0b040"></span><span class="mono" style="font-size:12px">E4</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#78b4ff"></span><span class="mono" style="font-size:12px">E5</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#ffd27a"></span><span class="mono" style="font-size:12px">E6</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#b79cff"></span><span class="mono" style="font-size:12px">E7</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#ff8fd0"></span><span class="mono" style="font-size:12px">E8</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#9ad0ff"></span><span class="mono" style="font-size:12px">E9</span></div>
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:1px solid #284e60;border-radius:2px;background:#08111a"><span style="width:10px;height:10px;border-radius:50%;background:#e8f4ff"></span><span class="mono" style="font-size:12px">E10</span></div>
+        </div>
+        <div class="sw-r" style="margin-top:4px;max-width:420px">An era chip always travels with its era number, so colour never carries the meaning alone.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW B: TYPE / ANATOMY / CONTROLS -->
+  <div style="display:flex;gap:16px;height:336px;flex:none">
+    <div class="panel sec" style="width:560px">
+      <div class="sec-h"><span class="sec-t">Typography</span><span class="sec-n">02</span></div>
+      <div class="cap">Rajdhani 600 / caps / +4% tracking</div>
+      <div class="disp" style="font-size:56px;line-height:.95;font-weight:700;color:#e8fcff;letter-spacing:.08em">Ascension</div>
+      <div style="display:flex;align-items:baseline;gap:20px">
+        <span class="disp" style="font-size:36px;line-height:1">Operation Dawnshield</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:22px">
+        <span class="disp" style="font-size:28px;line-height:1">Command deck</span>
+        <span class="disp" style="font-size:20px;line-height:1;color:#8fb0bf">Selected formation</span>
+      </div>
+      <div class="cap" style="margin-top:2px">IBM Plex Sans 400 / 16 / 1.5</div>
+      <div style="font-size:16px;line-height:1.5;color:#cee8f0">Ore in the ground is not usable inventory. Refineries turn deposits into construction material.</div>
+      <div class="cap">IBM Plex Mono 500 / data</div>
+      <div style="display:flex;gap:26px;flex-wrap:wrap">
+        <span class="mono" style="font-size:15px;color:#40dceb">POWER 130 / 160 kW</span>
+        <span class="mono" style="font-size:15px;color:#f0b040">WAVE 04 / SIEGE T-00:45</span>
+      </div>
+    </div>
+
+    <div class="panel sec" style="width:640px">
+      <div class="sec-h"><span class="sec-t">Panel anatomy</span><span class="sec-n">03</span></div>
+      <div style="display:flex;gap:22px;align-items:flex-start">
+        <div class="panel" style="width:300px;height:244px;position:relative;padding:14px;display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg,rgba(24,44,62,.95),rgba(8,16,26,.95))">
+          <div class="brk"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center"><span class="cap" style="color:#96f5ff">Selected / Vanguard</span><span class="tag t-cyan">18 units</span></div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" alt="Battle tank" style="width:84px;height:84px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+            <div style="display:flex;flex-direction:column;gap:3px"><span class="disp" style="font-size:22px;line-height:1">Battle tank</span><span class="mono" style="font-size:12px;color:#8fb0bf">Order: attack-move</span><span class="mono" style="font-size:12px;color:#8fb0bf">Wedge, return fire</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:center;gap:8px"><span class="lbl" style="width:52px">HP</span><div class="bar" style="flex:1"><i style="width:78%;background:#50e6a0"></i></div><span class="lbl" style="width:40px;text-align:right">78%</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><span class="lbl" style="width:52px">SHIELD</span><div class="bar" style="flex:1"><i style="width:45%;background:#78b4ff"></i></div><span class="lbl" style="width:40px;text-align:right">45%</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><span class="lbl" style="width:52px">AMMO</span><div class="bar" style="flex:1"><i style="width:80%;background:#40dceb"></i></div><span class="lbl" style="width:40px;text-align:right">72/90</span></div>
+            <div style="display:flex;align-items:center;gap:8px"><span class="lbl" style="width:52px">BUILD</span><div class="bar" style="flex:1"><i style="width:30%;background:#f0b040"></i></div><span class="lbl" style="width:40px;text-align:right">30%</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:11px;width:292px;padding-top:2px">
+          <div class="rule"><b>1</b><span><b>Glass fill.</b> Dark translucent gradient over the map, never opaque white.</span></div>
+          <div class="rule"><b>2</b><span><b>Steel border.</b> 1px line #284E60 at rest. Cyan is for the focused panel only.</span></div>
+          <div class="rule"><b>3</b><span><b>Corner brackets.</b> 12px cyan L-marks at four corners mark the active panel.</span></div>
+          <div class="rule"><b>4</b><span><b>Top light.</b> One inner highlight line, then a soft black drop shadow.</span></div>
+          <div class="rule"><b>5</b><span><b>Bars.</b> 6px track, flat fill, value always printed beside it.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel sec" style="width:560px">
+      <div class="sec-h"><span class="sec-t">Controls, chips, tags</span><span class="sec-n">04</span></div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 12px">
+        <div style="display:flex;flex-direction:column;gap:4px"><button type="button" class="btn" style="width:100%">Build</button><span class="lbl">REST</span></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><button type="button" class="btn" style="width:100%;background:#183446;border-color:#40dceb55">Units</button><span class="lbl">HOVER</span></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><button type="button" class="btn" style="width:100%;background:#104656;border-color:#40dceb;box-shadow:inset 0 -3px 0 #40dceb">Orders</button><span class="lbl">SELECTED / UNDERLINE</span></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><button type="button" class="btn pri" style="width:100%">Confirm</button><span class="lbl">PRIMARY</span></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><button type="button" class="btn" style="width:100%;background:#0a121c;border-style:dashed;border-color:#1b3342;color:#7f9faf">Science</button><span class="lbl">DISABLED / DASHED</span></div>
+        <div style="display:flex;flex-direction:column;gap:4px"><button type="button" class="btn" style="width:100%;background:#08111a;border-color:#96f5ff;color:#96f5ff;box-shadow:0 0 0 2px rgba(64,220,235,.35)">Logistics</button><span class="lbl">KEYBOARD FOCUS</span></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="chip">MATERIAL <b style="color:#96f5ff;font-weight:500">840</b></span>
+        <span class="chip">POWER <b style="color:#50e6a0;font-weight:500">130 / 160 kW</b></span>
+        <span class="chip">CREW <b style="color:#96f5ff;font-weight:500">22 / 60</b></span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="tag t-good">Valid</span>
+        <span class="tag t-bad">Blocked</span>
+        <span class="tag t-warn">Deficit</span>
+        <span class="tag t-cyan">Established</span>
+        <span class="tag t-violet">Speculative</span>
+        <span class="tag t-dim" style="border-style:dashed">Unknown</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW C: STATES / SELECTION / SPACING -->
+  <div style="display:flex;gap:16px;height:270px;flex:none">
+    <div class="panel sec" style="width:560px">
+      <div class="sec-h"><span class="sec-t">State language</span><span class="sec-n">05 / SHAPE + COLOUR + WORD</span></div>
+      <div style="display:flex;flex-direction:column;gap:0">
+        <div class="st"><svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#50e6a0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="28" height="28" rx="2"/><path d="M11 18l5 5 9-10"/></svg><span class="tag t-good" style="width:104px;justify-content:center">Valid</span><span class="st-t">Footprint and access are legal.</span></div>
+        <div class="st"><svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#f04e46" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4h12l8 8v12l-8 8H12l-8-8V12z"/><path d="M12 12l12 12M24 12L12 24"/></svg><span class="tag t-bad" style="width:104px;justify-content:center">Blocked</span><span class="st-t">Blocks refinery access. Rejected, no debit.</span></div>
+        <div class="st"><svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#f0b040" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 4l15 27H3z"/><path d="M18 14v8M18 26.5v.5"/></svg><span class="tag t-warn" style="width:104px;justify-content:center">Warning</span><span class="st-t">Consequence, not an error: 170 / 160 kW.</span></div>
+        <div class="st"><svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#b79cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3l13 7.5v15L18 33 5 25.5v-15z" stroke-dasharray="4 3"/><path d="M12 19c2-4 4-4 6 0s4 4 6 0"/></svg><span class="tag t-violet" style="width:104px;justify-content:center">Speculative</span><span class="st-t">Needs unproven physics. Shown, never implied.</span></div>
+        <div class="st"><svg width="36" height="36" viewBox="0 0 36 36" fill="none" stroke="#8fb0bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="14" stroke-dasharray="3 4"/><path d="M14 14.5a4 4 0 1 1 5.5 3.7c-1 .5-1.5 1.2-1.5 2.3M18 25v.5"/></svg><span class="tag t-dim" style="width:104px;justify-content:center;border-style:dashed">Unknown</span><span class="st-t">Alien function not yet studied.</span></div>
+      </div>
+    </div>
+
+    <div class="panel sec" style="width:560px">
+      <div class="sec-h"><span class="sec-t">Selection language</span><span class="sec-n">06</span></div>
+      <div style="display:flex;gap:14px">
+        <div style="position:relative;width:257px;height:150px;border:1px solid #1b3342;border-radius:3px;background:radial-gradient(120px 70px at 50% 70%,#3b3d30,#30332a 70%)" class="grid-bg">
+          <div style="position:absolute;left:50%;top:104px;width:150px;height:44px;margin-left:-75px;border:2px solid #96f5ff;border-radius:50%;box-shadow:0 0 14px rgba(64,220,235,.5)"></div>
+          <img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" alt="Friendly tank" style="position:absolute;left:50%;top:14px;margin-left:-70px;width:140px;height:140px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+          <svg width="257" height="150" viewBox="0 0 257 150" fill="none" stroke="#96f5ff" stroke-width="2.5" style="position:absolute;left:0;top:0"><path d="M62 18h-14v14M195 18h14v14M62 118h-14v-14M195 118h14v-14"/></svg>
+          <span class="tag t-cyan" style="position:absolute;left:8px;top:8px;background:#08111a">Friendly</span>
+        </div>
+        <div style="position:relative;width:257px;height:150px;border:1px solid #1b3342;border-radius:3px;background:radial-gradient(120px 70px at 50% 70%,#3b3d30,#30332a 70%)" class="grid-bg">
+          <div style="position:absolute;left:50%;top:104px;width:150px;height:44px;margin-left:-75px;border:2px dashed #f06050;border-radius:50%;box-shadow:0 0 14px rgba(240,96,80,.45)"></div>
+          <img src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" alt="Hostile tank" style="position:absolute;left:50%;top:22px;margin-left:-66px;width:132px;height:132px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+          <svg width="257" height="150" viewBox="0 0 257 150" fill="none" stroke="#f06050" stroke-width="2.5" style="position:absolute;left:0;top:0"><path d="M128 6l9 9-9 9-9-9z" fill="#f06050" fill-opacity=".25"/><path d="M52 112l6 6-6 6-6-6zM204 112l6 6-6 6-6-6z"/></svg>
+          <span class="tag t-bad" style="position:absolute;left:8px;top:8px;background:#08111a">Hostile</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:14px;font-size:13px;line-height:1.35;color:#cee8f0">
+        <div style="width:257px"><b class="disp" style="color:#96f5ff;font-size:15px">Square corners, solid ring.</b> Friendly units and buildings.</div>
+        <div style="width:257px"><b class="disp" style="color:#f06050;font-size:15px">Diamond marker, dashed ring.</b> Alien units and structures.</div>
+      </div>
+    </div>
+
+    <div class="panel sec" style="width:640px">
+      <div class="sec-h"><span class="sec-t">Spacing, radius, glow</span><span class="sec-n">07</span></div>
+      <div style="display:flex;gap:22px">
+        <div style="display:flex;flex-direction:column;gap:7px;width:190px">
+          <div class="cap">4 pt scale</div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:4px;height:8px;background:#40dceb"></div><span class="lbl">4</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;background:#40dceb"></div><span class="lbl">8</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:12px;height:8px;background:#40dceb"></div><span class="lbl">12</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:16px;height:8px;background:#40dceb"></div><span class="lbl">16 panel padding</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:24px;height:8px;background:#40dceb"></div><span class="lbl">24</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:32px;height:8px;background:#40dceb"></div><span class="lbl">32 section gap</span></div>
+          <div style="display:flex;align-items:center;gap:8px"><div style="width:48px;height:8px;background:#40dceb"></div><span class="lbl">48</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px;width:170px">
+          <div class="cap">Radius</div>
+          <div style="display:flex;gap:10px;align-items:flex-end">
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start"><div style="width:40px;height:40px;border:1px solid #40dceb;border-radius:2px"></div><span class="lbl">2 controls</span></div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start"><div style="width:40px;height:40px;border:1px solid #40dceb;border-radius:3px"></div><span class="lbl">3 panels</span></div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-end">
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start"><div style="width:40px;height:40px;border:1px solid #40dceb;border-radius:50%"></div><span class="lbl">ring only</span></div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start"><div style="width:40px;height:40px;border:1px solid #40dceb;border-radius:0"></div><span class="lbl">0 map</span></div>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:9px;flex:1;min-width:0">
+          <div class="cap">Glow ladder</div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="width:44px;height:26px;border:1px solid #284e60;border-radius:2px;background:#08111a"></div><span class="lbl">Rest: none</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="width:44px;height:26px;border-radius:2px;background:#08111a;box-shadow:0 0 0 1px rgba(64,220,235,.55)"></div><span class="lbl">Focus: 1px ring</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="width:44px;height:26px;border-radius:2px;background:#08111a;box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 18px rgba(64,220,235,.35)"></div><span class="lbl">Live: ring + bloom</span></div>
+          <div style="display:flex;align-items:center;gap:10px"><div style="width:44px;height:26px;border-radius:2px;background:#08111a;box-shadow:0 0 0 1px rgba(240,96,80,.7),0 0 18px rgba(240,96,80,.4)"></div><span class="lbl">Alert: red bloom</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW D: ICONS / ACCESSIBILITY -->
+  <div style="display:flex;gap:16px;height:244px;flex:none">
+    <div class="panel sec" style="width:1180px;gap:8px">
+      <div class="sec-h"><span class="sec-t">Iconography</span><span class="sec-n">08 / 24 GRID / 1.75 STROKE / ROUND CAPS / NO FILL</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px 4px;color:#96f5ff">
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12L4 7.5M12 12v9"/></svg></div><span class="ic-l">Material</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L5 14h6l-1 8 8-12h-6z"/></svg></div><span class="ic-l">Power</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.2c2.8.2 5 2.2 5 5.3"/></svg></div><span class="ic-l">Crew</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 20V10l2.5-4L11 10v10z"/><path d="M13 20V10l2.5-4L18 10v10z"/><path d="M4 20h16"/></svg></div><span class="ic-l">Ammo</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h5a3 3 0 0 0 3-3V9a3 3 0 0 1 2-2.8" stroke-dasharray="3 2.5"/></svg></div><span class="ic-l">Supply route</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V11"/><circle cx="12" cy="9" r="2"/><path d="M7.5 5.5a6.4 6.4 0 0 0 0 7M16.5 5.5a6.4 6.4 0 0 1 0 7M4.5 3.5a10.5 10.5 0 0 0 0 11M19.5 3.5a10.5 10.5 0 0 1 0 11"/><path d="M8 21h8"/></svg></div><span class="ic-l">Relay</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3"/><path d="M7.5 15h9"/></svg></div><span class="ic-l">Science</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" stroke-dasharray="3 2.5"/><circle cx="12" cy="12" r="2"/></svg></div><span class="ic-l">Prototype</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V10l6 3V10l6 3V6h6v15z"/><path d="M7 17h2M12 17h2M17 17h2"/></svg></div><span class="ic-l">Factory</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20h14l-1.5-5h-11z"/><circle cx="12" cy="11" r="3.5"/><path d="M14.5 9l6-3.5"/></svg></div><span class="ic-l">Turret</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21h14M8 21l1.5-5h5L16 21"/><path d="M9 14L7 5M15 14l2-9M12 14V4"/></svg></div><span class="ic-l">AA turret</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14"/><path d="M3 9.7h18M3 14.3h18M9 5v4.7M15 5v4.7M6 9.7v4.6M12 9.7v4.6M18 9.7v4.6M9 14.3V19M15 14.3V19"/></svg></div><span class="ic-l">Wall</span></div>
+
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17v-6h9v6M12 13h5l3 3v1"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/><path d="M5 11l3-6 5 2"/></svg></div><span class="ic-l">Harvester</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V11l8-4 8 4v10z"/><path d="M12 7V2M9 4.5h6"/><path d="M10 21v-5h4v5"/></svg></div><span class="ic-l">Command centre</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="9" r="4.5"/><path d="M15 2v3M15 13v3M8 9h3M19 9h3"/><path d="M3 21l6-6M3 21h5M3 21v-5"/></svg></div><span class="ic-l">Attack-move</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><rect x="9.5" y="9.5" width="5" height="5"/></svg></div><span class="ic-l">Hold</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V3"/><path d="M6 4h12l-3 4 3 4H6"/></svg></div><span class="ic-l">Rally</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7.5a4.5 4.5 0 0 1-6 4.3L6.3 19.5a2 2 0 0 1-2.8-2.8l7.7-7.7A4.5 4.5 0 0 1 16.5 3l-3 3 .5 3 3 .5z"/></svg></div><span class="ic-l">Repair</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v10M9.5 14.5c0 1 1 1.7 2.5 1.7s2.5-.7 2.5-1.7-1-1.5-2.5-1.8-2.5-.7-2.5-1.7S10.5 9.3 12 9.3s2.5.7 2.5 1.7"/></svg></div><span class="ic-l">Sell</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17c3-6 6-6 9 0s6 6 9 0"/><path d="M3 11c3-6 6-6 9 0s6 6 9 0"/></svg></div><span class="ic-l">Wave</span></div>
+        <div class="ic"><div class="ic-b" style="color:#f0b040"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg></div><span class="ic-l">Alert</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><circle cx="12" cy="12" r="2.5"/></svg></div><span class="ic-l">Focus</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></div><span class="ic-l">Layers</span></div>
+        <div class="ic"><div class="ic-b"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg></div><span class="ic-l">Pause</span></div>
+      </div>
+    </div>
+
+    <div class="panel sec" style="width:596px;gap:8px">
+      <div class="sec-h"><span class="sec-t">Accessibility rules</span><span class="sec-n">09</span></div>
+      <div class="rule"><b>A</b><span><b>Colour plus shape plus word.</b> Every state names itself and has its own silhouette.</span></div>
+      <div class="rule"><b>B</b><span><b>Faction by mark.</b> Square brackets for friendly, diamonds for hostile, in any palette.</span></div>
+      <div class="rule"><b>C</b><span><b>Scalable text.</b> 13px floor at 1080p, UI scale to 150%, no key fact in a tiny icon alone.</span></div>
+      <div class="rule"><b>D</b><span><b>Reduced motion.</b> Scanline sweep and flicker switch off. Glow stays static.</span></div>
+      <div class="rule"><b>E</b><span><b>Controls.</b> Remappable bindings, adjustable warning timing, pauseable command planning.</span></div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

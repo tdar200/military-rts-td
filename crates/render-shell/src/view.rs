@@ -16,6 +16,8 @@ use std::collections::HashMap;
 const HUMAN: PlayerId = PlayerId(0);
 /// Seconds for a freshly spawned entity to pop to full size.
 const SPAWN_POP: f32 = 0.28;
+/// Seconds for a newly placed structure to rise through its scaffold overlay.
+const BUILD_REVEAL: f32 = 1.15;
 /// How fast hit-flash fades (per second).
 const FLASH_DECAY: f32 = 4.0;
 /// Bar damping rate (higher = snappier).
@@ -65,6 +67,13 @@ struct Ent {
     max_sh: f32,
     flash: f32,
     spawn_age: f32,
+    motion: Motion,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Motion {
+    facing_left: bool,
+    moving: bool,
 }
 
 /// Interpolated render values for one entity this frame.
@@ -76,6 +85,12 @@ pub struct EntDraw {
     pub max_shield: f32,
     pub flash: f32,
     pub scale: f32,
+    /// Retained horizontal facing, updated only while the entity moves.
+    pub facing_left: bool,
+    /// Whether the entity changed position on the latest simulation tick.
+    pub moving: bool,
+    /// Presentation-only building reveal progress (0..1); always 1 for units.
+    pub construction: f32,
 }
 
 /// A rising, fading damage number.
@@ -141,6 +156,12 @@ impl ViewState {
                     e.seen = g;
                     e.prev = e.curr;
                     e.curr = world;
+                    let dx = e.curr.x - e.prev.x;
+                    let dy = e.curr.y - e.prev.y;
+                    e.motion.moving = dx.abs() + dy.abs() > 0.001;
+                    if dx.abs() > 0.001 {
+                        e.motion.facing_left = dx < 0.0;
+                    }
                     if hp < e.hp_target - HIT_EPS {
                         hit_amount = Some(e.hp_target - hp);
                         e.flash = 1.0;
@@ -197,6 +218,7 @@ impl ViewState {
                         max_sh,
                         flash: 0.0,
                         spawn_age: 0.0,
+                        motion: Motion::default(),
                     },
                 );
             }
@@ -248,6 +270,11 @@ impl ViewState {
             lerp(e.prev.y, e.curr.y, alpha),
         );
         let scale = ease_out_back((e.spawn_age / SPAWN_POP).min(1.0));
+        let construction = if e.building {
+            (e.spawn_age / BUILD_REVEAL).min(1.0)
+        } else {
+            1.0
+        };
         Some(EntDraw {
             world,
             hp: e.hp_shown,
@@ -256,6 +283,9 @@ impl ViewState {
             max_shield: e.max_sh,
             flash: e.flash,
             scale,
+            facing_left: e.motion.facing_left,
+            moving: e.motion.moving,
+            construction,
         })
     }
 }

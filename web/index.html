@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-    <title>Military RTS</title>
+    <title>Ascension: Earthfront</title>
     <style>
       html,
       body,
@@ -19,8 +19,8 @@
   </head>
   <body>
     <canvas id="glcanvas" tabindex="1"></canvas>
-    <!-- Macroquad's JS shim provides the WebGL + platform imports the wasm needs. -->
-    <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
+    <!-- Vendored by build.sh: the release must not depend on a third-party CDN. -->
+    <script src="mq_js_bundle.js"></script>
     <script>
       load("rts.wasm");
     </script>

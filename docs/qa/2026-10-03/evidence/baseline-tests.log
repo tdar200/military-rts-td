@@ -1,0 +1,324 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.03s
+     Running unittests src/lib.rs (target/debug/deps/rts_core-778a7adb43dc9d10)
+
+running 252 tests
+test fixed::tests::addition_and_subtraction ... ok
+test fixed::tests::floor_rounds_toward_negative_infinity ... ok
+test fixed::tests::constants_have_expected_raw_values ... ok
+test fixed::tests::division ... ok
+test fixed::tests::from_int_round_trips ... ok
+test fixed::tests::from_ratio_makes_fractions ... ok
+test fixed::tests::multiplication ... ok
+test fixed::tests::negation ... ok
+test fixed::tests::ordering_follows_value ... ok
+test fixed::tests::round_to_nearest ... ok
+test fixed::tests::sqrt_of_negative_clamps_to_zero ... ok
+test fixed::tests::sqrt_of_perfect_squares ... ok
+test fixed::tests::sqrt_of_two_is_close_to_root_two ... ok
+test game::ability::tests::defs_are_sane ... ok
+test game::ability::tests::heavies_have_abilities_and_lights_do_not ... ok
+test game::balance::tests::alien_mirrors_human_in_every_era ... ok
+test game::balance::tests::antimatter_plant_is_a_money_extractor ... ok
+test game::balance::tests::capital_ship_is_a_heavy_unit ... ok
+test game::balance::tests::default_balance_matches_canonical_stats ... ok
+test game::balance::tests::every_era_and_faction_returns_canonical_stats_for_now ... ok
+test game::balance::tests::research_lab_exists_and_costs_money ... ok
+test game::hex::tests::distance_is_symmetric_and_zero_to_self ... ok
+test game::hex::tests::from_world_round_trips_cell_centers ... ok
+test game::hex::tests::neighbors_are_six_and_distance_one ... ok
+test game::map::tests::deposits_default_empty_and_round_trip ... ok
+test game::map::tests::deposits_iter_lists_placed_deposits ... ok
+test game::map::tests::in_bounds_rejects_outside_and_negative ... ok
+test game::lockstep::tests::stalls_until_all_inputs_arrive ... ok
+test game::map::tests::new_map_has_dimensions_and_is_open ... ok
+test game::map::tests::set_tile_changes_the_cell ... ok
+test game::map::tests::tile_is_none_out_of_bounds ... ok
+test game::path::tests::deterministic_same_path_each_call ... ok
+test game::path::tests::no_path_when_fully_walled_off ... ok
+test game::path::tests::path_routes_around_a_wall ... ok
+test game::path::tests::start_equals_goal_is_empty_path ... ok
+test game::path::tests::straight_path_on_open_map_reaches_goal ... ok
+test game::lockstep::tests::checksums_detect_a_desync ... ok
+test game::procgen::tests::same_seed_is_identical_different_seed_differs ... ok
+test game::scenario::tests::crossroads_has_a_central_fortress_with_open_flanks ... ok
+test game::scenario::tests::every_scenario_builds_with_two_live_bases ... ok
+test game::scenario::tests::conquest_varies_by_seed ... ok
+test game::scenario::tests::every_scenario_keeps_the_battlefield_connected ... ok
+test game::scenario::tests::every_wave_map_has_minable_deposits ... ok
+test game::procgen::tests::margins_are_clear_and_field_is_connected ... ok
+test game::scenario::tests::scenarios_use_space_theme_names ... ok
+test game::scenario::tests::sets_up_both_bases_with_no_winner_yet ... ok
+test game::scenario::tests::survival_balance_playtest ... ignored, balance playtest — run with --ignored --nocapture to read the curve
+test game::procgen::tests::procgen_places_ore_and_a_near_base_deposit ... ok
+test game::scenario::tests::survival_founding_registers_a_manual_colony ... ok
+test game::lockstep::tests::two_peers_stay_in_sync ... ok
+test game::scenario::tests::open_clash_has_no_walls_and_trains_armies ... ok
+test game::scenario::tests::survival_is_deterministic ... ok
+test game::scenario::tests::survival_opens_in_survey_then_founds_and_stays_connected ... ok
+test game::scenario::tests::a_recorded_match_replays_to_the_same_result ... ok
+test game::scenario::tests::the_central_wall_band_blocks_movement ... ok
+test game::sim::earthfront::tests::ai_science_accelerates_theory_but_cannot_skip_or_accelerate_prototypes ... ok
+test game::sim::earthfront::tests::ammunition_exhaustion_stops_fire_and_depots_restore_it ... ok
+test game::sim::earthfront::tests::full_refineries_keep_ore_in_trucks_and_accept_partial_deliveries ... ok
+test game::sim::earthfront::tests::future_tech_and_magic_abilities_are_not_in_the_slice ... ok
+test game::sim::earthfront::tests::ore_must_be_delivered_and_processed_to_become_material ... ok
+test game::sim::earthfront::tests::power_is_a_flow_and_storage_requires_a_battery ... ok
+test game::scenario::tests::survival_has_a_peaceful_founding_grace_period ... ok
+test game::sim::earthfront::tests::prototype_reserves_only_one_factory_and_reassigns_after_destruction ... ok
+test game::sim::earthfront::tests::relay_power_and_destruction_change_actual_wave_strength ... ok
+test game::sim::earthfront::tests::relay_role_is_hashed_and_never_makes_the_core_invulnerable ... ok
+test game::sim::earthfront::tests::research_pauses_when_power_or_facility_is_lost ... ok
+test game::sim::earthfront::tests::prototypes_compete_with_factory_production ... ok
+test game::sim::earthfront::tests::tank_production_requires_its_factory_and_power ... ok
+test game::scenario::tests::an_undefended_base_falls_and_the_match_is_won ... ok
+test game::sim::earthfront::tests::service_state_is_replayable_and_hashed ... ok
+test game::sim::earthfront::tests::trucks_deliver_to_available_processor_and_survive_its_loss_with_cargo ... ok
+test game::sim::earthfront::tests::walls_sever_ground_supply_routes ... ok
+test game::sim::tests::a_sector_governs_its_member_colonies_policy ... ok
+test game::sim::tests::abilities_are_deterministic ... ok
+test game::scenario::tests::a_wave_eventually_spawns ... ok
+test game::scenario::tests::survival_economy_flows_after_founding_and_stays_peaceful ... ok
+test game::sim::tests::ai_builds_antimatter_plant_by_era_1 ... ok
+test game::scenario::tests::every_scenario_replays_to_the_same_result ... ok
+test game::sim::tests::ai_casts_an_ability_at_a_packed_clump ... ok
+test game::sim::tests::ai_builds_up_its_economy_and_army ... ok
+test game::scenario::tests::survival_overruns_an_undefended_base ... ok
+test game::sim::tests::ai_heals_a_wounded_clump_with_nanite_field ... ok
+test game::sim::tests::ai_emits_no_ascend_in_the_golden_run ... ok
+test game::sim::tests::ai_claims_and_mines_a_nearby_deposit ... ok
+test game::sim::tests::active_colony_grows_population_and_halts_at_cap ... ok
+test game::sim::tests::ai_builds_a_lab_and_researches ... ok
+test game::sim::tests::ai_builds_anti_air_when_threatened_by_aircraft ... ok
+test game::sim::tests::air_is_immune_to_ground_fire_but_dies_to_anti_air ... ok
+test game::sim::tests::anti_armor_hard_counters_tanks_at_equal_cost ... ok
+test game::scenario::tests::survival_replays_across_the_founding_transition ... ok
+test game::sim::tests::antigrav_research_makes_owner_units_ignore_terrain ... ok
+test game::sim::tests::ascend_charges_money_and_increments_level ... ok
+test game::sim::tests::ascend_cost_ramp_is_linear_and_exact ... ok
+test game::sim::tests::ai_vs_ai_is_deterministic ... ok
+test game::sim::tests::assigning_a_colony_to_a_sector_sets_its_doctrine ... ok
+test game::sim::tests::ascend_research_track_is_gated_by_lab ... ok
+test game::sim::tests::attack_move_units_stop_to_fight ... ok
+test game::sim::tests::autonomy_is_earned_over_time ... ok
+test game::sim::tests::barrage_damages_clustered_enemies_and_starts_cooldown ... ok
+test game::sim::tests::build_command_places_building_and_charges ... ok
+test game::sim::tests::build_fails_when_unaffordable ... ok
+test game::sim::tests::build_requires_owning_the_planet ... ok
+test game::sim::tests::capital_splash_hits_clustered_neighbors ... ok
+test game::sim::tests::capturing_a_seat_transfers_the_planet ... ok
+test game::sim::tests::changing_a_sectors_doctrine_repropagates_to_members ... ok
+test game::sim::tests::colony_cap_and_rates_derive_from_planet ... ok
+test game::sim::tests::colony_goes_tactical_under_threat ... ok
+test game::sim::tests::colony_growth_fields_hash_is_stable_and_golden_neutral ... ok
+test game::scenario::tests::conquest_scenario_is_deterministic_and_resolves ... ok
+test game::sim::tests::colony_slots_are_recycled ... ok
+test game::sim::tests::combat_decays_with_distance_from_command_center ... ok
+test game::sim::tests::combat_destroys_an_enemy_structure ... ok
+test game::sim::tests::autonomous_colony_run_is_deterministic ... ok
+test game::sim::tests::combat_full_strength_within_full_radius ... ok
+test game::sim::tests::colony_lod_is_state_driven_and_deterministic ... ok
+test game::sim::tests::autonomous_colony_expands_when_policy_allows ... ok
+test game::sim::tests::combat_scales_with_the_spatial_grid ... ok
+test game::sim::tests::conquest_majority_planet_owner_wins_immediately ... ok
+test game::scenario::tests::restricted_human_progresses_through_the_tech_tree ... ok
+test game::sim::tests::dead_slots_are_recycled ... ok
+test game::sim::tests::destroying_a_colony_seat_reaps_the_colony ... ok
+test game::sim::tests::disbanding_a_sector_unassigns_its_colonies ... ok
+test game::sim::tests::doctrine_effects_fold_into_combat_factors ... ok
+test game::sim::tests::doctrine_levels_are_hashed ... ok
+test game::sim::tests::dormant_closed_form_matches_full_simulation_every_tick ... ok
+test game::sim::tests::dormant_colonies_skip_their_per_tick_work ... ok
+test game::sim::tests::dormant_requires_maturity_not_just_autonomy ... ok
+test game::sim::tests::earthfront_is_won_by_destroying_the_hostile_core ... ok
+test game::sim::tests::emp_freezes_a_moving_unit_then_it_resumes ... ok
+test game::sim::tests::emp_immunity_prevents_chain_stun ... ok
+test game::sim::tests::emp_stuns_units_for_its_duration_then_releases ... ok
+test game::sim::tests::empire_upkeep_scales_superlinearly ... ok
+test game::sim::tests::conflict_emerges_over_a_shared_deposit ... ok
+test game::sim::tests::era_damage_factor_scales_up ... ok
+test game::sim::tests::era_key_nodes_are_affordable ... ok
+test game::sim::tests::escalating_waves_harden_the_attacker ... ok
+test game::sim::tests::every_grid_node_is_affordable ... ok
+test game::sim::tests::extractor_mines_at_full_rate ... ok
+test game::sim::tests::extractor_mines_money_from_a_deposit ... ok
+test game::sim::tests::field_intensity_is_deterministic_and_finite_is_zero ... ok
+test game::sim::tests::extractor_on_ore_mines_money_and_depletes ... ok
+test game::sim::tests::forge_track_is_money_only_and_ramps ... ok
+test game::sim::tests::found_colony_places_a_base_and_registers_a_colony ... ok
+test game::sim::tests::found_colony_respects_the_per_owner_cap ... ok
+test game::sim::tests::found_colony_claims_only_unowned_planets ... ok
+test game::sim::tests::golden_hash_pins_cross_target_determinism ... ok
+test game::sim::tests::govern_colony_reuses_or_founds_a_sector ... ok
+test game::sim::tests::helicopters_beat_ground_without_anti_air ... ok
+test game::sim::tests::hold_directive_freezes_a_colony ... ok
+test game::sim::tests::kardashev_tier_climbs_with_empire_size ... ok
+test game::sim::tests::lab_gates_research_past_era_zero ... ok
+test game::sim::tests::full_autonomy_colony_drives_its_owner_like_the_ai ... ok
+test game::sim::tests::lod_classification_does_not_perturb_results ... ok
+test game::sim::tests::losing_last_command_center_eliminates_and_decides_winner ... ok
+test game::sim::tests::manual_colony_emits_no_commands ... ok
+test game::sim::tests::ai_queues_no_unaffordable_money_spend ... ok
+test game::sim::tests::nanite_field_heals_wounded_allies_capped_at_max ... ok
+test game::sim::tests::new_sim_has_starting_credits_and_no_winner ... ok
+test game::sim::tests::perk_choice_sets_bit_and_applies_effect ... ok
+test game::sim::tests::mature_colony_treasury_wakes_to_exact_value ... ok
+test game::sim::tests::planets_and_alive_hash_is_stable ... ok
+test game::sim::tests::population_gates_building_count ... ok
+test game::sim::tests::population_scales_supply_cap ... ok
+test game::sim::tests::power_plant_feeds_the_energy_stockpile ... ok
+test game::sim::tests::producer_rally_is_inherited_by_completed_units ... ok
+test game::sim::tests::production_pauses_without_power_and_resumes_when_power_returns ... ok
+test game::sim::tests::plain_move_ignores_enemies ... ok
+test game::sim::tests::refinery_on_deposit_mines_money_when_powered ... ok
+test game::sim::tests::refinery_deploys_a_harvester_that_hauls_ore_home ... ok
+test game::sim::tests::repair_costs_money_and_sell_refunds_and_frees_tile ... ok
+test game::sim::tests::research_bonus_helpers_start_at_zero_then_grid_nodes_raise_them ... ok
+test game::sim::tests::research_completes_after_its_duration_and_sets_the_bit ... ok
+test game::sim::tests::research_is_rejected_without_a_lab_or_prereq ... ok
+test game::sim::tests::research_rejects_already_researched_and_unmet_prereqs ... ok
+test game::sim::tests::requested_autonomy_caps_the_effective_level ... ok
+test game::sim::tests::same_setup_and_commands_produce_same_hash ... ok
+test game::sim::tests::same_tick_double_cast_resolves_once ... ok
+test game::sim::tests::sector_slots_are_recycled_lifo ... ok
+test game::sim::tests::set_policy_and_autonomy_commands_apply ... ok
+test game::sim::tests::conquest_ai_breaks_a_defended_homeworld ... ok
+test game::sim::tests::shields_absorb_then_regen_and_antiarmor_pierces ... ok
+test game::sim::tests::researching_an_era_key_tech_advances_the_era ... ok
+test game::sim::tests::species_bias_expansion_drive ... ok
+test game::sim::tests::supply_cap_limits_trained_units ... ok
+test game::sim::tests::surveyed_field_special_accrues_into_the_stockpile ... ok
+test game::sim::tests::terrain_layer_and_planet_yield_cache ... ok
+test game::sim::tests::training_spawns_a_unit_after_build_time ... ok
+test game::sim::tests::unit_does_not_move_to_a_walled_off_target ... ok
+test game::sim::tests::six_civ_game_is_deterministic ... ok
+test game::sim::tests::use_ability_is_validated ... ok
+test game::sim::tests::views_report_living_entities_for_rendering ... ok
+test game::sim::tests::unit_moves_toward_target_and_arrives ... ok
+test game::sim::tests::wave_countdown_reports_time_to_next_wave ... ok
+test game::sim::tests::wave_units_march_toward_the_defender ... ok
+test game::sim::tests::waves_are_deterministic ... ok
+test game::sim::tests::waves_scale_with_the_defenders_empire ... ok
+test game::sim::tests::waves_spawn_on_schedule_and_grow ... ok
+test game::scenario::tests::conquest_colonies_grow_on_painted_terrain ... ok
+test game::stats::tests::anti_armor_is_strong_vs_plated_weak_vs_flesh ... ok
+test game::stats::tests::ballistic_is_strong_vs_flesh_weak_vs_plated ... ok
+test game::stats::tests::era_and_faction_indices_are_dense_and_in_bounds ... ok
+test game::stats::tests::explosive_is_strong_vs_structure ... ok
+test game::sim::tests::winner_is_the_last_player_with_a_command_center ... ok
+test game::stats::tests::power_plant_outputs_energy_and_refinery_mines ... ok
+test game::stats::tests::tank_is_tougher_and_costlier_than_infantry ... ok
+test game::stats::tests::turret_attacks_but_command_center_does_not ... ok
+test game::tech_grid::tests::bitset_ignores_out_of_range_ids ... ok
+test game::tech_grid::tests::bitset_hash_is_order_stable_and_value_sensitive ... ok
+test game::tech_grid::tests::bitset_set_get_clear_count ... ok
+test game::tech_grid::tests::coordinate_system_covers_every_slot_exactly_once ... ok
+test game::tech_grid::tests::era_keys_are_the_energy_capstones ... ok
+test game::tech_grid::tests::grid_dimensions_are_500_in_8_words ... ok
+test game::tech_grid_table::tests::era_keys_are_reachable_energy_capstones ... ok
+test game::tech_grid_table::tests::every_node_unlocks_something_concrete ... ok
+test game::tech_grid_table::tests::no_achieved_or_emerging_past_the_frontier ... ok
+test game::tech_grid_table::tests::grid_has_500_contiguous_well_formed_nodes ... ok
+test game::tech_grid_table::tests::prereqs_form_an_acyclic_dag_with_lower_ids ... ok
+test hash::tests::deterministic_for_same_input ... ok
+test hash::tests::distinguishes_values ... ok
+test hash::tests::order_sensitive ... ok
+test hash::tests::empty_hash_is_offset_basis ... ok
+test rng::tests::different_seeds_diverge ... ok
+test rng::tests::next_below_covers_full_range ... ok
+test rng::tests::next_below_one_is_always_zero ... ok
+test rng::tests::next_below_stays_in_range ... ok
+test rng::tests::sequence_advances ... ok
+test vec::tests::addition_and_subtraction ... ok
+test vec::tests::dot_product ... ok
+test vec::tests::length_is_euclidean_distance ... ok
+test vec::tests::length_squared_is_dot_with_self ... ok
+test vec::tests::new_sets_components ... ok
+test vec::tests::scale_multiplies_components ... ok
+test vec::tests::zero_is_origin ... ok
+test world::tests::damage_reduces_then_kills ... ok
+test rng::tests::same_seed_produces_same_sequence ... ok
+test world::tests::hash_changes_when_state_changes ... ok
+test world::tests::same_seed_and_commands_produce_same_hash ... ok
+test world::tests::set_velocity_changes_motion ... ok
+test world::tests::spawn_adds_an_entity ... ok
+test world::tests::step_advances_tick ... ok
+test world::tests::velocity_integrates_each_tick ... ok
+test game::sim::tests::waking_a_dormant_colony_recovers_the_full_active_value ... ok
+test world::tests::new_world_starts_empty_at_tick_zero ... ok
+test game::sim::tests::species_caps_expansion_per_archetype ... ok
+test game::sim::tests::lod_skip_matches_full_with_growing_and_mature_colonies ... ok
+test game::scenario::tests::every_scenario_resolves_decisively ... ok
+test game::sim::tests::ai_researches_shields ... ok
+test game::sim::tests::conquest_resolves_by_timeout_or_domination ... ok
+test game::sim::tests::conquest_ai_offence_is_deterministic ... ok
+test game::sim::tests::ai_advances_at_least_one_era ... ok
+test game::sim::tests::ai_secures_alloy_and_fields_a_capital ... ok
+test game::sim::tests::ai_researches_antigrav ... ok
+
+test result: ok. 251 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 35.47s
+
+     Running unittests src/lib.rs (target/debug/deps/rts_data-24ce672c6fdda740)
+
+running 3 tests
+test tests::malformed_ron_is_an_error ... ok
+test tests::default_ron_matches_the_code_default ... ok
+test tests::tweaking_a_value_takes_effect_without_recompiling_core ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/rts-428aa2372538efd1)
+
+running 12 tests
+test anim::tests::damp_converges_toward_target ... ok
+test anim::tests::ease_out_back_endpoints_and_overshoot ... ok
+test anim::tests::lerp_endpoints_and_midpoint ... ok
+test input::tests::buildings_are_selectable_but_excluded_from_army_orders ... ok
+test input::tests::contextual_targeting_finds_visible_enemy_units_and_buildings ... ok
+test input::tests::group_orders_assign_distinct_formation_slots ... ok
+test tests::available_when_prereq_met_and_lab_present ... ok
+test tests::in_progress_reports_correct_percent ... ok
+test tests::locked_when_prereq_not_researched ... ok
+test tests::no_lab_status_when_lab_absent ... ok
+test tests::researched_bit_takes_priority ... ok
+test ui::tests::names_are_faction_aware ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/earthfront-playtest.rs (target/debug/deps/earthfront_playtest-4b9ad00965e4e50b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/godot-bridge.rs (target/debug/deps/godot_bridge-e36cfb70b341a0de)
+
+running 3 tests
+test tests::godot_command_file_covers_the_complete_combat_roster ... ok
+test tests::godot_command_file_supports_rts_orders ... ok
+test tests::snapshot_is_parseable_shape_and_contains_entities ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/rts_server-8778d7cfe81715f8)
+
+running 5 tests
+test tests::replay_from_input_log_reproduces_final_state ... ok
+test tests::a_tampered_log_is_detected ... ok
+test tests::matches_are_deterministic_across_runs ... ok
+test tests::two_peers_stay_in_lockstep_for_a_full_match ... ok
+test tests::lockstep_outcome_matches_the_authoritative_replay ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Doc-tests rts_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rts_data
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

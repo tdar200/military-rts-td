@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Build Deck Placement</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.spr{position:absolute;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))}
+.pin{position:absolute;display:flex;align-items:center;gap:8px;height:30px;padding:0 12px 0 4px;border-radius:15px;background:rgba(3,5,10,.86);font-size:14px;white-space:nowrap}
+.pin b{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;font-family:'Rajdhani',sans-serif;font-size:15px;font-weight:700;color:#03050a}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:24px;padding:0 7px;border:1px solid #284e60;border-bottom-width:2px;border-radius:3px;background:#101c2a;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#cee8f0}
+.tab{flex:1;height:48px;border:0;border-bottom:2px solid transparent;background:transparent;color:#8fb0bf;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:18px;letter-spacing:.1em;text-transform:uppercase;cursor:default}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:radial-gradient(ellipse at 40% 30%,#3b3d30,#30332a 60%,#292b23);font-family:'IBM Plex Sans',system-ui,sans-serif;color:#cee8f0">
+
+  <div class="grid-bg" style="position:absolute;left:0;top:0;width:1920px;height:1080px"></div>
+
+  <!-- ground overlay: territory, lane, footprint, route -->
+  <svg width="1920" height="1080" viewBox="0 0 1920 1080" style="position:absolute;left:0;top:0" aria-hidden="true">
+    <ellipse cx="430" cy="360" rx="940" ry="470" fill="rgba(64,220,235,.045)" stroke="rgba(64,220,235,.5)" stroke-width="2" stroke-dasharray="14 10"></ellipse>
+    <path d="M110 596 C380 606 600 524 800 524 S1040 566 1130 584" fill="none" stroke="rgba(20,20,16,.32)" stroke-width="64" stroke-linecap="round"></path>
+    <path d="M110 596 C380 606 600 524 800 524 S1040 566 1130 584" fill="none" stroke="#4b4a3d" stroke-width="52" stroke-linecap="round"></path>
+    <path d="M110 596 C380 606 600 524 800 524 S1040 566 1130 584" fill="none" stroke="rgba(206,232,240,.14)" stroke-width="2" stroke-dasharray="18 16" stroke-linecap="round"></path>
+    <polygon points="1010,372 1140,432 1010,492 880,432" fill="rgba(80,230,160,.18)" stroke="#50e6a0" stroke-width="3"></polygon>
+    <line x1="945" y1="402" x2="1075" y2="462" stroke="rgba(80,230,160,.45)" stroke-width="1.5"></line>
+    <line x1="1075" y1="402" x2="945" y2="462" stroke="rgba(80,230,160,.45)" stroke-width="1.5"></line>
+    <ellipse cx="1245" cy="292" rx="120" ry="58" fill="rgba(240,176,64,.10)" stroke="#f0b040" stroke-width="3"></ellipse>
+    <path d="M1010 492 L992 526 C930 534 868 526 816 492" fill="none" stroke="#40dceb" stroke-width="4" stroke-dasharray="10 8" stroke-linecap="round"></path>
+    <circle cx="1010" cy="492" r="6" fill="#96f5ff"></circle>
+    <circle cx="816" cy="492" r="6" fill="#96f5ff"></circle>
+  </svg>
+
+  <!-- props -->
+  <img class="spr" src="/_blob/8fa77164b10809db24c6c15ea29877a6" alt="" style="left:40px;top:150px;width:150px;height:150px">
+  <img class="spr" src="/_blob/0534092272fcee8f91bb19ce38194728" alt="" style="left:215px;top:80px;width:120px;height:120px">
+  <img class="spr" src="/_blob/8fa77164b10809db24c6c15ea29877a6" alt="" style="left:1520px;top:170px;width:170px;height:170px">
+  <img class="spr" src="/_blob/0669d70b44736bbf3e74312d6655be03" alt="" style="left:1680px;top:90px;width:170px;height:170px">
+  <img class="spr" src="/_blob/16a3ba1e6e653026f0b1b48da95c8861" alt="" style="left:1500px;top:380px;width:160px;height:160px">
+  <img class="spr" src="/_blob/0534092272fcee8f91bb19ce38194728" alt="" style="left:1710px;top:330px;width:130px;height:130px">
+  <img class="spr" src="/_blob/af7e03a2da13b515c8f15e42e6e45d46" alt="" style="left:1400px;top:300px;width:130px;height:130px">
+
+  <!-- ore deposit and harvester -->
+  <img class="spr" src="/_blob/ad01a87d1f4358c140997c1dd0032c93" alt="" style="left:60px;top:500px;width:190px;height:190px;filter:drop-shadow(0 0 18px rgba(64,220,235,.35))">
+  <img class="spr" src="/_blob/ad01a87d1f4358c140997c1dd0032c93" alt="" style="left:200px;top:540px;width:140px;height:140px;filter:drop-shadow(0 0 14px rgba(64,220,235,.3))">
+  <img class="spr" src="/_blob/14acc3b5afc1b0571d3e865697cbeae2" alt="" style="left:440px;top:500px;width:120px;height:120px">
+
+  <!-- base -->
+  <img class="spr" src="/_blob/db3d948c803c1c9cba61476a340b63b2" alt="" style="left:300px;top:170px;width:240px;height:240px">
+  <img class="spr" src="/_blob/0a3a42962a75e9092f0523394a4dc593" alt="" style="left:610px;top:140px;width:190px;height:190px">
+  <img class="spr" src="/_blob/c3e6ec8d751f79e8312f5b1298c88af7" alt="" style="left:690px;top:320px;width:180px;height:180px">
+  <img class="spr" src="/_blob/b87355df3065a32c2df72af80bd98b93" alt="" style="left:560px;top:330px;width:90px;height:90px">
+  <img class="spr" src="/_blob/71723c07a0fc76250193f18fe908d174" alt="" style="left:1155px;top:140px;width:180px;height:180px">
+  <img class="spr" src="/_blob/3caebbeeadc58203acc54b6429009493" alt="" style="left:1270px;top:340px;width:110px;height:110px">
+  <img class="spr" src="/_blob/1a5cbe9ed020ebb77cbeef86a1702f71" alt="" style="left:1180px;top:390px;width:100px;height:100px">
+  <img class="spr" src="/_blob/b0ede9045c34b10202c4d4b57e128589" alt="" style="left:1310px;top:420px;width:110px;height:110px">
+
+  <!-- placement ghost -->
+  <img class="spr" src="/_blob/0a3a42962a75e9092f0523394a4dc593" alt="" style="left:890px;top:232px;width:240px;height:240px;opacity:.8;filter:drop-shadow(0 0 16px rgba(80,230,160,.55))">
+  <div style="position:absolute;left:965px;top:196px;display:flex;gap:6px"><span class="tag t-good" style="background:rgba(3,5,10,.86)">Valid site</span></div>
+
+  <!-- map pins -->
+  <div class="pin" style="left:880px;top:578px;border:1px solid #40dceb"><b style="background:#40dceb">A</b>Delivery lane must stay open</div>
+  <div class="pin" style="left:1360px;top:216px;border:1px solid #f0b040"><b style="background:#f0b040">B</b>Projected power warning</div>
+  <div class="pin" style="left:70px;top:462px;border:1px solid #40dceb"><b style="background:#40dceb">C</b>Finite ore: 8,250 remaining</div>
+  <div class="cap" style="position:absolute;left:1386px;top:346px;color:#96f5ff;background:rgba(3,5,10,.75);padding:4px 8px;border-radius:2px;border:1px solid #185a6e">Territory edge, 10 tiles</div>
+
+  <!-- TOP BAR -->
+  <div style="position:absolute;left:0;top:0;width:1920px;height:56px;background:linear-gradient(180deg,rgba(3,5,10,.95),rgba(8,17,26,.9));border-bottom:1px solid #284e60;display:flex;align-items:center;gap:12px;padding:0 16px">
+    <span class="chip" style="border-color:#8fb0bf;color:#cee8f0"><span style="width:8px;height:8px;border-radius:50%;background:#8fb0bf"></span>ERA 01 CONTEMPORARY</span>
+    <span class="chip"><span class="cap" style="font-size:12px">Material</span><span class="disp" style="font-size:22px;color:#e8fcff;letter-spacing:.02em">840</span><span style="color:#f0b040">planned -280</span></span>
+    <span class="chip" style="border-color:#f0b040;box-shadow:0 0 14px rgba(240,176,64,.2)"><span class="cap" style="font-size:12px">Power</span><span class="disp" style="font-size:22px;color:#e8fcff;letter-spacing:.02em">130 / 160 kW</span><span style="color:#f0b040">forecast 170</span></span>
+    <span class="chip"><span class="cap" style="font-size:12px">Industry</span><span class="disp" style="font-size:22px;color:#e8fcff;letter-spacing:.02em">360</span><span style="color:#8fb0bf">work reserved</span></span>
+    <span class="chip"><span class="cap" style="font-size:12px">Crew</span><span class="disp" style="font-size:22px;color:#e8fcff;letter-spacing:.02em">22 / 60</span></span>
+    <div style="flex:1"></div>
+    <span class="chip" style="border-color:#f0b040;color:#f0b040"><span class="cap" style="color:#f0b040">Wave 01</span><span class="disp" style="font-size:22px;letter-spacing:.04em">01:12</span><span style="color:#cee8f0">doctrine in 00:27</span></span>
+    <span class="chip"><span style="color:#cee8f0">Paused</span><span class="kbd">Space</span></span>
+    <span class="chip"><span style="color:#40dceb">1x</span><span style="color:#8fb0bf">2x</span><span style="color:#8fb0bf">4x</span></span>
+  </div>
+
+  <!-- power popover -->
+  <div class="panel" style="position:absolute;left:470px;top:66px;width:420px;padding:16px 18px;border-color:#f0b040;display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between"><div class="disp" style="font-size:20px;color:#f0b040">Forecast deficit 10 kW</div><span class="tag t-warn">After commissioning</span></div>
+    <div style="font-size:14px;color:#8fb0bf;line-height:1.45">Producer: Reactor A, 160 kW. Consumers: defences 45, refinery 25, lab 30, command centre 12, barracks 10, supply depot 8, planned Vehicle Factory 40.</div>
+    <div style="display:flex;gap:10px"><button type="button" class="btn" style="min-height:44px;font-size:15px">Focus on map</button><button type="button" class="btn" style="min-height:44px;font-size:15px">Plan a Reactor (P)</button></div>
+  </div>
+
+  <!-- BOTTOM LEFT: alerts, breadcrumb, minimap -->
+  <div style="position:absolute;left:16px;top:690px;width:340px;display:flex;flex-direction:column;gap:6px">
+    <div class="glass" style="display:flex;align-items:center;gap:10px;height:40px;padding:0 12px;border-color:#f0b040"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0b040" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z"></path><path d="M12 10v4M12 17v.5"></path></svg><span style="font-size:14px">Placement preview: power forecast</span></div>
+    <div class="glass" style="display:flex;align-items:center;gap:10px;height:40px;padding:0 12px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8fb0bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 7v5l3 2"></path></svg><span style="font-size:14px">Supply Depot: materials 12 short</span></div>
+    <div style="display:flex;align-items:center;gap:8px;height:30px;margin-top:4px"><span class="cap">Earth</span><span class="cap" style="color:#5f8191">/</span><span class="cap">Earthfront</span><span class="cap" style="color:#5f8191">/</span><span class="cap" style="color:#96f5ff">Base</span></div>
+  </div>
+  <div class="panel" style="position:absolute;left:16px;top:824px;width:340px;height:240px;padding:8px">
+    <div style="position:relative;width:100%;height:100%;background:radial-gradient(ellipse at 40% 40%,#2c2f27,#22241d);border:1px solid #1b3342;overflow:hidden">
+      <div style="position:absolute;left:20px;top:10px;width:230px;height:130px;border-radius:50%;border:1px dashed rgba(64,220,235,.5)"></div>
+      <div style="position:absolute;left:86px;top:56px;width:10px;height:10px;background:#46c8eb"></div>
+      <div style="position:absolute;left:130px;top:34px;width:7px;height:7px;background:#46c8eb"></div>
+      <div style="position:absolute;left:142px;top:58px;width:7px;height:7px;background:#46c8eb"></div>
+      <div style="position:absolute;left:108px;top:110px;width:7px;height:7px;background:#46c8eb"></div>
+      <div style="position:absolute;left:176px;top:72px;width:7px;height:7px;background:#46c8eb"></div>
+      <div style="position:absolute;left:38px;top:96px;width:12px;height:12px;background:#185a6e;border:1px solid #96f5ff;transform:rotate(45deg)"></div>
+      <div style="position:absolute;left:276px;top:48px;width:11px;height:11px;background:#f06050;transform:rotate(45deg)"></div>
+      <div style="position:absolute;left:290px;top:92px;width:11px;height:11px;background:#f06050;transform:rotate(45deg)"></div>
+      <div style="position:absolute;left:262px;top:150px;width:11px;height:11px;background:#f06050;transform:rotate(45deg)"></div>
+      <div style="position:absolute;left:60px;top:20px;width:150px;height:96px;border:1.5px solid #96f5ff;box-shadow:0 0 12px rgba(64,220,235,.35)"></div>
+    </div>
+  </div>
+
+  <!-- BOTTOM CENTRE: placement detail -->
+  <div class="panel glow" style="position:absolute;left:376px;top:724px;width:728px;height:340px;padding:20px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;gap:20px;height:154px">
+      <div style="position:relative;width:150px;height:150px;flex:none;border:1px solid #1b3342;background:radial-gradient(ellipse at 50% 70%,#3b3d30,#23251e)">
+        <svg width="148" height="148" viewBox="0 0 148 148" style="position:absolute;left:0;top:0" aria-hidden="true"><polygon points="74,84 130,110 74,136 18,110" fill="rgba(80,230,160,.2)" stroke="#50e6a0" stroke-width="2"></polygon></svg>
+        <img src="/_blob/0a3a42962a75e9092f0523394a4dc593" alt="" style="position:absolute;left:10px;top:2px;width:128px;height:128px;object-fit:contain;filter:drop-shadow(0 6px 4px rgba(0,0,0,.55))">
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:8px;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between"><div class="cap" style="color:#96f5ff">Placement preview</div><span class="tag t-good">Valid and affordable</span></div>
+        <div class="disp" style="font-size:32px;color:#e8fcff;line-height:1">Vehicle Factory / Preview</div>
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+          <div style="border:1px solid #1b3342;background:#08111a;padding:6px 10px"><div class="cap">Materials</div><div class="disp" style="font-size:26px;color:#e8fcff;line-height:1.1">280</div></div>
+          <div style="border:1px solid #1b3342;background:#08111a;padding:6px 10px"><div class="cap">Work</div><div class="disp" style="font-size:26px;color:#e8fcff;line-height:1.1">360</div></div>
+          <div style="border:1px solid #f0b040;background:#08111a;padding:6px 10px"><div class="cap">Power</div><div class="disp" style="font-size:26px;color:#f0b040;line-height:1.1">40 kW</div></div>
+          <div style="border:1px solid #1b3342;background:#08111a;padding:6px 10px"><div class="cap">Build</div><div class="disp" style="font-size:26px;color:#e8fcff;line-height:1.1">30 s</div></div>
+        </div>
+        <div style="font-size:14px;color:#8fb0bf">Enter reserves 280 once. Available materials fall from 840 to 560.</div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between"><div class="cap">Projected grid</div><div><span class="disp" style="font-size:26px;color:#f0b040">170 / 160 kW</span><span style="font-size:14px;color:#8fb0bf;margin-left:8px">after commissioning</span></div></div>
+      <div style="position:relative;height:14px;border:1px solid #1b3342;background:#0b1620">
+        <div style="position:absolute;left:0;top:0;height:100%;width:65%;background:#40dceb"></div>
+        <div style="position:absolute;left:65%;top:0;height:100%;width:15%;background:#f0b040"></div>
+        <div style="position:absolute;left:80%;top:0;height:100%;width:5%;background:repeating-linear-gradient(135deg,#f04e46 0,#f04e46 4px,#7a1f1b 4px,#7a1f1b 8px)"></div>
+        <div style="position:absolute;left:80%;top:-5px;width:2px;height:22px;background:#cee8f0"></div>
+      </div>
+      <div style="font-size:14px;color:#cee8f0"><span class="mono" style="color:#f04e46">10 kW over capacity.</span> Defences keep priority; industry shares the deficit.</div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:18px;font-size:14px;margin-top:auto">
+      <span style="display:flex;align-items:center;gap:6px;color:#50e6a0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg><span style="color:#cee8f0">Barracks built</span></span>
+      <span style="display:flex;align-items:center;gap:6px;color:#50e6a0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg><span style="color:#cee8f0">Inside territory</span></span>
+      <span style="display:flex;align-items:center;gap:6px;color:#50e6a0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg><span style="color:#cee8f0">Delivery access clear</span></span>
+      <span style="margin-left:auto;display:flex;align-items:center;gap:8px"><span class="kbd">Enter</span><span style="color:#8fb0bf">confirm</span><span class="kbd">R</span><span style="color:#8fb0bf">rotate</span><span class="kbd">Esc</span><span style="color:#8fb0bf">cancel</span></span>
+    </div>
+  </div>
+
+  <!-- BOTTOM RIGHT: deck -->
+  <div class="panel" style="position:absolute;left:1124px;top:494px;width:780px;height:570px;display:flex;flex-direction:column">
+    <div style="display:flex;border-bottom:1px solid #284e60">
+      <button type="button" class="tab" style="color:#e8fcff;background:#104656;border-bottom-color:#40dceb">Build</button>
+      <button type="button" class="tab">Units</button>
+      <button type="button" class="tab">Orders</button>
+      <button type="button" class="tab">Science</button>
+      <button type="button" class="tab">Logistics</button>
+    </div>
+    <div style="padding:12px 12px 0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px">
+      <sc-for list="{{cards}}" as="c" hint-placeholder-count="12">
+        <div style="position:relative;height:128px;border:1px solid {{c.border}};background:{{c.bg}};box-shadow:{{c.shadow}};border-radius:3px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;overflow:hidden">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;height:48px">
+            <img src="{{c.sprite}}" alt="" style="width:48px;height:48px;object-fit:contain;filter:drop-shadow(0 4px 3px rgba(0,0,0,.55))">
+            <div style="display:flex;align-items:center;gap:6px">
+              <sc-if value="{{c.locked}}" hint-placeholder-val="{{false}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8fb0bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked"><rect x="5" y="11" width="14" height="9" rx="1"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></sc-if>
+              <sc-if value="{{c.short}}" hint-placeholder-val="{{false}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f04e46" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-label="Cannot afford"><path d="M12 4l9 16H3z"></path><path d="M12 10v4M12 17v.5"></path></svg></sc-if>
+              <sc-if value="{{c.hasKey}}" hint-placeholder-val="{{false}}"><span class="kbd">{{c.key}}</span></sc-if>
+            </div>
+          </div>
+          <div class="disp" style="font-size:17px;line-height:1.15;color:{{c.nameColor}};white-space:nowrap">{{c.name}}</div>
+          <div class="mono" style="font-size:13px;color:{{c.costColor}};white-space:nowrap">{{c.cost}}</div>
+          <div style="font-size:13px;color:#8fb0bf;white-space:nowrap">{{c.prereq}}</div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="margin:10px 12px 0;display:flex;gap:18px;font-size:13px;color:#8fb0bf" class="mono"><span>M materials</span><span>W work</span><span>kW power draw (+ is output)</span></div>
+    <div style="margin:auto 12px 12px;border:1px solid #f0b040;background:rgba(240,176,64,.06);border-radius:3px;padding:8px 12px;display:flex;align-items:center;gap:14px;height:58px">
+      <img src="/_blob/bb8b1e3136a332e3f481fbf7939e8de5" alt="" style="width:40px;height:40px;object-fit:contain">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:10px"><span class="disp" style="font-size:17px;color:#e8fcff">Queue: Supply Depot</span><span class="tag t-warn">Stalled</span></div>
+        <div style="font-size:14px;color:#cee8f0">Waiting: materials 12 short (delivered 128 / 140)</div>
+      </div>
+      <div style="width:120px"><div class="bar"><i style="width:91%;background:#f0b040"></i></div><div class="mono" style="font-size:12px;color:#8fb0bf;margin-top:3px;text-align:right">91% delivered</div></div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const N = { border: '#1b3342', bg: 'rgba(8,17,26,.92)', shadow: 'none', nameColor: '#cee8f0', costColor: '#cee8f0' };
+    const mk = (o) => Object.assign({ locked: false, short: false, hasKey: !!o.key, key: o.key || '' }, N, o);
+    const cards = [
+      mk({ name: 'Command Centre', sprite: '/_blob/db3d948c803c1c9cba61476a340b63b2', cost: '600 M 600 W 20 kW', prereq: 'Needs: forward site', short: true, costColor: '#f04e46' }),
+      mk({ name: 'Reactor', key: 'P', sprite: '/_blob/71723c07a0fc76250193f18fe908d174', cost: '220 M 240 W +80 kW', prereq: 'Needs: Command Centre' }),
+      mk({ name: 'Refinery', key: 'R', sprite: '/_blob/c3e6ec8d751f79e8312f5b1298c88af7', cost: '300 M 300 W 25 kW', prereq: 'Needs: Command Centre' }),
+      mk({ name: 'Barracks', key: 'B', sprite: '/_blob/0a3a42962a75e9092f0523394a4dc593', cost: '180 M 200 W 10 kW', prereq: 'Needs: Command Centre' }),
+      mk({ name: 'Vehicle Factory', sprite: '/_blob/0a3a42962a75e9092f0523394a4dc593', cost: '280 M 360 W 40 kW', prereq: 'Needs: Barracks', border: '#96f5ff', bg: '#104656', shadow: '0 0 0 1px rgba(64,220,235,.55),0 0 22px rgba(64,220,235,.28)', nameColor: '#e8fcff' }),
+      mk({ name: 'Airfield', sprite: '/_blob/9c0496c20fb3ac15183f7c5e11871c31', cost: '360 M 400 W 45 kW', prereq: 'Needs: Aircraft tech', locked: true, nameColor: '#8fb0bf', costColor: '#8fb0bf' }),
+      mk({ name: 'Laser Turret', key: 'G', sprite: '/_blob/3caebbeeadc58203acc54b6429009493', cost: '150 M 120 W 15 kW', prereq: 'Needs: Barracks' }),
+      mk({ name: 'AA Turret', sprite: '/_blob/26db18ce2f6a04a6002dc9e4a19db082', cost: '170 M 140 W 15 kW', prereq: 'Needs: Air defence', locked: true, nameColor: '#8fb0bf', costColor: '#8fb0bf' }),
+      mk({ name: 'Wall', key: 'W', sprite: '/_blob/b0ede9045c34b10202c4d4b57e128589', cost: '20 M 20 W 0 kW', prereq: 'Needs: Command Centre' }),
+      mk({ name: 'Supply Depot', sprite: '/_blob/bb8b1e3136a332e3f481fbf7939e8de5', cost: '140 M 160 W 8 kW', prereq: 'Needs: Refinery' }),
+      mk({ name: 'Lab', sprite: '/_blob/5bbee67fadc67879fb0ad9ec8c96897e', cost: '320 M 320 W 30 kW', prereq: 'Needs: Reactor' }),
+      mk({ name: 'Battery', sprite: '/_blob/71723c07a0fc76250193f18fe908d174', cost: '160 M 180 W 6 kW', prereq: 'Needs: Battery tech', locked: true, nameColor: '#8fb0bf', costColor: '#8fb0bf' })
+    ];
+    return { cards };
+  }
+}
+</script>
+</body>
+</html>

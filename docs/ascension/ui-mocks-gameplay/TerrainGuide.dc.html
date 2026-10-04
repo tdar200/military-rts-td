@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Terrain guide</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board" style="background:#07101a">
+<div class="a" style="inset:0;background:radial-gradient(1100px 700px at 50% 0%,#10222f 0%,transparent 70%)"></div>
+
+<div class="a" style="left:60px;right:60px;top:30px;display:flex;align-items:flex-end;justify-content:space-between">
+  <div>
+    <div class="cap t-cyan">Codex / Kestrel Reach</div>
+    <div class="disp" style="font-size:48px;line-height:50px;color:#e8fcff;margin-top:2px">Terrain guide</div>
+    <div style="font-size:15px;color:#8fb0bf;margin-top:2px">The land your colony stands on. Hover any tile in the field for the same numbers.</div>
+  </div>
+  <div style="display:flex;gap:8px"><span class="btn pri">Terrain</span><span class="btn">Resources</span><span class="btn">Structures</span><span class="btn">Units</span></div>
+</div>
+
+<div class="a" style="left:60px;right:60px;top:128px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px">
+  <sc-for list="{{cards}}" as="c" hint-placeholder-count="12">
+    <div class="panel" style="padding:10px;display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;gap:12px">
+        <div style="width:132px;height:96px;flex:none;border:1px solid #284e60;border-radius:2px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) {{c.bx}}px {{c.by}}px/3600px 2400px no-repeat"></div>
+        <div style="min-width:0"><div class="disp" style="font-size:22px;line-height:24px;color:#e8fcff">{{c.name}}</div><div class="sub" style="line-height:1.35">{{c.where}}</div>
+          <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap"><span class="yl" style="color:{{c.tc}}">{{c.tag}}</span></div></div>
+      </div>
+      <div class="row" style="padding:3px 0;font-size:13px"><span class="t-dim">{{c.k1}}</span><span class="mono">{{c.v1}}</span></div>
+      <div class="row" style="padding:3px 0;font-size:13px"><span class="t-dim">{{c.k2}}</span><span class="mono">{{c.v2}}</span></div>
+      <div class="row" style="padding:3px 0;font-size:13px"><span class="t-dim">{{c.k3}}</span><span class="mono">{{c.v3}}</span></div>
+      <div style="font-size:12px;color:#8fb0bf;line-height:1.35">{{c.note}}</div>
+    </div>
+  </sc-for>
+</div>
+
+<div class="a glass" style="left:60px;right:60px;bottom:28px;padding:12px 18px;display:flex;gap:34px;align-items:center;font-size:14px">
+  <span class="cap t-cyan">Rules of thumb</span>
+  <span><b style="font-weight:600;color:#e8fcff">High ground</b> <span class="t-dim">adds 25% range</span></span>
+  <span><b style="font-weight:600;color:#e8fcff">Open flats</b> <span class="t-dim">are fast and exposed</span></span>
+  <span><b style="font-weight:600;color:#e8fcff">The river</b> <span class="t-dim">crosses only at Wyllow Ford</span></span>
+  <span><b style="font-weight:600;color:#e8fcff">Forest</b> <span class="t-dim">hides and shelters, slows wheels</span></span>
+  <span><b style="font-weight:600;color:#e8fcff">Fog</b> <span class="t-dim">hides tiles you have not scouted</span></span>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    // world point (wx,wy) -> background offset so the swatch centres on it (swatch 132 x 96)
+    const at = (wx, wy) => ({ bx: Math.round(66 - wx), by: Math.round(48 - wy) });
+    const c = (name, where, tag, tc, wx, wy, k1, v1, k2, v2, k3, v3, note) => Object.assign({ name, where, tag, tc, k1, v1, k2, v2, k3, v3, note }, at(wx, wy));
+    const cards = [
+      c('Grassland','Sunfield and the west bank','Home ground','#50e6a0',200,1100,'Movement','1.0x','Cover','None','Build','Anything','The default ground. Your first territory is mostly this.'),
+      c('Meadow','Pale patches round the base','Open','#cee8f0',620,520,'Movement','1.0x','Cover','+5% light','Sight','Normal','Same rules as grassland, softer on the eye. Good for expansion.'),
+      c('Dry Flats','East bank, towards the sea','Fast, exposed','#f0b040',1950,560,'Movement','1.1x','Cover','None','Sight','+2 open','Where waves gather. Tanks speed up here, so do the enemy.'),
+      c('Ironback Ridge','Highland, north east','High ground','#d4b8ff',2500,60,'Movement','0.7x','Cover','+25%','Range','+25% on top','Turrets and sensors only. Alloy crystals sit on the crest.'),
+      c('Hollow Wood','Forest south of the base','Cover','#50e6a0',520,900,'Movement','0.8x','Cover','+20%','Sight','-3 inside','Infantry hide here. Walls and turrets may be placed on the edge.'),
+      c('Calder River','Runs from north west to the bay','Barrier','#7fd4e0',1060,430,'Movement','Blocked','Reactor beside','+12 kW','Attack across','-25%','Ground units cross at the ford or a built bridge only.'),
+      c('Wyllow Ford','The one crossing, mid river','Chokepoint','#f0b040',1150,548,'Infantry','0.7x','Tanks','0.5x','Cover','None','Every wave comes through here. Hold it and the base is safe.'),
+      c('Shore','Sand along Kestrel Bay','No building','#c9b27a',1560,1040,'Movement','0.8x','Cover','None','Build','Not allowed','Sand is soft and tidal. Depots and walls must stay inland.'),
+      c('Kestrel Bay','Open sea, south east','Water','#7fd4e0',2300,1500,'Ground units','Blocked','Air units','Cross freely','Sight','+6 over water','Reinforcements may land on the far shore, 45 s from the flats.'),
+      c('Ore deposit','River bank, west side','Resource','#96f5ff',860,430,'Haul','+4 material','Refinery near','+20%','Supply','1,800 units','Claim it early. Depletes, then the tile reverts to grassland.'),
+      c('Alloy crystals','On the ridge crest','Strategic','#d4b8ff',2330,170,'Haul','+6 alloy','Needs','Alloy extraction','Defence','High ground','Locked until the lab finishes the research. The aliens want it too.'),
+      c('Impact crater','Scattered on the flats','Feature','#f0b040',2485,655,'Movement','0.8x','Cover','+15%','Build','Cleared first','Left by earlier landings. Good cover, awkward to build on.')
+    ];
+    return { cards };
+  }
+}
+</script>
+</body>
+</html>

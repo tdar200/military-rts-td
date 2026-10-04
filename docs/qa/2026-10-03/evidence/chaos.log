@@ -1,0 +1,9 @@
+   Compiling rts-core v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/core)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.73s
+     Running unittests src/lib.rs (target/debug/deps/rts_core-778a7adb43dc9d10)
+
+running 1 test
+test game::sim::qa_adversarial::qa_command_storm_is_deterministic_and_inventory_stays_valid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 268 filtered out; finished in 0.75s
+

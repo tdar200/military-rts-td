@@ -1,0 +1,76 @@
+ M .gitignore
+ M Cargo.toml
+ M NEXT_STEPS.md
+ M README.md
+ M assets/CREDITS.md
+ M crates/core/src/game/ability.rs
+ M crates/core/src/game/balance.rs
+ M crates/core/src/game/civ/mod.rs
+ M crates/core/src/game/scenario.rs
+ M crates/core/src/game/sim.rs
+ M crates/core/src/game/stats.rs
+ M crates/core/src/game/tech_grid.rs
+ M crates/core/src/game/tech_grid_table.rs
+ M crates/data/balance.ron
+ M crates/data/src/lib.rs
+ M crates/render-shell/src/audio.rs
+ M crates/render-shell/src/input.rs
+ M crates/render-shell/src/main.rs
+ M crates/render-shell/src/particles.rs
+ M crates/render-shell/src/sprites.rs
+ M crates/render-shell/src/theme.rs
+ M crates/render-shell/src/ui.rs
+ M crates/render-shell/src/view.rs
+ M crates/server/Cargo.toml
+ M web/build.sh
+ M web/index.html
+?? assets/aa_turret_v2.png
+?? assets/alien_aa_turret_v1.png
+?? assets/alien_anti_armor_v1.png
+?? assets/alien_atlas_v1.png
+?? assets/alien_barracks_v1.png
+?? assets/alien_capital_v1.png
+?? assets/alien_command_center_v1.png
+?? assets/alien_gun_turret_v1.png
+?? assets/alien_harvester_v1.png
+?? assets/alien_helicopter_v1.png
+?? assets/alien_infantry_v1.png
+?? assets/alien_power_plant_v1.png
+?? assets/alien_refinery_v1.png
+?? assets/alien_tank_v1.png
+?? assets/alien_wall_v1.png
+?? assets/alloy_crystals_v1.png
+?? assets/anti_armor_v2.png
+?? assets/barracks_v2.png
+?? assets/capital_v1.png
+?? assets/chain_fence_v1.png
+?? assets/command_center_v2.png
+?? assets/concrete_barriers_v1.png
+?? assets/crater_v1.png
+?? assets/dead_tree_v1.png
+?? assets/environment_atlas_v1.png
+?? assets/floodlight_v1.png
+?? assets/foundation_v1.png
+?? assets/gun_turret_v2.png
+?? assets/harvester_v2.png
+?? assets/helicopter_v2.png
+?? assets/infantry_v2.png
+?? assets/ore_crystals_v1.png
+?? assets/power_plant_v2.png
+?? assets/refinery_v2.png
+?? assets/rock_cluster_v1.png
+?? assets/rts_atlas_v2.png
+?? assets/sandbags_v1.png
+?? assets/scrub_cluster_v1.png
+?? assets/tank_v2.png
+?? assets/wall_v2.png
+?? assets/wrecked_car_v1.png
+?? crates/core/src/game/earthfront.rs
+?? crates/server/src/bin/
+?? docs/ascension/
+?? docs/qa/
+?? godot3d/
+?? run-3d.sh
+?? tools/__pycache__/
+?? tools/ascension_catalog.py
+?? tools/test_ascension_catalog.py

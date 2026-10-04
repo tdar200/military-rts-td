@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Attack-move armed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<!-- LAND: camera at world 500,150 (the ford and the east bank) -->
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) -500px -150px/3600px 2400px no-repeat"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <defs>
+    <filter id="bl"><feGaussianBlur stdDeviation="40"/></filter>
+    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="300" cy="400" r="520"/><circle cx="650" cy="400" r="380"/><circle cx="1180" cy="330" r="240"/></g></mask>
+  </defs>
+  <rect width="1920" height="1080" fill="#050b12" opacity=".42" mask="url(#vis)"/>
+  <!-- player border, west bank -->
+  <path d="M-20 -20 L60 -20 L240 0 L350 140 L460 270 L540 370 L590 490 L650 630 L680 750 L620 850 L-20 910 Z" fill="rgba(64,220,235,.07)" stroke="#40dceb" stroke-width="3" stroke-linejoin="round"/>
+  <!-- ghost path: army to ford to target -->
+  <path d="M470 560 C560 520 620 440 650 400 C800 360 1000 340 1200 372" fill="none" stroke="#96f5ff" stroke-width="3" stroke-dasharray="14 9"/>
+  <path d="M470 560 C560 520 620 440 650 400" fill="none" stroke="#f0b040" stroke-width="3" stroke-dasharray="14 9" opacity="0"/>
+  <ellipse cx="650" cy="408" rx="62" ry="40" fill="none" stroke="#f0b040" stroke-width="2" stroke-dasharray="4 5"/>
+  <!-- target reticle -->
+  <circle cx="1200" cy="372" r="46" fill="rgba(240,78,70,.10)" stroke="#f04e46" stroke-width="2.5"/>
+  <circle cx="1200" cy="372" r="24" fill="none" stroke="#f04e46" stroke-width="2"/>
+  <path d="M1200 318v22M1200 404v22M1146 372h22M1232 372h22" stroke="#f04e46" stroke-width="2.5"/>
+  <!-- spotted enemy zone -->
+  <circle cx="1400" cy="340" r="190" fill="rgba(240,78,70,.07)" stroke="rgba(240,78,70,.5)" stroke-dasharray="8 8"/>
+  <!-- selection rings -->
+  <g fill="none" stroke="#40dceb" stroke-width="2"><ellipse cx="450" cy="610" rx="56" ry="21"/><ellipse cx="520" cy="660" rx="56" ry="21"/><ellipse cx="390" cy="660" rx="56" ry="21"/><ellipse cx="560" cy="580" rx="56" ry="21"/></g>
+</svg>
+
+<div class="lbl w" style="left:330px;top:90px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
+<div class="lbl w" style="left:610px;top:440px;font-size:15px;letter-spacing:.3em">Wyllow Ford</div>
+<div class="lbl" style="left:1100px;top:600px;font-size:22px">The Dry Flats</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="20">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+
+<div class="pin" style="left:575px;top:340px;border-color:#f0b040;z-index:2000"><span class="dot" style="background:#f0b040"></span>Ford, slows 50%</div>
+<div class="pin" style="left:1130px;top:300px;border-color:#f04e46;z-index:2000"><span class="dot" style="background:#f04e46"></span>Alien patrol</div>
+
+<!-- cursor read-out -->
+<div class="a panel" style="left:1260px;top:420px;width:330px;padding:12px 14px;z-index:2600;border-color:#40dceb">
+  <div style="display:flex;justify-content:space-between;align-items:center"><div class="disp" style="font-size:20px;color:#e8fcff">Dry Flats, open</div><span class="tag t-cyan">Tile 41,14</span></div>
+  <div class="sub">Plains / flat / unowned</div>
+  <div style="margin-top:6px">
+    <div class="row"><span class="t-dim">Path</span><span class="mono">28 tiles, ETA 0:24</span></div>
+    <div class="row"><span class="t-dim">Crosses</span><span class="mono t-warn">Wyllow Ford, 6 s slow</span></div>
+    <div class="row"><span class="t-dim">Cover at target</span><span class="mono t-bad">None</span></div>
+    <div class="row"><span class="t-dim">Ammo on arrival</span><span class="mono t-good">~70%</span></div>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>840</b><span class="d">+38/m</span></div>
+  <div class="chip"><span class="t-dim">POWER</span><b>160 / 168 kW</b></div>
+  <div class="chip"><span class="t-dim">CREW</span><b>23 / 60</b></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="height:36px;border-color:#f0b040"><span class="t-warn">WAVE 03</span><span class="disp" style="font-size:22px;color:#e8fcff">01:52</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<!-- ARMED BANNER -->
+<div class="a" style="left:0;right:0;top:80px;display:flex;justify-content:center;z-index:3000">
+  <div class="panel" style="display:flex;align-items:center;gap:14px;padding:8px 22px;border-color:#f04e46;box-shadow:0 0 24px rgba(240,78,70,.3)">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f04e46" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>
+    <span class="disp" style="font-size:24px;color:#ffd6d2;letter-spacing:.16em">ATTACK-MOVE ARMED</span>
+    <span class="sub">Left click a tile to go, Esc to cancel</span>
+  </div>
+</div>
+
+<!-- LEFT: control groups -->
+<div class="a panel" style="left:12px;top:76px;width:200px;padding:10px 12px;z-index:3000">
+  <div class="cap t-cyan">Control groups</div>
+  <div style="display:flex;flex-direction:column;gap:5px;margin-top:6px;font-size:14px">
+    <div style="display:flex;gap:8px;align-items:center"><span class="key" style="border-color:#40dceb;color:#96f5ff">1</span><span>Vanguard</span><span class="mono t-dim" style="margin-left:auto">9</span></div>
+    <div style="display:flex;gap:8px;align-items:center"><span class="key">2</span><span>Gun line</span><span class="mono t-dim" style="margin-left:auto">3</span></div>
+    <div style="display:flex;gap:8px;align-items:center"><span class="key">3</span><span>Harvesters</span><span class="mono t-dim" style="margin-left:auto">2</span></div>
+    <div style="display:flex;gap:8px;align-items:center"><span class="key">4</span><span class="t-dim">empty</span></div>
+  </div>
+</div>
+
+<!-- NOTIFICATIONS -->
+<div class="a" style="right:12px;top:76px;width:340px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="notif" style="border-left-color:#f04e46"><svg class="ic t-bad" viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/></svg><div>Alien patrol on the east bank<small>3 tanks, 5 infantry, moving west</small></div></div>
+</div>
+
+<!-- MINIMAP -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
+    <div class="a" style="left:150px;top:52px;width:8px;height:8px;background:#f04e46"></div><div class="a" style="left:158px;top:46px;width:8px;height:8px;background:#f04e46"></div>
+    <div class="a" style="left:32px;top:16px;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<!-- SELECTION -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:12px 16px;z-index:3000;display:grid;grid-template-columns:1fr 250px;gap:16px">
+  <div style="min-width:0">
+    <div style="display:flex;align-items:center;gap:12px"><div class="disp" style="font-size:26px;color:#e8fcff;line-height:26px">Vanguard</div><span class="tag t-cyan">9 units</span><span class="tag t-bad">Armed: attack-move</span></div>
+    <div style="display:flex;gap:4px;margin-top:10px;min-width:0">
+      <sc-for list="{{roster}}" as="u" hint-placeholder-count="9">
+        <div class="glass" style="flex:1;min-width:0;padding:5px 3px;display:flex;flex-direction:column;align-items:center;gap:3px"><img src="{{u.img}}" alt="" style="width:38px;height:38px;object-fit:contain"><span style="font-size:10px;white-space:nowrap">{{u.name}}</span><div class="hp" style="width:100%"><i style="width:{{u.hp}}%"></i></div></div>
+      </sc-for>
+    </div>
+    <div class="glass" style="margin-top:10px;padding:8px 12px;font-size:13px;display:flex;gap:18px;flex-wrap:wrap"><span><span class="t-dim">Standing on</span> Grassland, flat</span><span class="t-good">speed 1.0x</span><span class="t-warn">Ford ahead: infantry wade, tanks cross at 0.5x</span></div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px;justify-content:center">
+    <span class="btn pri">Confirm target <span class="key">Click</span></span>
+    <span class="btn">Queue waypoint <span class="key">Shift</span></span>
+    <span class="btn">Cancel <span class="key">Esc</span></span>
+  </div>
+</div>
+
+<!-- DECK -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab">Build</span><span class="tab">Units</span><span class="tab on">Orders</span><span class="tab">Science</span><span class="tab">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:12px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      <span class="btn pri" style="flex-direction:column;min-height:72px;gap:2px;border-color:#f04e46;background:#4a1d1b"><span>Attack-move</span><span class="key">A</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Stop</span><span class="key">S</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Hold</span><span class="key">H</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Focus</span><span class="key">F</span></span>
+      <span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Resupply</span><span class="key">E</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Spread</span><span class="key">X</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>Queue</span><span class="key">Shift</span></span><span class="btn" style="flex-direction:column;min-height:72px;gap:2px"><span>HQ</span><span class="key">G</span></span>
+    </div>
+  </div>
+</div>
+
+<!-- cursor crosshair -->
+<svg class="a" style="left:1186px;top:358px;z-index:2700" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="7" fill="none" stroke="#fff" stroke-width="2"/><path d="M14 0v8M14 20v8M0 14h8M20 14h8" stroke="#fff" stroke-width="2"/></svg>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const cam = { x: 500, y: 150 };
+    const I = { pp:'b32b316f8a54cfb3e4e96b8ab7a2f79e', gt:'508d97c7b872d6502bb31b3fe2de001c', aa:'318ba1a2dd09b4736f000e8ba021bf70', tank:'87aab1971d525ecad863691237ae2a71', at:'004852755ece3a8e81b95a9e93489852', inf:'0cff440ac0f27a92e113ec4de32ee9a8', atank:'73037d5e6ad6e787627e98ef11935b3c', ainf:'10188eed0323bf70c0aa84a87d3bbcb9', wall:'a208753ee858587a05fa96e19584d2f8', hv:'439ac4aa47c8b40430b3ce1b7550277d', ref:'6c29c5788f12d88cfae3914221f234a9', crater:'ecef6e4a5fce7ea118d71be333bc0d36' };
+    const w = [
+      ['gt',735,330,115],['gt',880,560,115],['wall',905,610,100],['ref',560,470,200],['hv',790,455,110],
+      ['tank',950,700,140],['tank',1020,750,140],['tank',890,760,140],['tank',1060,670,140],['at',1150,640,90],['at',1100,740,90],['inf',830,700,80],['inf',800,780,80],['aa',960,810,84],
+      ['atank',1760,420,140],['atank',1830,480,140],['atank',1700,500,140],['ainf',1650,380,80],['ainf',1720,350,80],['ainf',1780,360,80],['ainf',1840,390,80],['ainf',1900,430,80],
+      ['crater',1500,500,110]
+    ];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1] - cam.x, top: a[2] - cam.y, w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    const r = (name, img, hp) => ({ name, img: B + I[img], hp });
+    const roster = [r('Tank','tank',92),r('Tank','tank',74),r('Tank','tank',58),r('Tank','tank',100),r('Anti-armour','at',88),r('Anti-armour','at',41),r('Infantry','inf',100),r('Infantry','inf',66),r('AA','aa',100)];
+    return { sprites, roster };
+  }
+}
+</script>
+</body>
+</html>

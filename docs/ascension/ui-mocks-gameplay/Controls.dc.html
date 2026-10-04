@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Controls reference</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.96),rgba(8,16,26,.96));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.key{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 7px;border:1px solid #284e60;border-bottom-width:2px;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#e8fcff;background:#03050a}
+.t-cyan{color:#40dceb}.t-dim{color:#8fb0bf}
+.a{position:absolute}
+.sec{padding:16px 18px}
+.sec h3{margin:0 0 10px;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:20px;letter-spacing:.1em;text-transform:uppercase;color:#96f5ff;display:flex;align-items:center;gap:10px}
+.sec h3 i{flex:1;height:1px;background:#1b3342}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;font-size:15px;border-bottom:1px solid rgba(27,51,66,.6)}
+.row:last-child{border-bottom:none}
+.keys{display:flex;gap:5px;align-items:center;flex:none}
+.plus{color:#5f8191;font-family:'IBM Plex Mono',monospace;font-size:12px}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:#07101a">
+<div class="a" style="inset:0;background:radial-gradient(1100px 700px at 50% 0%,#10222f 0%,transparent 70%),#07101a"></div>
+
+<!-- header -->
+<div class="a" style="left:60px;right:60px;top:36px;display:flex;align-items:flex-end;justify-content:space-between">
+  <div>
+    <div class="cap" style="color:#96f5ff">Pause / Controls</div>
+    <div class="disp" style="font-size:52px;line-height:54px;color:#e8fcff;margin-top:2px">Controls</div>
+    <div style="font-size:15px;color:#8fb0bf;margin-top:4px">Mouse and keyboard. Every command is also on the deck, so nothing here is required.</div>
+  </div>
+  <div style="display:flex;gap:10px">
+    <button type="button" class="btn">Rebind keys</button>
+    <button type="button" class="btn pri">Back <span class="key" style="min-width:22px;height:22px;font-size:12px">Esc</span></button>
+  </div>
+</div>
+
+<!-- columns -->
+<div class="a" style="left:60px;right:60px;top:170px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div class="panel sec">
+      <h3>Camera <i></i></h3>
+      <div class="row"><span>Pan</span><span class="keys"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></span></div>
+      <div class="row"><span>Edge pan</span><span class="t-dim">Cursor at screen edge</span></div>
+      <div class="row"><span>Orbit</span><span class="keys"><span class="key">Middle drag</span></span></div>
+      <div class="row"><span>Zoom</span><span class="keys"><span class="key">Wheel</span></span></div>
+      <div class="row"><span>Jump to alert</span><span class="keys"><span class="key">Space</span></span></div>
+      <div class="row"><span>Jump to base</span><span class="keys"><span class="key">Home</span></span></div>
+      <div class="row"><span>Jump on minimap</span><span class="keys"><span class="key">Click</span></span></div>
+    </div>
+    <div class="panel sec">
+      <h3>System <i></i></h3>
+      <div class="row"><span>Pause menu</span><span class="keys"><span class="key">Esc</span></span></div>
+      <div class="row"><span>Pause simulation</span><span class="keys"><span class="key">P</span></span></div>
+      <div class="row"><span>Game speed</span><span class="keys"><span class="key">-</span><span class="key">+</span></span></div>
+      <div class="row"><span>Quick save</span><span class="keys"><span class="key">F5</span></span></div>
+      <div class="row"><span>Map overlays</span><span class="keys"><span class="key">Tab</span></span></div>
+      <div class="row"><span>This screen</span><span class="keys"><span class="key">F1</span></span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div class="panel sec">
+      <h3>Selection <i></i></h3>
+      <div class="row"><span>Select</span><span class="keys"><span class="key">Left click</span></span></div>
+      <div class="row"><span>Box select</span><span class="keys"><span class="key">Left drag</span></span></div>
+      <div class="row"><span>Add to selection</span><span class="keys"><span class="key">Shift</span><span class="plus">+</span><span class="key">Click</span></span></div>
+      <div class="row"><span>Select all of a type</span><span class="keys"><span class="key">Double click</span></span></div>
+      <div class="row"><span>Select all army</span><span class="keys"><span class="key">Ctrl</span><span class="plus">+</span><span class="key">A</span></span></div>
+      <div class="row"><span>Clear selection</span><span class="keys"><span class="key">Esc</span></span></div>
+      <div class="row"><span>Save control group</span><span class="keys"><span class="key">Ctrl</span><span class="plus">+</span><span class="key">1-9</span></span></div>
+      <div class="row"><span>Recall control group</span><span class="keys"><span class="key">1-9</span></span></div>
+      <div class="row"><span>Recall and centre</span><span class="keys"><span class="key">1-9</span><span class="plus">x2</span></span></div>
+    </div>
+    <div class="panel sec">
+      <h3>Build <i></i></h3>
+      <div class="row"><span>Open Build tab</span><span class="keys"><span class="key">B</span></span></div>
+      <div class="row"><span>Place structure</span><span class="keys"><span class="key">Left click</span></span></div>
+      <div class="row"><span>Place several</span><span class="keys"><span class="key">Shift</span><span class="plus">+</span><span class="key">Click</span></span></div>
+      <div class="row"><span>Rotate ghost</span><span class="keys"><span class="key">R</span></span></div>
+      <div class="row"><span>Cancel placement</span><span class="keys"><span class="key">Right click</span><span class="key">Esc</span></span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:20px">
+    <div class="panel sec">
+      <h3>Orders <i></i></h3>
+      <div class="row"><span>Move or attack</span><span class="keys"><span class="key">Right click</span></span></div>
+      <div class="row"><span>Attack-move</span><span class="keys"><span class="key">A</span><span class="plus">then</span><span class="key">Click</span></span></div>
+      <div class="row"><span>Stop</span><span class="keys"><span class="key">S</span></span></div>
+      <div class="row"><span>Hold position</span><span class="keys"><span class="key">H</span></span></div>
+      <div class="row"><span>Focus fire</span><span class="keys"><span class="key">F</span><span class="plus">then</span><span class="key">Click</span></span></div>
+      <div class="row"><span>Resupply</span><span class="keys"><span class="key">E</span></span></div>
+      <div class="row"><span>Spread out</span><span class="keys"><span class="key">X</span></span></div>
+      <div class="row"><span>Queue waypoint</span><span class="keys"><span class="key">Shift</span><span class="plus">+</span><span class="key">Right click</span></span></div>
+      <div class="row"><span>Return to HQ</span><span class="keys"><span class="key">G</span></span></div>
+    </div>
+    <div class="panel sec">
+      <h3>Production <i></i></h3>
+      <div class="row"><span>Queue one</span><span class="keys"><span class="key">Click card</span></span></div>
+      <div class="row"><span>Queue five</span><span class="keys"><span class="key">Shift</span><span class="plus">+</span><span class="key">Click card</span></span></div>
+      <div class="row"><span>Set rally point</span><span class="keys"><span class="key">Y</span><span class="plus">then</span><span class="key">Click</span></span></div>
+      <div class="row"><span>Cancel last queued</span><span class="keys"><span class="key">Right click card</span></span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- footer tip -->
+<div class="a glass" style="left:60px;right:60px;bottom:36px;padding:14px 20px;display:flex;align-items:center;gap:16px;font-size:14px;color:#8fb0bf">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#40dceb" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>
+  <span>Hold <span class="key" style="height:22px;min-width:22px;font-size:12px">Alt</span> in game to see the hotkey on every deck button.</span>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

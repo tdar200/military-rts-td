@@ -1,0 +1,23 @@
+   Compiling rts-core v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/core)
+   Compiling rts-data v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/data)
+   Compiling rts-server v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/server)
+    Finished `test` profile [optimized + debuginfo] target(s) in 4.47s
+     Running unittests src/bin/godot-bridge.rs (target/debug/deps/godot_bridge-e36cfb70b341a0de)
+
+running 1 test
+
+thread 'tests::qa_concurrent_command_transport_preserves_every_order' (839579) panicked at crates/server/src/bin/godot-bridge.rs:481:9:
+assertion `left == right` failed: concurrent player orders were lost
+  left: 950
+ right: 1000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test tests::qa_concurrent_command_transport_preserves_every_order ... FAILED
+
+failures:
+
+failures:
+    tests::qa_concurrent_command_transport_preserves_every_order
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.18s
+
+error: test failed, to rerun pass `-p rts-server --bin godot-bridge`

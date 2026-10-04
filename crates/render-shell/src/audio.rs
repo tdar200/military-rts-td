@@ -3,8 +3,11 @@
 //! mixer), and loops music. Driven entirely off read-only sim queries and view
 //! events, so it never touches determinism. Missing files degrade to silence.
 
+#[cfg(feature = "audio")]
 use macroquad::audio::{load_sound, play_sound, stop_sound, PlaySoundParams, Sound};
+#[cfg(feature = "audio")]
 use macroquad::time::get_time;
+#[cfg(feature = "audio")]
 use std::collections::HashMap;
 
 /// A one-shot sound effect.
@@ -27,10 +30,13 @@ pub enum Music {
     Combat,
 }
 
+#[cfg(feature = "audio")]
 const SFX_VOL: f32 = 0.55;
+#[cfg(feature = "audio")]
 const MUSIC_VOL: f32 = 0.4;
 
 /// Holds the loaded sounds and the currently looping track.
+#[cfg(feature = "audio")]
 pub struct AudioMgr {
     sfx: HashMap<Sfx, Sound>,
     music_menu: Option<Sound>,
@@ -39,6 +45,13 @@ pub struct AudioMgr {
     last: HashMap<Sfx, f64>,
 }
 
+/// Silent native fallback used when the optional platform audio backend is not
+/// linked. Keeping this a real no-op avoids Macroquad's disabled-feature stub
+/// printing a warning on every shot, click, and frame.
+#[cfg(not(feature = "audio"))]
+pub struct AudioMgr;
+
+#[cfg(feature = "audio")]
 impl AudioMgr {
     /// Loads every sound from `assets/audio`. Missing files are skipped (silent),
     /// mirroring the sprite loader's graceful degradation.
@@ -127,4 +140,25 @@ impl AudioMgr {
             }
         }
     }
+}
+
+#[cfg(not(feature = "audio"))]
+#[allow(
+    clippy::needless_pass_by_ref_mut,
+    clippy::unused_async,
+    clippy::unused_self,
+    reason = "the silent fallback deliberately mirrors the feature-enabled manager API"
+)]
+impl AudioMgr {
+    pub async fn load() -> Self {
+        Self
+    }
+
+    pub const fn play(&self, _kind: Sfx) {}
+
+    pub const fn play_throttled(&mut self, _kind: Sfx, _min_gap: f64) {}
+
+    pub const fn set_music(&mut self, _track: Music) {}
+
+    pub const fn stop_music(&mut self) {}
 }

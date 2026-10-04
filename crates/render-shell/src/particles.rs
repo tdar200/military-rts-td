@@ -198,12 +198,13 @@ impl Particles {
         }
     }
 
-    /// Adds a persistent scorch decal at world/tile position `world`.
+    /// Adds a persistent wreck/scorch decal at world/tile position `world`.
+    /// Larger radii are building ruins and remain substantially longer.
     pub fn scorch(&mut self, world: Vec2, r_tiles: f32) {
         if self.scorches.len() >= MAX_SCORCHES {
             self.scorches.remove(0);
         }
-        let life = 9.0;
+        let life = if r_tiles > 0.5 { 75.0 } else { 32.0 };
         self.scorches.push(Scorch {
             world,
             r_tiles,
@@ -245,6 +246,37 @@ impl Particles {
                 s.r_tiles * cell * 0.6,
                 Color::new(0.0, 0.0, 0.0, 0.4 * t),
             );
+            let r = s.r_tiles * cell;
+            if s.r_tiles > 0.5 {
+                // Broken foundation slabs and twisted beams make a destroyed base
+                // leave spatial history instead of disappearing into a clean tile.
+                let rubble = Color::new(0.19, 0.18, 0.16, 0.82 * t);
+                draw_rectangle(px - r * 0.62, py - r * 0.18, r * 0.52, r * 0.25, rubble);
+                draw_rectangle(px + r * 0.08, py - r * 0.06, r * 0.48, r * 0.22, rubble);
+                draw_line(
+                    px - r * 0.55,
+                    py + r * 0.18,
+                    px + r * 0.46,
+                    py - r * 0.32,
+                    2.5,
+                    Color::new(0.3, 0.28, 0.24, 0.85 * t),
+                );
+                draw_line(
+                    px - r * 0.38,
+                    py - r * 0.3,
+                    px + r * 0.52,
+                    py + r * 0.22,
+                    1.8,
+                    Color::new(0.12, 0.12, 0.11, 0.9 * t),
+                );
+            } else {
+                // Compact vehicle/infantry wreck: a charred chassis line and two
+                // metal fragments, kept small enough not to resemble a live unit.
+                let metal = Color::new(0.22, 0.22, 0.2, 0.72 * t);
+                draw_line(px - r * 0.6, py, px + r * 0.55, py + r * 0.2, 2.2, metal);
+                draw_rectangle(px - r * 0.35, py - r * 0.22, r * 0.28, r * 0.2, metal);
+                draw_rectangle(px + r * 0.18, py, r * 0.24, r * 0.18, metal);
+            }
         }
     }
 

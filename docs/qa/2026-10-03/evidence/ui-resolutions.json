@@ -1,0 +1,558 @@
+[
+  {
+    "window": [
+      1920,
+      1080
+    ],
+    "viewport": [
+      1440.0,
+      900.0
+    ],
+    "fps": 3.0,
+    "draw_calls": 2595.0,
+    "memory": 58108189.0,
+    "buttons": [
+      {
+        "disabled": true,
+        "h": 42.0,
+        "text": "BUILD",
+        "w": 208.0,
+        "x": 562.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "UNITS",
+        "w": 208.0,
+        "x": 776.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "ORDERS",
+        "w": 208.0,
+        "x": 990.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "SCIENCE",
+        "w": 208.0,
+        "x": 1204.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "P  GENERATOR\nM100  \u2022  +80 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "R  REFINERY\nM150  \u2022  20 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "B  BARRACKS\nM200  \u2022  10 kW",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "G  GUN TURRET\nM120  \u2022  8 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 706.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "J  AA BATTERY\nM140  \u2022  8 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "C  FIELD WALL\nM20",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "L  RESEARCH LAB\nM250  \u2022  30 kW ACTIVE",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "VEHICLE FACTORY\nM220  \u2022  30 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "AIRFIELD\nM260  \u2022  35 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 816.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "SUPPLY DEPOT\nM100  \u2022  5 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 816.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "BATTERY\nM120  \u2022  2400 kJ",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 816.0
+      }
+    ]
+  },
+  {
+    "window": [
+      2560,
+      1440
+    ],
+    "viewport": [
+      1440.0,
+      900.0
+    ],
+    "fps": 2.0,
+    "draw_calls": 2595.0,
+    "memory": 58097005.0,
+    "buttons": [
+      {
+        "disabled": true,
+        "h": 42.0,
+        "text": "BUILD",
+        "w": 208.0,
+        "x": 562.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "UNITS",
+        "w": 208.0,
+        "x": 776.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "ORDERS",
+        "w": 208.0,
+        "x": 990.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "SCIENCE",
+        "w": 208.0,
+        "x": 1204.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "P  GENERATOR\nM100  \u2022  +80 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "R  REFINERY\nM150  \u2022  20 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "B  BARRACKS\nM200  \u2022  10 kW",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "G  GUN TURRET\nM120  \u2022  8 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 706.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "J  AA BATTERY\nM140  \u2022  8 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "C  FIELD WALL\nM20",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "L  RESEARCH LAB\nM250  \u2022  30 kW ACTIVE",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "VEHICLE FACTORY\nM220  \u2022  30 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "AIRFIELD\nM260  \u2022  35 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 816.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "SUPPLY DEPOT\nM100  \u2022  5 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 816.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "BATTERY\nM120  \u2022  2400 kJ",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 816.0
+      }
+    ]
+  },
+  {
+    "window": [
+      3840,
+      2160
+    ],
+    "viewport": [
+      1440.0,
+      900.0
+    ],
+    "fps": 1.0,
+    "draw_calls": 2624.0,
+    "memory": 60519797.0,
+    "buttons": [
+      {
+        "disabled": true,
+        "h": 42.0,
+        "text": "BUILD",
+        "w": 208.0,
+        "x": 562.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "UNITS",
+        "w": 208.0,
+        "x": 776.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "ORDERS",
+        "w": 208.0,
+        "x": 990.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "SCIENCE",
+        "w": 208.0,
+        "x": 1204.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "P  GENERATOR\nM100  \u2022  +80 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "R  REFINERY\nM150  \u2022  20 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "B  BARRACKS\nM200  \u2022  10 kW",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "G  GUN TURRET\nM120  \u2022  8 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 706.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "J  AA BATTERY\nM140  \u2022  8 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "C  FIELD WALL\nM20",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "L  RESEARCH LAB\nM250  \u2022  30 kW ACTIVE",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "VEHICLE FACTORY\nM220  \u2022  30 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "AIRFIELD\nM260  \u2022  35 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 816.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "SUPPLY DEPOT\nM100  \u2022  5 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 816.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "BATTERY\nM120  \u2022  2400 kJ",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 816.0
+      }
+    ]
+  },
+  {
+    "window": [
+      3440,
+      1440
+    ],
+    "viewport": [
+      1440.0,
+      900.0
+    ],
+    "fps": 1.0,
+    "draw_calls": 2610.0,
+    "memory": 59889925.0,
+    "buttons": [
+      {
+        "disabled": true,
+        "h": 42.0,
+        "text": "BUILD",
+        "w": 208.0,
+        "x": 562.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "UNITS",
+        "w": 208.0,
+        "x": 776.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "ORDERS",
+        "w": 208.0,
+        "x": 990.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 42.0,
+        "text": "SCIENCE",
+        "w": 208.0,
+        "x": 1204.0,
+        "y": 664.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "P  GENERATOR\nM100  \u2022  +80 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "R  REFINERY\nM150  \u2022  20 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "B  BARRACKS\nM200  \u2022  10 kW",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 706.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "G  GUN TURRET\nM120  \u2022  8 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 706.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "J  AA BATTERY\nM140  \u2022  8 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "C  FIELD WALL\nM20",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 761.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "L  RESEARCH LAB\nM250  \u2022  30 kW ACTIVE",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "VEHICLE FACTORY\nM220  \u2022  30 kW",
+        "w": 204.0,
+        "x": 1198.0,
+        "y": 761.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "AIRFIELD\nM260  \u2022  35 kW",
+        "w": 204.0,
+        "x": 562.0,
+        "y": 816.0
+      },
+      {
+        "disabled": false,
+        "h": 48.0,
+        "text": "SUPPLY DEPOT\nM100  \u2022  5 kW",
+        "w": 204.0,
+        "x": 774.0,
+        "y": 816.0
+      },
+      {
+        "disabled": true,
+        "h": 48.0,
+        "text": "BATTERY\nM120  \u2022  2400 kJ",
+        "w": 204.0,
+        "x": 986.0,
+        "y": 816.0
+      },
+      {
+        "disabled": false,
+        "h": 58.0,
+        "text": "REVIEW BATTLEFIELD",
+        "w": 282.0,
+        "x": 422.0,
+        "y": 538.0
+      },
+      {
+        "disabled": false,
+        "h": 58.0,
+        "text": "REDEPLOY",
+        "w": 282.0,
+        "x": 736.0,
+        "y": 538.0
+      }
+    ]
+  }
+]

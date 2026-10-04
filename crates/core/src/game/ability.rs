@@ -52,7 +52,7 @@ pub const fn ability_for(unit: UnitKind) -> Option<AbilityKind> {
         UnitKind::Tank => Some(AbilityKind::Barrage),
         UnitKind::Helicopter => Some(AbilityKind::EmpBurst),
         UnitKind::Capital => Some(AbilityKind::NaniteField),
-        UnitKind::Infantry | UnitKind::AntiArmor => None,
+        UnitKind::Harvester | UnitKind::Infantry | UnitKind::AntiArmor => None,
     }
 }
 

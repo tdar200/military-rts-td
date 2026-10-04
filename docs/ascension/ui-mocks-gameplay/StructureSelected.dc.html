@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Structure selected</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <defs>
+    <filter id="bl"><feGaussianBlur stdDeviation="40"/></filter>
+    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="470" cy="470" r="640"/><circle cx="1000" cy="520" r="260"/></g></mask>
+  </defs>
+  <rect width="1920" height="1080" fill="#050b12" opacity=".4" mask="url(#vis)"/>
+  <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="rgba(64,220,235,.06)" stroke="#40dceb" stroke-width="3" stroke-linejoin="round"/>
+  <circle cx="500" cy="670" r="250" fill="rgba(64,220,235,.05)" stroke="rgba(64,220,235,.45)" stroke-dasharray="10 8"/>
+  <path d="M560 740 C700 760 820 700 880 620 C910 580 930 550 944 528" fill="none" stroke="#50e6a0" stroke-width="3" stroke-dasharray="12 8"/>
+  <ellipse cx="500" cy="725" rx="132" ry="46" fill="rgba(64,220,235,.08)" stroke="#40dceb" stroke-width="2.5"/>
+</svg>
+
+<div class="lbl" style="left:70px;top:70px;font-size:20px">Sunfield</div>
+<div class="lbl w" style="left:775px;top:288px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
+<div class="lbl" style="left:380px;top:905px;font-size:18px">Hollow Wood</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="20">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+
+<div class="a" style="left:410px;top:560px;width:180px;z-index:2000"><div class="hp" style="height:7px"><i style="width:100%"></i></div><div class="mono" style="font-size:11px;color:#cee8f0;text-align:center;margin-top:2px">BARRACKS 04 / 480 HP</div></div>
+<svg class="a" style="left:920px;top:470px;z-index:2000" width="60" height="70" viewBox="0 0 60 70"><path d="M24 62V6" stroke="#e8fcff" stroke-width="3"/><path d="M24 8l30 10-30 12z" fill="#50e6a0"/><ellipse cx="24" cy="62" rx="14" ry="5" fill="rgba(0,0,0,.4)"/></svg>
+<div class="pin" style="left:880px;top:430px;border-color:#50e6a0;z-index:2000"><span class="dot" style="background:#50e6a0"></span>Rally, 11 s walk</div>
+<div class="pin" style="left:792px;top:392px;z-index:2000"><span class="dot"></span>Ore +4</div>
+
+<div class="a panel" style="left:980px;top:520px;width:300px;padding:10px 12px;z-index:2600">
+  <div class="disp" style="font-size:18px;color:#e8fcff">River bank</div>
+  <div class="sub">Tile 19,10 / flat / 2 tiles from Wyllow Ford</div>
+  <div class="row"><span class="t-dim">Movement</span><span class="mono">1.0x</span></div>
+  <div class="row"><span class="t-dim">Cover</span><span class="mono t-warn">None</span></div>
+  <div class="row"><span class="t-dim">Rally here</span><span class="mono t-good">Covers the ford</span></div>
+</div>
+
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>840</b><span class="d">+38/m</span></div>
+  <div class="chip"><span class="t-dim">WORK</span><b>612</b><span class="d">+22/m</span></div>
+  <div class="chip"><span class="t-dim">POWER</span><b>160 / 168 kW</b></div>
+  <div class="chip"><span class="t-dim">CREW</span><b>23 / 60</b></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="height:36px;border-color:#f0b040"><span class="t-warn">WAVE 03</span><span class="disp" style="font-size:22px;color:#e8fcff">01:52</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
+    <div class="a" style="left:30px;top:68px;width:8px;height:8px;background:#fff"></div>
+    <div class="a" style="left:-20px;top:0;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<div class="a panel" style="left:12px;top:76px;width:332px;padding:12px 14px;z-index:3000">
+  <div class="cap t-cyan">Barracks 04 site</div>
+  <div class="row"><span class="t-dim">Terrain</span><span class="mono">Grassland, flat</span></div>
+  <div class="row"><span class="t-dim">Forest edge</span><span class="mono">3 tiles S, cover</span></div>
+  <div class="row"><span class="t-dim">Ford</span><span class="mono">18 tiles E</span></div>
+  <div class="row"><span class="t-dim">Supply range</span><span class="mono t-good">Depot 02, in range</span></div>
+</div>
+
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 16px;z-index:3000;display:grid;grid-template-columns:230px 1fr 210px;gap:16px">
+  <div>
+    <div style="display:flex;gap:12px;align-items:center"><div class="glass" style="width:86px;height:86px;display:flex;align-items:center;justify-content:center"><img src="/_blob/c28b4de3839198732e73d3041feec1e6" style="width:76px;height:76px;object-fit:contain" alt=""></div><div><div class="disp" style="font-size:26px;color:#e8fcff;line-height:26px">Barracks 04</div><span class="tag t-good" style="margin-top:4px">Online</span></div></div>
+    <div style="margin-top:12px"><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Health</span><span class="mono">480 / 480</span></div><div class="hp"><i style="width:100%"></i></div></div>
+    <div class="row"><span class="t-dim">Power</span><span class="mono">10 kW</span></div>
+    <div class="row"><span class="t-dim">Output</span><span class="mono">1 unit / 18 s</span></div>
+    <div class="row"><span class="t-dim">Rally</span><span class="mono t-good">River bank</span></div>
+  </div>
+  <div style="border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 16px">
+    <div class="cap t-cyan">Production queue</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+      <div class="glass" style="padding:6px 10px;border-color:#40dceb;display:flex;align-items:center;gap:10px"><img src="/_blob/0cff440ac0f27a92e113ec4de32ee9a8" style="width:34px;height:34px" alt=""><div style="flex:1"><div style="display:flex;justify-content:space-between;font-size:14px"><span>Infantry</span><span class="mono t-dim">0:11</span></div><div class="bar" style="margin-top:3px"><i style="width:38%"></i></div></div></div>
+      <div class="glass" style="padding:6px 10px;display:flex;align-items:center;gap:10px"><img src="/_blob/0cff440ac0f27a92e113ec4de32ee9a8" style="width:34px;height:34px" alt=""><span style="font-size:14px;flex:1">Infantry</span><span class="mono t-dim" style="font-size:12px">queued</span></div>
+      <div class="glass" style="padding:6px 10px;display:flex;align-items:center;gap:10px"><img src="/_blob/004852755ece3a8e81b95a9e93489852" style="width:34px;height:34px" alt=""><span style="font-size:14px;flex:1">Anti-armour</span><span class="mono t-dim" style="font-size:12px">queued</span></div>
+    </div>
+    <div class="sub" style="margin-top:8px">Queue cost 520 M, deducted as each unit starts.</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <span class="btn pri sm">Set rally <span class="key">Y</span></span>
+    <span class="btn sm">Repair <span class="key">R</span></span>
+    <span class="btn sm">Cancel last <span class="key">Del</span></span>
+    <span class="btn sm">Focus building</span>
+    <span class="btn sm danger">Demolish</span>
+  </div>
+</div>
+
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab">Build</span><span class="tab on">Units</span><span class="tab">Orders</span><span class="tab">Science</span><span class="tab">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:10px">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <sc-for list="{{cards}}" as="c" hint-placeholder-count="6">
+        <div style="height:100px;border:1px solid {{c.bd}};background:rgba(8,17,26,.92);border-radius:3px;padding:8px 10px;display:flex;gap:10px;opacity:{{c.op}}">
+          <img src="{{c.img}}" alt="" style="width:44px;height:44px;object-fit:contain;flex:none">
+          <div><div class="disp" style="font-size:17px;line-height:18px;color:#e8fcff">{{c.name}}</div><div class="mono" style="font-size:12px">{{c.cost}}</div><div style="font-size:12px;color:#8fb0bf">{{c.note}}</div></div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const I = { pp:'b32b316f8a54cfb3e4e96b8ab7a2f79e', cc:'5828f353f51d19ec36c3c638831bfb96', ref:'6c29c5788f12d88cfae3914221f234a9', bar:'c28b4de3839198732e73d3041feec1e6', fnd:'bbb3bae9af99ea696ff5f34401784754', fl:'b68e987fd5fe7400ef76a4e86344f108', gt:'508d97c7b872d6502bb31b3fe2de001c', aa:'318ba1a2dd09b4736f000e8ba021bf70', hv:'439ac4aa47c8b40430b3ce1b7550277d', tank:'87aab1971d525ecad863691237ae2a71', at:'004852755ece3a8e81b95a9e93489852', inf:'0cff440ac0f27a92e113ec4de32ee9a8', lab:'8cb9cb29d95752ec982142bf671a1e6d' };
+    const w = [['pp',150,310,170],['pp',110,450,160],['cc',360,300,250],['fnd',330,100,170],['fl',570,360,80],['ref',560,470,200],['bar',400,570,200],['lab',610,230,150],['gt',735,330,115],['gt',880,560,115],['aa',780,430,85],['hv',790,455,110],['inf',640,780,80],['inf',700,810,80],['tank',770,745,140]];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1], top: a[2], w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    const mk = (name, img, cost, note, o) => Object.assign({ name, img: B + I[img], cost, note, bd: '#1b3342', op: 1 }, o || {});
+    const cards = [
+      mk('Infantry','inf','60 M 40 W','Rifle, cover +20%',{bd:'#40dceb'}),
+      mk('Anti-armour','at','90 M 60 W','Rocket, range 6'),
+      mk('Engineer','inf','70 M 50 W','Builds, repairs'),
+      mk('Scout','inf','50 M 30 W','Sight +4 tiles'),
+      mk('Medic','inf','80 M 60 W','Locked: field med',{op:.5}),
+      mk('Sniper','inf','120 M 90 W','Locked: optics',{op:.5})
+    ];
+    return { sprites, cards };
+  }
+}
+</script>
+</body>
+</html>

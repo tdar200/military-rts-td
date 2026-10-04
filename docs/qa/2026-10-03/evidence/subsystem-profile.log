@@ -1,0 +1,14 @@
+   Compiling rts-core v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/core)
+    Finished `release` profile [optimized] target(s) in 17.45s
+     Running unittests src/lib.rs (target/release/deps/rts_core-9d2175d07fe0a761)
+
+running 1 test
+QA_PROFILE services total_us=9288 calls=100
+QA_PROFILE production total_us=1329 calls=100
+QA_PROFILE movement total_us=1559 calls=100
+QA_PROFILE combat total_us=14889445 calls=100
+QA_PROFILE harvesting total_us=1978 calls=100
+test game::sim::qa_adversarial::qa_profile_subsystems ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 14.91s
+

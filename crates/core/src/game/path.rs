@@ -36,6 +36,13 @@ fn passable(map: &Map, x: i32, y: i32) -> bool {
     reason = "tile coords are bounds-checked non-negative and < the u16 grid"
 )]
 pub fn find_path(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<Vec<(u16, u16)>> {
+    if start.0 >= map.width()
+        || start.1 >= map.height()
+        || goal.0 >= map.width()
+        || goal.1 >= map.height()
+    {
+        return None;
+    }
     if start == goal {
         return Some(Vec::new());
     }
@@ -152,5 +159,16 @@ mod tests {
         let b = find_path(&m, (0, 0), (7, 7));
         assert_eq!(a, b);
         assert!(a.is_some());
+    }
+}
+
+#[cfg(test)]
+mod qa_bounds {
+    use super::*;
+    #[test]
+    fn invalid_endpoints_are_rejected_without_panicking() {
+        let map = Map::new(8, 8);
+        assert_eq!(find_path(&map, (u16::MAX, u16::MAX), (1, 1)), None);
+        assert_eq!(find_path(&map, (9, 9), (9, 9)), None);
     }
 }

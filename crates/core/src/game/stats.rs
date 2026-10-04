@@ -205,6 +205,8 @@ pub struct BuildingStats {
     pub energy_cost: Fixed,
     /// Labour cost to construct (first-pass 0 for legacy buildings).
     pub labour_cost: Fixed,
+    /// Ticks from placement until the structure becomes operational.
+    pub build_time: u32,
     /// Money/tick this building mines from a deposit it stands on (Extractors).
     pub mine_rate: i32,
 }
@@ -212,6 +214,8 @@ pub struct BuildingStats {
 /// The kinds of mobile unit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum UnitKind {
+    /// Unarmed economy vehicle that shuttles ore back to a Refinery.
+    Harvester,
     /// Cheap, fast, anti-flesh swarm.
     Infantry,
     /// Tough, slow, anti-everything via explosives.
@@ -245,6 +249,14 @@ pub enum BuildingKind {
     ResearchLab,
     /// A second Money extractor (repurposed; mines deposits).
     AntimatterPlant,
+    /// Dedicated ground-vehicle industrial production.
+    VehicleFactory,
+    /// Aircraft assembly and sortie support.
+    Airfield,
+    /// Finite ammunition store and frontline supply anchor.
+    SupplyDepot,
+    /// Bounded electrical storage and discharge capacity.
+    Battery,
 }
 
 /// The rock-paper-scissors damage matrix: how `damage_type` fares against
@@ -272,6 +284,7 @@ impl UnitKind {
             Self::AntiArmor => 2,
             Self::Helicopter => 3,
             Self::Capital => 4,
+            Self::Harvester => 5,
         }
     }
 
@@ -279,6 +292,17 @@ impl UnitKind {
     #[must_use]
     pub const fn stats(self) -> UnitStats {
         match self {
+            Self::Harvester => UnitStats {
+                max_hp: Fixed::from_int(180),
+                armor: ArmorType::Plated,
+                attack: AttackProfile::ground(Fixed::ZERO, DamageType::Ballistic, Fixed::ZERO, 30),
+                speed: Fixed::from_ratio(12, 200),
+                money_cost: Fixed::from_int(140),
+                energy_cost: Fixed::ZERO,
+                labour_cost: Fixed::from_int(1),
+                build_time: 120,
+                is_air: false,
+            },
             Self::Infantry => UnitStats {
                 max_hp: Fixed::from_int(50),
                 armor: ArmorType::Flesh,
@@ -383,6 +407,10 @@ impl BuildingKind {
             Self::Wall => 6,
             Self::ResearchLab => 7,
             Self::AntimatterPlant => 8,
+            Self::VehicleFactory => 9,
+            Self::Airfield => 10,
+            Self::SupplyDepot => 11,
+            Self::Battery => 12,
         }
     }
 
@@ -390,7 +418,7 @@ impl BuildingKind {
     #[must_use]
     pub const fn stats(self) -> BuildingStats {
         // Defaults shared by most structures; overridden per kind below.
-        const fn base(max_hp: i32, money_cost: i32) -> BuildingStats {
+        const fn base(max_hp: i32, money_cost: i32, build_time: u32) -> BuildingStats {
             BuildingStats {
                 max_hp: Fixed::from_int(max_hp),
                 armor: ArmorType::Structure,
@@ -401,31 +429,42 @@ impl BuildingKind {
                 money_cost: Fixed::from_int(money_cost),
                 energy_cost: Fixed::ZERO,
                 labour_cost: Fixed::ZERO,
+                build_time,
                 mine_rate: 0,
             }
         }
         match self {
+            Self::VehicleFactory => BuildingStats {
+                produces_units: true,
+                ..base(550, 220, 450)
+            },
+            Self::Airfield => BuildingStats {
+                produces_units: true,
+                ..base(400, 260, 540)
+            },
+            Self::SupplyDepot => base(280, 100, 180),
+            Self::Battery => base(220, 120, 240),
             // The HQ produces base population (Labour) every tick.
             Self::CommandCenter => BuildingStats {
                 labour_output: 2,
-                ..base(1000, 0)
+                ..base(1000, 0, 0)
             },
             // The power building feeds the spendable Energy stockpile (the bite
             // comes from a moderate flow that production/expansion can outrun).
             Self::PowerPlant => BuildingStats {
                 energy_output: 40,
-                ..base(300, 100)
+                ..base(300, 100, 90)
             },
             Self::Refinery => BuildingStats {
                 mine_rate: 2,
                 energy_cost: Fixed::from_int(8),
-                ..base(300, 150)
+                ..base(300, 150, 150)
             },
             Self::Barracks => BuildingStats {
                 produces_units: true,
                 labour_output: 1,
                 energy_cost: Fixed::from_int(15),
-                ..base(400, 200)
+                ..base(400, 200, 180)
             },
             Self::GunTurret => BuildingStats {
                 attack: Some(AttackProfile::ground(
@@ -435,7 +474,7 @@ impl BuildingKind {
                     10,
                 )),
                 energy_cost: Fixed::from_int(10),
-                ..base(250, 120)
+                ..base(250, 120, 120)
             },
             Self::AaTurret => BuildingStats {
                 attack: Some(AttackProfile::anti_air(
@@ -445,19 +484,19 @@ impl BuildingKind {
                     8,
                 )),
                 energy_cost: Fixed::from_int(12),
-                ..base(220, 140)
+                ..base(220, 140, 140)
             },
-            Self::Wall => base(200, 20),
+            Self::Wall => base(200, 20, 30),
             // The lab is now just a research prerequisite building.
             Self::ResearchLab => BuildingStats {
                 energy_cost: Fixed::from_int(20),
-                ..base(300, 250)
+                ..base(300, 250, 240)
             },
             // Repurposed as a plain money extractor (mines deposits).
             Self::AntimatterPlant => BuildingStats {
                 mine_rate: 2,
                 energy_cost: Fixed::from_int(12),
-                ..base(300, 200)
+                ..base(300, 200, 210)
             },
         }
     }

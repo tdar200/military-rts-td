@@ -8,12 +8,10 @@
 //! real precursor chain (theory → lab control → engineering → deployment →
 //! application → civilization-scale).
 //!
-//! This module is the **M1 scaffold**: the determinism-critical primitives
-//! ([`TechBitset`], the coordinate system, [`RealityClass`]) plus the era/branch
-//! taxonomy. It is *dormant* — the live game still runs the legacy
-//! [`crate::game::tech`] tree; the 500-node content table and the migration of
-//! the per-player researched set onto [`TechBitset`] land in the following steps,
-//! each as its own golden-hash re-pin (never two hash rewrites in one commit).
+//! The grid is live in the deterministic simulation: players research directly
+//! into [`TechBitset`], era keys advance civilization, and concrete unlocks feed
+//! the RTS build and production rosters. The fixed coordinate system and honesty
+//! labels are also consumed by both presentation clients.
 
 use crate::game::stats::{BuildingKind, UnitKind};
 use crate::hash::Fnv;

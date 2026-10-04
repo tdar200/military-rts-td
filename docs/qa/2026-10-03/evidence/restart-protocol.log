@@ -1,0 +1,1 @@
+PASS: restart clears duplicate deploy, waits at briefing, and accepts fresh deploy

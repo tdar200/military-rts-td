@@ -454,11 +454,11 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
     use crate::game::sim::Command;
     match command {
         // maintenance/economy build
-        Command::Build { .. } => 2,
+        Command::Build { .. } | Command::Repair { .. } | Command::Sell { .. } => 2,
         // research adoption
         Command::Research { .. } => 4,
         // training (defensive at 3, offensive folds in by 5)
-        Command::Train { .. } => 5,
+        Command::Train { .. } | Command::SetRally { .. } => 5,
         // expansion
         Command::FoundBase { .. } | Command::FoundColony { .. } => 6,
         // movement / initiative

@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Core Assault</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.spr{position:absolute;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))}
+.ring{position:absolute;border-radius:50%;border:2px solid #40dceb;box-shadow:0 0 14px rgba(64,220,235,.5);background:rgba(64,220,235,.06)}
+.hm{position:absolute;display:flex;flex-direction:column;align-items:center;gap:4px}
+.hm i.dm{display:block;width:12px;height:12px;background:#f04e46;transform:rotate(45deg);box-shadow:0 0 10px rgba(240,78,70,.85)}
+.ico{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.hkey{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8fb0bf;border:1px solid #284e60;border-radius:2px;padding:0 5px;height:20px;display:inline-flex;align-items:center}
+.ob{display:flex;align-items:center;gap:10px;font-size:14px;line-height:1.3}
+.alert{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:2px;background:#08111a;border:1px solid #1b3342;font-size:14px}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:#30332a;font-family:'IBM Plex Sans',sans-serif">
+
+<!-- ============ BATTLEFIELD ============ -->
+<div style="position:absolute;left:0;top:0;width:1920px;height:1080px;background:radial-gradient(900px 600px at 1330px 380px,rgba(120,30,24,.45),rgba(120,30,24,0) 70%),radial-gradient(700px 500px at 500px 700px,rgba(60,70,50,.55),rgba(0,0,0,0) 70%),radial-gradient(1200px 800px at 900px 400px,#3b3d30,#2b2e26 70%,#23251f)"></div>
+<div class="grid-bg" style="position:absolute;left:0;top:0;width:1920px;height:1080px"></div>
+<!-- craters and props -->
+<img class="spr" src="/_blob/16a3ba1e6e653026f0b1b48da95c8861" style="left:940px;top:610px;width:210px;opacity:.9" alt="">
+<img class="spr" src="/_blob/16a3ba1e6e653026f0b1b48da95c8861" style="left:150px;top:330px;width:170px;opacity:.8" alt="">
+<img class="spr" src="/_blob/8fa77164b10809db24c6c15ea29877a6" style="left:70px;top:520px;width:170px" alt="">
+<img class="spr" src="/_blob/8fa77164b10809db24c6c15ea29877a6" style="left:1640px;top:560px;width:200px" alt="">
+<img class="spr" src="/_blob/0534092272fcee8f91bb19ce38194728" style="left:420px;top:230px;width:150px" alt="">
+<img class="spr" src="/_blob/407161c4f238555c18eeddccf3152d12" style="left:380px;top:430px;width:130px" alt="">
+<img class="spr" src="/_blob/0669d70b44736bbf3e74312d6655be03" style="left:1700px;top:330px;width:150px" alt="">
+<img class="spr" src="/_blob/1a5cbe9ed020ebb77cbeef86a1702f71" style="left:230px;top:780px;width:120px;opacity:.95" alt="">
+
+<!-- impact zone (under units) -->
+<svg style="position:absolute;left:0;top:0" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs>
+<pattern id="ca-hatch" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="14" stroke="#f04e46" stroke-width="3" stroke-opacity=".45"/></pattern>
+<marker id="ca-ah" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 11 6 1 11z" fill="#96f5ff"/></marker>
+<marker id="ca-ahd" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="9" markerHeight="9" orient="auto"><path d="M1 1 11 6 1 11z" fill="#40dceb"/></marker>
+</defs>
+<circle cx="690" cy="570" r="215" fill="url(#ca-hatch)" stroke="#f04e46" stroke-width="3" stroke-dasharray="14 8"/>
+<circle cx="690" cy="570" r="215" fill="rgba(240,78,70,.07)"/>
+<circle cx="690" cy="570" r="150" fill="none" stroke="#f04e46" stroke-width="1.5" stroke-opacity=".6"/>
+<!-- supply link -->
+<path d="M395 700 C 430 700 450 690 478 672" fill="none" stroke="#40dceb" stroke-width="3" stroke-dasharray="3 9" stroke-linecap="round"/>
+<path d="M395 720 C 330 760 300 790 285 800" fill="none" stroke="#1b3342" stroke-width="2" stroke-dasharray="6 6"/>
+</svg>
+
+<!-- alien structures and defenders -->
+<img class="spr" src="/_blob/0be71b82ef5f888b5618e0f9fa839355" style="left:1170px;top:180px;width:330px" alt="">
+<img class="spr" src="/_blob/1e0293a090eb12178904bcd900a92881" style="left:1500px;top:170px;width:150px" alt="">
+<img class="spr" src="/_blob/6cd3a32e617c263fff1b81b8a6e7e7cb" style="left:995px;top:225px;width:130px" alt="">
+<img class="spr" src="/_blob/6cd3a32e617c263fff1b81b8a6e7e7cb" style="left:975px;top:435px;width:130px" alt="">
+<img class="spr" src="/_blob/507dc9a95b17b8cd91bb6a3ebcdcb945" style="left:1360px;top:460px;width:120px" alt="">
+<img class="spr" src="/_blob/1c1f1a04b9a8d6000561ddee15a3c4bc" style="left:1055px;top:340px;width:110px" alt="">
+<img class="spr" src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" style="left:1190px;top:550px;width:150px" alt="">
+<img class="spr" src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" style="left:1420px;top:600px;width:140px" alt="">
+<img class="spr" src="/_blob/1d648dd01f3485c61eeb35fe811e39c9" style="left:910px;top:350px;width:110px" alt="">
+<img class="spr" src="/_blob/1d648dd01f3485c61eeb35fe811e39c9" style="left:905px;top:500px;width:110px" alt="">
+
+<!-- hostile markers: diamond + hp -->
+<div class="hm" style="left:1303px;top:148px"><i class="dm"></i><div class="bar" style="width:70px;border-color:#5a1e1a"><i style="width:40%;background:#f04e46"></i></div></div>
+<div class="hm" style="left:1551px;top:138px"><i class="dm"></i><div class="bar" style="width:50px;border-color:#5a1e1a"><i style="width:62%;background:#f04e46"></i></div></div>
+<div class="hm" style="left:1042px;top:200px"><i class="dm"></i><div class="bar" style="width:50px;border-color:#5a1e1a"><i style="width:55%;background:#f04e46"></i></div></div>
+<div class="hm" style="left:1022px;top:408px"><i class="dm"></i><div class="bar" style="width:50px;border-color:#5a1e1a"><i style="width:90%;background:#f04e46"></i></div></div>
+<div class="hm" style="left:1104px;top:318px"><i class="dm"></i><div class="bar" style="width:40px;border-color:#5a1e1a"><i style="width:100%;background:#f04e46"></i></div></div>
+<div class="hm" style="left:1406px;top:436px"><i class="dm"></i><div class="bar" style="width:46px;border-color:#5a1e1a"><i style="width:35%;background:#f04e46"></i></div></div>
+<div class="hm" style="left:1253px;top:526px"><i class="dm"></i><div class="bar" style="width:50px;border-color:#5a1e1a"><i style="width:80%;background:#f04e46"></i></div></div>
+
+<!-- human forward depot -->
+<img class="spr" src="/_blob/db3d948c803c1c9cba61476a340b63b2" style="left:235px;top:595px;width:190px" alt="">
+<div class="glass" style="position:absolute;left:252px;top:568px;padding:4px 10px;display:flex;gap:8px;align-items:center;border-color:#284e60"><span class="disp" style="font-size:15px;color:#96f5ff">Forward depot</span><span class="mono" style="font-size:12px;color:#8fb0bf">186 rounds</span></div>
+
+<!-- human force: ground rings -->
+<div class="ring" style="left:592px;top:500px;width:96px;height:40px"></div>
+<div class="ring" style="left:672px;top:568px;width:96px;height:40px"></div>
+<div class="ring" style="left:532px;top:578px;width:96px;height:40px"></div>
+<div class="ring" style="left:612px;top:640px;width:96px;height:40px"></div>
+<!-- human units -->
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:580px;top:455px;width:120px" alt="">
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:660px;top:520px;width:120px" alt="">
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:520px;top:530px;width:120px" alt="">
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:600px;top:595px;width:120px" alt="">
+<img class="spr" src="/_blob/da5b12c112e382553cd16772f71535ac" style="left:745px;top:410px;width:100px" alt="">
+<img class="spr" src="/_blob/da5b12c112e382553cd16772f71535ac" style="left:790px;top:520px;width:100px" alt="">
+<img class="spr" src="/_blob/da5b12c112e382553cd16772f71535ac" style="left:730px;top:600px;width:100px" alt="">
+<img class="spr" src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="left:470px;top:440px;width:100px" alt="">
+<img class="spr" src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="left:455px;top:600px;width:100px" alt="">
+<img class="spr" src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="left:830px;top:600px;width:100px" alt="">
+<img class="spr" src="/_blob/26db18ce2f6a04a6002dc9e4a19db082" style="left:520px;top:660px;width:84px" alt="">
+<img class="spr" src="/_blob/26db18ce2f6a04a6002dc9e4a19db082" style="left:810px;top:680px;width:84px" alt="">
+<img class="spr" src="/_blob/9c0496c20fb3ac15183f7c5e11871c31" style="left:640px;top:270px;width:190px;filter:drop-shadow(0 40px 10px rgba(0,0,0,.45))" alt="">
+
+<!-- selection brackets around the group (square corners = friendly) -->
+<svg style="position:absolute;left:0;top:0" width="1920" height="1080" viewBox="0 0 1920 1080">
+<g fill="none" stroke="#96f5ff" stroke-width="3" stroke-linecap="square">
+<path d="M436 396 V370 H462"/><path d="M944 396 V370 H918"/><path d="M436 726 V752 H462"/><path d="M944 726 V752 H918"/>
+</g>
+<!-- attack-move: solid (immediate) -->
+<path d="M930 470 C 990 430 1030 400 1050 372" fill="none" stroke="#96f5ff" stroke-width="4" stroke-linecap="round" marker-end="url(#ca-ah)"/>
+<path d="M900 590 C 960 580 1000 560 1075 520" fill="none" stroke="#96f5ff" stroke-width="4" stroke-linecap="round" marker-end="url(#ca-ah)"/>
+<!-- queued (dotted) -->
+<path d="M1100 340 C 1140 300 1170 290 1215 300" fill="none" stroke="#40dceb" stroke-width="3" stroke-dasharray="2 9" stroke-linecap="round" marker-end="url(#ca-ahd)"/>
+<path d="M1120 500 C 1160 470 1190 450 1235 420" fill="none" stroke="#40dceb" stroke-width="3" stroke-dasharray="2 9" stroke-linecap="round" marker-end="url(#ca-ahd)"/>
+<!-- Core charge beam -->
+<path d="M1565 215 C 1320 150 900 220 705 555" fill="none" stroke="#f04e46" stroke-width="2.5" stroke-dasharray="10 8" stroke-opacity=".9"/>
+<!-- countdown ring -->
+<circle cx="690" cy="570" r="46" fill="rgba(8,15,24,.88)" stroke="#3a1815" stroke-width="8"/>
+<circle cx="690" cy="570" r="46" fill="none" stroke="#f04e46" stroke-width="8" stroke-dasharray="180 289" transform="rotate(-90 690 570)" stroke-linecap="butt"/>
+<text x="690" y="580" text-anchor="middle" font-family="Rajdhani" font-weight="700" font-size="36" fill="#ffe8e6">5</text>
+<text x="690" y="608" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f4b3ae" letter-spacing="1.5">OF 8 S</text>
+</svg>
+
+<!-- map labels -->
+<div class="glass" style="position:absolute;left:520px;top:340px;display:flex;gap:10px;align-items:center;padding:6px 12px;border-color:#f04e46"><span class="tag t-bad">Impact zone</span><span style="font-size:14px;color:#cee8f0">Disperse or destroy the emitter</span></div>
+<div class="glass" style="position:absolute;left:1560px;top:292px;width:236px;padding:10px 12px;border-color:#f04e46;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;justify-content:space-between;align-items:center"><span class="disp" style="font-size:16px;color:#ffb3ad">Core emitter</span><span class="tag t-bad">Interruptible</span></div>
+<div class="bar" style="border-color:#5a1e1a"><i style="width:62%;background:#f04e46"></i></div>
+<div style="font-size:13px;color:#cee8f0;line-height:1.35">62% integrity. Destroy it to cancel the charge. 8 s warning, no screen-wide kill.</div>
+</div>
+<div class="glass" style="position:absolute;left:1090px;top:690px;padding:6px 12px;display:flex;gap:10px;align-items:center"><span class="tag t-bad">AA + AT screen</span><span style="font-size:14px">4 anti-air and anti-armour guards remain</span></div>
+<div style="position:absolute;left:1216px;top:268px;display:flex;gap:8px;align-items:center"><span class="mono" style="width:22px;height:22px;border:1.5px solid #40dceb;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;background:#08111a;color:#96f5ff">2</span></div>
+
+<!-- HQ under raid edge arrow -->
+<div style="position:absolute;left:12px;top:690px;display:flex;align-items:center;gap:0">
+<svg width="30" height="44" viewBox="0 0 30 44"><path d="M28 2 3 22l25 20z" fill="#f04e46" stroke="#ffd2cf" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<div class="panel" style="margin-left:-4px;padding:8px 12px;border-color:#f04e46;display:flex;flex-direction:column;gap:2px">
+<span class="disp" style="font-size:17px;color:#ffb3ad">HQ under raid</span>
+<span class="mono" style="font-size:12px;color:#cee8f0">HQ 72% integrity</span>
+<span class="mono" style="font-size:12px;color:#8fb0bf">Space: jump camera</span>
+</div>
+</div>
+
+<!-- ============ TOP BAR ============ -->
+<div style="position:absolute;left:0;top:0;width:1920px;height:56px;background:linear-gradient(180deg,rgba(3,5,10,.96),rgba(6,12,20,.9));border-bottom:1px solid #284e60;display:flex;align-items:center;gap:10px;padding:0 20px">
+<span class="chip" style="color:#cee8f0"><svg class="ico" style="color:#96f5ff" viewBox="0 0 24 24"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></svg>MATERIAL 1,240</span>
+<span class="chip"><svg class="ico" style="color:#50e6a0" viewBox="0 0 24 24"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg>POWER 212 / 240 kW</span>
+<span class="chip"><svg class="ico" style="color:#96f5ff" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M17 14c2.5 0 4.5 2 4.5 5"/></svg>CREW 41 / 60</span>
+<span style="width:1px;height:28px;background:#284e60;margin:0 6px"></span>
+<span class="chip" style="border-color:#f04e46"><svg class="ico" style="color:#f04e46" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>CORE 4,800 / 12,000 HP</span>
+<span class="chip"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><path d="M12 12v9M8 21h8M7 8a7 7 0 0 1 10 0M4.5 5.5a11 11 0 0 1 15 0"/><circle cx="12" cy="11" r="1.5"/></svg>RELAYS 1 / 2 active</span>
+<span class="chip" style="border-color:#f0b040"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><path d="M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6"/></svg>HQ 72% integrity</span>
+<span class="chip"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><path d="M9 21V9l3-5 3 5v12M9 14h6"/></svg>AMMO 61%</span>
+<span style="flex:1"></span>
+<span class="chip" style="border-color:#f0b040"><svg class="ico" style="color:#f0b040" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg>NEXT WAVE 01:52</span>
+<span class="chip" style="color:#8fb0bf">SPEED 1x</span>
+</div>
+
+<!-- boss bar -->
+<div class="panel" style="position:absolute;left:600px;top:68px;width:720px;padding:10px 16px 12px;border-color:#7a2a26;background:linear-gradient(180deg,rgba(40,16,16,.92),rgba(14,10,14,.92))">
+<div style="display:flex;justify-content:space-between;align-items:baseline">
+<span class="disp" style="font-size:22px;color:#ffd2cf;letter-spacing:.1em">Alien Core Node</span>
+<span class="mono" style="font-size:14px;color:#ffd2cf">4,800 / 12,000 HP</span>
+</div>
+<div style="position:relative;margin-top:6px;height:14px;border:1px solid #7a2a26;background:#150a0b">
+<div style="width:40%;height:100%;background:linear-gradient(90deg,#c43a33,#f04e46)"></div>
+<div style="position:absolute;left:25%;top:-3px;width:2px;height:20px;background:#ffb3ad"></div>
+<div style="position:absolute;left:50%;top:-3px;width:2px;height:20px;background:#ffb3ad"></div>
+<div style="position:absolute;left:75%;top:-3px;width:2px;height:20px;background:#ffb3ad"></div>
+</div>
+<div style="display:flex;justify-content:space-between;margin-top:6px"><span class="cap" style="color:#f4b3ae">Phase 3 of 4: charge cycle</span><span class="cap" style="color:#f4b3ae">Retaliation in 5 s</span></div>
+</div>
+
+<!-- objective banner -->
+<div class="panel" style="position:absolute;left:20px;top:72px;width:384px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-color:#40dceb">
+<div style="display:flex;justify-content:space-between;align-items:center"><span class="cap" style="color:#96f5ff">Objective</span><span class="tag t-cyan">Operation Dawnshield</span></div>
+<div class="disp" style="font-size:30px;line-height:1;color:#e8fcff">Destroy the Core Node</div>
+<div style="font-size:14px;color:#8fb0bf;line-height:1.4">Ends the Earth operation. Relay destruction cuts reinforcements but is optional.</div>
+<div style="display:flex;flex-direction:column;gap:7px;padding-top:4px;border-top:1px solid #1b3342">
+<div class="ob"><span class="tag t-good" style="min-width:58px;justify-content:center">Done</span><span style="color:#8fb0bf;text-decoration:line-through">Suppress AA</span></div>
+<div class="ob"><span class="tag t-good" style="min-width:58px;justify-content:center">Done</span><span style="color:#8fb0bf;text-decoration:line-through">Clear the AT screen</span></div>
+<div class="ob"><span class="tag t-cyan" style="min-width:58px;justify-content:center;background:#104656">Now</span><span style="color:#e8fcff;font-weight:500">Move tanks up</span></div>
+<div class="ob"><span class="tag t-dim" style="min-width:58px;justify-content:center">Next</span><span>Protect the forward depot</span></div>
+<div class="ob"><span class="tag t-dim" style="min-width:58px;justify-content:center">Next</span><span>Focus the exposed Core</span></div>
+</div>
+</div>
+
+<!-- relays card -->
+<div class="panel" style="position:absolute;left:1640px;top:72px;width:260px;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+<span class="cap">Invasion relays</span>
+<div style="display:flex;align-items:center;gap:10px;font-size:14px"><span style="width:10px;height:10px;background:#50e6a0;display:inline-block;border-radius:50%"></span><span style="flex:1">Relay A</span><span class="tag t-good">Destroyed</span></div>
+<div style="display:flex;align-items:center;gap:10px;font-size:14px"><i style="width:10px;height:10px;background:#f04e46;transform:rotate(45deg);display:inline-block"></i><span style="flex:1">Relay B</span><span class="tag t-bad">Powered</span></div>
+<div style="font-size:13px;color:#8fb0bf;line-height:1.4">Each powered relay adds two units to every expedition.</div>
+</div>
+
+<!-- ============ BOTTOM HUD ============ -->
+<!-- bottom-left: minimap + alerts -->
+<div class="panel" style="position:absolute;left:16px;top:824px;width:572px;height:240px;padding:12px;display:flex;gap:12px">
+<div style="display:flex;flex-direction:column;gap:6px;width:216px">
+<div class="cap" style="display:flex;gap:6px;white-space:nowrap"><span style="color:#96f5ff">Tactical</span><span style="color:#5f8191">/</span><span>Regional</span><span style="color:#5f8191">/</span><span>Planetary</span></div>
+<div style="position:relative;width:216px;height:192px;border:1px solid #284e60;background:#1f2219;overflow:hidden">
+<div class="grid-bg" style="position:absolute;inset:0;background-size:24px 24px"></div>
+<div style="position:absolute;left:120px;top:2px;width:100px;height:100px;background:radial-gradient(circle,rgba(240,78,70,.5),rgba(240,78,70,0) 70%)"></div>
+<div style="position:absolute;left:158px;top:30px;width:12px;height:12px;background:#f04e46;transform:rotate(45deg)"></div>
+<div style="position:absolute;left:186px;top:22px;width:7px;height:7px;background:#f04e46;transform:rotate(45deg)"></div>
+<div style="position:absolute;left:30px;top:150px;width:10px;height:10px;border:2px solid #96f5ff;background:#104656"></div>
+<div style="position:absolute;left:70px;top:70px;width:90px;height:82px;border-radius:50%;border:1.5px dashed #f04e46;background:rgba(240,78,70,.12)"></div>
+<div style="position:absolute;left:92px;top:84px;width:6px;height:6px;background:#96f5ff"></div>
+<div style="position:absolute;left:100px;top:92px;width:6px;height:6px;background:#96f5ff"></div>
+<div style="position:absolute;left:86px;top:100px;width:6px;height:6px;background:#96f5ff"></div>
+<div style="position:absolute;left:104px;top:106px;width:6px;height:6px;background:#96f5ff"></div>
+<div style="position:absolute;left:8px;top:132px;width:12px;height:12px;border:2px solid #f04e46;background:#08111a"></div>
+<div style="position:absolute;left:44px;top:44px;width:128px;height:84px;border:1.5px solid #96f5ff"></div>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;min-width:0">
+<div class="cap" style="display:flex;justify-content:space-between"><span>Alert queue</span><span>4</span></div>
+<div class="alert" style="border-color:#f04e46"><i style="width:10px;height:10px;background:#f04e46;transform:rotate(45deg);flex:none"></i><span style="flex:1">HQ under raid</span><span class="mono" style="font-size:12px;color:#8fb0bf">0:12</span></div>
+<div class="alert" style="border-color:#f04e46"><i style="width:10px;height:10px;background:#f04e46;transform:rotate(45deg);flex:none"></i><span style="flex:1">Core charging</span><span class="mono" style="font-size:12px;color:#ffb3ad">5 s</span></div>
+<div class="alert" style="border-color:#f0b040"><svg class="ico" style="color:#f0b040;width:16px;height:16px" viewBox="0 0 24 24"><path d="M12 3 2 21h20zM12 10v5M12 18v.5"/></svg><span style="flex:1">Ammo 61%, depot link ok</span><span class="mono" style="font-size:12px;color:#8fb0bf">0:41</span></div>
+<div class="alert"><span style="width:10px;height:10px;border-radius:50%;background:#50e6a0;flex:none"></span><span style="flex:1;color:#8fb0bf">Relay A destroyed</span><span class="mono" style="font-size:12px;color:#8fb0bf">3:08</span></div>
+</div>
+</div>
+
+<!-- bottom-centre: selection -->
+<div class="panel" style="position:absolute;left:604px;top:824px;width:700px;height:240px;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;justify-content:space-between;align-items:center">
+<div style="display:flex;align-items:baseline;gap:12px"><span class="disp" style="font-size:24px;color:#e8fcff">Vanguard</span><span class="mono" style="font-size:14px;color:#8fb0bf">18 units / wedge / face NE</span></div>
+<span class="tag t-cyan">Attack-move active</span>
+</div>
+<div style="display:flex;gap:8px">
+<div class="glass" style="flex:1;padding:6px;display:flex;flex-direction:column;align-items:center;gap:2px"><img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="width:54px;height:54px" alt=""><span class="mono" style="font-size:13px">TANK 4</span><div class="bar" style="width:70%"><i style="width:81%"></i></div></div>
+<div class="glass" style="flex:1;padding:6px;display:flex;flex-direction:column;align-items:center;gap:2px"><img src="/_blob/da5b12c112e382553cd16772f71535ac" style="width:54px;height:54px" alt=""><span class="mono" style="font-size:13px">AT 3</span><div class="bar" style="width:70%"><i style="width:64%;background:#f0b040"></i></div></div>
+<div class="glass" style="flex:1;padding:6px;display:flex;flex-direction:column;align-items:center;gap:2px"><img src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="width:54px;height:54px" alt=""><span class="mono" style="font-size:13px">INF 8</span><div class="bar" style="width:70%"><i style="width:72%"></i></div></div>
+<div class="glass" style="flex:1;padding:6px;display:flex;flex-direction:column;align-items:center;gap:2px"><img src="/_blob/26db18ce2f6a04a6002dc9e4a19db082" style="width:54px;height:54px" alt=""><span class="mono" style="font-size:13px">AA 2</span><div class="bar" style="width:70%"><i style="width:90%"></i></div></div>
+<div class="glass" style="flex:1;padding:6px;display:flex;flex-direction:column;align-items:center;gap:2px"><img src="/_blob/9c0496c20fb3ac15183f7c5e11871c31" style="width:54px;height:54px" alt=""><span class="mono" style="font-size:13px">AIR 1</span><div class="bar" style="width:70%"><i style="width:48%;background:#f0b040"></i></div></div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+<div style="display:flex;flex-direction:column;gap:3px"><span class="cap">Ammunition</span><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="flex:1"><i style="width:61%;background:#f0b040"></i></div><span class="mono" style="font-size:13px">61%</span></div></div>
+<div style="display:flex;flex-direction:column;gap:3px"><span class="cap">Supply path</span><span style="font-size:14px;color:#50e6a0">Connected, 2 hops to depot</span></div>
+<div style="display:flex;flex-direction:column;gap:3px"><span class="cap">Order, then queued</span><span style="font-size:14px">Move up, then focus Core</span></div>
+</div>
+</div>
+
+<!-- bottom-right: deck -->
+<div class="panel" style="position:absolute;left:1320px;top:824px;width:584px;height:240px;padding:12px;display:flex;flex-direction:column;gap:10px">
+<div style="display:flex;gap:4px">
+<span class="cap" style="padding:7px 12px;border:1px solid #1b3342">Build</span>
+<span class="cap" style="padding:7px 12px;border:1px solid #1b3342">Units</span>
+<span class="cap" style="padding:7px 12px;border:1px solid #40dceb;background:#104656;color:#e8fcff">Orders</span>
+<span class="cap" style="padding:7px 12px;border:1px solid #1b3342">Science</span>
+<span class="cap" style="padding:7px 12px;border:1px solid #1b3342">Logistics</span>
+</div>
+<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;flex:1">
+<button type="button" class="btn pri" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">Attack-move</span><span class="hkey">A</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">Stop</span><span class="hkey">S</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">Hold</span><span class="hkey">H</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">Focus</span><span class="hkey">F</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0;border-color:#f0b040;color:#f0b040"><span style="font-size:15px">Resupply</span><span class="hkey">R</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">Spread</span><span class="hkey">Z</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">Queue</span><span class="hkey">Shift</span></button>
+<button type="button" class="btn" style="flex-direction:column;gap:2px;padding:0;min-height:0"><span style="font-size:15px">HQ</span><span class="hkey">Home</span></button>
+</div>
+<div style="font-size:13px;color:#8fb0bf">Right-click previews its meaning before confirming. Ctrl+1 stores this group.</div>
+</div>
+
+<!-- vignette -->
+<div style="position:absolute;left:0;top:0;width:1920px;height:1080px;pointer-events:none;background:radial-gradient(1400px 900px at 50% 45%,rgba(0,0,0,0) 55%,rgba(0,0,0,.45))"></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

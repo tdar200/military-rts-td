@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Build deck and placement</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080">
+  <defs>
+    <filter id="bl"><feGaussianBlur stdDeviation="40"/></filter>
+    <mask id="vis"><rect width="1920" height="1080" fill="#fff"/><g filter="url(#bl)" fill="#000"><circle cx="470" cy="470" r="640"/><circle cx="1000" cy="520" r="260"/></g></mask>
+    <pattern id="tg" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"/></pattern>
+  </defs>
+  <rect width="1920" height="1080" fill="#050b12" opacity=".4" mask="url(#vis)"/>
+  <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="rgba(64,220,235,.06)" stroke="#40dceb" stroke-width="3" stroke-linejoin="round"/>
+  <!-- build grid shown while placing, 48px tiles -->
+  <rect x="96" y="288" width="912" height="672" fill="url(#tg)"/>
+  <!-- footprint 4x3 tiles at (576,480) -->
+  <rect x="576" y="480" width="192" height="144" fill="rgba(80,230,160,.30)" stroke="#50e6a0" stroke-width="2"/>
+  <rect x="720" y="576" width="48" height="48" fill="rgba(240,78,70,.38)" stroke="#f04e46" stroke-width="2"/>
+  <path d="M576 480h192v144H576z" fill="none" stroke="#e8fcff" stroke-width="1" stroke-dasharray="4 4"/>
+  <!-- link to ore, adjacency range -->
+  <path d="M768 504 C820 480 840 470 862 450" fill="none" stroke="#96f5ff" stroke-width="2" stroke-dasharray="6 5"/>
+  <circle cx="672" cy="552" r="190" fill="none" stroke="rgba(150,245,255,.35)" stroke-dasharray="10 8"/>
+</svg>
+
+<div class="lbl" style="left:70px;top:70px;font-size:20px">Sunfield</div>
+<div class="lbl w" style="left:775px;top:288px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
+<div class="lbl" style="left:380px;top:845px;font-size:18px">Hollow Wood</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="20">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+<img class="spr" src="/_blob/6c29c5788f12d88cfae3914221f234a9" alt="" style="left:556px;top:430px;width:230px;height:230px;opacity:.82;z-index:1500;filter:drop-shadow(0 0 16px rgba(80,230,160,.6))">
+<div class="pin" style="left:792px;top:392px;z-index:2000"><span class="dot"></span>Ore +4<span class="t-dim">in range</span></div>
+
+<!-- placement card at the cursor -->
+<div class="a panel" style="left:604px;top:690px;width:340px;padding:12px 14px;z-index:2600">
+  <div style="display:flex;align-items:center;justify-content:space-between"><div class="disp" style="font-size:22px;color:#e8fcff">Placing Refinery</div><span class="tag t-warn">1 tile blocked</span></div>
+  <div class="sub" style="margin-top:2px">Footprint 4 x 3 tiles on Grassland, flat</div>
+  <div style="margin-top:8px">
+    <div class="row"><span class="t-dim">Ore in range</span><span class="mono t-good">Bank deposit, 5 tiles, +20% output</span></div>
+    <div class="row"><span class="t-dim">Slope</span><span class="mono t-good">0 deg</span></div>
+    <div class="row"><span class="t-dim">Blocked tile</span><span class="mono t-bad">Shore sand, cannot build</span></div>
+    <div class="row"><span class="t-dim">Power</span><span class="mono t-warn">-25 kW, grid over capacity</span></div>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>840</b><span class="d">+38/m</span></div>
+  <div class="chip"><span class="t-dim">WORK</span><b>612</b><span class="d">+22/m</span></div>
+  <div class="chip" style="border-color:#f0b040"><span class="t-dim">POWER</span><b class="t-warn">160 / 168 kW</b><span class="t-warn" style="font-size:11px">-25 on build</span></div>
+  <div class="chip"><span class="t-dim">CREW</span><b>23 / 60</b></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="border-color:#40dceb"><span class="t-cyan">PLACEMENT</span><span class="key">R</span><span class="t-dim">rotate</span><span class="key">Enter</span><span class="t-dim">confirm</span><span class="key">Esc</span><span class="t-dim">cancel</span></div>
+  <div class="chip" style="height:36px;border-color:#f0b040"><span class="t-warn">WAVE 03</span><span class="disp" style="font-size:22px;color:#e8fcff">01:52</span></div>
+</div>
+
+<!-- MINIMAP -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Land</span><span class="key">Res</span><span class="key">Bdr</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat"></div>
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <div class="a" style="left:-4px;top:0;width:120px;height:132px;border:1.5px solid #40dceb;background:rgba(64,220,235,.12);border-radius:0 0 18px 0"></div>
+    <div class="a" style="left:-20px;top:0;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<!-- GRID PROJECTION (left, above minimap) -->
+<div class="a panel" style="left:12px;top:560px;width:332px;padding:12px 14px;z-index:3000">
+  <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="cap">Projected grid</div><div><span class="disp" style="font-size:24px;color:#f0b040">185 / 168 kW</span></div></div>
+  <div style="position:relative;height:14px;border:1px solid #1b3342;background:#0b1620;margin-top:6px"><div class="a" style="left:0;top:0;height:100%;width:70%;background:#40dceb"></div><div class="a" style="left:70%;top:0;height:100%;width:12%;background:#f0b040"></div><div class="a" style="left:82%;top:0;height:100%;width:6%;background:repeating-linear-gradient(135deg,#f04e46 0,#f04e46 4px,#7a1f1b 4px,#7a1f1b 8px)"></div><div class="a" style="left:82%;top:-5px;width:2px;height:22px;background:#cee8f0"></div></div>
+  <div style="font-size:13px;margin-top:6px"><span class="mono t-bad">17 kW over.</span> <span class="t-dim">Build a Reactor beside the river for +12 kW cooling.</span></div>
+</div>
+
+<!-- DECK (expanded) -->
+<div class="a panel" style="left:1124px;top:494px;width:780px;height:570px;display:flex;flex-direction:column;z-index:3000">
+  <div style="display:flex;border-bottom:1px solid #284e60"><span class="tab on" style="border-radius:0;height:46px">Build</span><span class="tab" style="border-radius:0;height:46px;border-color:transparent">Units</span><span class="tab" style="border-radius:0;height:46px;border-color:transparent">Orders</span><span class="tab" style="border-radius:0;height:46px;border-color:transparent">Science</span><span class="tab" style="border-radius:0;height:46px;border-color:transparent">Logistics</span></div>
+  <div style="padding:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+    <sc-for list="{{cards}}" as="c" hint-placeholder-count="12">
+      <div style="height:112px;border:1px solid {{c.bd}};background:rgba(8,17,26,.92);border-radius:3px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;opacity:{{c.op}};box-shadow:{{c.sh}}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><img src="{{c.img}}" alt="" style="width:42px;height:42px;object-fit:contain"><span class="key">{{c.key}}</span></div>
+        <div class="disp" style="font-size:17px;line-height:18px;color:#e8fcff;white-space:nowrap">{{c.name}}</div>
+        <div class="mono" style="font-size:12px;color:#cee8f0;white-space:nowrap">{{c.cost}}</div>
+        <div style="font-size:12px;color:{{c.nc}};white-space:nowrap">{{c.note}}</div>
+      </div>
+    </sc-for>
+  </div>
+  <div class="mono sub" style="padding:0 14px;display:flex;gap:18px;font-size:12px"><span>M materials</span><span>W work</span><span>kW power draw (+ is output)</span></div>
+  <div style="margin:auto 12px 12px;border:1px solid #f0b040;background:rgba(240,176,64,.06);border-radius:3px;padding:8px 12px;display:flex;align-items:center;gap:14px;height:60px">
+    <img src="/_blob/bbb3bae9af99ea696ff5f34401784754" alt="" style="width:40px;height:40px;object-fit:contain">
+    <div style="flex:1"><div style="display:flex;gap:10px;align-items:center"><span class="disp" style="font-size:17px;color:#e8fcff">Queue: Supply Depot</span><span class="tag t-warn">Stalled</span></div><div style="font-size:14px">Waiting on materials: 12 short, delivered 128 / 140</div></div>
+    <div style="width:120px"><div class="bar"><i style="width:91%;background:#f0b040"></i></div><div class="mono sub" style="text-align:right;margin-top:3px;font-size:12px">91% delivered</div></div>
+  </div>
+</div>
+
+<!-- cursor -->
+<svg class="a" style="left:670px;top:538px;z-index:2700" width="22" height="28" viewBox="0 0 22 28"><path d="M2 2l16 14-7 1 4 8-3 1-4-8-6 5z" fill="#fff" stroke="#000" stroke-width="1.2"/></svg>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const I = { pp:'b32b316f8a54cfb3e4e96b8ab7a2f79e', cc:'5828f353f51d19ec36c3c638831bfb96', ref:'6c29c5788f12d88cfae3914221f234a9', bar:'c28b4de3839198732e73d3041feec1e6', fnd:'bbb3bae9af99ea696ff5f34401784754', fl:'b68e987fd5fe7400ef76a4e86344f108', gt:'508d97c7b872d6502bb31b3fe2de001c', aa:'318ba1a2dd09b4736f000e8ba021bf70', hv:'439ac4aa47c8b40430b3ce1b7550277d', tank:'87aab1971d525ecad863691237ae2a71', lab:'8cb9cb29d95752ec982142bf671a1e6d', heli:'df45512203a3212ed1030c81c397e959', wall:'a208753ee858587a05fa96e19584d2f8' };
+    const w = [['pp',150,310,170],['pp',110,450,160],['cc',360,300,250],['fnd',330,100,170],['fl',570,360,80],['bar',400,640,200],['lab',610,230,150],['gt',735,330,115],['gt',880,560,115],['aa',780,330,85],['hv',790,455,110],['tank',700,830,140]];
+    I.bar = 'c28b4de3839198732e73d3041feec1e6';
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1], top: a[2], w: a[3], op: 1, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    const mk = (name, img, cost, note, key, o) => Object.assign({ name, img: B + I[img], cost, note, key, nc: '#8fb0bf', bd: '#1b3342', op: 1, sh: 'none' }, o || {});
+    const cards = [
+      mk('Reactor','pp','220 M 240 W','+80 kW, river +12','P',{nc:'#50e6a0'}),
+      mk('Refinery','ref','300 M 300 W','Ore +20%, -25 kW','R',{bd:'#96f5ff',sh:'0 0 0 1px rgba(64,220,235,.5)'}),
+      mk('Barracks','bar','180 M 200 W','Trains infantry','B'),
+      mk('Vehicle Fac.','bar','280 M 360 W','Needs Barracks','V'),
+      mk('Laser Turret','gt','150 M 120 W','+25% high ground','G',{nc:'#50e6a0'}),
+      mk('AA Turret','aa','170 M 140 W','Locked: air defence','A',{op:.5}),
+      mk('Wall','wall','20 M 20 W','Forest gives cover','W'),
+      mk('Supply Depot','fnd','140 M 160 W','Feeds 9 tiles','D'),
+      mk('Lab','lab','320 M 320 W','Needs Reactor','L'),
+      mk('Battery','pp','160 M 180 W','Locked: battery','T',{op:.5}),
+      mk('Floodlight','fl','60 M 40 W','Night vision +4','F'),
+      mk('Airfield','heli','360 M 400 W','Locked: aircraft','K',{op:.5})
+    ];
+    return { sprites, cards };
+  }
+}
+</script>
+</body>
+</html>

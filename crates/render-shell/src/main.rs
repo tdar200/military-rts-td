@@ -122,8 +122,7 @@ const MAX_ZOOM: f32 = 4.0;
 /// Wheel-tick zoom step (per detent).
 const ZOOM_STEP: f32 = 0.12;
 /// Surviving this many waves earns the celebratory "BEACHHEAD SECURED" milestone.
-/// The run keeps going — survival stays an endurance mode; this is the goal to
-/// beat, not an ending.
+/// The mission still ends only when either Command Center is destroyed.
 const SURVIVAL_MILESTONE_WAVE: u32 = 5;
 
 /// Top-level screen state.
@@ -131,6 +130,31 @@ const SURVIVAL_MILESTONE_WAVE: u32 = 5;
 enum Phase {
     Title,
     Playing,
+}
+
+#[derive(Clone, Copy)]
+struct OrderMarker {
+    world: SimVec2,
+    attack: bool,
+    age: f32,
+}
+
+fn remember_order(commands: &[Command], markers: &mut Vec<OrderMarker>) {
+    let order = commands.iter().find_map(|command| match command {
+        Command::AttackMove { target, .. } => Some((*target, true)),
+        Command::Move { target, .. } | Command::SetRally { target, .. } => Some((*target, false)),
+        _ => None,
+    });
+    if let Some((world, attack)) = order {
+        if markers.len() >= 12 {
+            markers.remove(0);
+        }
+        markers.push(OrderMarker {
+            world,
+            attack,
+            age: 0.0,
+        });
+    }
 }
 
 /// The player's current selection: a group of friendly units and/or one planet.
@@ -282,10 +306,11 @@ async fn main() {
     // Attack-move mode: armed by `A`, consumed by the next left/right map click.
     let mut attack_move_armed = false;
     let mut pending = Vec::new();
+    let mut order_markers: Vec<OrderMarker> = Vec::new();
     let mut accumulator = 0.0_f32;
     let mut paused = false;
-    // Sim speed multiplier (gears 1/2/4/8×): Civ-pace games need a fast-forward for the
-    // quiet stretches. `-` slows, `=`/`+` speeds up; determinism is untouched
+    // Sim speed multiplier (gears 1/2/4/8×): optional fast-forward for quieter
+    // build-up stretches. `-` slows, `=`/`+` speeds up; determinism is untouched
     // (the same ticks run, just more per wall-clock second).
     let mut game_speed: u32 = 1;
     let mut research_open = false;
@@ -316,18 +341,18 @@ async fn main() {
     // Audio bookkeeping: one-shot game-over jingle + wave-incoming alarm edges.
     let mut over_announced = false;
     let mut prev_wave_secs: i64 = i64::MAX;
-    // Commanded-time auto-pause: freeze + banner on a key event so the player is
-    // never ambushed mid-menu and never misses a beat. Edge-detected, fires once.
-    let mut auto_pause_msg: Option<(&'static str, f32)> = None;
+    // Real-time event banner: important strategic events are announced without
+    // freezing the battlefield. The player alone controls pause with Space.
+    let mut event_msg: Option<(&'static str, f32)> = None;
     let mut prev_era: u8 = 0;
     let mut prev_researching = false;
     // Whether the current match is a survival run (drives the score HUD + summary).
     let mut survival_run = true;
-    // Title-screen mode selection: false = Survival, true = Conquest (N-civ
-    // planetary war with growing cities). Toggled with Left/Right on the title.
-    // Default to Conquest — it's the main game (planets, cities, interplanetary
-    // war); Survival is the legacy siege mode.
-    let mut selected_conquest = true;
+    // Title-screen operation selection: false = Earthfront, the primary direct-
+    // control RTS experience; true = the experimental N-civ planetary sandbox.
+    // Toggled with Left/Right on the title. The game always opens on Earthfront:
+    // empire-scale systems support the campaign, but they do not replace the RTS.
+    let mut selected_conquest = false;
     // Survival perk draft: a modal opens each new wave until all perks are taken.
     let mut perk_open = false;
     let mut prev_waves = 0_u32;
@@ -337,9 +362,9 @@ async fn main() {
 
     loop {
         if phase == Phase::Title {
-            // Two modes: Survival (procedural siege) and Conquest (N-civ
-            // planetary war with growing cities). Left/Right/Tab switches the
-            // selection; Enter/Space/click begins the selected mode.
+            // Earthfront is the primary continuous RTS operation. The planetary
+            // sandbox remains available as an experimental strategic mode.
+            // Left/Right/Tab switches; Enter/Space/click begins the selection.
             if is_key_pressed(KeyCode::Left)
                 || is_key_pressed(KeyCode::Right)
                 || is_key_pressed(KeyCode::Tab)
@@ -360,6 +385,7 @@ async fn main() {
                 view = view::ViewState::default();
                 view.on_tick(&sim);
                 particles.clear();
+                order_markers.clear();
                 camera = anim::Camera::default();
                 hitstop = 0.0;
                 over_announced = false;
@@ -367,7 +393,7 @@ async fn main() {
                 perk_open = false;
                 prev_waves = 0;
                 milestone_flash = 0.0;
-                auto_pause_msg = None;
+                event_msg = None;
                 prev_era = 0;
                 prev_researching = false;
                 audio.set_music(audio::Music::Combat);
@@ -382,6 +408,8 @@ async fn main() {
                 attack_move_armed = false;
                 pending.clear();
                 accumulator = 0.0;
+                game_speed = 1;
+                paused = false;
                 research_open = false;
                 doctrine_open = false;
                 grid_open = false;
@@ -529,7 +557,7 @@ async fn main() {
                     audio.play(audio::Sfx::Victory);
                 }
                 prev_waves = w;
-                if sim.perks(HUMAN).count_ones() < perk::PERK_COUNT {
+                if !sim.is_earthfront() && sim.perks(HUMAN).count_ones() < perk::PERK_COUNT {
                     perk_open = true;
                 }
             }
@@ -588,8 +616,8 @@ async fn main() {
             if is_mouse_button_pressed(MouseButton::Left) && ui::pointer_over_ui() {
                 audio.play(audio::Sfx::UiClick);
             }
-            pending.extend(ui::handle_click(&sim, &mut build_mode));
-            pending.extend(input::gather_commands(
+            let mut new_commands = ui::handle_click(&sim, &mut build_mode);
+            new_commands.extend(input::gather_commands(
                 &sim,
                 &mut selected,
                 &mut drag_start,
@@ -599,6 +627,8 @@ async fn main() {
                 cell,
                 (ox_cam, wtop_cam),
             ));
+            remember_order(&new_commands, &mut order_markers);
+            pending.extend(new_commands);
         }
         // Survey allows only founding — pause/speed/modals are suppressed until
         // the base exists.
@@ -656,7 +686,7 @@ async fn main() {
             && !sector_open
             && is_key_pressed(KeyCode::U)
         {
-            doctrine_open = !doctrine_open;
+            doctrine_open = !sim.is_earthfront() && !doctrine_open;
         }
         // Toggle the read-only capability-grid viewer with X (the matriX/grid).
         // NOT G: G arms the Laser/GunTurret build placement (input.rs), and one
@@ -671,7 +701,7 @@ async fn main() {
             && !sector_open
             && is_key_pressed(KeyCode::X)
         {
-            grid_open = !grid_open;
+            grid_open = !sim.is_earthfront() && !grid_open;
         }
         if grid_open && is_key_pressed(KeyCode::Escape) {
             grid_open = false;
@@ -685,6 +715,7 @@ async fn main() {
             && !doctrine_open
             && !perk_open
             && !grid_open
+            && !sim.is_earthfront()
             && is_key_pressed(KeyCode::K)
         {
             sector_open = !sector_open;
@@ -778,7 +809,25 @@ async fn main() {
         // Enter researches the highlighted node, or click a pip directly. Escape
         // closes. The core validates prereqs/lab/affordability, so a bad pick is a
         // harmless no-op. The cursor is a grid id (era*50 + branch*5 + step).
-        if research_open {
+        if research_open && sim.is_earthfront() {
+            if is_key_pressed(KeyCode::Down) {
+                research_cursor = (research_cursor + 1) % sim.technology_count();
+            }
+            if is_key_pressed(KeyCode::Up) {
+                research_cursor =
+                    (research_cursor + sim.technology_count() - 1) % sim.technology_count();
+            }
+            if is_key_pressed(KeyCode::Enter) {
+                pending.push(Command::Research {
+                    owner: HUMAN,
+                    tech_id: research_cursor as u32,
+                });
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                research_open = false;
+            }
+        }
+        if research_open && !sim.is_earthfront() {
             let (mut era, mut branch, mut step) = (
                 research_cursor as u32 / 50,
                 (research_cursor as u32 / 5) % 10,
@@ -836,6 +885,7 @@ async fn main() {
             view = view::ViewState::default();
             view.on_tick(&sim);
             particles.clear();
+            order_markers.clear();
             camera = anim::Camera::default();
             hitstop = 0.0;
             over_announced = false;
@@ -843,7 +893,7 @@ async fn main() {
             perk_open = false;
             prev_waves = 0;
             milestone_flash = 0.0;
-            auto_pause_msg = None;
+            event_msg = None;
             prev_era = 0;
             prev_researching = false;
             audio.set_music(audio::Music::Combat);
@@ -858,6 +908,8 @@ async fn main() {
             attack_move_armed = false;
             pending.clear();
             accumulator = 0.0;
+            game_speed = 1;
+            paused = false;
             research_open = false;
             doctrine_open = false;
         }
@@ -875,11 +927,15 @@ async fn main() {
             doctrine_open = false;
         }
 
-        // Advance the fixed-timestep sim unless paused, the match is over, or the
-        // research modal is open (the modal freezes time so the player can read it).
+        // Advance unless the PLAYER paused or the match is over. Research and perk
+        // choices are live overlays; only Space deliberately stops battlefield time.
         // Clamp frame time so a stall / slow frame can't dump hundreds of ticks at
         // once (the "spiral of death") and fast-forward past wave spawns.
         let dt = get_frame_time().min(0.1);
+        for marker in &mut order_markers {
+            marker.age += dt;
+        }
+        order_markers.retain(|marker| marker.age < 0.9);
         // Hit-stop freezes the sim (in wall-clock) for a beat on big impacts; the
         // accumulator simply doesn't grow, so no ticks run and rendering continues.
         if hitstop > 0.0 {
@@ -887,7 +943,7 @@ async fn main() {
         } else {
             accumulator += dt * game_speed as f32;
         }
-        if paused || over || research_open || perk_open {
+        if paused || over {
             accumulator = 0.0;
             pending.clear();
         }
@@ -995,19 +1051,16 @@ async fn main() {
         particles.update(dt);
         camera.update(dt);
 
-        // Wave-incoming alarm + auto-pause: a siege telegraphs at 30 s out.
+        // Wave-incoming alarm + real-time warning: a siege telegraphs at 30 s out.
         let wave_secs = sim
             .ticks_until_next_wave()
             .map_or(i64::MAX, |t| (t / 30) as i64);
         if prev_wave_secs > 5 && wave_secs <= 5 {
             audio.play(audio::Sfx::WaveIncoming);
         }
-        // Commanded-time auto-pause edges (skip while a modal already holds time):
-        // siege warning (30 s out), an era advance, and research completing.
-        // Survival-only: the commanded-time auto-pause (never be ambushed
-        // mid-menu). Conquest is real-time grand strategy — auto-pausing on every
-        // AI research/era event would be maddening, so it's suppressed there.
-        if survival_run && !over && !paused && !research_open && !doctrine_open && !perk_open {
+        // Important event edges become banners, never automatic pauses. Conquest
+        // suppresses these human-campaign notices.
+        if survival_run && !over && !paused {
             let era = sim.player_era(HUMAN);
             let researching = sim.research_state(HUMAN).1.is_some();
             let mut event: Option<&'static str> = None;
@@ -1019,8 +1072,7 @@ async fn main() {
                 event = Some("RESEARCH COMPLETE");
             }
             if let Some(msg) = event {
-                paused = true;
-                auto_pause_msg = Some((msg, 4.0));
+                event_msg = Some((msg, 4.0));
             }
             prev_era = era;
             prev_researching = researching;
@@ -1048,8 +1100,20 @@ async fn main() {
         let (sx, sy) = camera.offset(7.0);
 
         draw(
-            &sim, &view, &particles, &selected, drag_start, build_mode, cell, ox_cam, wtop_cam,
-            alpha, sx, sy, &sprites,
+            &sim,
+            &view,
+            &particles,
+            &order_markers,
+            &selected,
+            drag_start,
+            build_mode,
+            cell,
+            ox_cam,
+            wtop_cam,
+            alpha,
+            sx,
+            sy,
+            &sprites,
         );
         if surveying {
             draw_survey_overlay(&sim, cell, ox_cam, wtop_cam, &sprites);
@@ -1155,13 +1219,13 @@ async fn main() {
                 draw_milestone_banner(milestone_flash, &sprites);
             }
         }
-        // Auto-pause banner: what froze the game, and how to resume.
-        if let Some((msg, t)) = auto_pause_msg.as_mut() {
+        // Informational strategic alert; battlefield time continues.
+        if let Some((msg, t)) = event_msg.as_mut() {
             *t -= get_frame_time();
-            if *t <= 0.0 || !paused {
-                auto_pause_msg = None;
+            if *t <= 0.0 {
+                event_msg = None;
             } else {
-                draw_auto_pause_banner(msg, &sprites);
+                draw_event_banner(msg, &sprites);
             }
         }
         if research_open {
@@ -1394,23 +1458,42 @@ fn draw_title(sprites: &Sprites, conquest: bool) {
 
     // --- parchment cartouche ---
     draw_cartouche(c);
-    let (mode_name, mode_desc, mode_line) = if conquest {
+    let (mode_name, mode_desc, mode_points, mode_line) = if conquest {
         (
-            "CONQUEST",
-            "Settle planets, grow cities, conquer the star system.",
-            "Up to 6 civilizations vie for planets; cities grow and mature.".to_string(),
+            "PLANETARY SANDBOX",
+            "Experimental macro-scale civilization simulation.",
+            [
+                "CITIES  •  POPULATION  •  SECTORS",
+                "REAL-TIME EMPIRE AI  •  PLANETARY WAR",
+                "A STRATEGIC TESTBED FOR THE LATER CAMPAIGN",
+            ],
+            "Manage colonies and contest the solar system in real time.".to_string(),
         )
     } else {
         (
-            "SURVIVAL",
-            "Survey a world, found your colony, hold the line.",
+            "EARTHFRONT",
+            "Build a base. Command armies. Defend Earth. Counterattack.",
+            [
+                "BASE & ECONOMY  •  UNIT PRODUCTION  •  DIRECT COMMAND",
+                "REAL-TIME COMBAT  •  ALIEN WAVES  •  COUNTERATTACK",
+                "FULL BATTLEFIELD INTELLIGENCE  •  NO FOG OF WAR",
+            ],
             format!(
-                "Hold {SURVIVAL_MILESTONE_WAVE} escalating sieges on an ever-changing procedural front."
+                "Direct-control RTS: survive {SURVIVAL_MILESTONE_WAVE} escalating alien assaults."
             ),
         )
     };
     centered(mode_name, c.y + 30.0, 24.0, INK, sprites.font_regal());
     centered(mode_desc, c.y + 52.0, 13.0, INK_DIM, sprites.font());
+    for (i, point) in mode_points.into_iter().enumerate() {
+        centered(
+            point,
+            c.y + 98.0 + i as f32 * 32.0,
+            13.0,
+            if i == 1 { INK } else { INK_DIM },
+            sprites.font_bold(),
+        );
+    }
     centered(
         &mode_line,
         c.y + c.h - 16.0,
@@ -1427,21 +1510,21 @@ fn draw_title(sprites: &Sprites, conquest: bool) {
         sprites.font_bold(),
     );
     centered(
-        "Y tech tree  \u{2022}  U doctrines  \u{2022}  K sectors  \u{2022}  Q ability  \u{2022}  X grid  \u{2022}  Space pause  \u{2022}  +/- speed (to 8\u{00d7})",
+        "Drag/Shift select  \u{2022}  Right-click move/attack  \u{2022}  A attack-move  \u{2022}  S stop  \u{2022}  F2 army  \u{2022}  B/P/R/G/W build",
         c.y + c.h + 70.0,
         13.0,
         INK_DIM,
         sprites.font(),
     );
     centered(
-        "1-9 control groups (Ctrl set, Shift add, double-tap recenter)  \u{2022}  ` jump to attack",
+        "1-9 groups  \u{2022}  producer right-click rally  \u{2022}  U repair  \u{2022}  Delete sell  \u{2022}  ` jump to attack",
         c.y + c.h + 92.0,
         13.0,
         INK_DIM,
         sprites.font(),
     );
     centered(
-        "Left / Right or Tab  \u{2022}  switch mode",
+        "Left / Right or Tab  \u{2022}  switch operation  \u{2022}  Earthfront is the primary campaign experience",
         c.y + c.h + 116.0,
         12.0,
         with_alpha(GOLD_HI, 0.75),
@@ -1507,15 +1590,11 @@ fn draw_game_over(
     draw_rectangle_lines(px, py, pw, ph, 1.0, BORDER_NEUTRAL);
     // The human triumphs only as the sole survivor; everything else (a single
     // rival winner, OR a human wipe with multiple AI civs still standing) is a
-    // defeat. Survival victory keeps its "REPELLED" wording; a conquest loss /
-    // human elimination reads "DEFEAT" with the cause beneath it.
+    // defeat. A conquest loss / human elimination reads "DEFEAT" with the cause
+    // beneath it; Earthfront now awards an explicit offensive victory.
     let human_won = winner == Some(HUMAN);
     let (msg, color) = if human_won {
-        if survival_score.is_some() {
-            ("REPELLED", GOOD)
-        } else {
-            ("VICTORY", GOOD)
-        }
+        ("VICTORY", GOOD)
     } else if survival_score.is_some() {
         ("OVERRUN", BAD)
     } else {
@@ -1635,7 +1714,7 @@ fn draw_survey_overlay(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprit
         },
     );
     centered(
-        "click a tile to land your Command Center  \u{2022}  green = beside ore (bonus)",
+        "deploy your Mobile Command Vehicle  \u{2022}  green = beside ore (bonus)",
         by + 22.0,
         15.0,
         TEXT_DIM,
@@ -1659,6 +1738,21 @@ fn draw_survival_hud(sim: &Sim, sprites: &Sprites) {
             font: fb,
             font_size: 20,
             color: GOLD_HI,
+            ..Default::default()
+        },
+    );
+    let objective = "OBJECTIVE: DESTROY THE ALIEN CORE NODE";
+    let ow = measure_text(objective, fb, 13, 1.0).width;
+    let ox = (screen_width() - ow) / 2.0;
+    draw_rectangle(ox - 10.0, y + 9.0, ow + 20.0, 20.0, with_alpha(PANEL, 0.9));
+    draw_text_ex(
+        objective,
+        ox,
+        y + 24.0,
+        TextParams {
+            font: fb,
+            font_size: 13,
+            color: TEAM_ENEMY,
             ..Default::default()
         },
     );
@@ -1741,9 +1835,9 @@ fn draw_attack_move_banner(sprites: &Sprites) {
     draw_line(mx, my + 6.0, mx, my + 16.0, 1.5, BAD);
 }
 
-/// The commanded-time auto-pause banner: names the event that froze the game and
-/// how to resume. Centered high so it doesn't fight the world view.
-fn draw_auto_pause_banner(msg: &str, sprites: &Sprites) {
+/// A real-time strategic event banner. Centered high so it doesn't fight the
+/// world view; explicitly tells the player that the battlefield is still live.
+fn draw_event_banner(msg: &str, sprites: &Sprites) {
     let fb = sprites.font_bold();
     let tw = measure_text(msg, fb, 26, 1.0).width;
     let x = (screen_width() - tw) / 2.0;
@@ -1763,7 +1857,7 @@ fn draw_auto_pause_banner(msg: &str, sprites: &Sprites) {
         },
     );
     centered(
-        "PAUSED \u{2014} Space to resume",
+        "REAL-TIME ALERT \u{2014} battlefield active",
         y + 22.0,
         14.0,
         TEXT_DIM,
@@ -1950,24 +2044,29 @@ const fn building_label(b: BuildingKind) -> &'static str {
     match b {
         BuildingKind::CommandCenter => "Command",
         BuildingKind::PowerPlant => "Reactor",
-        BuildingKind::Refinery => "Extractor",
-        BuildingKind::Barracks => "Hangar",
+        BuildingKind::Refinery => "Refinery",
+        BuildingKind::Barracks => "Barracks",
         BuildingKind::GunTurret => "Laser Turret",
         BuildingKind::AaTurret => "Flak Turret",
         BuildingKind::Wall => "Wall",
         BuildingKind::ResearchLab => "Research Lab",
         BuildingKind::AntimatterPlant => "Antimatter",
+        BuildingKind::VehicleFactory => "Vehicle Factory",
+        BuildingKind::Airfield => "Airfield",
+        BuildingKind::SupplyDepot => "Supply Depot",
+        BuildingKind::Battery => "Battery",
     }
 }
 
 /// Short label for a unit kind (tech-tree unlock hints).
 const fn unit_label(u: UnitKind) -> &'static str {
     match u {
-        UnitKind::Infantry => "Infantry",
-        UnitKind::Tank => "Crawler",
-        UnitKind::AntiArmor => "Lancer",
+        UnitKind::Infantry => "Riflemen",
+        UnitKind::Tank => "Battle Tank",
+        UnitKind::AntiArmor => "Rocket Team",
         UnitKind::Helicopter => "Gunship",
         UnitKind::Capital => "Capital",
+        UnitKind::Harvester => "Ore Harvester",
     }
 }
 
@@ -2427,6 +2526,60 @@ const fn status_color(status: TechStatus, reality: RealityClass) -> Color {
 /// highlighted; the panel below reads out the selected node. Toggle with Y;
 /// ←/→ era, ↑/↓ branch, [ ] step, Enter/click to research, Esc closes.
 fn draw_research_modal(sim: &Sim, cursor: usize, sprites: &Sprites) {
+    if sim.is_earthfront() {
+        draw_rectangle(
+            0.0,
+            0.0,
+            screen_width(),
+            screen_height(),
+            Color::from_rgba(0, 0, 0, 235),
+        );
+        centered(
+            "EARTHFRONT SCIENCE - UP / DOWN, ENTER TO RESEARCH, ESC TO CLOSE",
+            36.0,
+            19.0,
+            GOLD,
+            sprites.font_bold(),
+        );
+        centered(
+            sim.economy_view(HUMAN).research_status,
+            62.0,
+            16.0,
+            TEXT,
+            sprites.font(),
+        );
+        let available = sim.available_research(HUMAN);
+        let (known, _) = sim.research_state(HUMAN);
+        let row_height = ((screen_height() - 155.0) / sim.technology_count() as f32).min(42.0);
+        for id in 0..sim.technology_count() {
+            if let Some(node) = sim.technology(id as u32) {
+                let y = 90.0 + id as f32 * row_height;
+                let status = if known.get(id as u32) {
+                    "COMPLETE"
+                } else if available.contains(&(id as u32)) {
+                    "READY"
+                } else {
+                    "NEEDS LAB / MATERIAL / PREREQUISITES"
+                };
+                let label = format!(
+                    "{}  {}  |  M{}  |  {}",
+                    if id == cursor { ">" } else { " " },
+                    node.name,
+                    node.money,
+                    status
+                );
+                draw_text(
+                    &label,
+                    28.0,
+                    y,
+                    18.0,
+                    if id == cursor { GOLD } else { WHITE },
+                );
+                draw_text(node.unlocks[0].name, 48.0, y + 16.0, 14.0, TEXT_DIM);
+            }
+        }
+        return;
+    }
     draw_rectangle(
         0.0,
         0.0,
@@ -2586,6 +2739,7 @@ fn draw(
     sim: &Sim,
     view: &view::ViewState,
     particles: &particles::Particles,
+    order_markers: &[OrderMarker],
     selected: &Selection,
     drag_start: Option<(f32, f32)>,
     build_mode: Option<BuildingKind>,
@@ -2603,17 +2757,21 @@ fn draw(
     let ox = ox_base + sx;
     let wtop = wtop_base + sy;
     draw_ground(sim, cell, ox, wtop);
-    // Resource deposits sit on the ground, above the terrain but under pieces/fog.
-    draw_deposits(sim, cell, ox, wtop);
+    draw_base_roads(sim, cell, ox, wtop);
     // Scorch decals sit on the ground, under terrain and pieces.
     particles.draw_scorches(ox, wtop, cell);
     draw_terrain(sim, cell, ox, wtop);
+    draw_environment_props(sim, cell, ox, wtop, sprites);
+    // Resource deposits sit above terrain dressing and under pieces.
+    draw_deposits(sim, cell, ox, wtop, sprites);
     // Cities: each planet is a glowing world that grows with its colony. Drawn
     // BEFORE the pieces so on-planet buildings (Command Center, turrets,
     // refineries) render ON TOP of the planet disc instead of being buried under
     // it — otherwise the base the player builds is invisible. The planets' pop
     // numbers and name labels sit above/below the disc, clear of the pieces.
     draw_cities(sim, cell, ox, wtop, sprites);
+    draw_structure_foundations(sim, cell, ox, wtop, sprites);
+    draw_wall_connections(sim, cell, ox, wtop);
     for v in sim.views() {
         // Per-civ identity, matching the minimap + planet discs (which already use
         // `civ_color`). The binary human-cyan / everyone-red split made a 4-civ
@@ -2627,7 +2785,7 @@ fn draw(
         };
         let (texture, base_size, is_building) = match v.kind {
             EntityKindView::Building(b) => (
-                sprites.building(b),
+                sprites.building_for(b, v.owner != HUMAN),
                 if matches!(b, BuildingKind::CommandCenter) {
                     cell * 1.9
                 } else {
@@ -2636,46 +2794,95 @@ fn draw(
                 true,
             ),
             EntityKindView::Unit(u) => (
-                sprites.unit(u),
-                if matches!(u, UnitKind::Tank) {
-                    cell * 1.25
-                } else {
-                    cell * 1.05
+                sprites.unit_for(u, v.owner != HUMAN),
+                match u {
+                    UnitKind::Capital => cell * 1.58,
+                    UnitKind::Tank | UnitKind::AntiArmor => cell * 1.25,
+                    UnitKind::Helicopter => cell * 1.18,
+                    UnitKind::Infantry | UnitKind::Harvester => cell * 1.05,
                 },
                 false,
             ),
         };
         // Smoothly interpolated transform + animated stats from the view layer,
         // falling back to the raw sim values if the entity isn't tracked yet.
-        let (wx, wy, hp, max_hp, sh, max_sh, scale, flash) = view.entity(v.id, alpha).map_or_else(
-            || {
-                (
-                    v.pos.x.to_bits() as f32 / 65536.0,
-                    v.pos.y.to_bits() as f32 / 65536.0,
-                    v.hp.to_bits() as f32 / 65536.0,
-                    (v.max_hp.to_bits() as f32 / 65536.0).max(1.0),
-                    v.shield.to_bits() as f32 / 65536.0,
-                    v.max_shield.to_bits() as f32 / 65536.0,
-                    1.0,
-                    0.0,
-                )
-            },
-            |e| {
-                (
-                    e.world.x,
-                    e.world.y,
-                    e.hp,
-                    e.max_hp,
-                    e.shield,
-                    e.max_shield,
-                    e.scale,
-                    e.flash,
-                )
-            },
-        );
+        let (wx, wy, hp, max_hp, sh, max_sh, scale, flash, facing_left, moving, construction) =
+            view.entity(v.id, alpha).map_or_else(
+                || {
+                    (
+                        v.pos.x.to_bits() as f32 / 65536.0,
+                        v.pos.y.to_bits() as f32 / 65536.0,
+                        v.hp.to_bits() as f32 / 65536.0,
+                        (v.max_hp.to_bits() as f32 / 65536.0).max(1.0),
+                        v.shield.to_bits() as f32 / 65536.0,
+                        v.max_shield.to_bits() as f32 / 65536.0,
+                        1.0,
+                        0.0,
+                        false,
+                        false,
+                        1.0,
+                    )
+                },
+                |e| {
+                    (
+                        e.world.x,
+                        e.world.y,
+                        e.hp,
+                        e.max_hp,
+                        e.shield,
+                        e.max_shield,
+                        e.scale,
+                        e.flash,
+                        e.facing_left,
+                        e.moving,
+                        e.construction,
+                    )
+                },
+            );
+        let construction = if v.construction_total > 0 {
+            1.0 - v.construction_remaining as f32 / v.construction_total as f32
+        } else {
+            construction
+        };
         let x = ox + wx * cell;
         let y = wtop + wy * cell;
-        draw_piece(x, y, base_size * scale, texture, team, is_building, flash);
+        let lift = match v.kind {
+            EntityKindView::Unit(UnitKind::Helicopter) => {
+                cell * (0.2 + 0.04 * (get_time() as f32 * 5.0).sin())
+            }
+            EntityKindView::Unit(_) if moving => {
+                cell * 0.025 * (get_time() as f32 * 13.0).sin().abs()
+            }
+            _ => 0.0,
+        };
+        draw_motion_underlay(v.kind, x, y, base_size, team, moving, lift);
+        draw_piece(
+            x,
+            y,
+            base_size * scale,
+            texture,
+            PieceVisual {
+                team,
+                building: is_building,
+                flash,
+                flip_x: facing_left,
+                lift,
+                construction,
+                damage: 1.0 - hp / max_hp,
+            },
+        );
+        draw_entity_animation(
+            v.kind,
+            x,
+            y,
+            base_size,
+            team,
+            facing_left,
+            moving,
+            lift,
+            flash,
+            construction,
+        );
         draw_health_bar(x, y, cell, hp, max_hp);
         draw_shield_bar(x, y, cell, sh, max_sh);
         if selected.units.contains(&v.id) {
@@ -2689,6 +2896,18 @@ fn draw(
                 1.5,
                 with_alpha(SELECT_RING, 0.35 + pulse * 0.4),
             );
+            if let Some(rally) = v.rally {
+                let rx = ox + tile_to_px(rally.x, cell);
+                let ry = wtop + tile_to_px(rally.y, cell);
+                draw_line(x, y, rx, ry, 1.5, with_alpha(GOOD, 0.55));
+                draw_line(rx, ry - cell * 0.3, rx, ry + cell * 0.18, 2.0, GOOD);
+                draw_triangle(
+                    vec2(rx, ry - cell * 0.3),
+                    vec2(rx + cell * 0.24, ry - cell * 0.2),
+                    vec2(rx, ry - cell * 0.1),
+                    with_alpha(GOOD, 0.9),
+                );
+            }
         }
         if v.stun_ticks > 0 {
             // EMP crackle: a flickering amber ring marks a stunned, silenced unit.
@@ -2698,6 +2917,7 @@ fn draw(
         }
     }
     draw_tracers(sim, cell, ox, wtop);
+    draw_order_markers(order_markers, cell, ox, wtop);
     // Particles (muzzle flashes, explosions, debris, warp-ins) over the pieces.
     particles.draw(sx, sy);
     // Floating damage numbers, rising and fading.
@@ -2753,6 +2973,38 @@ fn draw(
         if rw > 2.0 || rh > 2.0 {
             draw_rectangle(rx, ry, rw, rh, with_alpha(SELECT_RING, 0.10));
             draw_rectangle_lines(rx, ry, rw, rh, 1.0, with_alpha(SELECT_RING, 0.9));
+        }
+    }
+}
+
+fn draw_order_markers(markers: &[OrderMarker], cell: f32, ox: f32, wtop: f32) {
+    for marker in markers {
+        let t = (marker.age / 0.9).clamp(0.0, 1.0);
+        let x = ox + tile_to_px(marker.world.x, cell);
+        let y = wtop + tile_to_px(marker.world.y, cell);
+        let color = if marker.attack { BAD } else { GOOD };
+        let radius = cell * (0.24 + t * 0.5);
+        draw_circle_lines(x, y, radius, 2.0, with_alpha(color, 1.0 - t));
+        if marker.attack {
+            let arm = cell * 0.22;
+            draw_line(
+                x - arm,
+                y - arm,
+                x + arm,
+                y + arm,
+                2.0,
+                with_alpha(color, 1.0 - t),
+            );
+            draw_line(
+                x + arm,
+                y - arm,
+                x - arm,
+                y + arm,
+                2.0,
+                with_alpha(color, 1.0 - t),
+            );
+        } else {
+            draw_circle(x, y, cell * 0.07, with_alpha(color, 1.0 - t));
         }
     }
 }
@@ -3269,11 +3521,6 @@ fn draw_cities(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
     }
 }
 
-/// Scales a color's RGB toward black by `factor` (keeps alpha).
-fn darken(c: Color, factor: f32) -> Color {
-    Color::new(c.r * factor, c.g * factor, c.b * factor, c.a)
-}
-
 /// A tight contact shadow under a piece, two stacked ellipses for a soft edge.
 fn contact_shadow(x: f32, y: f32, base: f32) {
     let sy = y + base * 0.92;
@@ -3288,22 +3535,19 @@ fn contact_shadow(x: f32, y: f32, base: f32) {
     );
 }
 
-/// Draws the white silhouette icon (or a fallback shape) centered on a piece.
-fn piece_icon(x: f32, y: f32, isz: f32, texture: Option<&Texture2D>, team: Color, building: bool) {
+/// Draws native-colour isometric art (or a simple fallback shape) centered on a
+/// piece. Team colour stays in the ground marker so metal, concrete and infantry
+/// details remain legible.
+fn piece_icon(
+    x: f32,
+    y: f32,
+    isz: f32,
+    texture: Option<&Texture2D>,
+    team: Color,
+    building: bool,
+    flip_x: bool,
+) {
     if let Some(tex) = texture {
-        // Hologram: a slightly larger team-tinted glow copy behind a bright core,
-        // so the silhouette reads as a projection rather than solid clip-art.
-        let g = isz * 1.12;
-        draw_texture_ex(
-            tex,
-            x - g / 2.0,
-            y - g / 2.0,
-            with_alpha(team, 0.5),
-            DrawTextureParams {
-                dest_size: Some(vec2(g, g)),
-                ..DrawTextureParams::default()
-            },
-        );
         draw_texture_ex(
             tex,
             x - isz / 2.0,
@@ -3311,6 +3555,7 @@ fn piece_icon(x: f32, y: f32, isz: f32, texture: Option<&Texture2D>, team: Color
             WHITE,
             DrawTextureParams {
                 dest_size: Some(vec2(isz, isz)),
+                flip_x,
                 ..DrawTextureParams::default()
             },
         );
@@ -3321,68 +3566,279 @@ fn piece_icon(x: f32, y: f32, isz: f32, texture: Option<&Texture2D>, team: Color
     }
 }
 
-/// Draws one unit/building as a grounded game piece. Units get a fake-lit team
-/// dome (stacked discs + a specular dot); buildings get a fake-extruded team
-/// foundation slab with a thin gold baseplate tying them to the HUD. Both sit on a
-/// contact shadow, with the white silhouette framed by the team base so faction
-/// reads instantly and the piece has volume rather than looking like flat clip-art.
-fn draw_piece(
-    x: f32,
-    y: f32,
-    size: f32,
-    texture: Option<&Texture2D>,
+/// Draws one unit/building as a grounded battlefield object. A compact faction
+/// ellipse sits beneath native-colour art: allegiance remains obvious without
+/// turning detailed machinery into a board-game counter.
+#[derive(Clone, Copy)]
+struct PieceVisual {
     team: Color,
     building: bool,
     flash: f32,
-) {
+    flip_x: bool,
+    lift: f32,
+    construction: f32,
+    damage: f32,
+}
+
+fn draw_piece(x: f32, y: f32, size: f32, texture: Option<&Texture2D>, visual: PieceVisual) {
+    let PieceVisual {
+        team,
+        building,
+        flash,
+        flip_x,
+        lift,
+        construction,
+        damage,
+    } = visual;
     let base = size * 0.5;
     contact_shadow(x, y, base);
+    let marker_y = y + base * 0.36;
+    draw_ellipse(
+        x,
+        marker_y,
+        base * if building { 0.92 } else { 0.76 },
+        base * if building { 0.34 } else { 0.27 },
+        0.0,
+        with_alpha(team, 0.32),
+    );
+    draw_ellipse_lines(
+        x,
+        marker_y,
+        base * if building { 0.92 } else { 0.76 },
+        base * if building { 0.34 } else { 0.27 },
+        0.0,
+        1.5,
+        with_alpha(team, 0.88),
+    );
     if building {
-        let s = size * 0.86;
-        // Soft holographic projection bloom around the structure.
-        glow_rect(x - s / 2.0, y - s / 2.0, s, s, with_alpha(team, 0.28), 3);
-        // Extruded team slab, lit top face, holo-rimmed (a map "plinth").
-        draw_rectangle(x - s / 2.0, y - s / 2.0, s, s, darken(team, 0.45));
-        draw_rectangle(x - s / 2.0, y - s / 2.0, s, s * 0.5, darken(team, 0.66));
-        draw_rectangle_lines(x - s / 2.0, y - s / 2.0, s, s, 2.0, DECO_GOLD);
-        draw_line(
-            x - s / 2.0,
-            y - s / 2.0 + 1.0,
-            x + s / 2.0,
-            y - s / 2.0 + 1.0,
-            1.0,
-            DECO_GOLD_HI,
-        );
-        // Thin gold baseplate tying structures to the gold HUD.
-        draw_rectangle(x - s / 2.0, y + s / 2.0 - 2.0, s, 2.0, GOLD);
-        piece_icon(x, y, size * 0.6, texture, team, true);
-        if flash > 0.0 {
+        let s = size * 1.18;
+        piece_icon(x, y - size * 0.08 - lift, s, texture, team, true, false);
+        if construction < 1.0 {
+            let top = y - s * 0.58;
+            let left = x - s * 0.5;
+            let reveal_y = top + s * (1.0 - construction);
             draw_rectangle(
-                x - s / 2.0,
-                y - s / 2.0,
+                left,
+                top,
                 s,
-                s,
-                with_alpha(WHITE, flash * 0.6),
+                (reveal_y - top).max(0.0),
+                Color::from_rgba(8, 10, 9, 205),
             );
+            for rail in [0.08_f32, 0.5, 0.92] {
+                let rx = left + s * rail;
+                draw_line(rx, top, rx, top + s, 1.5, with_alpha(WARN, 0.8));
+            }
+            draw_line(left, reveal_y, left + s, reveal_y, 2.5, GOLD_HI);
+            draw_rectangle_lines(left, top, s, s, 1.5, with_alpha(WARN, 0.8));
+        }
+        if damage > 0.28 && construction >= 1.0 {
+            draw_damage_smoke(x, y - size * 0.45, size, damage);
+        }
+        if flash > 0.0 {
+            draw_circle(x, y, size * 0.52, with_alpha(WHITE, flash * 0.5));
         }
     } else {
-        let r = size * 0.58;
-        draw_circle(x, y, r + 4.0, with_alpha(team, 0.14)); // holographic halo
-        draw_circle(x, y, r, darken(team, 0.5)); // base
-        draw_circle(x, y - r * 0.14, r * 0.82, team); // top-lit bulge
-        draw_circle_lines(x, y, r, 2.0, DECO_GOLD); // gold rim
-        draw_circle_lines(x, y, r - 1.8, 1.0, with_alpha(DECO_GOLD_HI, 0.55)); // inner sheen
-                                                                               // Specular highlight, upper-left.
-        draw_circle(
-            x - r * 0.36,
-            y - r * 0.36,
-            r * 0.18,
-            Color::new(1.0, 1.0, 1.0, 0.32),
+        piece_icon(
+            x,
+            y - size * 0.08 - lift,
+            size * 1.22,
+            texture,
+            team,
+            false,
+            flip_x,
         );
-        piece_icon(x, y, size * 0.6, texture, team, false);
         if flash > 0.0 {
-            draw_circle(x, y, r, with_alpha(WHITE, flash * 0.6));
+            draw_circle(x, y, size * 0.5, with_alpha(WHITE, flash * 0.52));
         }
+    }
+}
+
+/// Layered smoke and intermittent sparks for damaged structures. The effect is
+/// wall-clock driven and presentation-only; damage thresholds come from the
+/// interpolated HP bar already shown to the player.
+fn draw_damage_smoke(x: f32, y: f32, size: f32, damage: f32) {
+    let t = get_time() as f32;
+    let columns = if damage > 0.62 { 3 } else { 2 };
+    for i in 0..columns {
+        let phase = (t * (0.34 + i as f32 * 0.05) + i as f32 * 0.37).fract();
+        let drift = (t * 1.7 + i as f32).sin() * size * 0.08;
+        let px = x + (i as f32 - 1.0) * size * 0.18 + drift;
+        let py = y - phase * size * 0.7;
+        let radius = size * (0.09 + phase * 0.12);
+        let alpha = (1.0 - phase) * (0.18 + damage * 0.28);
+        draw_circle(px, py, radius, Color::new(0.12, 0.13, 0.12, alpha));
+    }
+    if damage > 0.62 && (t * 8.0).fract() < 0.22 {
+        draw_line(x - 3.0, y, x + 4.0, y - 7.0, 2.0, WARN);
+        draw_circle(x + 4.0, y - 7.0, 2.2, WHITE);
+    }
+}
+
+/// Ground interaction beneath moving pieces: displaced dust, wheel wake, and a
+/// detached aircraft shadow. Presentation-only and deliberately subtle.
+fn draw_motion_underlay(
+    kind: EntityKindView,
+    x: f32,
+    y: f32,
+    size: f32,
+    team: Color,
+    moving: bool,
+    lift: f32,
+) {
+    let t = get_time() as f32;
+    if matches!(kind, EntityKindView::Unit(UnitKind::Helicopter)) {
+        draw_ellipse(
+            x + size * 0.16,
+            y + size * 0.34 + lift,
+            size * 0.46,
+            size * 0.14,
+            0.0,
+            Color::from_rgba(0, 0, 0, 85),
+        );
+    }
+    if moving && matches!(kind, EntityKindView::Unit(u) if u != UnitKind::Helicopter) {
+        for i in 0..3 {
+            let phase = (t * 2.2 + i as f32 * 0.31).fract();
+            let lateral = if i % 2 == 0 { -1.0 } else { 1.0 };
+            draw_circle(
+                x + lateral * size * 0.2 - phase * size * 0.15,
+                y + size * 0.3 + phase * size * 0.08,
+                size * (0.045 + phase * 0.04),
+                Color::new(0.48, 0.43, 0.32, (1.0 - phase) * 0.18),
+            );
+        }
+        draw_ellipse_lines(
+            x,
+            y + size * 0.36,
+            size * 0.34,
+            size * 0.11,
+            0.0,
+            1.0,
+            with_alpha(team, 0.3),
+        );
+    }
+}
+
+/// Small continuous animations layered over otherwise static source sprites.
+/// These sell machinery, recoil and altitude until full directional frame sets
+/// are introduced, without changing the simulation or obscuring silhouettes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "overlay animation needs the resolved piece presentation state"
+)]
+fn draw_entity_animation(
+    kind: EntityKindView,
+    x: f32,
+    y: f32,
+    size: f32,
+    team: Color,
+    facing_left: bool,
+    moving: bool,
+    lift: f32,
+    flash: f32,
+    construction: f32,
+) {
+    if construction < 1.0 {
+        return;
+    }
+    let t = get_time() as f32;
+    match kind {
+        EntityKindView::Unit(UnitKind::Helicopter) => {
+            let ry = y - size * 0.34 - lift;
+            let sweep = 0.72 + (t * 18.0).sin().abs() * 0.18;
+            draw_ellipse_lines(
+                x,
+                ry,
+                size * sweep,
+                size * 0.12,
+                0.0,
+                1.4,
+                Color::from_rgba(220, 240, 245, 135),
+            );
+            draw_line(
+                x - size * 0.62,
+                ry,
+                x + size * 0.62,
+                ry,
+                1.2,
+                with_alpha(WHITE, 0.48),
+            );
+        }
+        EntityKindView::Unit(UnitKind::Tank | UnitKind::AntiArmor | UnitKind::Capital) => {
+            let dir = if facing_left { -1.0 } else { 1.0 };
+            let recoil = flash * size * 0.08;
+            let muzzle_x = x + dir * (size * 0.32 - recoil);
+            let muzzle_y = y - size * 0.24;
+            draw_line(
+                x,
+                y - size * 0.18,
+                muzzle_x,
+                muzzle_y,
+                size * 0.055,
+                WALL_EDGE,
+            );
+            draw_line(
+                x,
+                y - size * 0.2,
+                muzzle_x,
+                muzzle_y - 1.0,
+                size * 0.025,
+                WALL_HI,
+            );
+            if moving {
+                draw_circle(
+                    x - dir * size * 0.28,
+                    y - size * 0.04,
+                    size * 0.035,
+                    with_alpha(WARN, 0.45),
+                );
+            }
+        }
+        EntityKindView::Building(BuildingKind::PowerPlant | BuildingKind::AntimatterPlant) => {
+            let pulse = (t * 3.4).sin() * 0.5 + 0.5;
+            draw_circle(
+                x,
+                y - size * 0.42,
+                size * (0.09 + pulse * 0.025),
+                with_alpha(team, 0.25),
+            );
+            draw_circle_lines(
+                x,
+                y - size * 0.42,
+                size * 0.11,
+                1.2,
+                with_alpha(GOLD_HI, 0.6 + pulse * 0.35),
+            );
+        }
+        EntityKindView::Building(BuildingKind::Refinery) => {
+            for i in 0..3 {
+                let phase = (t * 0.8 + i as f32 / 3.0).fract();
+                let px = x - size * 0.24 + phase * size * 0.48;
+                draw_circle(px, y + size * 0.13, size * 0.025, with_alpha(WARN, 0.75));
+            }
+        }
+        EntityKindView::Building(BuildingKind::Barracks | BuildingKind::ResearchLab) => {
+            let blink = if (t * 2.0).fract() > 0.35 { 0.8 } else { 0.2 };
+            draw_circle(
+                x + size * 0.2,
+                y - size * 0.35,
+                size * 0.026,
+                with_alpha(team, blink),
+            );
+        }
+        EntityKindView::Building(BuildingKind::GunTurret | BuildingKind::AaTurret) => {
+            let sweep = t * 1.4;
+            let r = size * 0.18;
+            draw_line(
+                x,
+                y - size * 0.3,
+                x + sweep.cos() * r,
+                y - size * 0.3 + sweep.sin() * r * 0.45,
+                1.2,
+                with_alpha(team, 0.75),
+            );
+        }
+        _ => {}
     }
 }
 
@@ -3585,6 +4041,76 @@ fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
             if (col / 4 + row / 4).is_multiple_of(2) {
                 draw_hex(cx, cy, cell, GROUND_MACRO);
             }
+            // Fixed micro-detail breaks up flat hex fills without introducing
+            // presentation RNG or obscuring unit silhouettes.
+            let seed = u32::from(col)
+                .wrapping_mul(73_856_093)
+                .wrapping_add(u32::from(row).wrapping_mul(19_349_663));
+            let dx = ((seed & 15) as f32 / 15.0 - 0.5) * cell * 0.72;
+            let dy = (((seed >> 4) & 15) as f32 / 15.0 - 0.5) * cell * 0.54;
+            match sim.map().terrain_at(i32::from(col), i32::from(row)) {
+                TerrainKind::Barren if seed.is_multiple_of(3) => {
+                    let rr = cell * (0.035 + ((seed >> 8) & 3) as f32 * 0.012);
+                    draw_circle(cx + dx, cy + dy, rr, with_alpha(WALL_EDGE, 0.42));
+                    draw_circle(
+                        cx + dx - rr * 0.3,
+                        cy + dy - rr * 0.4,
+                        rr * 0.35,
+                        with_alpha(WALL_HI, 0.38),
+                    );
+                }
+                TerrainKind::Plains if seed.is_multiple_of(2) => {
+                    let col = Color::from_rgba(58, 68, 39, 105);
+                    draw_line(
+                        cx + dx,
+                        cy + dy,
+                        cx + dx - 2.0,
+                        cy + dy - cell * 0.12,
+                        1.0,
+                        col,
+                    );
+                    draw_line(
+                        cx + dx,
+                        cy + dy,
+                        cx + dx + 2.0,
+                        cy + dy - cell * 0.1,
+                        1.0,
+                        col,
+                    );
+                }
+                TerrainKind::Fertile => {
+                    let col = Color::from_rgba(70, 112, 62, 120);
+                    for n in -1..=1 {
+                        let px = cx + dx + n as f32 * cell * 0.07;
+                        draw_line(px, cy + dy, px + 1.5, cy + dy - cell * 0.14, 1.2, col);
+                    }
+                }
+                TerrainKind::Rich if seed.is_multiple_of(2) => {
+                    draw_poly(
+                        cx + dx,
+                        cy + dy,
+                        4,
+                        cell * 0.055,
+                        45.0,
+                        with_alpha(GOLD_HI, 0.32),
+                    );
+                }
+                _ => {}
+            }
+            let terrain = sim.map().terrain_at(i32::from(col), i32::from(row));
+            let boundary = hex::neighbors(col, row).iter().any(|&(nx, ny)| {
+                sim.map().tile(nx, ny).is_some() && sim.map().terrain_at(nx, ny) != terrain
+            });
+            if boundary {
+                draw_hex_outline(cx, cy, cell, 2.2, Color::from_rgba(20, 22, 18, 58));
+                draw_hex_outline(
+                    cx,
+                    cy - 1.0,
+                    cell * 0.96,
+                    0.8,
+                    with_alpha(terrain_color(terrain), 0.72),
+                );
+            }
             // Planetary territory: tint the tile by its owning civ (neutral grey
             // for unclaimed planets). Open space (no planet) stays untinted.
             if let Some(pid) = sim.map().planet_at(i32::from(col), i32::from(row)) {
@@ -3637,6 +4163,61 @@ fn draw_ground(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     corner_ornament(ox + bw, wtop + bh, -1.0, -1.0);
 }
 
+/// Concrete service lanes connect nearby structures into a visually coherent
+/// base. Each building links only to its nearest earlier neighbor, avoiding a
+/// dense all-to-all web while naturally producing a small road tree.
+fn draw_base_roads(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+    if sim.planets_len() > 0 {
+        return;
+    }
+    let buildings: Vec<_> = sim
+        .views()
+        .into_iter()
+        .filter(|v| matches!(v.kind, EntityKindView::Building(_)))
+        .collect();
+    for (i, building) in buildings.iter().enumerate() {
+        let nearest = buildings[..i]
+            .iter()
+            .filter(|other| other.owner == building.owner)
+            .map(|other| {
+                let dx = (building.pos.x - other.pos.x).to_bits() as f32 / 65536.0;
+                let dy = (building.pos.y - other.pos.y).to_bits() as f32 / 65536.0;
+                (other, dx * dx + dy * dy)
+            })
+            .filter(|(_, distance)| *distance <= 36.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let Some((other, _)) = nearest else { continue };
+        let ax = ox + tile_to_px(building.pos.x, cell);
+        let ay = wtop + tile_to_px(building.pos.y, cell) + cell * 0.22;
+        let bx = ox + tile_to_px(other.pos.x, cell);
+        let by = wtop + tile_to_px(other.pos.y, cell) + cell * 0.22;
+        draw_line(
+            ax,
+            ay,
+            bx,
+            by,
+            cell * 0.58,
+            Color::from_rgba(28, 29, 26, 180),
+        );
+        draw_line(
+            ax,
+            ay,
+            bx,
+            by,
+            cell * 0.43,
+            Color::from_rgba(96, 92, 78, 210),
+        );
+        draw_line(
+            ax,
+            ay - 1.0,
+            bx,
+            by - 1.0,
+            1.0,
+            Color::from_rgba(170, 160, 130, 80),
+        );
+    }
+}
+
 /// The hovered hex during building placement (mouse → cell), using the shared
 /// camera transform `ox`/`wtop` so the ghost lands under the cursor at any zoom/pan.
 fn mouse_hex(sim: &Sim, cell: f32, ox: f32, wtop: f32) -> (u16, u16) {
@@ -3648,20 +4229,183 @@ fn mouse_hex(sim: &Sim, cell: f32, ox: f32, wtop: f32) -> (u16, u16) {
 
 /// Draws a small cluster of diamonds on each deposit tile so resource nodes read
 /// as distinct map features: cyan (`GOLD`) for Ore, amber (`WARN`) for Alloy.
-/// Placed after `draw_ground` so deposits sit on the ground under pieces and fog.
-fn draw_deposits(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+/// Placed after `draw_ground` so deposits sit on the ground under pieces.
+fn draw_deposits(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
     let r = cell * 0.16;
+    let pulse = (get_time() as f32 * 2.4).sin() * 0.5 + 0.5;
     for (x, y, dep) in sim.map().deposits() {
         let (cx, cy) = hex_center_px(x, y, cell, ox, wtop);
-        let (fill, rim) = match dep.kind {
-            DepositKind::Ore => (GOLD, with_alpha(GOLD_HI, 0.55)),
-            DepositKind::Alloy => (WARN, with_alpha(WARN, 0.55)),
+        let (fill, rim, sprite) = match dep.kind {
+            DepositKind::Ore => (GOLD, with_alpha(GOLD_HI, 0.55), sprites.environment(8)),
+            DepositKind::Alloy => (WARN, with_alpha(WARN, 0.55), sprites.environment(9)),
         };
-        // Faint ring so the cluster reads as a resource node.
-        draw_circle_lines(cx, cy, r * 2.6, 1.0, rim);
-        // Cluster of 4 small diamonds offset from the center.
-        for (dx, dy) in [(-r, 0.0_f32), (r, 0.0), (0.0, -r), (0.0, r)] {
-            draw_poly(cx + dx, cy + dy, 4, r, 45.0, fill);
+        draw_circle(
+            cx,
+            cy + cell * 0.15,
+            cell * 0.36,
+            with_alpha(fill, 0.08 + pulse * 0.06),
+        );
+        draw_circle_lines(cx, cy, r * (2.8 + pulse * 0.3), 1.2, rim);
+        if let Some(tex) = sprite {
+            let size = cell * 1.28;
+            draw_texture_ex(
+                tex,
+                cx - size / 2.0,
+                cy - size * 0.58,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(size, size)),
+                    ..Default::default()
+                },
+            );
+        } else {
+            for (dx, dy) in [(-r, 0.0_f32), (r, 0.0), (0.0, -r), (0.0, r)] {
+                draw_poly(cx + dx, cy + dy, 4, r, 45.0, fill);
+            }
+        }
+    }
+}
+
+/// Sparse, deterministic battlefield dressing. It never hides information or
+/// affects pathing; occupied and resource tiles remain clean and readable.
+fn draw_environment_props(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
+    if sim.planets_len() > 0 {
+        return;
+    }
+    let occupied: Vec<(u16, u16)> = sim
+        .views()
+        .iter()
+        .filter(|v| matches!(v.kind, EntityKindView::Building(_)))
+        .map(|v| hex::from_world(v.pos, sim.map().width(), sim.map().height()))
+        .collect();
+    for row in 0..sim.map().height() {
+        for col in 0..sim.map().width() {
+            if sim.map().deposit(col, row).is_some()
+                || occupied.contains(&(col, row))
+                || !sim
+                    .map()
+                    .tile(i32::from(col), i32::from(row))
+                    .is_some_and(|tile| tile.passable)
+            {
+                continue;
+            }
+            let seed = u32::from(col)
+                .wrapping_mul(73_856_093)
+                .wrapping_add(u32::from(row).wrapping_mul(19_349_663));
+            if !seed.is_multiple_of(17) {
+                continue;
+            }
+            let choices: &[usize] = match sim.map().terrain_at(i32::from(col), i32::from(row)) {
+                TerrainKind::Barren => &[0, 2, 4, 5, 7, 11],
+                TerrainKind::Plains => &[1, 2, 3, 5, 6, 11],
+                TerrainKind::Fertile => &[1, 1, 2, 6],
+                TerrainKind::Rich => &[0, 5, 6, 7],
+            };
+            let index = choices[((seed >> 8) as usize) % choices.len()];
+            let Some(tex) = sprites.environment(index) else {
+                continue;
+            };
+            let (cx, cy) = hex_center_px(col, row, cell, ox, wtop);
+            let size = cell
+                * if matches!(index, 2 | 4 | 6) {
+                    1.38
+                } else {
+                    1.12
+                };
+            let dx = ((seed >> 16) & 7) as f32 / 7.0 * cell * 0.18 - cell * 0.09;
+            draw_texture_ex(
+                tex,
+                cx + dx - size / 2.0,
+                cy - size * 0.58,
+                Color::new(0.92, 0.94, 0.9, 0.92),
+                DrawTextureParams {
+                    dest_size: Some(vec2(size, size)),
+                    flip_x: seed & 1 == 0,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+}
+
+/// Concrete pads seat structures into the terrain and provide a consistent
+/// footprint even when faction sprites have different silhouettes.
+fn draw_structure_foundations(sim: &Sim, cell: f32, ox: f32, wtop: f32, sprites: &Sprites) {
+    let Some(tex) = sprites.environment(10) else {
+        return;
+    };
+    for v in sim.views() {
+        if !matches!(v.kind, EntityKindView::Building(_)) {
+            continue;
+        }
+        let x = ox + tile_to_px(v.pos.x, cell);
+        let y = wtop + tile_to_px(v.pos.y, cell);
+        let size = cell * 1.52;
+        draw_texture_ex(
+            tex,
+            x - size / 2.0,
+            y - size * 0.43,
+            Color::new(0.84, 0.88, 0.86, 0.86),
+            DrawTextureParams {
+                dest_size: Some(vec2(size, size)),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Fills gaps between adjacent wall sprites so a defensive line reads as one
+/// continuous fortification instead of a row of disconnected icons.
+fn draw_wall_connections(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
+    let walls: Vec<_> = sim
+        .views()
+        .into_iter()
+        .filter(|v| matches!(v.kind, EntityKindView::Building(BuildingKind::Wall)))
+        .collect();
+    for (i, a) in walls.iter().enumerate() {
+        for b in walls.iter().skip(i + 1) {
+            let dx = (a.pos.x - b.pos.x).to_bits() as f32 / 65536.0;
+            let dy = (a.pos.y - b.pos.y).to_bits() as f32 / 65536.0;
+            if dx * dx + dy * dy > 2.1 {
+                continue;
+            }
+            let (ax, ay) = (
+                ox + tile_to_px(a.pos.x, cell),
+                wtop + tile_to_px(a.pos.y, cell),
+            );
+            let (bx, by) = (
+                ox + tile_to_px(b.pos.x, cell),
+                wtop + tile_to_px(b.pos.y, cell),
+            );
+            let team = if a.owner == HUMAN {
+                TEAM_PLAYER
+            } else {
+                TEAM_ENEMY
+            };
+            draw_line(
+                ax,
+                ay + cell * 0.18,
+                bx,
+                by + cell * 0.18,
+                cell * 0.34,
+                WALL_EDGE,
+            );
+            draw_line(
+                ax,
+                ay + cell * 0.12,
+                bx,
+                by + cell * 0.12,
+                cell * 0.2,
+                WALL_TOP,
+            );
+            draw_line(
+                ax,
+                ay + cell * 0.02,
+                bx,
+                by + cell * 0.02,
+                1.5,
+                with_alpha(team, 0.65),
+            );
         }
     }
 }
@@ -3683,8 +4427,21 @@ fn draw_build_grid(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     }
 }
 
-/// Draws shot tracers for the most recent combat tick (combat juice): a wide
-/// translucent cyan glow under a bright thin core, so lasers read as energy bolts.
+/// Finds the entity whose muzzle is at an attack origin. Attack events intentionally
+/// remain lightweight position pairs in the deterministic core; this presentation
+/// lookup recovers enough kind information to give each weapon a distinct effect.
+fn attack_source_kind(sim: &Sim, from: SimVec2) -> Option<EntityKindView> {
+    let distance = |v: &rts_core::game::sim::EntityView| {
+        let dx = i128::from((v.pos.x - from.x).to_bits());
+        let dy = i128::from((v.pos.y - from.y).to_bits());
+        dx * dx + dy * dy
+    };
+    sim.views().into_iter().min_by_key(distance).map(|v| v.kind)
+}
+
+/// Draws recent shots with weapon identity: rifle rounds are short gold streaks,
+/// cannons are heavy white-hot shells, rockets leave red-orange trails, and
+/// energy turrets retain the cyan beam language.
 fn draw_tracers(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
     for &(from, to) in sim.recent_attacks() {
         let (fx, fy) = (
@@ -3692,8 +4449,31 @@ fn draw_tracers(sim: &Sim, cell: f32, ox: f32, wtop: f32) {
             wtop + tile_to_px(from.y, cell),
         );
         let (tx, ty) = (ox + tile_to_px(to.x, cell), wtop + tile_to_px(to.y, cell));
-        draw_line(fx, fy, tx, ty, 4.0, with_alpha(TRACER, 0.28));
-        draw_line(fx, fy, tx, ty, 1.5, TRACER);
+        let kind = attack_source_kind(sim, from);
+        let (core, glow, width, head) = match kind {
+            Some(EntityKindView::Unit(UnitKind::Infantry)) => (WARN, WARN, 1.0, 1.8),
+            Some(EntityKindView::Unit(UnitKind::Tank | UnitKind::Capital)) => {
+                (WHITE, WARN, 2.8, 4.2)
+            }
+            Some(
+                EntityKindView::Unit(UnitKind::AntiArmor)
+                | EntityKindView::Building(BuildingKind::AaTurret),
+            ) => (WARN, BAD, 2.2, 3.8),
+            Some(EntityKindView::Unit(UnitKind::Helicopter)) => (WHITE, BAD, 1.6, 2.8),
+            _ => (GOLD_HI, TRACER, 1.5, 2.6),
+        };
+        // Keep rifle fire compact; heavier weapons retain a longer, brighter trail.
+        let trail_start = if matches!(kind, Some(EntityKindView::Unit(UnitKind::Infantry))) {
+            0.58
+        } else {
+            0.12
+        };
+        let sx = fx + (tx - fx) * trail_start;
+        let sy = fy + (ty - fy) * trail_start;
+        draw_line(sx, sy, tx, ty, width + 4.0, with_alpha(glow, 0.25));
+        draw_line(sx, sy, tx, ty, width, core);
+        draw_circle(tx, ty, head + 3.0, with_alpha(glow, 0.18));
+        draw_circle(tx, ty, head, core);
     }
 }
 

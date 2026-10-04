@@ -28,9 +28,7 @@ const SETTLE_COST: i64 = 800;
 /// label over each yield's value so the ribbon reads without a legend.
 pub const TOP_BAR_H: f32 = 50.0;
 /// Height of the bottom command bar.
-pub const CMD_BAR_H: f32 = 76.0;
-/// Gap separating the build-button group from the unit-button group.
-const GROUP_GAP: f32 = 22.0;
+pub const CMD_BAR_H: f32 = 132.0;
 /// Minimap width — single source of truth for both the minimap itself and the
 /// civ roster docked beneath it (their heights derive from this via map aspect).
 const MM_W: f32 = 188.0;
@@ -107,20 +105,25 @@ struct Button {
     action: Action,
 }
 
-fn layout() -> [Button; 12] {
-    // Responsive width: fit all 12 buttons + the unit-group gap inside the
+fn layout() -> [Button; 18] {
+    // Responsive width: fit all 14 buttons + the unit-group gap inside the
     // window (a fixed 92 px overflowed a 1024 px window, pushing the Gunship
     // and Capital buttons off-screen).
     let pad = 6.0;
-    let avail = screen_width() - 24.0 - GROUP_GAP - 11.0 * pad;
-    let w = (avail / 12.0).clamp(64.0, 104.0);
-    let h = CMD_BAR_H - 16.0;
-    let y = screen_height() - CMD_BAR_H + 8.0;
+    let avail = screen_width() - 24.0 - 8.0 * pad;
+    let w = (avail / 9.0).max(36.0);
+    let h = 47.0;
+    let y = screen_height() - CMD_BAR_H + 20.0;
     let mk = |i: usize, label, key, action| {
-        // The unit group starts at index 7 (after 7 build buttons 0–6).
-        let gap = if i >= 7 { GROUP_GAP } else { 0.0 };
+        // The unit group starts at index 8 (after 8 build buttons 0–7).
+        let gap = 0.0;
         Button {
-            rect: Rect::new(12.0 + i as f32 * (w + pad) + gap, y, w, h),
+            rect: Rect::new(
+                12.0 + (i % 9) as f32 * (w + pad) + gap,
+                y + (i / 9) as f32 * 53.0,
+                w,
+                h,
+            ),
             label,
             key,
             action,
@@ -128,8 +131,8 @@ fn layout() -> [Button; 12] {
     };
     [
         mk(0, "Reactor", 'P', Action::Build(BuildingKind::PowerPlant)),
-        mk(1, "Extractor", 'R', Action::Build(BuildingKind::Refinery)),
-        mk(2, "Hangar", 'B', Action::Build(BuildingKind::Barracks)),
+        mk(1, "Refinery", 'R', Action::Build(BuildingKind::Refinery)),
+        mk(2, "Barracks", 'B', Action::Build(BuildingKind::Barracks)),
         mk(3, "Laser", 'G', Action::Build(BuildingKind::GunTurret)),
         mk(4, "Flak", 'J', Action::Build(BuildingKind::AaTurret)),
         mk(5, "Lab", 'L', Action::Build(BuildingKind::ResearchLab)),
@@ -139,11 +142,22 @@ fn layout() -> [Button; 12] {
             'N',
             Action::Build(BuildingKind::AntimatterPlant),
         ),
-        mk(7, "Infantry", 'T', Action::Train(UnitKind::Infantry)),
-        mk(8, "Lancer", 'V', Action::Train(UnitKind::AntiArmor)),
-        mk(9, "Crawler", 'K', Action::Train(UnitKind::Tank)),
-        mk(10, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
-        mk(11, "Capital", 'C', Action::Train(UnitKind::Capital)),
+        mk(7, "Wall", 'W', Action::Build(BuildingKind::Wall)),
+        mk(8, "Harvester", 'D', Action::Train(UnitKind::Harvester)),
+        mk(9, "Riflemen", 'T', Action::Train(UnitKind::Infantry)),
+        mk(10, "Rockets", 'V', Action::Train(UnitKind::AntiArmor)),
+        mk(11, "Battle Tank", 'K', Action::Train(UnitKind::Tank)),
+        mk(12, "Gunship", 'H', Action::Train(UnitKind::Helicopter)),
+        mk(13, "Capital", 'C', Action::Train(UnitKind::Capital)),
+        mk(
+            14,
+            "Factory",
+            'F',
+            Action::Build(BuildingKind::VehicleFactory),
+        ),
+        mk(15, "Airfield", 'O', Action::Build(BuildingKind::Airfield)),
+        mk(16, "Depot", 'N', Action::Build(BuildingKind::SupplyDepot)),
+        mk(17, "Battery", 'I', Action::Build(BuildingKind::Battery)),
     ]
 }
 
@@ -165,12 +179,17 @@ fn action_texture(sprites: &Sprites, action: Action) -> Option<&Texture2D> {
     }
 }
 
-fn first_barracks(sim: &Sim) -> Option<EntityId> {
+fn producer_for(sim: &Sim, unit: UnitKind) -> Option<EntityId> {
+    let producer = if sim.is_earthfront() {
+        Sim::earthfront_producer(unit)
+    } else if unit == UnitKind::Harvester {
+        BuildingKind::Refinery
+    } else {
+        BuildingKind::Barracks
+    };
     sim.views()
         .into_iter()
-        .find(|v| {
-            v.owner == HUMAN && matches!(v.kind, EntityKindView::Building(BuildingKind::Barracks))
-        })
+        .find(|v| v.owner == HUMAN && v.kind == EntityKindView::Building(producer))
         .map(|v| v.id)
 }
 
@@ -204,7 +223,7 @@ pub fn handle_click(sim: &Sim, build_mode: &mut Option<BuildingKind>) -> Vec<Com
             match b.action {
                 Action::Build(kind) => *build_mode = Some(kind),
                 Action::Train(kind) => {
-                    if let Some(barracks) = first_barracks(sim) {
+                    if let Some(barracks) = producer_for(sim, kind) {
                         cmds.push(Command::Train {
                             owner: HUMAN,
                             barracks,
@@ -302,9 +321,9 @@ pub fn draw_planet_panel(sim: &Sim, pid: PlanetId, sprites: &Sprites) {
     match owner {
         Some(o) if o == HUMAN => {
             text(
-                // Match the command-bar names exactly (Hangar/Laser/Extractor)
+                // Match the command-bar names exactly (Barracks/Laser/Refinery)
                 // so the same building isn't called two different things.
-                "Build: B Hangar  G Laser  R Extractor",
+                "Build: B Barracks  G Laser  R Refinery  W Wall",
                 lx,
                 ty,
                 13.0,
@@ -537,10 +556,13 @@ fn kind_name_role(kind: EntityKindView, owner: PlayerId) -> (&'static str, &'sta
 
 const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
     match kind {
-        EntityKindView::Unit(UnitKind::Infantry) => ("Infantry", "Cheap anti-infantry"),
-        EntityKindView::Unit(UnitKind::Tank) => ("Tank", "Heavy armour, anti-ground"),
+        EntityKindView::Unit(UnitKind::Harvester) => {
+            ("Ore Harvester", "Collects ore for your economy")
+        }
+        EntityKindView::Unit(UnitKind::Infantry) => ("Riflemen", "Fast anti-infantry squad"),
+        EntityKindView::Unit(UnitKind::Tank) => ("Battle Tank", "Heavy armour and cannon"),
         EntityKindView::Unit(UnitKind::AntiArmor) => {
-            ("Anti-Armor", "Beats tanks, weak vs infantry")
+            ("Rocket Team", "Beats tanks, weak vs riflemen")
         }
         EntityKindView::Unit(UnitKind::Helicopter) => ("Gunship", "Air — only flak can hit it"),
         EntityKindView::Unit(UnitKind::Capital) => ("Capital Ship", "Era-4 heavy warship"),
@@ -548,8 +570,10 @@ const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
             ("Command Nexus", "Your base — protect it")
         }
         EntityKindView::Building(BuildingKind::PowerPlant) => ("Reactor", "Supplies power"),
-        EntityKindView::Building(BuildingKind::Refinery) => ("Extractor", "+credits while powered"),
-        EntityKindView::Building(BuildingKind::Barracks) => ("Hangar", "Trains units"),
+        EntityKindView::Building(BuildingKind::Refinery) => {
+            ("Refinery", "Deploys and receives ore harvesters")
+        }
+        EntityKindView::Building(BuildingKind::Barracks) => ("Barracks", "Trains units"),
         EntityKindView::Building(BuildingKind::GunTurret) => {
             ("Laser Turret", "Anti-ground defence")
         }
@@ -558,6 +582,14 @@ const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         EntityKindView::Building(BuildingKind::ResearchLab) => {
             ("Research Lab", "Researches upgrades")
         }
+        EntityKindView::Building(BuildingKind::VehicleFactory) => {
+            ("Vehicle Factory", "Powered armour production")
+        }
+        EntityKindView::Building(BuildingKind::Airfield) => ("Airfield", "Aircraft production"),
+        EntityKindView::Building(BuildingKind::SupplyDepot) => {
+            ("Supply Depot", "Material-funded ammunition")
+        }
+        EntityKindView::Building(BuildingKind::Battery) => ("Battery", "Bounded energy storage"),
         EntityKindView::Building(BuildingKind::AntimatterPlant) => {
             ("Antimatter Plant", "Produces antimatter")
         }
@@ -566,6 +598,7 @@ const fn human_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
 
 const fn alien_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
     match kind {
+        EntityKindView::Unit(UnitKind::Harvester) => ("Drudge", "Alien resource collector"),
         EntityKindView::Unit(UnitKind::Infantry) => ("Drone", "Cheap anti-infantry swarm"),
         EntityKindView::Unit(UnitKind::Tank) => ("Crawler", "Heavy armour, anti-ground"),
         EntityKindView::Unit(UnitKind::AntiArmor) => ("Lancer", "Beats armour, weak vs swarm"),
@@ -587,6 +620,14 @@ const fn alien_name_role(kind: EntityKindView) -> (&'static str, &'static str) {
         EntityKindView::Building(BuildingKind::ResearchLab) => {
             ("Fabricator", "Researches alien upgrades")
         }
+        EntityKindView::Building(BuildingKind::VehicleFactory) => {
+            ("Vehicle Factory", "Powered armour production")
+        }
+        EntityKindView::Building(BuildingKind::Airfield) => ("Airfield", "Aircraft production"),
+        EntityKindView::Building(BuildingKind::SupplyDepot) => {
+            ("Supply Depot", "Material-funded ammunition")
+        }
+        EntityKindView::Building(BuildingKind::Battery) => ("Battery", "Bounded energy storage"),
         EntityKindView::Building(BuildingKind::AntimatterPlant) => {
             ("Singularity", "Produces antimatter")
         }
@@ -609,11 +650,29 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     let owned = view.owner == HUMAN;
     // Owned units with an active ability get an extra status row (Q to cast).
     let ability = match view.kind {
-        EntityKindView::Unit(k) if owned => rts_core::game::ability::ability_for(k),
+        EntityKindView::Unit(k) if owned && !sim.is_earthfront() => {
+            rts_core::game::ability::ability_for(k)
+        }
         _ => None,
     };
     let panel_w = 252.0;
-    let panel_h = if ability.is_some() { 82.0 } else { 66.0 };
+    let harvester = view.kind == EntityKindView::Unit(UnitKind::Harvester) && owned;
+    let producer = owned
+        && matches!(
+            view.kind,
+            EntityKindView::Building(
+                BuildingKind::Barracks
+                    | BuildingKind::Refinery
+                    | BuildingKind::VehicleFactory
+                    | BuildingKind::Airfield
+            )
+        );
+    let building_status = owned && matches!(view.kind, EntityKindView::Building(_));
+    let panel_h = if ability.is_some() || harvester || building_status {
+        82.0
+    } else {
+        66.0
+    };
     let px = 12.0;
     let py = screen_height() - CMD_BAR_H - panel_h - 10.0;
     fill_panel(px, py, panel_w, panel_h);
@@ -621,8 +680,8 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
     draw_rectangle(px + 5.0, py + 5.0, 3.0, panel_h - 10.0, OLIVE);
     let team = if owned { TEAM_PLAYER } else { TEAM_ENEMY };
     let texture = match view.kind {
-        EntityKindView::Building(k) => sprites.building(k),
-        EntityKindView::Unit(k) => sprites.unit(k),
+        EntityKindView::Building(k) => sprites.building_for(k, view.owner != HUMAN),
+        EntityKindView::Unit(k) => sprites.unit_for(k, view.owner != HUMAN),
     };
     // Medallion: native-color sprite, team-colored ring for allegiance.
     medallion(px + 34.0, py + panel_h / 2.0, 24.0, texture, WHITE, team);
@@ -660,6 +719,68 @@ fn draw_selection_panel(sim: &Sim, selected: Option<EntityId>, sprites: &Sprites
             py + 56.0,
             13.0,
             col,
+            fb,
+        );
+    } else if harvester {
+        text("ORE CARGO", text_x, py + 56.0, 13.0, GOLD_HI, fb);
+        let cargo = format!("{}/100", view.cargo);
+        text(
+            &cargo,
+            text_x + bar_w - text_width(&cargo, 13.0, fb),
+            py + 56.0,
+            13.0,
+            GOOD,
+            fb,
+        );
+    } else if owned && view.construction_total > 0 && view.construction_remaining > 0 {
+        let built = view
+            .construction_total
+            .saturating_sub(view.construction_remaining);
+        let pct = built.saturating_mul(100) / view.construction_total;
+        let status = format!("CONSTRUCTING  {pct}%");
+        text(&status, text_x, py + 56.0, 13.0, WARN, fb);
+    } else if producer {
+        if let Some(status) = sim.production_status(view.id) {
+            let pct = status.progress.saturating_mul(100) / status.duration;
+            let unit_name = kind_name_role(EntityKindView::Unit(status.unit), HUMAN).0;
+            let powered = if sim.is_earthfront() {
+                sim.earthfront_entity_status(view.id).0 > 0
+            } else {
+                sim.energy(HUMAN) > Fixed::ZERO
+            };
+            let queue = if sim.prototype_factory(HUMAN) == Some(view.id) {
+                format!("PROTOTYPE TESTING · QUEUE {} PAUSED", status.queued)
+            } else if powered {
+                format!("{unit_name}  {pct}%  ·  QUEUE {}", status.queued)
+            } else {
+                format!("NO POWER  ·  QUEUE {}", status.queued)
+            };
+            text("PRODUCTION", text_x, py + 56.0, 13.0, GOLD_HI, fb);
+            text(
+                &queue,
+                text_x + bar_w - text_width(&queue, 13.0, fb),
+                py + 56.0,
+                13.0,
+                if powered { GOOD } else { BAD },
+                fb,
+            );
+        } else {
+            text(
+                "PRODUCTION IDLE  ·  RIGHT-CLICK RALLY",
+                text_x,
+                py + 56.0,
+                13.0,
+                TEXT_DIM,
+                fb,
+            );
+        }
+    } else if owned && matches!(view.kind, EntityKindView::Building(_)) {
+        text(
+            "U  REPAIR   ·   DELETE  SELL",
+            text_x,
+            py + 56.0,
+            13.0,
+            TEXT_DIM,
             fb,
         );
     }
@@ -860,7 +981,15 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
 
     // MONEY — the headline yield: "MONEY" caption + gold coin + large gold value.
     let mut x = 14.0;
-    let lw = ribbon_label("MONEY", x, fb);
+    let lw = ribbon_label(
+        if sim.is_earthfront() {
+            "MATERIAL"
+        } else {
+            "MONEY"
+        },
+        x,
+        fb,
+    );
     icon_coin(x + 7.0, RIBBON_VALUE_Y - 7.0, 8.0);
     let money = (sim.money(HUMAN).to_bits() / 65536).to_string();
     text(
@@ -876,17 +1005,42 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     ribbon_divider(x - 9.0);
 
     // ENERGY — bolt + spendable stockpile (warm amber).
-    let lw = ribbon_label("ENERGY", x, fb);
+    let lw = ribbon_label(
+        if sim.is_earthfront() {
+            "POWER kW"
+        } else {
+            "ENERGY"
+        },
+        x,
+        fb,
+    );
     icon_bolt(x + 5.0, RIBBON_VALUE_Y - 6.0, 8.0, WARN);
-    let energy = (sim.energy(HUMAN).to_bits() / 65536).to_string();
+    let economy = sim.economy_view(HUMAN);
+    let energy = if sim.is_earthfront() {
+        format!("{}/{}", economy.generation, economy.demand)
+    } else {
+        (sim.energy(HUMAN).to_bits() / 65536).to_string()
+    };
     text(&energy, x + 16.0, RIBBON_VALUE_Y, 18.0, WARN, fb);
     let energy_w = 16.0 + text_width(&energy, 18.0, fb);
     x += lw.max(energy_w) + 18.0;
     ribbon_divider(x - 9.0);
 
     // LABOUR — the population/workforce stockpile (shield-teal).
-    let lw = ribbon_label("LABOUR", x, fb);
-    let lab_val = (sim.labour(HUMAN).to_bits() / 65536).to_string();
+    let lw = ribbon_label(
+        if sim.is_earthfront() {
+            "DEPOT AMMO"
+        } else {
+            "LABOUR"
+        },
+        x,
+        fb,
+    );
+    let lab_val = if sim.is_earthfront() {
+        economy.ammunition.to_string()
+    } else {
+        (sim.labour(HUMAN).to_bits() / 65536).to_string()
+    };
     text(&lab_val, x, RIBBON_VALUE_Y, 18.0, SHIELD, fb);
     x += lw.max(text_width(&lab_val, 18.0, fb)) + 18.0;
     ribbon_divider(x - 9.0);
@@ -905,7 +1059,15 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
 
     // ERA indicator — shows the human player's current era name.
     let lw = ribbon_label("ERA", x, fb);
-    let era = ERA_NAMES[(sim.player_era(HUMAN) as usize).min(3)];
+    let era = if sim.is_earthfront() {
+        if sim.player_era(HUMAN) == 0 {
+            "CONTEMPORARY"
+        } else {
+            "INDUSTRIAL"
+        }
+    } else {
+        ERA_NAMES[(sim.player_era(HUMAN) as usize).min(3)]
+    };
     text(era, x, RIBBON_VALUE_Y, 18.0, DECO_GOLD, fb);
     x += lw.max(text_width(era, 18.0, fb)) + 18.0;
     ribbon_divider(x - 9.0);
@@ -915,7 +1077,14 @@ fn draw_top_bar(sim: &Sim, paused: bool, game_speed: u32, sprites: &Sprites) {
     let tier = kardashev_name(sim.kardashev_tier(HUMAN));
     text(tier, x, RIBBON_VALUE_Y, 14.0, SHIELD, fb);
     let tier_x = x + text_width(tier, 14.0, fb) + 6.0;
-    let colonies = format!("{}c", sim.colony_count_for(HUMAN));
+    let colonies = if sim.is_earthfront() {
+        format!(
+            "{} relays",
+            sim.alien_relay_count(rts_core::game::sim::PlayerId(1), true)
+        )
+    } else {
+        format!("{}c", sim.colony_count_for(HUMAN))
+    };
     text(&colonies, tier_x, RIBBON_VALUE_Y, 14.0, TEXT_DIM, fb);
 
     // Incoming-wave alert pill (right).
@@ -969,6 +1138,22 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
     draw_rectangle(0.0, top, screen_width(), 3.0, DECO_GOLD);
     draw_rectangle(0.0, top, screen_width(), 1.0, DECO_GOLD_HI);
     let buttons = layout();
+    text(
+        "BASE CONSTRUCTION",
+        buttons[0].rect.x,
+        top + 15.0,
+        11.0,
+        TEXT_DIM,
+        sprites.font_bold(),
+    );
+    text(
+        "UNIT DEPLOYMENT",
+        buttons[8].rect.x,
+        top + 15.0,
+        11.0,
+        TEXT_DIM,
+        sprites.font_bold(),
+    );
     // Olive group divider between the build group and the unit group.
     let divider_x = (buttons[6].rect.x + buttons[6].rect.w + buttons[7].rect.x) / 2.0;
     draw_rectangle(divider_x - 0.5, top + 12.0, 1.0, CMD_BAR_H - 24.0, OLIVE);
@@ -987,6 +1172,24 @@ fn draw_command_bar(sim: &Sim, build_mode: Option<BuildingKind>, sprites: &Sprit
         let hover = b.rect.contains(pointer);
         let price_int = price.to_bits() / 65536;
         draw_button(b, sprites, unlocked, affordable, active, hover, price_int);
+        if let Action::Train(kind) = b.action {
+            if let Some(status) = producer_for(sim, kind).and_then(|id| sim.production_status(id)) {
+                if status.unit == kind {
+                    let badge = format!("{}", status.queued);
+                    draw_circle(b.rect.x + 10.0, b.rect.y + 10.0, 9.0, GOLD);
+                    draw_circle_lines(b.rect.x + 10.0, b.rect.y + 10.0, 9.0, 1.0, GOLD_HI);
+                    let bw = text_width(&badge, 13.0, sprites.font_bold());
+                    text(
+                        &badge,
+                        b.rect.x + 10.0 - bw / 2.0,
+                        b.rect.y + 14.0,
+                        13.0,
+                        WELL,
+                        sprites.font_bold(),
+                    );
+                }
+            }
+        }
         if hover {
             draw_tooltip(b.rect, b.action, price_int, unlocked, sprites);
         }
@@ -1102,7 +1305,7 @@ mod tests {
     #[test]
     fn names_are_faction_aware() {
         let inf = EntityKindView::Unit(UnitKind::Infantry);
-        assert_eq!(kind_name_role(inf, HUMAN).0, "Infantry");
+        assert_eq!(kind_name_role(inf, HUMAN).0, "Riflemen");
         assert_eq!(kind_name_role(inf, ALIEN).0, "Drone");
 
         let cc = EntityKindView::Building(BuildingKind::CommandCenter);

@@ -85,11 +85,14 @@ struct BuildingData {
     #[serde(default)]
     labour_cost: i32,
     #[serde(default)]
+    build_time: u32,
+    #[serde(default)]
     mine_rate: i32,
 }
 
 #[derive(Deserialize)]
 struct BalanceData {
+    harvester: UnitData,
     infantry: UnitData,
     tank: UnitData,
     anti_armor: UnitData,
@@ -170,6 +173,7 @@ fn to_building(b: &BuildingData) -> BuildingStats {
         money_cost: Fixed::from_int(b.cost),
         energy_cost: Fixed::from_int(b.energy_cost),
         labour_cost: Fixed::from_int(b.labour_cost),
+        build_time: b.build_time,
         mine_rate: b.mine_rate,
     }
 }
@@ -187,6 +191,7 @@ pub fn load(ron_str: &str) -> Result<Balance, ron::error::SpannedError> {
             to_unit(&data.anti_armor),
             to_unit(&data.helicopter),
             to_unit(&data.capital),
+            to_unit(&data.harvester),
         ],
         [
             to_building(&data.command_center),

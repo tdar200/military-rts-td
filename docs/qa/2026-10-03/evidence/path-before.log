@@ -1,0 +1,22 @@
+   Compiling rts-core v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/core)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.70s
+     Running unittests src/lib.rs (target/debug/deps/rts_core-778a7adb43dc9d10)
+
+running 1 test
+test game::path::qa_bounds::invalid_endpoints_are_rejected_without_panicking ... FAILED
+
+failures:
+
+---- game::path::qa_bounds::invalid_endpoints_are_rejected_without_panicking stdout ----
+
+thread 'game::path::qa_bounds::invalid_endpoints_are_rejected_without_panicking' (882653) panicked at crates/core/src/game/path.rs:54:12:
+index out of bounds: the len is 64 but the index is 589815
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    game::path::qa_bounds::invalid_endpoints_are_rejected_without_panicking
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 264 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p rts-core --lib`

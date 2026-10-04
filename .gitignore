@@ -1,9 +1,17 @@
 /target
 # Generated web bundle (built by web/build.sh from crate + assets/)
 /web/rts.wasm
+/web/mq_js_bundle.js
 /web/assets/
 **/*.rs.bk
 *.pdb
+# Godot editor cache and project-local engine download
+/godot3d/.godot/
+/godot3d/runtime/*.json
+/godot3d/runtime/*.txt
+/tools/godot/
+/tools/blender/
+
 # Editor / OS noise
 .DS_Store
 .idea/

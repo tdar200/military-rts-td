@@ -1,0 +1,680 @@
+[
+  {
+    "id": "01-construction",
+    "title": "Every building is a commitment.",
+    "chapter": "01 / CONSTRUCTION & ECONOMIC EXPANSION",
+    "era": "ERA 01",
+    "mode": "placement",
+    "subtitle": "Place a vehicle factory without blocking the ore route or silently starving your defences.",
+    "hud": [
+      "MATERIAL 840 / planned 280",
+      "POWER 130 / 160 kW",
+      "CREW 22 / 60",
+      "WAVE 01  01:12"
+    ],
+    "decision": "Build now, or add generation first?",
+    "inspector": [
+      [
+        "VEHICLE FACTORY / PREVIEW",
+        "280 materials • 40 kW • 30 s build",
+        "cyan"
+      ],
+      [
+        "PROJECTED GRID",
+        "170 / 160 kW after commissioning. Defences keep priority; industry shares the deficit.",
+        "amber"
+      ],
+      [
+        "PLACEMENT CONTRACT",
+        "Green footprint: valid terrain and territory. Dashed cyan: delivery access. Orange: consequence, not a placement error.",
+        "text"
+      ],
+      [
+        "PLAYER OPTIONS",
+        "Enter confirms this footprint. R rotates 90°. Esc cancels the preview. Shift repeats placement while resources allow.",
+        "text"
+      ]
+    ],
+    "maplabels": [
+      [
+        "A",
+        "Delivery lane must stay open",
+        340,
+        515
+      ],
+      [
+        "B",
+        "Projected power warning",
+        825,
+        225
+      ],
+      [
+        "C",
+        "Finite ore: 8,250 remaining",
+        270,
+        235
+      ]
+    ],
+    "states": [
+      [
+        "VALID / AFFORDABLE",
+        "Enter at a valid site",
+        "Reserve 280 once; queue the foundation. Available materials fall from 840 to 560. Ghost becomes a visible build site.",
+        "cyan"
+      ],
+      [
+        "BLOCKED / NO ROUTE",
+        "Footprint closes the only lane",
+        "Red hatch and “Blocks refinery access”. Confirmation is rejected without debit; show the nearest valid footprint.",
+        "red"
+      ],
+      [
+        "CANCEL / PARTLY BUILT",
+        "Cancel at 30% material consumption",
+        "84 consumed, 196 unconsumed returned. Available balance becomes 756. Repeated cancel cannot issue a second refund.",
+        "amber"
+      ]
+    ],
+    "rules": [
+      "Placement validity is authoritative and rechecked at command execution; preview validity is advisory.",
+      "Reject overlap with solid buildings, out-of-map cells and hostile footprints. Friendly units receive an eviction order; construction waits for a clear site.",
+      "Construction progresses only with staff, work capacity and delivered materials. Power shortage appears as an explicit pause or throttle reason.",
+      "Maintain separate available, reserved and consumed ledgers. Reservation must be atomic across rapid repeated placements.",
+      "Territory follows completed anchors; losing an anchor pauses new placements, not demolition of surviving facilities.",
+      "Illustrative proposed costs and incremental consumption are design changes, not a description of the current runtime."
+    ],
+    "acceptance": [
+      "Exactly 280 is reserved once per accepted build.",
+      "An invalid preview never changes money or occupancy.",
+      "A destroyed foundation releases only recoverable, unconsumed stock.",
+      "Reload restores footprint, consumed stock, reservation and completion work."
+    ]
+  },
+  {
+    "id": "02-combined-arms",
+    "title": "Win with roles, not a bigger number.",
+    "chapter": "02 / SELECTION, ORDERS & COMBINED ARMS",
+    "era": "ERA 01",
+    "mode": "combat",
+    "subtitle": "Armour pins the front. Anti-armour teams use cover. Mobile air defence protects the resupply route.",
+    "hud": [
+      "SELECTED 18 units",
+      "TANKS 4 / AT 3 / INF 8",
+      "AA 2 / AIR 1",
+      "SUPPLY 72%"
+    ],
+    "decision": "Hold the ridge or push through the valley?",
+    "inspector": [
+      [
+        "VANGUARD / 18 UNITS",
+        "Wedge formation • face north-east • return fire",
+        "cyan"
+      ],
+      [
+        "TACTICAL COUNTERS",
+        "Tanks: open terrain. Infantry: cover and capture. AT: armour ambush. AA: air denial. Aircraft: exposed artillery.",
+        "text"
+      ],
+      [
+        "ENGAGEMENT PREVIEW",
+        "Target: alien heavy armour. AT shot: 90 × (1 − 0.10) = 81 HP. 3 s cycle → 27 sustained DPS.",
+        "amber"
+      ],
+      [
+        "COMMAND FEEDBACK",
+        "Solid arrows: immediate order. Dotted arrows: queued order. Threat rings show range; striped ring shows a blocked firing line.",
+        "text"
+      ]
+    ],
+    "maplabels": [
+      [
+        "A",
+        "AT team in ridge cover",
+        725,
+        250
+      ],
+      [
+        "B",
+        "Tanks hold the open lane",
+        720,
+        480
+      ],
+      [
+        "C",
+        "Aircraft skirts the AA envelope",
+        1090,
+        205
+      ]
+    ],
+    "states": [
+      [
+        "SELECT / COMPOSE",
+        "Drag, then Shift-click to adjust",
+        "Unit strip groups by role. Ctrl+1 stores this exact group. Double-click selects visible units of the same type; UI clicks never select through.",
+        "cyan"
+      ],
+      [
+        "ADVANCE / MAINTAIN SPACING",
+        "A then choose a destination",
+        "Units approach in assigned slots; local avoidance yields at choke points. Slow support units receive a trailing slot, not a teleport.",
+        "amber"
+      ],
+      [
+        "RETREAT / RESUPPLY",
+        "R chooses the nearest safe depot",
+        "Low-ammo units disengage by cohort. Healthy screens cover withdrawal. A severed route produces “No safe supply path”, not idle silence.",
+        "red"
+      ]
+    ],
+    "rules": [
+      "Proposed damage model: effective armour = clamp(armour − penetration, 0, 0.8); damage = max(1, base_damage × (1 − effective_armour)).",
+      "Controlled AT example: 900 HP target, 81 HP per hit, 3 s cycle, first shot at t=0. Twelve hits kill at t=33 s. Travel time and movement add separately.",
+      "No random accuracy in the baseline test model. Cover modifies exposed hit area through a documented multiplier; aircraft eligibility is a target-class rule.",
+      "Range test uses squared distance, inclusive boundary. LOS, target class and ammunition are checked again when a shot is emitted.",
+      "Hold means never pursue beyond assigned position radius. Attack-move can engage along the route; explicit target orders expire on target death.",
+      "Formation slots are a soft objective. Narrow corridors temporarily use a column; regroup beyond the obstruction. Never force units through walls.",
+      "Older units keep useful roles through low cost, low energy demand and specialized counter technology, not universal era damage scaling."
+    ],
+    "acceptance": [
+      "AT controlled experiment deals 81 HP per hit and kills at 33 s.",
+      "Friendly units cannot occupy the same solid footprint.",
+      "A destroyed selected unit disappears from group counts.",
+      "Ground-only weapons reject aircraft without wasting ammunition."
+    ]
+  },
+  {
+    "id": "03-logistics",
+    "title": "The front line ends where supply ends.",
+    "chapter": "03 / SUPPLY, DEPLETION & RECOVERY",
+    "era": "ERA 02",
+    "mode": "logistics",
+    "subtitle": "A raid cuts the depot corridor. Recover the link, reroute a convoy or give ground before magazines empty.",
+    "hud": [
+      "DEPOT 240 rounds",
+      "ARMY 72 / 90 rounds",
+      "ROUTE 02 severed",
+      "BUFFER 00:24"
+    ],
+    "decision": "Repair the route or retreat while covered?",
+    "inspector": [
+      [
+        "SUPPLY NETWORK / L",
+        "Cyan = connected. Amber = delayed. Red = cut. No traditional fog of war.",
+        "cyan"
+      ],
+      [
+        "FAILURE CASCADE",
+        "Bridge blocked → deliveries stop → depot drains → units exhaust carried rounds → firing stops. Movement remains possible.",
+        "red"
+      ],
+      [
+        "CONSERVATION EXAMPLE",
+        "Three tanks start at 72 rounds each. Transfer 18 each: depot 240 → 186; each tank 72 → 90. Total stays 456.",
+        "amber"
+      ],
+      [
+        "RECOVERY TOOLS",
+        "Assign repair crew, set a safe alternate route or place a forward depot. New logistics capacity costs materials and power.",
+        "text"
+      ]
+    ],
+    "maplabels": [
+      [
+        "A",
+        "Depot: 186 rounds after transfer",
+        380,
+        545
+      ],
+      [
+        "B",
+        "Route blocked by alien raiders",
+        740,
+        395
+      ],
+      [
+        "C",
+        "Three tanks: 90 rounds each",
+        1030,
+        420
+      ]
+    ],
+    "states": [
+      [
+        "CONNECTED / STOCKED",
+        "Depot and valid path in range",
+        "Transfer only the minimum of unit deficit, depot stock and route throughput. Reserve stock per recipient to prevent double withdrawal.",
+        "cyan"
+      ],
+      [
+        "SEVERED / BUFFERED",
+        "Depot or route is destroyed",
+        "Carried ammo remains. Route indicator turns red and estimates combat endurance from recent firing demand. Supply cannot teleport.",
+        "red"
+      ],
+      [
+        "RESTORED / RECOVERING",
+        "Repair or alternate route completes",
+        "Delivery resumes at throughput limits. Empty units refill first within player priority; no instant full-army refill or free rounds.",
+        "amber"
+      ]
+    ],
+    "rules": [
+      "Supply route overlays show actual traversable connectivity, not straight-line distance alone.",
+      "Early slice uses material-funded local ammunition distribution. Fuel, spare parts and routed convoys in this board are future design extensions where shown.",
+      "No ammunition permits movement and retreat but no weapon discharge. Aircraft retain a separately visible reserve-return rule in the full design.",
+      "Each shipment owns a unique reservation. Destruction moves contents to a wreck ledger or documented loss, never to both destination and source.",
+      "Automatic routing minimizes travel time plus exposed-threat cost; player waypoints override with a visible risk notice.",
+      "Economy buffer warning predicts remaining supply under current consumption, and labels the forecast as an estimate.",
+      "Repair work consumes a separate parts/material budget and cannot create ammo. Depots cannot distribute more than they hold."
+    ],
+    "acceptance": [
+      "Ammo transfers conserve depot + units + in-transit inventory.",
+      "Destroying a depot cannot refill any unit.",
+      "A sealed wall blocks supply even if the depot is geographically close.",
+      "Save/load preserves shipment ownership and pending reservations."
+    ]
+  },
+  {
+    "id": "04-wave-defence",
+    "title": "Read the attack. Redesign the defence.",
+    "chapter": "04 / ADAPTIVE WAVES & DEFENSIVE GEOMETRY",
+    "era": "ERA 02",
+    "mode": "waves",
+    "subtitle": "The enemy commits to a siege wave after observing heavy walls. Create a mobile reserve instead of adding another wall.",
+    "hud": [
+      "WAVE 04 / SIEGE",
+      "ARRIVAL 00:45",
+      "RELAYS 2 active",
+      "RESERVE 6 units"
+    ],
+    "decision": "Counter-battery strike or defence in depth?",
+    "inspector": [
+      [
+        "DOCTRINE LOCKED / T−45",
+        "Siege: 2 artillery, 4 heavy escorts, 8 raiders. Composition estimate is marked as an estimate until confirmed.",
+        "red"
+      ],
+      [
+        "DEFENCE PLAN",
+        "Outer obstacles delay. AT protects the breach. Turrets cover crossfire. Aircraft or mobile armour hunt the artillery.",
+        "text"
+      ],
+      [
+        "AI OBSERVATION",
+        "Walls raise siege weight. Tanks raise anti-armour weight. Aircraft raise air-denial weight. Committed waves do not change after launch.",
+        "amber"
+      ],
+      [
+        "STRATEGIC TRADEOFF",
+        "Each surviving relay contributes reinforcements. Raid a relay to lower future pressure, accepting a temporarily weaker home defence.",
+        "cyan"
+      ]
+    ],
+    "maplabels": [
+      [
+        "A",
+        "Crossfire, not one turret clump",
+        655,
+        445
+      ],
+      [
+        "B",
+        "Siege battery outside turret range",
+        1090,
+        235
+      ],
+      [
+        "C",
+        "Reserve counterattack route",
+        790,
+        600
+      ]
+    ],
+    "states": [
+      [
+        "PREPARE / T−90 TO T−45",
+        "Inter-wave economy window",
+        "Show repairs, low ammunition and stalled construction first. Wave timer never hides while build or research panels are open.",
+        "cyan"
+      ],
+      [
+        "COMMIT / T−45 TO T=0",
+        "Alien doctrine is committed",
+        "Announce approach and estimated threats. Preserve composition through save/load. Avoid instant counters to actions after commitment.",
+        "amber"
+      ],
+      [
+        "ASSAULT / CLEANUP",
+        "Attackers reach the defence",
+        "Attack obstacles if no route exists. Detect path stalls, recalculate or engage the blocking structure. No unreachable enemy may stall the campaign.",
+        "red"
+      ]
+    ],
+    "rules": [
+      "Current early-wave baseline: first arrival at 90 s; later arrivals at 180 s intervals; doctrine announced 45 s before arrival.",
+      "Composition shown here is illustrative. Spawn counts must be funded by the invasion budget plus operational relay contributions.",
+      "AI planner scores infrastructure value, exposure, route cost and expected losses. Tactical controller chooses legal targets with hysteresis to avoid target thrashing.",
+      "Doctrine observes a rolling history; it does not read queued human orders. Apply capped adaptation so all unit families remain viable.",
+      "Spawn positions are validated outside occupied solid cells. A blocked edge selects another legal entry, never deletes the wave silently.",
+      "Give each assault a progress watchdog. If no damage or advance occurs, change route, breach, or regroup; record the decision for QA.",
+      "The player can see the map; uncertainty concerns future intent, production capacity and unstudied weapons."
+    ],
+    "acceptance": [
+      "Arrival and warning occur at exact configured ticks.",
+      "Reload cannot reroll doctrine or duplicate a wave.",
+      "Enemy artillery has a counter and a minimum deployment vulnerability.",
+      "Blocking all spawn cells cannot suppress future pressure for free."
+    ]
+  },
+  {
+    "id": "05-research-deployment",
+    "title": "Knowledge is not industrial capacity.",
+    "chapter": "05 / RESEARCH, PROTOTYPES & ERA ADVANCEMENT",
+    "era": "ERA 01 → 02",
+    "mode": "research",
+    "subtitle": "A robotic-workcell prototype reserves one factory. Decide whether the long-term productivity gain justifies fewer tanks now.",
+    "hud": [
+      "SCIENCE 62% theory",
+      "PROTOTYPE 0 / 1",
+      "FACTORY 01 reserved",
+      "POWER 30 kW needed"
+    ],
+    "decision": "Commit the factory, or postpone the era transition?",
+    "inspector": [
+      [
+        "ROBOTIC WORKCELLS",
+        "Advanced computing + precision manufacturing → theory → powered prototype → commissioning.",
+        "cyan"
+      ],
+      [
+        "EXPLICIT OPPORTUNITY COST",
+        "Factory 01 is reserved for the prototype. Factory 02 keeps its tank queue. No hidden suspension of all military production.",
+        "amber"
+      ],
+      [
+        "ERA ADVANCEMENT",
+        "Validate the prototype and commission the first workcell. Unlock Era 02 infrastructure; existing tanks keep their model and role.",
+        "text"
+      ],
+      [
+        "SCIENCE LABEL",
+        "Engineering extrapolation. Robotics is established; flexible reliable automation at this scale depends on engineering and energy.",
+        "violet"
+      ]
+    ],
+    "maplabels": [],
+    "states": [
+      [
+        "THEORY / LAB-BOUND",
+        "Fund the project with prerequisites met",
+        "Computing and staffed laboratories advance theory. Show effective rate and the current bottleneck; more power alone cannot replace experiments.",
+        "cyan"
+      ],
+      [
+        "PROTOTYPE / FACTORY-BOUND",
+        "Theory complete; reserve one factory",
+        "Pause only the chosen production bay. Factory destruction transfers to a valid replacement; otherwise preserve progress in a halted state.",
+        "amber"
+      ],
+      [
+        "DEPLOY / ECONOMY-BOUND",
+        "Prototype validated and tooling built",
+        "Commission the first upgraded line, unlock Era 02 and offer optional retrofits. No automatic empire-wide transformation.",
+        "violet"
+      ]
+    ],
+    "rules": [
+      "Research graph is a directed acyclic graph; every prerequisite, unit unlock and facility ID resolves before shipping.",
+      "Separate theory work, experimental evidence, prototype work and deployment eligibility; a single points bar cannot substitute for all four.",
+      "Proposed retrofit: 120 materials + 20 s downtime buys +25% compatible work rate and +30 kW demand. Pay per facility; this is a design value, not current balance.",
+      "Example factory: 12 work/s, 360 work per tank. Baseline 30 s; retrofitted 15 work/s gives 24 s with full supply. At 50% served capacity, 48 s.",
+      "Prototype reservation is exclusive and recorded in saves. Another laboratory cannot clone the same prototype progress or reserve the same bay.",
+      "Era UI previews new capabilities and continuing constraints before commit. No technology is completed by merely entering an era.",
+      "Destruction of infrastructure pauses requirements-dependent work; established knowledge remains unless a explicitly designed scenario says otherwise."
+    ],
+    "acceptance": [
+      "A prototype cannot advance without its powered required facility.",
+      "Only one chosen factory is reserved for this prototype.",
+      "Era advancement fires exactly once at commissioning.",
+      "Legacy units and buildings remain valid after the transition."
+    ]
+  },
+  {
+    "id": "06-core-assault",
+    "title": "Break the invasion’s coordination.",
+    "chapter": "06 / RELAY RAIDS, CORE ASSAULT & CAMPAIGN END",
+    "era": "ERA 02",
+    "mode": "core",
+    "subtitle": "Take down optional relay support, secure a forward depot and commit a supplied combined-arms force to the Core district.",
+    "hud": [
+      "CORE 4,800 / 12,000 HP",
+      "RELAYS 1 / 2 active",
+      "HQ 72% integrity",
+      "AMMO 61%"
+    ],
+    "decision": "Finish the Core, or divert to save headquarters?",
+    "inspector": [
+      [
+        "OBJECTIVE / CORE NODE",
+        "Destroying the Core ends the Earth operation. Relay destruction reduces reinforcements but is not mandatory.",
+        "red"
+      ],
+      [
+        "ASSAULT SEQUENCE",
+        "Suppress AA → clear the AT screen → move tanks up → protect the forward depot → focus the exposed Core.",
+        "text"
+      ],
+      [
+        "TELEGRAPHED RETALIATION",
+        "Core charge: 8 s warning, marked impact zone, interruptible emitter. Disperse or destroy the emitter; no unavoidable screen-wide kill.",
+        "amber"
+      ],
+      [
+        "AFTERMATH",
+        "Freeze hostile simulation, show casualties and economy history, reveal an off-world command signature and offer the Solar campaign.",
+        "cyan"
+      ]
+    ],
+    "maplabels": [
+      [
+        "A",
+        "Forward depot sustains the push",
+        515,
+        545
+      ],
+      [
+        "B",
+        "Core retaliation: move out",
+        1080,
+        325
+      ],
+      [
+        "C",
+        "HQ raid still needs a response",
+        320,
+        235
+      ]
+    ],
+    "states": [
+      [
+        "BREACH / SUPPLIED",
+        "Outer AA and anti-armour cleared",
+        "Expose a safe approach. Units retain ammo limits; direct-rush strategy remains possible with enough preparation.",
+        "cyan"
+      ],
+      [
+        "TERMINAL / SAME-TICK RESOLUTION",
+        "Core HP or HQ HP reaches zero",
+        "Resolve all damage for the tick first. Core dead and HQ alive = victory; HQ dead and Core alive = loss; both dead = mutual destruction.",
+        "red"
+      ],
+      [
+        "DEBRIEF / NEXT HORIZON",
+        "A terminal outcome is committed",
+        "Emit one outcome event. Stop combat and economy mutation. Preserve final replay state; restart uses a fresh seed/state, not old orders.",
+        "violet"
+      ]
+    ],
+    "rules": [
+      "Core health and terminal state are authoritative. Clients cannot award victory from a local animation.",
+      "The simultaneous-destruction outcome is a proposed explicit rule requiring implementation; do not infer it from the current ordering of damage events.",
+      "Every weapon class that can legally damage structures can finish the Core. A projectile already emitted may finish it after its attacker dies.",
+      "Defeat debrief shows what failed, the last supply interruption and the timing of production pauses; avoid a bare “You lose” screen.",
+      "A resource deadlock prompts recovery options before declaring defeat. Losing all combat units alone is not defeat while production remains possible.",
+      "Camera keeps the Core visible during the final assault but never steals control before terminal resolution.",
+      "Cosmic campaign reveal is narrative progression, not proof that later layers are currently playable."
+    ],
+    "acceptance": [
+      "Victory event is emitted once regardless of multiple lethal hits.",
+      "No future wave, shot, refund or build order mutates terminal state.",
+      "Simultaneous HQ/Core loss produces the documented outcome.",
+      "Restart clears selection, build ghosts, commands and prior wave timers."
+    ]
+  },
+  {
+    "id": "07-scale-transition",
+    "title": "Zoom out without throwing your army away.",
+    "chapter": "07 / PLANETARY & SOLAR STRATEGY TRANSITION",
+    "era": "ERA 03 → 04",
+    "mode": "solar",
+    "subtitle": "Delegate stabilized regions, preserve their ledgers and retain direct command of strategically important operations.",
+    "hud": [
+      "POWER 4.8 / 6.2 TW",
+      "INDUSTRY 8.4 Mt/yr",
+      "FLEETS 6 task forces",
+      "TRANSIT 82%"
+    ],
+    "decision": "How much authority should a planetary governor have?",
+    "inspector": [
+      [
+        "REGION → PLANET → SYSTEM",
+        "A region becomes a persistent production and defence contract, not a freshly minted resource bonus.",
+        "cyan"
+      ],
+      [
+        "CONSERVATION EXAMPLE",
+        "Earth 1,200 + Mars 800 + in transit 100 = 2,100 kt before and after aggregation. Transit stock belongs to one shipment.",
+        "amber"
+      ],
+      [
+        "GOVERNOR CONTRACT",
+        "Civilian minimum 55%; defence reserve 20%; expansion up to 25%. Cannot overspend, disassemble inhabited assets or change species policy.",
+        "text"
+      ],
+      [
+        "PLAYER AGENCY",
+        "Set objectives, budgets and fallback doctrine. Exceptions open an operation card with the exact shortage, route risk and available intervention.",
+        "violet"
+      ]
+    ],
+    "maplabels": [],
+    "states": [
+      [
+        "DELEGATE / PREVIEW",
+        "Choose a stable region",
+        "Show inventories, work rates, garrisons and standing orders that will be retained. No conversion until the player confirms the contract.",
+        "cyan"
+      ],
+      [
+        "AGGREGATE / PRESERVE",
+        "Transfer authority at a tick boundary",
+        "Store one ownership ledger. Disable duplicate low-level simulation of the same inventory; preserve queues and transit in the aggregate model.",
+        "amber"
+      ],
+      [
+        "RE-ENTER / INSPECT",
+        "Open a threatened operation",
+        "Restore or deterministically instantiate the tactical state from the saved contract. Never spawn a new full army in addition to the abstract one.",
+        "violet"
+      ]
+    ],
+    "rules": [
+      "Full future design: tactical entities aggregate into cohorts with count, equipment, HP distribution, ammunition and orders.",
+      "Use a single owner for each simulation domain. Change ownership transactionally; do not run tactical and aggregate production on the same assets.",
+      "Zoom is presentation only. Time speed is explicit, bounded by active engagements, and applied consistently to travel, research and resource flows.",
+      "Planetary logistics respects launch mass, transfer windows, travel time and receiving capacity. A space elevator raises throughput, not free material.",
+      "Interstellar orders execute on delivery under the chosen physical model. Standing local orders prevent the entire civilization waiting for the player.",
+      "No FTL logistics before the explicitly speculative branch. Antimatter is manufactured energy storage, not net energy creation.",
+      "Army groups retain composition vulnerabilities: a system with many transports and no escorts is not equivalent to an equally expensive combat fleet."
+    ],
+    "acceptance": [
+      "Resource totals and military cohorts match before/after every scale change.",
+      "Repeated zoom in/out cannot duplicate units or reset damage.",
+      "A destroyed destination reroutes or holds cargo under policy.",
+      "Governor exceptions surface before an irreversible policy violation."
+    ]
+  },
+  {
+    "id": "08-cosmic-governance",
+    "title": "At cosmic scale, survival is the objective.",
+    "chapter": "08 / GALACTIC WARFARE & COSMIC STEWARDSHIP",
+    "era": "ERA 08 → 10",
+    "mode": "galaxy",
+    "subtitle": "Control routes, energy, computation and resilience while respecting the limits of the chosen physics model.",
+    "hud": [
+      "POWER 2.4 × 10³³ W",
+      "COMPUTE 61% allocated",
+      "GATEWAYS 42 / 45",
+      "REFUGES 7 / 12"
+    ],
+    "decision": "Expand the network or preserve a survivable reserve?",
+    "inspector": [
+      [
+        "WORMHOLE NETWORK / SPECULATIVE",
+        "Inspired by general relativity; requires unproven traversability and stabilizing negative energy. Gameplay permission is an explicit scenario assumption.",
+        "violet"
+      ],
+      [
+        "COUNTERPLAY / ROUTE DENIAL",
+        "Gateway attack cuts throughput. Distributed depots, redundant routes, local production and conventional fallback fleets prevent a single unstoppable strike.",
+        "text"
+      ],
+      [
+        "VICTORY / RESILIENCE CONTRACT",
+        "Maintain 12 independent refuges, survive 3 disruption cycles and preserve 90% of civilization information under the scenario’s finite horizon.",
+        "cyan"
+      ],
+      [
+        "PHYSICAL BOUNDARY",
+        "Observable-universe control is not guaranteed: expansion and causal horizons limit reach. Artificial universes remain unknown-physics research, not established capability.",
+        "amber"
+      ]
+    ],
+    "maplabels": [],
+    "states": [
+      [
+        "SECTOR / AUTONOMOUS",
+        "Set fleet and production policy",
+        "Governors operate inside energy, matter and compute budgets. A local emergency spends only its reserved contingency allocation.",
+        "cyan"
+      ],
+      [
+        "DISRUPTION / ISOLATED",
+        "A gateway or star-power hub is lost",
+        "Sever the route, expose the affected civilian reserve and execute fallback policy. Redundant sectors retain useful agency.",
+        "red"
+      ],
+      [
+        "COSMIC / SURVIVAL",
+        "Complete the resilience contract",
+        "Victory evaluates retained minds, information, redundancy and sustainable power—not only destroyed enemy headquarters.",
+        "violet"
+      ]
+    ],
+    "rules": [
+      "Era 05 interstellar: propulsion and autonomous probes; Era 06 stellar: swarms, lifting and stellar industry; Era 07 post-biological: optional digital and hybrid societies.",
+      "Era 08 spacetime: explicitly speculative gateways and gravity research; Era 09 galactic: sector policies and distributed warfare; Era 10 cosmic: survival under causal and thermodynamic limits.",
+      "Dyson swarms are orbiting collectors; no unsupported rigid sphere. Stellar engines use momentum transfer. Black-hole energy extraction has an explicit source of mass or spin.",
+      "Relativistic strike: large preparation cost, visible launch infrastructure and long lead time; counter with dispersal, interception and relocation. No instant uncounterable kill button.",
+      "Gateways impose mass/energy throughput and stabilization costs. Capturing a gateway does not grant unlimited instantaneous movement.",
+      "Digital minds require compute, power and backup consistency. Biological populations require habitats, ecology and care; neither path is mandatory or a pure stat upgrade.",
+      "Scenario physics choices are disclosed before campaign start and stored in the save. Never silently introduce faster-than-light solutions in a hard-science campaign."
+    ],
+    "acceptance": [
+      "Each exotic weapon has a cost, warning, counter and aftermath.",
+      "Sector automation cannot spend the same reserve twice.",
+      "No energy-positive antimatter production loop exists.",
+      "Victory checks resilience across disruption cycles, not a momentary stockpile spike."
+    ]
+  }
+]

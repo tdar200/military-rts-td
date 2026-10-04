@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Victory and Defeat Debrief</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.num{font-family:'Rajdhani',sans-serif;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.seg{position:absolute;top:0;height:100%;display:flex;align-items:center;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;overflow:hidden}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:#060910;display:flex;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#cee8f0">
+
+  <!-- ============ VICTORY ============ -->
+  <div style="position:relative;width:960px;height:1080px;padding:44px 56px;display:flex;flex-direction:column;gap:20px;background:radial-gradient(900px 560px at 30% 0%,rgba(64,220,235,.16),transparent 65%),linear-gradient(180deg,#07121c,#060910)">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:12px"><span class="tag t-good">Debrief / Victory</span><span class="cap">Operation Dawnshield</span></div>
+      <span class="cap">Terminal outcome committed once</span>
+    </div>
+    <div>
+      <div class="disp" style="font-size:76px;line-height:1;color:#e8fcff;letter-spacing:.05em;filter:drop-shadow(0 0 22px rgba(64,220,235,.4))">Core Node destroyed</div>
+      <div style="margin-top:12px;font-size:17px;color:#8fb0bf;line-height:1.5;max-width:760px">The Earth operation is over. Hostile simulation is frozen, and no later shot, refund or build order can change this result.</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px">
+      <div class="panel" style="padding:12px 14px"><div class="cap">Operation time</div><div class="num" style="font-size:40px;color:#e8fcff;line-height:1.1">12:01</div></div>
+      <div class="panel" style="padding:12px 14px"><div class="cap">Waves survived</div><div class="num" style="font-size:40px;color:#e8fcff;line-height:1.1">4</div></div>
+      <div class="panel" style="padding:12px 14px"><div class="cap">Relays down</div><div class="num" style="font-size:40px;color:#e8fcff;line-height:1.1">2 / 2</div></div>
+      <div class="panel" style="padding:12px 14px"><div class="cap">Technologies</div><div class="num" style="font-size:40px;color:#e8fcff;line-height:1.1">12 / 12</div></div>
+      <div class="panel" style="padding:12px 14px"><div class="cap">HQ integrity</div><div class="num" style="font-size:40px;color:#50e6a0;line-height:1.1">72%</div></div>
+    </div>
+
+    <div style="display:flex;gap:16px">
+      <!-- casualties -->
+      <div class="panel" style="width:368px;padding:18px 20px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between"><div class="disp" style="font-size:20px">Casualties</div><div class="cap">Lost / produced</div></div>
+        <div style="display:flex;flex-direction:column;gap:14px;margin-top:4px">
+          <div><div style="display:flex;justify-content:space-between;font-size:15px"><span>Infantry</span><span class="mono num" style="font-size:15px">14 / 31</span></div><div style="position:relative;height:12px;margin-top:4px;background:#0b1620;border:1px solid #1b3342"><div style="position:absolute;left:0;top:0;height:100%;width:100%;background:#185a6e"></div><div style="position:absolute;left:0;top:0;height:100%;width:45%;background:#f06050"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:15px"><span>Anti-armour</span><span class="mono num" style="font-size:15px">6 / 12</span></div><div style="position:relative;height:12px;margin-top:4px;background:#0b1620;border:1px solid #1b3342"><div style="position:absolute;left:0;top:0;height:100%;width:39%;background:#185a6e"></div><div style="position:absolute;left:0;top:0;height:100%;width:19.5%;background:#f06050"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:15px"><span>Battle tanks</span><span class="mono num" style="font-size:15px">5 / 18</span></div><div style="position:relative;height:12px;margin-top:4px;background:#0b1620;border:1px solid #1b3342"><div style="position:absolute;left:0;top:0;height:100%;width:58%;background:#185a6e"></div><div style="position:absolute;left:0;top:0;height:100%;width:16%;background:#f06050"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:15px"><span>Gunships</span><span class="mono num" style="font-size:15px">2 / 6</span></div><div style="position:relative;height:12px;margin-top:4px;background:#0b1620;border:1px solid #1b3342"><div style="position:absolute;left:0;top:0;height:100%;width:19%;background:#185a6e"></div><div style="position:absolute;left:0;top:0;height:100%;width:6.5%;background:#f06050"></div></div></div>
+          <div><div style="display:flex;justify-content:space-between;font-size:15px"><span>Harvesters</span><span class="mono num" style="font-size:15px">1 / 4</span></div><div style="position:relative;height:12px;margin-top:4px;background:#0b1620;border:1px solid #1b3342"><div style="position:absolute;left:0;top:0;height:100%;width:13%;background:#185a6e"></div><div style="position:absolute;left:0;top:0;height:100%;width:3.2%;background:#f06050"></div></div></div>
+        </div>
+        <div style="display:flex;gap:16px;font-size:13px;color:#8fb0bf;margin-top:auto"><span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;background:#f06050;display:inline-block"></span>Lost</span><span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;background:#185a6e;display:inline-block"></span>Produced</span></div>
+      </div>
+
+      <!-- economy history -->
+      <div class="panel" style="flex:1;padding:18px 20px;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between"><div class="disp" style="font-size:20px">Material stock</div><div class="cap">Sample history</div></div>
+        <svg width="420" height="200" viewBox="0 0 420 200" aria-label="Material stock over twelve minutes, with wave arrivals and relay kills marked" style="display:block;margin-top:4px">
+          <line x1="40" y1="24" x2="410" y2="24" stroke="#1b3342" stroke-width="1"></line>
+          <line x1="40" y1="87" x2="410" y2="87" stroke="#1b3342" stroke-width="1"></line>
+          <line x1="40" y1="150" x2="410" y2="150" stroke="#284e60" stroke-width="1"></line>
+          <text x="34" y="28" text-anchor="end" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">1,500</text>
+          <text x="34" y="91" text-anchor="end" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">750</text>
+          <text x="34" y="154" text-anchor="end" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">0</text>
+          <line x1="86" y1="30" x2="86" y2="150" stroke="#f0b040" stroke-width="1" stroke-dasharray="3 4"></line>
+          <line x1="178" y1="30" x2="178" y2="150" stroke="#f0b040" stroke-width="1" stroke-dasharray="3 4"></line>
+          <line x1="271" y1="30" x2="271" y2="150" stroke="#f0b040" stroke-width="1" stroke-dasharray="3 4"></line>
+          <line x1="363" y1="30" x2="363" y2="150" stroke="#f0b040" stroke-width="1" stroke-dasharray="3 4"></line>
+          <text x="86" y="18" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f0b040">W1</text>
+          <text x="178" y="18" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f0b040">W2</text>
+          <text x="271" y="18" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f0b040">W3</text>
+          <text x="363" y="18" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f0b040">W4</text>
+          <polygon points="40,128 60,112 86,118 110,95 140,80 178,92 205,66 235,78 271,52 300,40 327,62 363,48 390,38 410,31 410,150 40,150" fill="rgba(64,220,235,.14)"></polygon>
+          <polyline points="40,128 60,112 86,118 110,95 140,80 178,92 205,66 235,78 271,52 300,40 327,62 363,48 390,38 410,31" fill="none" stroke="#40dceb" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></polyline>
+          <polygon points="235,70 241,78 235,86 229,78" fill="#f06050" stroke="#060910" stroke-width="1.5"></polygon>
+          <polygon points="327,54 333,62 327,70 321,62" fill="#f06050" stroke="#060910" stroke-width="1.5"></polygon>
+          <text x="235" y="104" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f06050">Relay 1</text>
+          <text x="327" y="88" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#f06050">Relay 2</text>
+          <circle cx="410" cy="31" r="4" fill="#96f5ff"></circle>
+          <text x="404" y="54" text-anchor="end" font-family="Rajdhani" font-weight="600" font-size="18" fill="#e8fcff">1,420</text>
+          <text x="40" y="172" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">0:00</text>
+          <text x="132" y="172" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">3:00</text>
+          <text x="225" y="172" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">6:00</text>
+          <text x="317" y="172" text-anchor="middle" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">9:00</text>
+          <text x="404" y="172" text-anchor="end" font-family="IBM Plex Mono" font-size="12" fill="#8fb0bf">12:01</text>
+        </svg>
+        <div style="font-size:13px;color:#8fb0bf">W marks a wave arrival. Diamonds mark relay outposts destroyed.</div>
+      </div>
+    </div>
+
+    <!-- narrative teaser -->
+    <div style="border:1px solid #b79cff;border-radius:3px;background:linear-gradient(90deg,rgba(183,156,255,.14),rgba(8,17,26,.9));padding:14px 20px;display:flex;align-items:center;gap:18px">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#b79cff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8" stroke-dasharray="2 3"></circle><path d="M12 1v3M12 20v3M1 12h3M20 12h3"></path></svg>
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:10px"><span class="disp" style="font-size:22px;color:#e6dcff">Off-world command signature detected</span><span class="tag t-violet">Narrative / Not playable</span></div>
+        <div style="font-size:15px;color:#cee8f0;margin-top:2px">A transmission pattern routes beyond Earth orbit. The Solar chapter is design only.</div>
+      </div>
+    </div>
+
+    <div class="mono" style="font-size:13px;color:#8fb0bf;letter-spacing:.03em">Final state hash 11859179164159499449  /  tick 21,642  /  seed 2026  /  sample data</div>
+
+    <div style="display:flex;gap:12px;margin-top:auto">
+      <button type="button" class="btn pri" style="flex:1.4">Next horizon</button>
+      <button type="button" class="btn" style="flex:1">Replay</button>
+      <button type="button" class="btn" style="flex:1">Restart</button>
+    </div>
+  </div>
+
+  <!-- ============ DEFEAT ============ -->
+  <div style="position:relative;width:960px;height:1080px;padding:44px 56px;display:flex;flex-direction:column;gap:20px;border-left:1px solid #284e60;background:radial-gradient(900px 560px at 70% 0%,rgba(240,78,70,.16),transparent 65%),linear-gradient(180deg,#120b0e,#07070b)">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:12px"><span class="tag t-bad">Debrief / Defeat</span><span class="cap">Operation Dawnshield</span></div>
+      <span class="cap">Alien Core Node survived at 4,800 / 12,000 HP</span>
+    </div>
+    <div>
+      <div class="disp" style="font-size:76px;line-height:1;color:#ffd9d4;letter-spacing:.05em;filter:drop-shadow(0 0 22px rgba(240,78,70,.4))">Headquarters lost</div>
+      <div style="margin-top:12px;font-size:17px;color:#c9aaa6;line-height:1.5;max-width:760px">The invasion broke the base at 08:55. Here is the chain that led there and what to change.</div>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <span class="chip" style="border-color:#f04e46"><span class="cap" style="color:#f04e46">Last supply cut</span>07:40</span>
+      <span class="chip" style="border-color:#f0b040"><span class="cap" style="color:#f0b040">Production pauses</span>1 / 35 s</span>
+      <span class="chip" style="border-color:#f0b040"><span class="cap" style="color:#f0b040">Power deficit</span>01:20 total</span>
+    </div>
+
+    <!-- what failed timeline -->
+    <div class="panel" style="padding:18px 20px;display:flex;flex-direction:column;gap:12px;border-color:#5a2a2a">
+      <div style="display:flex;align-items:baseline;justify-content:space-between"><div class="disp" style="font-size:20px">What failed</div><div class="cap">06:00 to 09:00 / sample data</div></div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:10px"><div style="width:110px;flex:none;font-size:14px">Supply route</div>
+          <div style="position:relative;width:684px;height:32px;background:#0b1620;border:1px solid #1b3342">
+            <div class="seg" style="left:0;width:380px;background:#185a6e;color:#cee8f0">Connected</div>
+            <div class="seg" style="left:380px;width:304px;background:#7a1f1b;color:#ffd9d4">Route 02 severed 07:40</div>
+          </div></div>
+        <div style="display:flex;align-items:center;gap:10px"><div style="width:110px;flex:none;font-size:14px">Depot ammo</div>
+          <div style="position:relative;width:684px;height:32px;background:#0b1620;border:1px solid #1b3342">
+            <div class="seg" style="left:0;width:380px;background:#185a6e;color:#cee8f0">Stocked</div>
+            <div class="seg" style="left:380px;width:190px;background:#6b4a10;color:#ffe3ae">Draining</div>
+            <div class="seg" style="left:570px;width:114px;background:#7a1f1b;color:#ffd9d4">Empty 08:30</div>
+          </div></div>
+        <div style="display:flex;align-items:center;gap:10px"><div style="width:110px;flex:none;font-size:14px">Power</div>
+          <div style="position:relative;width:684px;height:32px;background:#0b1620;border:1px solid #1b3342">
+            <div class="seg" style="left:0;width:228px;background:#185a6e;color:#cee8f0">Balanced</div>
+            <div class="seg" style="left:228px;width:304px;background:#6b4a10;color:#ffe3ae">Deficit 07:00 to 08:20</div>
+            <div class="seg" style="left:532px;width:152px;background:#185a6e;color:#cee8f0">Balanced</div>
+          </div></div>
+        <div style="display:flex;align-items:center;gap:10px"><div style="width:110px;flex:none;font-size:14px">Production</div>
+          <div style="position:relative;width:684px;height:32px;background:#0b1620;border:1px solid #1b3342">
+            <div class="seg" style="left:0;width:342px;background:#185a6e;color:#cee8f0">Running</div>
+            <div class="seg" style="left:342px;width:133px;background:#7a1f1b;color:#ffd9d4">Paused</div>
+            <div class="seg" style="left:475px;width:209px;background:#185a6e;color:#cee8f0">Running</div>
+          </div></div>
+        <div style="display:flex;align-items:center;gap:10px"><div style="width:110px;flex:none;font-size:14px">Defences</div>
+          <div style="position:relative;width:684px;height:32px;background:#0b1620;border:1px solid #1b3342">
+            <div class="seg" style="left:0;width:532px;background:#185a6e;color:#cee8f0">Firing</div>
+            <div class="seg" style="left:532px;width:133px;background:#7a1f1b;color:#ffd9d4">No rounds</div>
+          </div></div>
+        <div style="display:flex;align-items:center;gap:10px"><div style="width:110px;flex:none;font-size:14px">HQ integrity</div>
+          <div style="position:relative;width:684px;height:32px;background:#0b1620;border:1px solid #1b3342">
+            <div class="seg" style="left:0;width:494px;background:#185a6e;color:#cee8f0">Intact</div>
+            <div class="seg" style="left:494px;width:171px;background:#6b4a10;color:#ffe3ae">Under attack</div>
+            <div style="position:absolute;left:665px;top:-1px;width:2px;height:32px;background:#f04e46"></div>
+            <div style="position:absolute;left:660px;top:8px;width:12px;height:12px;background:#f04e46;transform:rotate(45deg)"></div>
+          </div></div>
+        <div style="position:relative;height:36px;margin-left:120px">
+          <span class="mono" style="position:absolute;left:0;top:2px;font-size:12px;color:#8fb0bf">06:00</span>
+          <span class="mono" style="position:absolute;left:218px;top:2px;font-size:12px;color:#8fb0bf">07:00</span>
+          <span class="mono" style="position:absolute;left:446px;top:2px;font-size:12px;color:#8fb0bf">08:00</span>
+          <span class="mono" style="position:absolute;right:0;top:2px;font-size:12px;color:#f04e46">08:55 HQ destroyed</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- cause chain -->
+    <div class="panel" style="padding:14px 20px;border-color:#5a2a2a;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="cap" style="color:#f04e46">Cause chain</span>
+      <span class="chip">Route cut</span><span style="color:#8fb0bf">&#8594;</span>
+      <span class="chip">Depot drained</span><span style="color:#8fb0bf">&#8594;</span>
+      <span class="chip">Rounds exhausted</span><span style="color:#8fb0bf">&#8594;</span>
+      <span class="chip">Firing stopped</span><span style="color:#8fb0bf">&#8594;</span>
+      <span class="chip" style="border-color:#f04e46;color:#ffd9d4">HQ breached</span>
+    </div>
+
+    <!-- recovery -->
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="disp" style="font-size:20px">What to try next</div>
+      <div class="glass" style="display:flex;align-items:center;gap:14px;padding:10px 16px;min-height:52px"><span class="num" style="font-size:24px;color:#40dceb;width:22px">1</span><span style="font-size:16px">Place a forward depot beyond the bridge before the siege wave commits.</span></div>
+      <div class="glass" style="display:flex;align-items:center;gap:14px;padding:10px 16px;min-height:52px"><span class="num" style="font-size:24px;color:#40dceb;width:22px">2</span><span style="font-size:16px">Add a Reactor or Battery before the second Vehicle Factory to keep defences powered.</span></div>
+      <div class="glass" style="display:flex;align-items:center;gap:14px;padding:10px 16px;min-height:52px"><span class="num" style="font-size:24px;color:#40dceb;width:22px">3</span><span style="font-size:16px">Hold a mobile reserve near the headquarters for the late raid.</span></div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:auto">
+      <button type="button" class="btn pri" style="flex:1.4">Retry from checkpoint</button>
+      <button type="button" class="btn" style="flex:1">Review replay</button>
+      <button type="button" class="btn" style="flex:1">Restart</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

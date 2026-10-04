@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Title and Campaign</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.menu-btn{display:flex;align-items:center;gap:14px;width:440px;height:56px;padding:0 20px;border:1px solid #1b3342;border-radius:2px;background:rgba(8,17,26,.82);color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:21px;letter-spacing:.1em;text-transform:uppercase;cursor:default;text-align:left}
+.menu-btn .hint{margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:13px;letter-spacing:.06em;color:#8fb0bf;text-transform:none}
+.menu-btn:hover{background:#183446;border-color:#185a6e}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:radial-gradient(1200px 700px at 72% 80%,rgba(64,220,235,.10),transparent 60%),radial-gradient(900px 600px at 18% 8%,rgba(24,90,110,.28),transparent 65%),linear-gradient(180deg,#03050a 0%,#060b14 60%,#08121c 100%);font-family:'IBM Plex Sans',system-ui,sans-serif;color:#cee8f0">
+
+  <!-- stars -->
+  <div style="position:absolute;left:0;top:0;width:1920px;height:1080px;background-repeat:no-repeat;background-image:radial-gradient(1.5px 1.5px at 140px 90px,#cee8f0,transparent),radial-gradient(1px 1px at 330px 210px,#8fb0bf,transparent),radial-gradient(1.5px 1.5px at 520px 60px,#96f5ff,transparent),radial-gradient(1px 1px at 760px 150px,#cee8f0,transparent),radial-gradient(1px 1px at 910px 40px,#8fb0bf,transparent),radial-gradient(1.5px 1.5px at 1090px 120px,#cee8f0,transparent),radial-gradient(1px 1px at 1260px 70px,#8fb0bf,transparent),radial-gradient(1px 1px at 1500px 30px,#cee8f0,transparent),radial-gradient(1.5px 1.5px at 1710px 100px,#96f5ff,transparent),radial-gradient(1px 1px at 1850px 260px,#8fb0bf,transparent),radial-gradient(1px 1px at 60px 380px,#8fb0bf,transparent),radial-gradient(1px 1px at 640px 330px,#cee8f0,transparent),radial-gradient(1px 1px at 1010px 300px,#8fb0bf,transparent),radial-gradient(1.5px 1.5px at 1620px 440px,#cee8f0,transparent)"></div>
+
+  <!-- orbital arc -->
+  <div style="position:absolute;left:-260px;top:300px;width:2500px;height:900px;border-radius:50%;border:1px dashed rgba(64,220,235,.32);transform:rotate(-7deg)"></div>
+  <div style="position:absolute;left:1118px;top:324px;width:10px;height:10px;border-radius:50%;background:#96f5ff;box-shadow:0 0 14px 4px rgba(64,220,235,.55)"></div>
+
+  <!-- Earth limb -->
+  <div style="position:absolute;left:-540px;top:790px;width:3000px;height:3000px;border-radius:50%;background:radial-gradient(circle at 50% 0%,#12425c 0%,#0b2a3f 12%,#07161f 36%,#03070d 70%);box-shadow:0 -2px 0 rgba(150,245,255,.6),0 -26px 90px rgba(64,220,235,.38),inset 0 40px 100px rgba(64,220,235,.20)"></div>
+  <div style="position:absolute;left:300px;top:842px;width:1320px;height:3px;background:linear-gradient(90deg,transparent,rgba(240,176,64,.5),transparent);filter:blur(1px)"></div>
+  <div style="position:absolute;left:0;top:760px;width:1920px;height:320px;background:linear-gradient(180deg,transparent,rgba(3,5,10,.55))"></div>
+
+  <!-- alien core signature -->
+  <div style="position:absolute;left:980px;top:150px;width:200px;height:200px">
+    <div style="position:absolute;left:0;top:0;width:200px;height:200px;border-radius:50%;border:1px solid rgba(240,96,80,.35);background:radial-gradient(circle,rgba(240,96,80,.28),transparent 66%)"></div>
+    <div style="position:absolute;left:36px;top:36px;width:128px;height:128px;border-radius:50%;border:1px dashed rgba(240,96,80,.5)"></div>
+    <img src="/_blob/0be71b82ef5f888b5618e0f9fa839355" alt="" style="position:absolute;left:44px;top:40px;width:112px;height:112px;object-fit:contain;opacity:.62;filter:drop-shadow(0 0 16px rgba(240,96,80,.65))">
+    <div class="cap" style="position:absolute;left:0;top:210px;width:200px;text-align:center;color:#f06050;letter-spacing:.08em">Alien Core signature</div>
+  </div>
+
+  <!-- key art -->
+  <div style="position:absolute;left:640px;top:520px;width:540px;height:430px">
+    <div style="position:absolute;left:-40px;top:180px;width:360px;height:200px;background:radial-gradient(ellipse,rgba(64,220,235,.22),transparent 68%)"></div>
+    <div style="position:absolute;left:300px;top:150px;width:300px;height:220px;background:radial-gradient(ellipse,rgba(240,96,80,.26),transparent 68%)"></div>
+    <img src="/_blob/db3d948c803c1c9cba61476a340b63b2" alt="" style="position:absolute;left:0;top:70px;width:270px;height:270px;object-fit:contain;opacity:.62;filter:drop-shadow(0 12px 10px rgba(0,0,0,.6))">
+    <img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" alt="" style="position:absolute;left:150px;top:210px;width:210px;height:210px;object-fit:contain;opacity:.7;filter:drop-shadow(0 10px 8px rgba(0,0,0,.6))">
+    <img src="/_blob/879ef1bcd08cfe47287ca9a866836361" alt="" style="position:absolute;left:30px;top:290px;width:130px;height:130px;object-fit:contain;opacity:.7;filter:drop-shadow(0 8px 6px rgba(0,0,0,.6))">
+    <img src="/_blob/6a6d4bfd505790b39b7485e2bfc2b124" alt="" style="position:absolute;left:330px;top:40px;width:230px;height:230px;object-fit:contain;opacity:.55;filter:drop-shadow(0 12px 10px rgba(0,0,0,.6))">
+    <img src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" alt="" style="position:absolute;left:320px;top:220px;width:210px;height:210px;object-fit:contain;opacity:.62;filter:drop-shadow(0 10px 8px rgba(0,0,0,.6))">
+    <img src="/_blob/93d78c252e9b483a235e153feaad78be" alt="" style="position:absolute;left:250px;top:-20px;width:150px;height:150px;object-fit:contain;opacity:.5;filter:drop-shadow(0 14px 10px rgba(0,0,0,.5))">
+  </div>
+
+  <!-- left column: wordmark + menu -->
+  <div style="position:absolute;left:120px;top:96px;width:900px">
+    <div class="cap" style="color:#40dceb;display:flex;align-items:center;gap:12px"><span style="display:inline-block;width:36px;height:1px;background:#40dceb"></span>A real-time science RTS</div>
+    <div style="margin-top:14px;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:128px;line-height:1;letter-spacing:.1em;text-transform:uppercase;background:linear-gradient(180deg,#ffffff 0%,#96f5ff 52%,#40dceb 100%);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 26px rgba(64,220,235,.45))">Ascension</div>
+    <div class="disp" style="margin-top:10px;font-size:30px;letter-spacing:.2em;color:#cee8f0">Earthfront to the cosmic frontier</div>
+  </div>
+
+  <div style="position:absolute;left:120px;top:432px;display:flex;flex-direction:column;gap:10px">
+    <button type="button" class="menu-btn" style="background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 22px rgba(64,220,235,.25)">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5l12 7-12 7z"></path></svg>
+      Continue campaign<span class="hint" style="color:#cee8f0">Dawnshield 07:12</span>
+    </button>
+    <button type="button" class="menu-btn" style="background:#183446;border-color:#185a6e">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+      New operation<span class="hint">Seed 2026</span>
+    </button>
+    <button type="button" class="menu-btn">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><path d="M12 2v5M12 17v5M2 12h5M17 12h5"></path></svg>
+      Skirmish sandbox<span class="hint">Legacy map</span>
+    </button>
+    <button type="button" class="menu-btn">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"></path></svg>
+      Research archive<span class="hint">12 projects</span>
+    </button>
+    <button type="button" class="menu-btn">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"></path></svg>
+      Settings<span class="hint">Remap keys</span>
+    </button>
+    <button type="button" class="menu-btn">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v8M6.5 6.8a8 8 0 1 0 11 0"></path></svg>
+      Quit<span class="hint">Alt F4</span>
+    </button>
+  </div>
+
+  <!-- campaign panel -->
+  <div class="panel" style="position:absolute;left:1180px;top:56px;width:664px;height:920px;padding:24px;display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div class="disp" style="font-size:28px;color:#cee8f0">Campaign</div>
+      <div class="cap">5 chapters / 1 playable</div>
+    </div>
+
+    <!-- Dawnshield -->
+    <div class="glow" style="border-radius:3px;background:linear-gradient(180deg,rgba(16,70,86,.55),rgba(8,17,26,.9));padding:0;overflow:hidden">
+      <div style="position:relative;height:130px;background:radial-gradient(ellipse at 30% 110%,#3b3d30,#30332a 55%,#23251e);overflow:hidden">
+        <div class="grid-bg" style="position:absolute;left:0;top:0;width:100%;height:100%"></div>
+        <img src="/_blob/db3d948c803c1c9cba61476a340b63b2" alt="" style="position:absolute;left:30px;top:-10px;width:170px;height:170px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+        <img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" alt="" style="position:absolute;left:190px;top:30px;width:130px;height:130px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+        <img src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" alt="" style="position:absolute;left:400px;top:26px;width:130px;height:130px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+        <img src="/_blob/6a6d4bfd505790b39b7485e2bfc2b124" alt="" style="position:absolute;left:500px;top:-14px;width:160px;height:160px;object-fit:contain;filter:drop-shadow(0 8px 6px rgba(0,0,0,.55))">
+        <div style="position:absolute;left:0;top:0;width:100%;height:100%;background:linear-gradient(180deg,transparent 40%,rgba(8,17,26,.92))"></div>
+        <div style="position:absolute;left:16px;top:14px;display:flex;gap:8px"><span class="tag t-good" style="background:rgba(3,5,10,.7)">Playable</span><span class="tag" style="color:#8fb0bf;background:rgba(3,5,10,.7)">Era 1-2</span></div>
+      </div>
+      <div style="padding:16px 20px 20px;display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div class="disp" style="font-size:34px;color:#e8fcff;line-height:1.1">Operation Dawnshield</div>
+          <div style="margin-top:4px;font-size:16px;color:#8fb0bf">Earthfront. Contemporary Humanity to Advanced Industrial Civilization.</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px">
+          <div><div class="cap">Objective</div><div style="font-size:15px;margin-top:2px">Destroy the alien Core Node</div></div>
+          <div><div class="cap">Target length</div><div style="font-size:15px;margin-top:2px">25 to 40 minutes</div></div>
+          <div><div class="cap">Visibility</div><div style="font-size:15px;margin-top:2px">Full battlefield, no fog of war</div></div>
+          <div><div class="cap">Tempo</div><div style="font-size:15px;margin-top:2px">Pause and speed control</div></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <button type="button" class="btn pri" style="flex:1">Continue operation</button>
+          <button type="button" class="btn" style="flex:1">Start over</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:2px">
+      <div class="cap">Later chapters</div>
+      <div class="cap" style="color:#b79cff">Design only, not yet built</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;flex:1">
+      <div style="border:1px dashed #284e60;border-radius:3px;background:rgba(8,17,26,.7);padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between"><span class="tag" style="color:#f0b040">Eras 3-4</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8fb0bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked"><rect x="5" y="11" width="14" height="9" rx="1"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></div>
+        <div class="disp" style="font-size:26px;color:#cee8f0">Solar</div>
+        <div style="font-size:14px;color:#8fb0bf;line-height:1.4">Orbital industry, launch mass and transfer windows.</div>
+        <div class="tag t-dim" style="align-self:flex-start;margin-top:auto">Design / Locked</div>
+      </div>
+      <div style="border:1px dashed #284e60;border-radius:3px;background:rgba(8,17,26,.7);padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between"><span class="tag" style="color:#78b4ff">Era 5</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8fb0bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked"><rect x="5" y="11" width="14" height="9" rx="1"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></div>
+        <div class="disp" style="font-size:26px;color:#cee8f0">Interstellar</div>
+        <div style="font-size:14px;color:#8fb0bf;line-height:1.4">Independent industrial seeds and communication delay.</div>
+        <div class="tag t-dim" style="align-self:flex-start;margin-top:auto">Design / Locked</div>
+      </div>
+      <div style="border:1px dashed #284e60;border-radius:3px;background:rgba(8,17,26,.7);padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between"><span class="tag" style="color:#9ad0ff">Eras 6-9</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8fb0bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked"><rect x="5" y="11" width="14" height="9" rx="1"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></div>
+        <div class="disp" style="font-size:26px;color:#cee8f0">Galactic</div>
+        <div style="font-size:14px;color:#8fb0bf;line-height:1.4">Sector budgets and autonomous governors.</div>
+        <div class="tag t-dim" style="align-self:flex-start;margin-top:auto">Design / Locked</div>
+      </div>
+      <div style="border:1px dashed #284e60;border-radius:3px;background:rgba(8,17,26,.7);padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;justify-content:space-between"><span class="tag" style="color:#e8f4ff">Era 10</span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8fb0bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-label="Locked"><rect x="5" y="11" width="14" height="9" rx="1"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></div>
+        <div class="disp" style="font-size:26px;color:#cee8f0">Cosmic</div>
+        <div style="font-size:14px;color:#8fb0bf;line-height:1.4">Refuge networks and survival under causal limits.</div>
+        <div class="tag t-dim" style="align-self:flex-start;margin-top:auto">Design / Locked</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- footer -->
+  <div style="position:absolute;left:120px;right:76px;bottom:28px;display:flex;align-items:center;justify-content:space-between">
+    <div class="mono" style="font-size:13px;color:#8fb0bf;letter-spacing:.04em">DESIGN PREVIEW  /  Earthfront slice, eras 1-2  /  deterministic core, 30 Hz</div>
+    <div class="mono" style="font-size:13px;color:#8fb0bf;letter-spacing:.04em">WASD pan  /  Wheel zoom  /  A attack-move  /  Y research  /  Esc menu</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

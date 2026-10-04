@@ -1,5 +1,35 @@
 # Asset credits
 
+## Earthfront isometric sprite set
+
+The active `*_v2.png` unit and structure sprites are original AI-generated
+art created for this project with OpenAI's built-in image-generation tool. The
+versioned source atlas is `rts_atlas_v2.png`; the twelve runtime sprites were
+cropped from its strict 4×3 grid and normalized to 256×256 transparent PNGs.
+They use native material colors in-game, with faction identity drawn separately
+by the renderer. The older credited assets below remain in the repository but
+are no longer loaded by the Earthfront renderer.
+
+The active `alien_*_v1.png` set was produced through the same original
+image-generation workflow as a second strict 4×3 transparent atlas
+(`alien_atlas_v1.png`). Its iron/crimson biomechanical machines are intentionally
+silhouette-distinct from the human olive/teal industrial faction.
+
+The unique `capital_v1.png` mobile fortress and `alien_capital_v1.png`
+Leviathan are original transparent production sprites generated with the same
+built-in tool. They replace the former reused tank silhouettes for late-game
+flagships.
+
+## Earthfront environment set
+
+`environment_atlas_v1.png` is an original AI-generated strict 4×3 transparent
+atlas created for this project with OpenAI's built-in image-generation tool.
+Its twelve normalized runtime sprites provide rocks, scrub, dead trees,
+sandbags, wrecked vehicles, concrete barriers, floodlights, craters, illustrated
+ore/alloy fields, building foundations, and damaged fencing. The renderer places
+them deterministically as cosmetic battlefield dressing; they never obscure fog
+or change simulation pathing.
+
 ## Combat sprites (units + turrets)
 
 The four units and both turrets use top-down military art from the **Dark War
@@ -74,3 +104,8 @@ the public domain (**CC0 1.0**). No third-party audio is used. Files live in
 
 Regenerate with the FFmpeg commands recorded in the project history; tweak the
 synthesis expressions to taste.
+
+
+## Godot 3D modular models
+
+The Godot presentation client uses selected GLB models from Kenney City Kit (Industrial), Modular Space Kit, and Hexagon Kit. All three packs are Creative Commons CC0. Their original license files are preserved under `godot3d/assets/licenses/`.

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pause menu</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.96),rgba(8,16,26,.96));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.btn{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:56px;padding:0 20px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:20px;letter-spacing:.1em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.btn.danger{border-color:#7a2f2b;color:#ffd6d2}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-dim{color:#8fb0bf}
+.key{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 5px;border:1px solid #284e60;border-radius:2px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#cee8f0;background:#03050a}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.a{position:absolute}
+.spr{position:absolute;filter:drop-shadow(0 1px 1px rgba(0,0,0,.35));pointer-events:none;z-index:2}
+.shd{position:absolute;pointer-events:none;z-index:1;filter:brightness(0) blur(4px);opacity:.4;transform-origin:50% 84%;transform:skewX(60deg) scaleY(-.34)}
+.ao{position:absolute;pointer-events:none;z-index:1;filter:brightness(0) blur(6px);opacity:.6;transform-origin:50% 84%;transform:translateY(3px) scaleY(.13)}
+.stat{display:flex;justify-content:space-between;font-size:14px;padding:7px 0;border-bottom:1px solid #1b3342}
+.stat:last-child{border-bottom:none}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:#30332a">
+
+<!-- frozen battlefield: Kestrel Reach -->
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
+<img class="shd" src="/_blob/b32b316f8a54cfb3e4e96b8ab7a2f79e" style="left:150px;top:310px;width:170px;height:170px"><img class="ao" src="/_blob/b32b316f8a54cfb3e4e96b8ab7a2f79e" style="left:150px;top:310px;width:170px;height:170px"><img class="spr" src="/_blob/b32b316f8a54cfb3e4e96b8ab7a2f79e" style="left:150px;top:310px;width:170px">
+<img class="shd" src="/_blob/5828f353f51d19ec36c3c638831bfb96" style="left:360px;top:300px;width:250px;height:250px"><img class="ao" src="/_blob/5828f353f51d19ec36c3c638831bfb96" style="left:360px;top:300px;width:250px;height:250px"><img class="spr" src="/_blob/5828f353f51d19ec36c3c638831bfb96" style="left:360px;top:300px;width:250px">
+<img class="shd" src="/_blob/6c29c5788f12d88cfae3914221f234a9" style="left:560px;top:470px;width:200px;height:200px"><img class="ao" src="/_blob/6c29c5788f12d88cfae3914221f234a9" style="left:560px;top:470px;width:200px;height:200px"><img class="spr" src="/_blob/6c29c5788f12d88cfae3914221f234a9" style="left:560px;top:470px;width:200px">
+<img class="shd" src="/_blob/c28b4de3839198732e73d3041feec1e6" style="left:400px;top:570px;width:200px;height:200px"><img class="ao" src="/_blob/c28b4de3839198732e73d3041feec1e6" style="left:400px;top:570px;width:200px;height:200px"><img class="spr" src="/_blob/c28b4de3839198732e73d3041feec1e6" style="left:400px;top:570px;width:200px">
+<img class="shd" src="/_blob/508d97c7b872d6502bb31b3fe2de001c" style="left:735px;top:330px;width:115px;height:115px"><img class="ao" src="/_blob/508d97c7b872d6502bb31b3fe2de001c" style="left:735px;top:330px;width:115px;height:115px"><img class="spr" src="/_blob/508d97c7b872d6502bb31b3fe2de001c" style="left:735px;top:330px;width:115px">
+<img class="shd" src="/_blob/87aab1971d525ecad863691237ae2a71" style="left:690px;top:700px;width:140px;height:140px"><img class="ao" src="/_blob/87aab1971d525ecad863691237ae2a71" style="left:690px;top:700px;width:140px;height:140px"><img class="spr" src="/_blob/87aab1971d525ecad863691237ae2a71" style="left:690px;top:700px;width:140px">
+
+<!-- scrim -->
+<div class="a" style="inset:0;background:rgba(3,5,10,.72);backdrop-filter:blur(3px)"></div>
+
+<!-- paused marker, top center -->
+<div class="a" style="left:0;right:0;top:34px;display:flex;justify-content:center">
+  <div class="panel" style="display:flex;align-items:center;gap:14px;padding:10px 26px;border-color:#40dceb">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#96f5ff" stroke-width="2" stroke-linecap="round"><path d="M8 5v14M16 5v14"/></svg>
+    <span class="disp" style="font-size:26px;color:#e8fcff;letter-spacing:.2em">Paused</span>
+    <span class="cap">Simulation stopped</span>
+  </div>
+</div>
+
+<!-- menu -->
+<div class="a panel" style="left:560px;top:190px;width:480px;padding:26px 26px 22px">
+  <div class="cap" style="color:#96f5ff">Kestrel Reach</div>
+  <div class="disp" style="font-size:44px;line-height:46px;color:#e8fcff;margin-top:4px">Command pause</div>
+  <div style="display:flex;flex-direction:column;gap:10px;margin-top:22px">
+    <button type="button" class="btn pri">Resume <span class="key">Esc</span></button>
+    <button type="button" class="btn">Controls <span class="key">F1</span></button>
+    <button type="button" class="btn">Settings <span class="key">F10</span></button>
+    <button type="button" class="btn">Save and keep playing <span class="key">F5</span></button>
+    <div style="height:1px;background:#1b3342;margin:4px 0"></div>
+    <button type="button" class="btn danger">Restart mission</button>
+    <button type="button" class="btn danger">Quit to title</button>
+  </div>
+  <div style="font-size:13px;color:#8fb0bf;margin-top:16px">Restart and quit ask for a second confirmation. Progress since the last save is lost.</div>
+</div>
+
+<!-- mission snapshot -->
+<div class="a panel" style="left:1080px;top:190px;width:440px;padding:22px 24px">
+  <div class="cap" style="color:#96f5ff">Mission snapshot</div>
+  <div style="margin-top:10px">
+    <div class="stat"><span class="t-dim">Objective</span><span>Hold Kestrel Reach, wave 02 of 05</span></div>
+    <div class="stat"><span class="t-dim">Elapsed</span><span class="mono">14:36</span></div>
+    <div class="stat"><span class="t-dim">Next wave</span><span class="mono">01:52</span></div>
+    <div class="stat"><span class="t-dim">Material</span><span class="mono">840</span></div>
+    <div class="stat"><span class="t-dim">Power</span><span class="mono t-warn">160 / 168 kW</span></div>
+    <div class="stat"><span class="t-dim">Units alive</span><span class="mono">23</span></div>
+    <div class="stat"><span class="t-dim">Losses</span><span class="mono">4</span></div>
+    <div class="stat"><span class="t-dim">Last save</span><span class="mono">Autosave, 03:10 ago</span></div>
+  </div>
+</div>
+
+<!-- confirm dialog, shown as the second state of Restart -->
+<div class="a panel" style="left:560px;top:760px;width:960px;padding:18px 24px;display:flex;align-items:center;gap:24px;border-color:#7a2f2b">
+  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#f04e46" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg>
+  <div style="flex:1"><div class="disp" style="font-size:24px;color:#ffd6d2">Restart this mission?</div><div style="font-size:14px;color:#8fb0bf;margin-top:2px">You will lose 14:36 of progress. This cannot be undone.</div></div>
+  <button type="button" class="btn" style="min-width:150px;min-height:48px">Keep playing</button>
+  <button type="button" class="btn danger" style="min-width:150px;min-height:48px">Restart</button>
+</div>
+<div class="a cap" style="left:560px;top:734px">Confirmation state, shown when Restart mission is pressed</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

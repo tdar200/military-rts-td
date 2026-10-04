@@ -1,0 +1,4 @@
+   Compiling rts-core v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/core)
+   Compiling rts-data v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/data)
+   Compiling rts-server v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/server)
+    Finished `release` profile [optimized] target(s) in 17.92s

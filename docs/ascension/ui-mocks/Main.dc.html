@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Earthfront HUD</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg0:#03050a;--bg1:#060910;--bg2:#08111a;--panel:rgba(10,18,28,.88);--raised:#101c2a;--hover:#183446;--active:#104656;--line:#284e60;--line-dim:#1b3342;--cyan:#40dceb;--cyan-hi:#96f5ff;--cyan-dk:#185a6e;--glow:rgba(64,220,235,.18);--text:#cee8f0;--dim:#8fb0bf;--faint:#5f8191;--good:#50e6a0;--warn:#f0b040;--bad:#f04e46;--violet:#b79cff;--shield:#78b4ff}
+body{margin:0;background:#060910;color:#cee8f0;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+.disp{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.cap{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0bf}
+.panel{background:linear-gradient(180deg,rgba(18,32,46,.92),rgba(8,16,26,.92));border:1px solid #284e60;border-radius:3px;box-shadow:inset 0 1px 0 rgba(150,245,255,.10),0 8px 28px rgba(0,0,0,.45)}
+.glass{background:rgba(8,15,24,.82);border:1px solid #1b3342;border-radius:3px}
+.glow{box-shadow:0 0 0 1px rgba(64,220,235,.55),0 0 24px rgba(64,220,235,.18)}
+.chip{display:inline-flex;align-items:center;gap:8px;height:28px;padding:0 10px;border:1px solid #284e60;border-radius:2px;background:#08111a;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#cee8f0;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border:1px solid #284e60;border-radius:2px;background:#101c2a;color:#cee8f0;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:17px;letter-spacing:.08em;text-transform:uppercase;cursor:default}
+.btn.pri{background:#104656;border-color:#40dceb;color:#e8fcff;box-shadow:0 0 18px rgba(64,220,235,.22)}
+.bar{height:6px;border-radius:1px;background:#0b1620;border:1px solid #1b3342;overflow:hidden}
+.bar>i{display:block;height:100%;background:#40dceb}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:2px;border:1px solid currentColor;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.t-cyan{color:#40dceb}.t-good{color:#50e6a0}.t-warn{color:#f0b040}.t-bad{color:#f04e46}.t-violet{color:#b79cff}.t-dim{color:#8fb0bf}
+.grid-bg{background-image:linear-gradient(rgba(176,190,154,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(176,190,154,.08) 1px,transparent 1px);background-size:48px 48px}
+.scan{background:repeating-linear-gradient(0deg,rgba(120,245,255,.035) 0,rgba(120,245,255,.035) 1px,transparent 1px,transparent 4px)}
+.a{position:absolute}
+.spr{position:absolute;filter:drop-shadow(0 10px 8px rgba(0,0,0,.55));pointer-events:none}
+.sel{position:absolute;background:linear-gradient(#96f5ff,#96f5ff) top left/12px 2px no-repeat,linear-gradient(#96f5ff,#96f5ff) top left/2px 12px no-repeat,linear-gradient(#96f5ff,#96f5ff) top right/12px 2px no-repeat,linear-gradient(#96f5ff,#96f5ff) top right/2px 12px no-repeat,linear-gradient(#96f5ff,#96f5ff) bottom left/12px 2px no-repeat,linear-gradient(#96f5ff,#96f5ff) bottom left/2px 12px no-repeat,linear-gradient(#96f5ff,#96f5ff) bottom right/12px 2px no-repeat,linear-gradient(#96f5ff,#96f5ff) bottom right/2px 12px no-repeat}
+.ring{position:absolute;border:2px solid rgba(150,245,255,.85);border-radius:50%;box-shadow:0 0 14px rgba(64,220,235,.45)}
+.hostile{position:absolute;width:16px;height:16px;transform:rotate(45deg);border:2px solid #f04e46;background:rgba(240,78,70,.25);box-shadow:0 0 12px rgba(240,78,70,.6)}
+.hp{position:absolute;height:5px;background:#0b1620;border:1px solid #1b3342}
+.hp>i{display:block;height:100%}
+.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.tab{display:flex;align-items:center;gap:8px;height:40px;padding:0 14px;border:1px solid #1b3342;border-bottom:none;border-radius:3px 3px 0 0;background:#08111a;color:#8fb0bf;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:16px;letter-spacing:.08em;text-transform:uppercase}
+.tab.on{background:#104656;color:#e8fcff;border-color:#40dceb}
+.key{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 5px;border:1px solid #284e60;border-radius:2px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#cee8f0;background:#03050a}
+</style>
+</helmet>
+<div style="position:relative;width:1920px;height:1080px;overflow:hidden;background:#30332a;font-family:'IBM Plex Sans',sans-serif">
+
+<!-- ============ BATTLEFIELD ============ -->
+<div class="a" style="inset:0;background:radial-gradient(900px 600px at 30% 40%,#3d4033 0%,transparent 70%),radial-gradient(800px 500px at 80% 70%,#2a2d25 0%,transparent 70%),radial-gradient(700px 400px at 60% 20%,#383a2d 0%,transparent 70%),#30332a"></div>
+<div class="a grid-bg" style="inset:0"></div>
+<!-- enemy approach lane -->
+<div class="a" style="left:1180px;top:150px;width:760px;height:380px;transform:rotate(-14deg);background:linear-gradient(90deg,rgba(240,96,80,0),rgba(240,96,80,.10) 60%,rgba(240,96,80,.16));border-radius:60px"></div>
+<!-- territory ring (10 tiles from command centre) -->
+<div class="a" style="left:130px;top:70px;width:900px;height:640px;border:2px dashed rgba(64,220,235,.35);border-radius:50%"></div>
+
+<!-- props -->
+<img class="spr" src="/_blob/8fa77164b10809db24c6c15ea29877a6" style="left:60px;top:150px;width:170px">
+<img class="spr" src="/_blob/0534092272fcee8f91bb19ce38194728" style="left:20px;top:560px;width:140px">
+<img class="spr" src="/_blob/16a3ba1e6e653026f0b1b48da95c8861" style="left:1480px;top:470px;width:170px;opacity:.9">
+<img class="spr" src="/_blob/16a3ba1e6e653026f0b1b48da95c8861" style="left:880px;top:90px;width:130px;opacity:.85">
+<img class="spr" src="/_blob/0669d70b44736bbf3e74312d6655be03" style="left:1650px;top:520px;width:150px">
+<img class="spr" src="/_blob/8fa77164b10809db24c6c15ea29877a6" style="left:1560px;top:640px;width:190px">
+<img class="spr" src="/_blob/407161c4f238555c18eeddccf3152d12" style="left:700px;top:690px;width:150px">
+<img class="spr" src="/_blob/0534092272fcee8f91bb19ce38194728" style="left:1290px;top:640px;width:140px">
+
+<!-- ore field -->
+<div class="a" style="left:900px;top:520px;width:380px;height:210px;background:radial-gradient(ellipse at center,rgba(54,110,100,.55),rgba(54,110,100,0) 70%)"></div>
+<img class="spr" src="/_blob/ad01a87d1f4358c140997c1dd0032c93" style="left:930px;top:540px;width:130px">
+<img class="spr" src="/_blob/ad01a87d1f4358c140997c1dd0032c93" style="left:1050px;top:590px;width:140px">
+<img class="spr" src="/_blob/ad01a87d1f4358c140997c1dd0032c93" style="left:1150px;top:530px;width:120px">
+<img class="spr" src="/_blob/9ead5a70630b558818b1f499fa2921d7" style="left:1010px;top:650px;width:110px">
+
+<!-- base -->
+<img class="spr" src="/_blob/71723c07a0fc76250193f18fe908d174" style="left:200px;top:310px;width:170px">
+<img class="spr" src="/_blob/71723c07a0fc76250193f18fe908d174" style="left:150px;top:440px;width:160px">
+<img class="spr" src="/_blob/db3d948c803c1c9cba61476a340b63b2" style="left:380px;top:250px;width:260px">
+<img class="spr" src="/_blob/c3e6ec8d751f79e8312f5b1298c88af7" style="left:690px;top:400px;width:230px">
+<img class="spr" src="/_blob/0a3a42962a75e9092f0523394a4dc593" style="left:430px;top:520px;width:210px">
+<img class="spr" src="/_blob/bb8b1e3136a332e3f481fbf7939e8de5" style="left:660px;top:190px;width:200px">
+<img class="spr" src="/_blob/b87355df3065a32c2df72af80bd98b93" style="left:620px;top:350px;width:90px">
+<!-- vehicle factory foundation progress ring -->
+<div class="a" style="left:696px;top:236px;width:130px;height:36px;border:1px dashed #40dceb;background:rgba(64,220,235,.10)"></div>
+<div class="a mono" style="left:700px;top:176px;font-size:12px;color:#96f5ff;letter-spacing:.08em">FACTORY 02 / BUILDING 61%</div>
+<!-- harvesters -->
+<img class="spr" src="/_blob/14acc3b5afc1b0571d3e865697cbeae2" style="left:820px;top:560px;width:120px">
+<img class="spr" src="/_blob/14acc3b5afc1b0571d3e865697cbeae2" style="left:1190px;top:600px;width:110px">
+
+<!-- defence line -->
+<img class="spr" src="/_blob/af7e03a2da13b515c8f15e42e6e45d46" style="left:1300px;top:150px;width:150px">
+<img class="spr" src="/_blob/b0ede9045c34b10202c4d4b57e128589" style="left:1330px;top:250px;width:120px">
+<img class="spr" src="/_blob/3caebbeeadc58203acc54b6429009493" style="left:1300px;top:290px;width:130px">
+<img class="spr" src="/_blob/b0ede9045c34b10202c4d4b57e128589" style="left:1340px;top:400px;width:120px">
+<img class="spr" src="/_blob/26db18ce2f6a04a6002dc9e4a19db082" style="left:1230px;top:400px;width:120px">
+<img class="spr" src="/_blob/3caebbeeadc58203acc54b6429009493" style="left:1320px;top:500px;width:130px">
+<img class="spr" src="/_blob/1a5cbe9ed020ebb77cbeef86a1702f71" style="left:1380px;top:340px;width:90px">
+
+<!-- selected vanguard -->
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:1000px;top:250px;width:150px">
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:1070px;top:320px;width:150px">
+<img class="spr" src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="left:940px;top:330px;width:150px">
+<img class="spr" src="/_blob/da5b12c112e382553cd16772f71535ac" style="left:1090px;top:210px;width:90px">
+<img class="spr" src="/_blob/da5b12c112e382553cd16772f71535ac" style="left:1160px;top:380px;width:90px">
+<img class="spr" src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="left:1010px;top:420px;width:80px">
+<img class="spr" src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="left:1100px;top:440px;width:80px">
+<!-- selection brackets + rings -->
+<div class="ring" style="left:1035px;top:345px;width:80px;height:34px"></div>
+<div class="sel" style="left:1020px;top:268px;width:112px;height:90px"></div>
+<div class="sel" style="left:1090px;top:338px;width:112px;height:90px"></div>
+<div class="sel" style="left:960px;top:348px;width:112px;height:90px"></div>
+<div class="sel" style="left:1103px;top:228px;width:66px;height:62px"></div>
+<div class="sel" style="left:1173px;top:398px;width:66px;height:62px"></div>
+<div class="sel" style="left:1022px;top:438px;width:56px;height:58px"></div>
+<div class="sel" style="left:1112px;top:458px;width:56px;height:58px"></div>
+<div class="hp" style="left:1030px;top:262px;width:90px"><i style="width:92%;background:#50e6a0"></i></div>
+<div class="hp" style="left:1100px;top:332px;width:90px"><i style="width:70%;background:#f0b040"></i></div>
+<div class="hp" style="left:970px;top:342px;width:90px"><i style="width:100%;background:#50e6a0"></i></div>
+<!-- attack-move order: solid + queued dotted -->
+<svg class="a" style="left:0;top:0" width="1920" height="780" viewBox="0 0 1920 780" fill="none">
+  <defs><marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#96f5ff"/></marker></defs>
+  <path d="M1220 320 C1300 300 1420 280 1560 250" stroke="#96f5ff" stroke-width="2.5" marker-end="url(#ah)"/>
+  <path d="M1560 250 C1600 230 1640 215 1690 200" stroke="#96f5ff" stroke-width="2.5" stroke-dasharray="3 7" stroke-linecap="round"/>
+  <circle cx="1560" cy="250" r="9" stroke="#96f5ff" stroke-width="2"/>
+  <!-- enemy approach arrow -->
+  <path d="M1900 170 C1820 190 1740 240 1620 300" stroke="#f04e46" stroke-width="3" stroke-dasharray="10 8" marker-end="url(#ah)" opacity=".85"/>
+  <!-- threat range ring of turret -->
+  <circle cx="1365" cy="355" r="150" stroke="rgba(240,176,64,.55)" stroke-width="1.5" stroke-dasharray="6 6"/>
+</svg>
+
+<!-- alien wave inbound -->
+<img class="spr" src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" style="left:1620px;top:150px;width:150px">
+<img class="spr" src="/_blob/d0dfd9e694f84cd197a46eae1f0c8308" style="left:1730px;top:210px;width:150px">
+<img class="spr" src="/_blob/1c1f1a04b9a8d6000561ddee15a3c4bc" style="left:1580px;top:260px;width:90px">
+<img class="spr" src="/_blob/4f832c0046d9ce5a1cc6b5a1da70d43d" style="left:1690px;top:330px;width:90px">
+<img class="spr" src="/_blob/93d78c252e9b483a235e153feaad78be" style="left:1500px;top:90px;width:140px">
+<div class="hostile" style="left:1690px;top:170px"></div>
+<div class="hostile" style="left:1800px;top:236px"></div>
+<div class="hostile" style="left:1618px;top:262px"></div>
+<div class="hostile" style="left:1722px;top:336px"></div>
+<div class="hostile" style="left:1560px;top:100px"></div>
+<!-- relay -->
+<img class="spr" src="/_blob/6a6d4bfd505790b39b7485e2bfc2b124" style="left:1640px;top:540px;width:180px;opacity:.95">
+<div class="a glass" style="left:1648px;top:520px;padding:4px 8px;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.08em;color:#f04e46;border-color:#f04e46">RELAY A / OPERATIONAL</div>
+
+<!-- edge alert arrow (right edge) -->
+<div class="a" style="right:0;top:200px;display:flex;align-items:center;gap:10px;padding:8px 14px 8px 12px;background:rgba(240,78,70,.18);border:1px solid #f04e46;border-right:none;border-radius:3px 0 0 3px;color:#ffd6d2;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.1em">
+  <svg class="ic" viewBox="0 0 24 24" style="color:#f04e46"><path d="M15 5l-7 7 7 7"/></svg>WAVE 02 ENTRY</div>
+
+<!-- ============ TOP BAR ============ -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:10px;padding:0 14px;border-radius:3px">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Era 1 / Earthfront</div></div>
+  </div>
+  <div class="chip"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M12 2l9 5v10l-9 5-9-5V7l9-5zM3 7l9 5 9-5M12 12v10"/></svg><span class="t-dim">MATERIAL</span> <b style="font-weight:500;color:#e8fcff">840</b></div>
+  <div class="chip"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/></svg><span class="t-dim">ORE BUFFER</span> <b style="font-weight:500;color:#e8fcff">210 / 300</b></div>
+  <div class="chip" style="border-color:#f0b040;box-shadow:0 0 0 1px rgba(240,176,64,.35)"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg><span class="t-dim">POWER</span> <b style="font-weight:500;color:#f0b040">160 / 168 kW</b></div>
+  <div class="chip"><svg class="ic t-good" viewBox="0 0 24 24"><rect x="3" y="8" width="16" height="9" rx="1"/><path d="M21 11v3M7 11v3"/></svg><span class="t-dim">BATTERY</span> <b style="font-weight:500;color:#e8fcff">62%</b></div>
+  <div class="chip"><svg class="ic t-cyan" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.5c2.8.2 5 2.4 5 5.5"/></svg><span class="t-dim">CREW</span> <b style="font-weight:500;color:#e8fcff">22 / 60</b></div>
+  <div class="chip"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M8 20V9a4 4 0 018 0v11M8 20h8M8 13h8"/></svg><span class="t-dim">AMMO SUPPLY</span> <b style="font-weight:500;color:#e8fcff">72%</b></div>
+  <div class="chip"><svg class="ic t-violet" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 001.8 3h10.4a2 2 0 001.8-3l-5-9V3"/></svg><span class="t-dim">RESERVED</span> <b style="font-weight:500;color:#e8fcff">FACTORY 01</b></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="border-color:#f0b040;background:rgba(240,176,64,.10);height:36px;padding:0 14px;gap:12px"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M2 12c2.5-4 4.5-4 7 0s4.5 4 7 0 4.5-4 6-2"/></svg><span class="t-warn" style="letter-spacing:.1em">WAVE 02 SIEGE</span><span class="disp" style="font-size:22px;color:#ffd78a;letter-spacing:.06em">T-00:45</span></div>
+  <div style="display:flex;gap:4px;margin-left:6px">
+    <button type="button" class="btn" style="min-height:36px;padding:0 10px" aria-label="Pause"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
+    <button type="button" class="btn pri" style="min-height:36px;padding:0 12px">1x</button>
+    <button type="button" class="btn" style="min-height:36px;padding:0 12px">2x</button>
+  </div>
+</div>
+
+<!-- power deficit tooltip (hover on POWER) -->
+<div class="a panel glow" style="left:462px;top:76px;width:448px;padding:14px 16px;border-color:#f0b040;box-shadow:0 0 0 1px rgba(240,176,64,.5),0 12px 36px rgba(0,0,0,.6)">
+  <div style="display:flex;align-items:center;justify-content:space-between"><div class="disp" style="font-size:20px;color:#f0b040">Grid deficit 8 kW</div><span class="tag t-warn">Throttling industry</span></div>
+  <div style="font-size:14px;color:#8fb0bf;margin:6px 0 10px">Delivered 160 kW against 168 kW requested. Defences and construction keep priority; industry and research share the shortfall.</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div><div class="cap" style="margin-bottom:6px">Producers</div>
+      <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><span>Reactor A</span><span class="mono">100</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:14px"><span>Reactor B</span><span class="mono">60</span></div></div>
+    <div><div class="cap" style="margin-bottom:6px">Largest consumers</div>
+      <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><span>Vehicle factory</span><span class="mono">40</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><span>Lab</span><span class="mono">30</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:14px"><span>Refinery</span><span class="mono">24</span></div></div>
+  </div>
+  <div style="display:flex;gap:10px;margin-top:12px"><button type="button" class="btn" style="min-height:36px;font-size:15px">Focus on map</button><button type="button" class="btn pri" style="min-height:36px;font-size:15px">Build reactor <span class="key">P</span></button></div>
+</div>
+
+<!-- objective tracker -->
+<div class="a panel" style="left:12px;top:76px;width:420px;padding:12px 14px">
+  <div class="cap" style="color:#96f5ff">Operation Dawnshield</div>
+  <div style="display:flex;flex-direction:column;gap:7px;margin-top:8px;font-size:14px">
+    <div style="display:flex;gap:10px;align-items:center;color:#50e6a0"><svg class="ic" viewBox="0 0 24 24"><path d="M4 12l5 5 11-11"/></svg><span style="color:#8fb0bf;text-decoration:line-through">Establish a supplied base</span></div>
+    <div style="display:flex;gap:10px;align-items:center;color:#40dceb"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></svg><span>Hold wave 02 and commission Factory 02</span></div>
+    <div style="display:flex;gap:10px;align-items:center;color:#8fb0bf"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" stroke-dasharray="3 3"/></svg><span>Optional: disable relay A and relay B</span></div>
+    <div style="display:flex;gap:10px;align-items:center;color:#8fb0bf"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" stroke-dasharray="3 3"/></svg><span>Destroy the alien Core Node</span></div>
+  </div>
+</div>
+
+<!-- wave telegraph (centre) -->
+<div class="a panel" style="left:962px;top:76px;width:440px;padding:12px 14px;border-color:rgba(240,176,64,.6)">
+  <div style="display:flex;align-items:center;gap:10px"><span class="tag t-warn">Doctrine committed</span><span class="cap">Arrives in 00:45</span></div>
+  <div class="disp" style="font-size:22px;margin-top:6px;color:#ffd78a">Siege wave: observed walls and tanks</div>
+  <div style="font-size:14px;color:#8fb0bf;margin-top:4px">Estimate: 2 artillery, 4 heavy escorts, 8 raiders. Composition stays an estimate until confirmed. Support: 2 relays operating.</div>
+</div>
+
+<!-- ============ ALERT QUEUE + MINIMAP ============ -->
+<div class="a" style="left:12px;top:520px;width:300px;display:flex;flex-direction:column;gap:6px">
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #f04e46;display:flex;gap:10px;align-items:center"><div class="hostile" style="position:relative;flex:none;width:12px;height:12px"></div><div style="font-size:14px"><b style="font-weight:600;color:#ffd6d2">Wave 02 committed</b><div style="color:#8fb0bf;font-size:13px">Siege, 14 units, east entry</div></div></div>
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #f0b040;display:flex;gap:10px;align-items:center"><svg class="ic t-warn" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg><div style="font-size:14px"><b style="font-weight:600;color:#ffd78a">Power short by 8 kW</b><div style="color:#8fb0bf;font-size:13px">Factory 02 build throttled</div></div></div>
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #40dceb;display:flex;gap:10px;align-items:center"><svg class="ic t-cyan" viewBox="0 0 24 24"><path d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/></svg><div style="font-size:14px"><b style="font-weight:600">Ore field A 62% left</b><div style="color:#8fb0bf;font-size:13px">Finite deposit, plan expansion</div></div></div>
+</div>
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap" style="color:#96f5ff">Tactical <span style="color:#5f8191">/</span> Earthfront</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff">Pwr</span><span class="key">Sup</span><span class="key" style="border-color:#40dceb;color:#96f5ff">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;background:#30332a;border:1px solid #1b3342;overflow:hidden">
+    <div class="a" style="inset:0;background:radial-gradient(ellipse at 35% 45%,#40432f,transparent 70%),radial-gradient(ellipse at 80% 30%,rgba(240,96,80,.20),transparent 60%),#30332a"></div>
+    <div class="a" style="left:150px;top:110px;width:60px;height:36px;background:rgba(54,110,100,.8);border-radius:50%"></div>
+    <div class="a" style="left:44px;top:58px;width:84px;height:84px;border:1px dashed rgba(64,220,235,.5);border-radius:50%"></div>
+    <div class="a" style="left:60px;top:70px;width:10px;height:10px;background:#40dceb"></div><div class="a" style="left:78px;top:92px;width:8px;height:8px;background:#40dceb"></div><div class="a" style="left:48px;top:100px;width:8px;height:8px;background:#40dceb"></div><div class="a" style="left:100px;top:84px;width:8px;height:8px;background:#40dceb"></div><div class="a" style="left:92px;top:116px;width:8px;height:8px;background:#40dceb"></div>
+    <div class="a" style="left:190px;top:66px;width:6px;height:6px;background:#96f5ff"></div><div class="a" style="left:196px;top:78px;width:6px;height:6px;background:#96f5ff"></div><div class="a" style="left:184px;top:82px;width:6px;height:6px;background:#96f5ff"></div>
+    <div class="a" style="left:212px;top:38px;width:9px;height:9px;transform:rotate(45deg);border:2px solid #f04e46;background:rgba(240,78,70,.35)"></div><div class="a" style="left:232px;top:52px;width:9px;height:9px;transform:rotate(45deg);border:2px solid #f04e46;background:rgba(240,78,70,.35)"></div><div class="a" style="left:222px;top:68px;width:9px;height:9px;transform:rotate(45deg);border:2px solid #f04e46;background:rgba(240,78,70,.35)"></div>
+    <div class="a" style="left:226px;top:150px;width:11px;height:11px;transform:rotate(45deg);border:2px solid #f04e46"></div>
+    <div class="a" style="left:244px;top:196px;width:11px;height:11px;transform:rotate(45deg);border:2px solid #f04e46"></div>
+    <div class="a" style="left:40px;top:20px;width:160px;height:150px;border:1.5px solid #96f5ff;box-shadow:0 0 12px rgba(64,220,235,.4)"></div>
+  </div>
+</div>
+
+<!-- ============ SELECTION PANEL ============ -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 18px;display:grid;grid-template-columns:330px 1fr 250px;gap:18px">
+  <div>
+    <div style="display:flex;align-items:center;gap:10px"><div class="disp" style="font-size:26px;color:#e8fcff;line-height:26px">Vanguard</div><span class="tag t-cyan">11 units</span></div>
+    <div class="cap" style="margin-top:4px">Wedge formation / face north-east</div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <div class="glass" style="width:96px;padding:6px 6px 8px;text-align:center;border-color:#40dceb"><img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="width:64px;height:64px;object-fit:contain"><div class="mono" style="font-size:13px">TANK x4</div><div class="bar" style="margin-top:4px"><i style="width:84%;background:#50e6a0"></i></div></div>
+      <div class="glass" style="width:96px;padding:6px 6px 8px;text-align:center"><img src="/_blob/da5b12c112e382553cd16772f71535ac" style="width:64px;height:64px;object-fit:contain"><div class="mono" style="font-size:13px">AT x3</div><div class="bar" style="margin-top:4px"><i style="width:100%;background:#50e6a0"></i></div></div>
+      <div class="glass" style="width:96px;padding:6px 6px 8px;text-align:center"><img src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="width:64px;height:64px;object-fit:contain"><div class="mono" style="font-size:13px">INF x4</div><div class="bar" style="margin-top:4px"><i style="width:61%;background:#f0b040"></i></div></div>
+    </div>
+    <div class="cap" style="margin-top:12px">Tab cycles subgroup / Ctrl+1 stores group</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:10px;border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 18px">
+    <div><div style="display:flex;justify-content:space-between;font-size:14px"><span class="t-dim">Health, average</span><span class="mono">82%</span></div><div class="bar" style="margin-top:4px"><i style="width:82%;background:#50e6a0"></i></div></div>
+    <div><div style="display:flex;justify-content:space-between;font-size:14px"><span class="t-dim">Ammunition carried</span><span class="mono">72 / 90 rounds</span></div><div class="bar" style="margin-top:4px"><i style="width:80%"></i></div></div>
+    <div style="display:flex;justify-content:space-between;font-size:14px"><span class="t-dim">Supply path</span><span class="mono t-good">Connected, depot 02, 14 s</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:14px"><span class="t-dim">Current order</span><span class="mono t-cyan">Attack-move, ridge</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:14px"><span class="t-dim">Queued</span><span class="mono">Hold at checkpoint</span></div>
+    <div class="glass" style="padding:8px 10px;font-size:13px;color:#8fb0bf;border-color:#284e60"><span class="t-warn">Preview:</span> AT shot 90 x (1 - 0.10) = 81 HP vs alien heavy armour</div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;align-content:start">
+    <button type="button" class="btn pri" style="flex-direction:column;gap:2px;min-height:58px">Attack-move<span class="key">A</span></button>
+    <button type="button" class="btn" style="flex-direction:column;gap:2px;min-height:58px">Stop<span class="key">S</span></button>
+    <button type="button" class="btn" style="flex-direction:column;gap:2px;min-height:58px">Hold<span class="key">Shift S</span></button>
+    <button type="button" class="btn" style="flex-direction:column;gap:2px;min-height:58px">Resupply<span class="key">R</span></button>
+    <button type="button" class="btn" style="grid-column:1 / span 2;min-height:44px">Focus group <span class="key">F</span></button>
+  </div>
+</div>
+
+<!-- ============ DECK (bottom right) ============ -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px">
+  <div style="display:flex;gap:4px;height:40px">
+    <div class="tab"><svg class="ic" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 005.4-5.4l-2.6 2.6-2.4-.6-.6-2.4 2.6-2.6z"/></svg>Build</div>
+    <div class="tab on"><svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/></svg>Units</div>
+    <div class="tab"><svg class="ic" viewBox="0 0 24 24"><path d="M4 12h12M12 6l6 6-6 6"/></svg>Orders</div>
+    <div class="tab"><svg class="ic" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 001.8 3h10.4a2 2 0 001.8-3l-5-9V3"/></svg>Science</div>
+    <div class="tab"><svg class="ic" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 17l8-10" stroke-dasharray="3 3"/></svg>Logistics</div>
+  </div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:10px 12px">
+    <div style="display:flex;align-items:center;justify-content:space-between"><div class="cap" style="color:#96f5ff">Barracks / rally set</div><div class="cap">Costs: material / work / kW / crew</div></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
+      <div class="glass" style="padding:6px;text-align:center;border-color:#40dceb"><img src="/_blob/879ef1bcd08cfe47287ca9a866836361" style="width:60px;height:60px;object-fit:contain"><div class="disp" style="font-size:15px">Riflemen <span class="key">T</span></div><div class="mono" style="font-size:12px;color:#8fb0bf">60 / 8 s / 4 / 1</div></div>
+      <div class="glass" style="padding:6px;text-align:center"><img src="/_blob/da5b12c112e382553cd16772f71535ac" style="width:60px;height:60px;object-fit:contain"><div class="disp" style="font-size:15px">Rocket <span class="key">V</span></div><div class="mono" style="font-size:12px;color:#8fb0bf">90 / 10 s / 6 / 1</div></div>
+      <div class="glass" style="padding:6px;text-align:center"><img src="/_blob/1d7c9b6c3ef6ada1cd18f9efc7e76f0c" style="width:60px;height:60px;object-fit:contain"><div class="disp" style="font-size:15px">Tank <span class="key">K</span></div><div class="mono" style="font-size:12px;color:#8fb0bf">240 / 30 s / 20 / 2</div></div>
+      <div class="glass" style="padding:6px;text-align:center;opacity:.55"><img src="/_blob/9c0496c20fb3ac15183f7c5e11871c31" style="width:60px;height:60px;object-fit:contain;filter:grayscale(1)"><div class="disp" style="font-size:15px">Gunship <span class="key">H</span></div><div class="mono" style="font-size:12px;color:#f0b040">Needs airfield</div></div>
+    </div>
+    <div class="cap" style="margin-top:10px">Production queue</div>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <div class="glass" style="width:76px;padding:4px;text-align:center;border-color:#40dceb"><div class="mono" style="font-size:12px">TANK</div><div class="bar" style="margin-top:3px"><i style="width:62%"></i></div></div>
+      <div class="glass" style="width:76px;padding:4px;text-align:center"><div class="mono" style="font-size:12px">ROCKET</div><div class="bar" style="margin-top:3px"><i style="width:0%"></i></div></div>
+      <div class="glass" style="width:76px;padding:4px;text-align:center"><div class="mono" style="font-size:12px">ROCKET</div><div class="bar" style="margin-top:3px"><i style="width:0%"></i></div></div>
+      <div class="glass" style="width:76px;padding:4px;text-align:center;border-style:dashed"><div class="mono" style="font-size:12px;color:#5f8191">EMPTY</div></div>
+      <div class="glass" style="width:76px;padding:4px;text-align:center;border-style:dashed"><div class="mono" style="font-size:12px;color:#5f8191">EMPTY</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px"><span class="tag t-warn">Throttled</span><span style="color:#cee8f0">Grid deficit 8 kW. Tank line runs at 95%.</span></div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

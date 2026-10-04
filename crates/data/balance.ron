@@ -5,6 +5,11 @@
 // (e.g. 150 = 0.15 tiles/tick). Damage/armour types: Ballistic|AntiArmor|Explosive
 // and Flesh|Plated|Structure.
 (
+    harvester: (
+        max_hp: 180, armor: Plated,
+        attack: (damage: 0, damage_type: Ballistic, range: 0, period: 30),
+        speed_milli: 60, cost: 140, labour_cost: 1, build_time: 120,
+    ),
     infantry: (
         max_hp: 50, armor: Flesh,
         attack: (damage: 6, damage_type: Ballistic, range: 3, period: 8),
@@ -34,43 +39,43 @@
     // Energy/Labour stockpiles; `mine_rate` mines Money from a deposit.
     command_center: (
         max_hp: 1000, labour_output: 2,
-        produces_units: false, attack: None, cost: 0,
+        produces_units: false, attack: None, cost: 0, build_time: 0,
     ),
     power_plant: (
         max_hp: 300, energy_output: 40,
-        produces_units: false, attack: None, cost: 100,
+        produces_units: false, attack: None, cost: 100, build_time: 90,
     ),
     refinery: (
         max_hp: 300, mine_rate: 2, energy_cost: 8,
-        produces_units: false, attack: None, cost: 150,
+        produces_units: false, attack: None, cost: 150, build_time: 150,
     ),
     barracks: (
         max_hp: 400, labour_output: 1, energy_cost: 15,
-        produces_units: true, attack: None, cost: 200,
+        produces_units: true, attack: None, cost: 200, build_time: 180,
     ),
     gun_turret: (
         max_hp: 250, energy_cost: 10,
         produces_units: false,
         attack: Some((damage: 10, damage_type: Ballistic, range: 5, period: 10)),
-        cost: 120,
+        cost: 120, build_time: 120,
     ),
     aa_turret: (
         max_hp: 220, energy_cost: 12,
         produces_units: false,
         attack: Some((damage: 20, damage_type: AntiArmor, range: 6, period: 8, targets_ground: false, targets_air: true)),
-        cost: 140,
+        cost: 140, build_time: 140,
     ),
     wall: (
         max_hp: 200,
-        produces_units: false, attack: None, cost: 20,
+        produces_units: false, attack: None, cost: 20, build_time: 30,
     ),
     research_lab: (
         max_hp: 300, energy_cost: 20,
-        produces_units: false, attack: None, cost: 250,
+        produces_units: false, attack: None, cost: 250, build_time: 240,
     ),
     antimatter_plant: (
         max_hp: 300, mine_rate: 2, energy_cost: 12,
-        produces_units: false, attack: None, cost: 200,
+        produces_units: false, attack: None, cost: 200, build_time: 210,
     ),
     // Seat-capture: a conquered planet seat is left at this fraction (×1000) of
     // the CommandCenter's max HP. 250 = 0.25. Config only, not hashed.

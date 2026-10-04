@@ -1,0 +1,15 @@
+   Compiling rts-core v0.1.0 (/home/tahseen-dar/Projects/military-rts-td/crates/core)
+    Finished `test` profile [optimized + debuginfo] target(s) in 4.56s
+     Running unittests src/lib.rs (target/debug/deps/rts_core-778a7adb43dc9d10)
+
+running 7 tests
+test game::sim::qa_adversarial::qa_duplicate_research_spends_once_and_invalid_ids_do_nothing ... ok
+test game::sim::qa_adversarial::qa_damage_range_and_time_to_kill_are_measured_independently ... ok
+test game::sim::qa_adversarial::qa_exact_build_price_and_invalid_placement_do_not_create_material ... ok
+test game::sim::qa_adversarial::qa_queue_cost_crew_limit_and_unauthorised_producer ... ok
+test game::sim::qa_adversarial::qa_sold_building_cannot_be_resurrected_by_repair_in_same_tick ... ok
+test game::sim::qa_adversarial::qa_victory_is_terminal_even_with_hostile_survivors_and_commands ... ok
+test game::sim::qa_adversarial::qa_repeated_sell_is_not_an_infinite_material_faucet ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 252 filtered out; finished in 0.00s
+

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Map overlays</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="./hud.css">
+</helmet>
+<div class="board">
+
+<div class="a" style="inset:0;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/3600px 2400px no-repeat"></div>
+<div class="a" style="inset:0;background:rgba(3,5,10,.42)"></div>
+
+<svg class="a" style="left:0;top:0" width="1920" height="1080" fill="none">
+  <defs>
+    <pattern id="tg" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" stroke="rgba(255,255,255,.10)" stroke-width="1"/></pattern>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#tg)"/>
+  <!-- territory -->
+  <path d="M-20 -20 L560 -20 L740 150 L850 290 L960 420 L1040 520 L1090 640 L1150 780 L1180 900 L1120 1000 L600 1060 L-20 1060 Z" fill="rgba(64,220,235,.05)" stroke="#40dceb" stroke-width="3"/>
+  <!-- POWER: weight = load -->
+  <g stroke-linecap="round">
+    <path d="M235 395 L485 425" stroke="#40dceb" stroke-width="6"/>
+    <path d="M190 530 L485 440" stroke="#40dceb" stroke-width="5"/>
+    <path d="M485 425 L685 320" stroke="#f0b040" stroke-width="5"/>
+    <path d="M485 425 L660 575" stroke="#40dceb" stroke-width="4"/>
+    <path d="M485 425 L415 200" stroke="#40dceb" stroke-width="2.5"/>
+    <path d="M660 575 L500 680" stroke="#f04e46" stroke-width="3" stroke-dasharray="3 8"/>
+    <path d="M485 425 L790 390" stroke="#40dceb" stroke-width="3"/>
+    <path d="M660 575 L935 620" stroke="#40dceb" stroke-width="3"/>
+    <path d="M790 390 L822 470" stroke="#40dceb" stroke-width="2"/>
+  </g>
+  <!-- SUPPLY: dashed green -->
+  <g stroke="#50e6a0" stroke-width="3" stroke-dasharray="10 8">
+    <path d="M660 575 L860 455"/><path d="M660 575 L845 515"/><path d="M660 575 L810 700"/><path d="M485 425 L790 390"/>
+  </g>
+  <path d="M660 600 L520 690" stroke="#f04e46" stroke-width="3" stroke-dasharray="4 8"/>
+  <circle cx="590" cy="645" r="12" stroke="#f04e46" stroke-width="2"/><path d="M584 639l12 12M596 639l-12 12" stroke="#f04e46" stroke-width="2"/>
+  <!-- coverage -->
+  <circle cx="235" cy="395" r="260" stroke="rgba(64,220,235,.35)" stroke-width="1.5" stroke-dasharray="8 8"/>
+  <circle cx="660" cy="575" r="230" stroke="rgba(80,230,160,.4)" stroke-width="1.5" stroke-dasharray="8 8"/>
+  <!-- yield numbers, Civ style -->
+  <g font-family="IBM Plex Mono" font-size="12" fill="#e8fcff" text-anchor="middle">
+    <g transform="translate(860 430)"><circle r="12" fill="#06101a" stroke="#96f5ff"/><text y="4">4</text></g>
+    <g transform="translate(300 790)"><circle r="12" fill="#06101a" stroke="#50e6a0"/><text y="4">C</text></g>
+    <g transform="translate(1090 540)"><circle r="12" fill="#06101a" stroke="#7fd4e0"/><text y="4">F</text></g>
+  </g>
+</svg>
+
+<div class="lbl w" style="left:775px;top:288px;font-size:22px;transform:rotate(48deg);transform-origin:left center">Calder River</div>
+<div class="lbl" style="left:380px;top:845px;font-size:18px">Hollow Wood</div>
+
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="30">
+  <img class="shd" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.sh}}">
+  <img class="ao" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px">
+</sc-for>
+<sc-for list="{{sprites}}" as="s" hint-placeholder-count="20">
+  <img class="spr" src="{{s.src}}" alt="" style="left:{{s.left}}px;top:{{s.top}}px;width:{{s.w}}px;height:{{s.w}}px;opacity:{{s.op}};z-index:{{s.z}}">
+</sc-for>
+
+<!-- node labels -->
+<div class="pin" style="left:150px;top:310px;border-color:#40dceb;z-index:2000">Reactor A +100 kW</div>
+<div class="pin" style="left:90px;top:610px;border-color:#40dceb;z-index:2000">Reactor B +60 kW</div>
+<div class="pin" style="left:420px;top:372px;border-color:#40dceb;z-index:2000">Command 12 kW</div>
+<div class="pin" style="left:630px;top:262px;border-color:#f0b040;z-index:2000">Lab 30 kW, throttled</div>
+<div class="pin" style="left:590px;top:528px;border-color:#f0b040;z-index:2000">Refinery 24 kW</div>
+<div class="pin" style="left:420px;top:730px;border-color:#f04e46;z-index:2000">Barracks 04, no supply link</div>
+<div class="pin" style="left:730px;top:340px;border-color:#40dceb;z-index:2000">Turret 15 kW</div>
+<div class="pin" style="left:340px;top:140px;border-color:#50e6a0;z-index:2000">Depot 02 building</div>
+<div class="pin" style="left:810px;top:392px;border-color:#96f5ff;z-index:2000">Ore +4</div>
+
+<!-- TOP BAR -->
+<div class="a panel" style="left:12px;right:12px;top:10px;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:3000">
+  <div style="display:flex;align-items:center;gap:10px;padding-right:14px;border-right:1px solid #1b3342;height:36px">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="#96f5ff" stroke-width="1.75" stroke-linejoin="round"><path d="M13 2l10 21H3z"/><path d="M13 9l4.5 10h-9z" stroke="#40dceb"/></svg>
+    <div><div class="disp" style="font-size:20px;line-height:20px;color:#e8fcff;letter-spacing:.14em">Ascension</div><div class="cap" style="font-size:11px;line-height:13px">Kestrel Reach</div></div>
+  </div>
+  <div class="chip"><span class="t-dim">MATERIAL</span><b>840</b><span class="d">+38/m</span></div>
+  <div class="chip" style="border-color:#f0b040"><span class="t-dim">POWER</span><b class="t-warn">160 / 168 kW</b></div>
+  <div class="chip"><span class="t-dim">BATTERY</span><b>62%</b></div>
+  <div class="chip"><span class="t-dim">AMMO SUPPLY</span><b>72%</b></div>
+  <div style="flex:1"></div>
+  <div class="chip" style="height:36px"><span class="t-dim">NEXT WAVE</span><span class="disp" style="font-size:22px;color:#e8fcff">01:52</span></div>
+  <div style="display:flex;gap:4px"><span class="btn sm"><svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></span><span class="btn sm pri">1x</span><span class="btn sm">2x</span></div>
+</div>
+
+<!-- LENS LEGEND -->
+<div class="a panel" style="right:12px;top:76px;width:400px;padding:12px 14px;z-index:3000">
+  <div style="display:flex;justify-content:space-between"><div class="cap t-cyan">Map lenses</div><span class="cap">Tab cycles</span></div>
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;font-size:14px">
+    <div style="display:flex;gap:10px;align-items:center"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Pwr</span><span>Power grid</span><span class="mono t-dim" style="margin-left:auto">line weight = load</span></div>
+    <div style="display:flex;gap:10px;align-items:center"><span class="key" style="border-color:#40dceb;color:#96f5ff;background:#104656">Sup</span><span>Supply routes</span><span class="mono t-dim" style="margin-left:auto">dashed = in use</span></div>
+    <div style="display:flex;gap:10px;align-items:center"><span class="key">Yld</span><span>Tile yields</span><span class="mono t-dim" style="margin-left:auto">ore, cover, ford</span></div>
+    <div style="display:flex;gap:10px;align-items:center"><span class="key">Thr</span><span>Threat range</span><span class="mono t-dim" style="margin-left:auto">off</span></div>
+  </div>
+  <div style="height:1px;background:#1b3342;margin:12px 0"></div>
+  <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;font-size:13px;align-items:center">
+    <svg width="40" height="8"><path d="M0 4h40" stroke="#40dceb" stroke-width="4"/></svg><span class="t-dim">Powered, full delivery</span>
+    <svg width="40" height="8"><path d="M0 4h40" stroke="#f0b040" stroke-width="4"/></svg><span class="t-dim">Powered, throttled</span>
+    <svg width="40" height="8"><path d="M0 4h40" stroke="#50e6a0" stroke-width="3" stroke-dasharray="8 6"/></svg><span class="t-dim">Supply carrying ammo</span>
+    <svg width="40" height="8"><path d="M0 4h40" stroke="#f04e46" stroke-width="3" stroke-dasharray="3 6"/></svg><span class="t-dim">Link broken</span>
+    <span style="display:flex;gap:4px"><span class="yl" style="height:18px">4</span></span><span class="t-dim">Ore haul value</span>
+    <span style="display:flex;gap:4px"><span class="yl" style="height:18px">C</span><span class="yl" style="height:18px">F</span></span><span class="t-dim">Cover tile, Ford tile</span>
+  </div>
+</div>
+
+<!-- alerts -->
+<div class="a" style="left:12px;top:480px;width:340px;display:flex;flex-direction:column;gap:6px;z-index:3000">
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #f04e46;font-size:14px"><b style="font-weight:600;color:#ffd6d2">Barracks 04 has no supply link</b><div class="sub">Units start with no ammo</div></div>
+  <div class="glass" style="padding:8px 10px;border-left:3px solid #f0b040;font-size:14px"><b style="font-weight:600;color:#ffd78a">Power short by 8 kW</b><div class="sub">Lab research throttled</div></div>
+</div>
+
+<!-- minimap -->
+<div class="a panel" style="left:12px;top:770px;width:304px;height:298px;padding:8px;z-index:3000">
+  <div style="display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 4px"><div class="cap t-cyan">Tactical <span style="color:#5f8191">/</span> Kestrel Reach</div><div style="display:flex;gap:4px"><span class="key" style="border-color:#40dceb;color:#96f5ff">Pwr</span><span class="key" style="border-color:#40dceb;color:#96f5ff">Sup</span><span class="key">Yld</span><span class="key">Thr</span></div></div>
+  <div class="a" style="left:8px;top:40px;width:288px;height:250px;overflow:hidden;border:1px solid #1b3342;background:#0a2c47">
+    <div class="a" style="left:-20px;top:0;width:375px;height:250px;background:url(/_blob/4439b34dc8ac1316a28492d84cfe9efd) 0 0/375px 250px no-repeat;filter:brightness(.8)"></div>
+    <div class="a" style="left:236px;top:0;width:60px;height:250px;background:rgba(5,9,14,.82)"></div>
+    <svg class="a" style="left:0;top:0" width="288" height="250" fill="none"><path d="M25 38L50 42M25 38L63 38M50 42L68 32M50 42L66 56M66 56L93 38M66 56L50 68" stroke="#40dceb" stroke-width="2"/><path d="M66 56L86 45M66 56L84 70" stroke="#50e6a0" stroke-width="1.5" stroke-dasharray="4 3"/><path d="M66 58L50 68" stroke="#f04e46" stroke-width="2" stroke-dasharray="3 3"/></svg>
+    <div class="a" style="left:-20px;top:0;width:200px;height:112px;border:1.5px solid #fff"></div>
+  </div>
+</div>
+
+<!-- ledger -->
+<div class="a panel" style="left:328px;top:810px;width:940px;height:258px;padding:14px 18px;z-index:3000;display:grid;grid-template-columns:1fr 1fr 250px;gap:18px">
+  <div>
+    <div style="display:flex;align-items:center;gap:10px"><div class="disp" style="font-size:26px;color:#e8fcff;line-height:26px">Grid ledger</div><span class="tag t-warn">Deficit 8 kW</span></div>
+    <div class="cap" style="margin-top:4px">Delivered 160 of 168 kW requested</div>
+    <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
+      <div><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Reactor A</span><span class="mono">100 / 100</span></div><div class="bar" style="margin-top:3px"><i style="width:100%"></i></div></div>
+      <div><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Reactor B, river cooled</span><span class="mono">72 / 72</span></div><div class="bar" style="margin-top:3px"><i style="width:100%"></i></div></div>
+      <div><div style="display:flex;justify-content:space-between;font-size:13px"><span class="t-dim">Battery reserve</span><span class="mono">62%, drains 8 kW</span></div><div class="bar" style="margin-top:3px"><i style="width:62%;background:#f0b040"></i></div></div>
+    </div>
+  </div>
+  <div style="border-left:1px solid #1b3342;border-right:1px solid #1b3342;padding:0 18px">
+    <div class="cap t-cyan">Largest consumers</div>
+    <div style="margin-top:8px">
+      <div class="row"><span>Lab</span><span class="mono t-warn">30 kW, 75%</span></div>
+      <div class="row"><span>Refinery</span><span class="mono">24 kW</span></div>
+      <div class="row"><span>Gun turrets (2)</span><span class="mono">30 kW, priority</span></div>
+      <div class="row"><span>Barracks 04</span><span class="mono">10 kW</span></div>
+    </div>
+    <div class="sub" style="margin-top:8px">Defences keep priority, industry shares the shortfall.</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <span class="btn pri">Build reactor <span class="key">P</span></span>
+    <span class="btn">Link supply to barracks</span>
+    <span class="btn">Close lens <span class="key">Esc</span></span>
+  </div>
+</div>
+
+<!-- deck Logistics -->
+<div class="a" style="left:1284px;top:770px;width:624px;height:298px;z-index:3000">
+  <div class="tabs"><span class="tab">Build</span><span class="tab">Units</span><span class="tab">Orders</span><span class="tab">Science</span><span class="tab on">Logistics</span></div>
+  <div class="panel" style="height:258px;border-top-left-radius:0;padding:12px">
+    <div class="cap t-cyan">Supply routes / 3 active</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+      <div class="glass" style="padding:8px 10px;display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;font-size:14px"><span>Refinery to ore harvesters</span><span class="mono t-good">2 routes</span><span class="tag t-good">OK</span></div>
+      <div class="glass" style="padding:8px 10px;display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;font-size:14px"><span>Command to gun line</span><span class="mono t-good">Connected, 14 s</span><span class="tag t-good">OK</span></div>
+      <div class="glass" style="padding:8px 10px;display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;font-size:14px;border-color:#7a2f2b"><span>Refinery to Barracks 04</span><span class="mono t-bad">Broken, no path</span><span class="tag t-bad">Fix</span></div>
+    </div>
+    <div class="sub" style="margin-top:12px">A depot feeds everything within 9 tiles. Routes cross the river only at Wyllow Ford.</div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const B = '/_blob/';
+    const I = { pp:'b32b316f8a54cfb3e4e96b8ab7a2f79e', cc:'5828f353f51d19ec36c3c638831bfb96', ref:'6c29c5788f12d88cfae3914221f234a9', bar:'c28b4de3839198732e73d3041feec1e6', fnd:'bbb3bae9af99ea696ff5f34401784754', fl:'b68e987fd5fe7400ef76a4e86344f108', gt:'508d97c7b872d6502bb31b3fe2de001c', aa:'318ba1a2dd09b4736f000e8ba021bf70', hv:'439ac4aa47c8b40430b3ce1b7550277d', lab:'8cb9cb29d95752ec982142bf671a1e6d' };
+    const w = [['pp',150,310,170],['pp',110,450,160],['cc',360,300,250],['fnd',330,100,170],['fl',570,360,80],['ref',560,470,200],['bar',400,570,200],['lab',610,230,150],['gt',735,330,115],['gt',880,560,115],['aa',780,430,85],['hv',790,455,110]];
+    const sprites = w.map(a => ({ src: B + I[a[0]], left: a[1], top: a[2], w: a[3], op: .92, sh: .52, z: Math.round(a[2] + a[3] * 0.85) })).sort((p, q) => p.z - q.z);
+    return { sprites };
+  }
+}
+</script>
+</body>
+</html>

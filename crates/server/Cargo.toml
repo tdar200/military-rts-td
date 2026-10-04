@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+default-run = "rts-server"
 
 # The server links the *same* core crate, headless. Later it re-simulates a
 # recorded input log and checks the final-state hash against the client's,

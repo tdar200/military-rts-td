@@ -1,0 +1,54 @@
+ASCENSION / DETAILED GAMEPLAY DESIGN PACK 02
+
+Open index.html to browse eight gameplay boards and their implementation contracts.
+The gallery works offline. Tabs and state buttons are design previews, not a game.
+
+FIGMA STATUS
+The existing six-board Figma file is:
+https://www.figma.com/design/jeYvt0dxHykkMDjuoYJaSm
+The eight additional gameplay boards in this pack have NOT been uploaded to Figma.
+The Figma MCP Starter-plan quota rejected access on 2026-10-03.
+
+IMPORT
+Create a new page in the existing Figma file, then drag the eight files from
+boards/ onto that page. Each SVG is 1920 x 1440 with original vector artwork.
+SVG imports preserve editable vector geometry. Figma may convert text to vector
+outlines; editable copy is retained in gameplay-spec.json and index.html.
+Native Figma auto-layout/component reconstruction can follow when API access returns.
+Rajdhani SemiBold is included with its SIL Open Font License. Body type uses
+DejaVu Sans or the local sans-serif fallback. Typography may vary across importers.
+
+INVENTORY
+01 Construction: placement, power forecast, reservation, interruption and refunds.
+02 Combined arms: roles, selection, formations, targeting, counters and damage math.
+03 Logistics: severed supply, ammo conservation, route recovery and depletion.
+04 Waves: commitment timing, adaptive doctrine, counterplay and blocked-route recovery.
+05 Research: scientific prerequisites, exclusive factory prototypes and deployment.
+06 Core assault: optional relays, resupply, telegraphs, terminal outcomes and debrief.
+07 Scale transition: tactical aggregation, planetary governors and ledger ownership.
+08 Cosmic governance: sector autonomy, exotic-weapon counters and resilience victory.
+
+IMPLEMENTATION BOUNDARY
+These are proposed designs, not a report of existing or completed gameplay.
+Costs, combat formulas, partial-consumption refunds, factory retrofits, rotation,
+Core retaliation, simultaneous-destruction outcome and late strategic layers need
+implementation and balancing. Current gameplay is described in ../IMPLEMENTED.md.
+Existing game code has not been changed by this design task.
+
+SOURCE OF TRUTH
+generate.py contains the authored scene data and SVG/gallery renderer.
+gameplay-spec.json is its machine-readable generated export.
+Regenerate with: python3 generate.py
+The ZIP includes the gallery, font/license, eight SVGs, specification and generator.
+
+VALIDATION
+All eight boards were rendered in an isolated headless browser and visually reviewed.
+All SVG text bounds fit their 1920 x 1440 canvases. Eight gallery tabs, 24 state
+selections and eight image loads passed automated checks. Desktop gallery has no
+horizontal overflow at 1920 pixels. This is design-artifact validation, not game QA.
+No desktop mouse or keyboard automation was used.
+
+FOLLOW-UP IN FIGMA
+Import/rebuild these eight boards as native components and frames after access returns.
+Correct the earlier research paragraph clipping and crowded solar labels in the
+existing Figma file. Those previous-file issues remain unresolved by this local pack.

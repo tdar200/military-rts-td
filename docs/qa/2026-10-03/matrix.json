@@ -1,0 +1,223 @@
+[
+  {
+    "system": "Opening and campaign",
+    "happy_path": "fresh deploy \u2192 economy \u2192 research \u2192 mixed assault \u2192 Core victory",
+    "adversarial": "restart; simultaneous HQ loss; terminal commands",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Running final fresh UI campaign",
+    "evidence": [
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Economy and finite ore",
+    "happy_path": "truck \u2192 refinery buffer \u2192 material \u2192 production",
+    "adversarial": "empty deposit; full buffer; two trucks; destroyed receiver; exact costs",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed exercised boundaries and ledger",
+    "evidence": [
+      "evidence/qa-regressions.log",
+      "evidence/soak-a.jsonl"
+    ]
+  },
+  {
+    "system": "Power and batteries",
+    "happy_path": "priority allocation; surplus charge; deficit discharge",
+    "adversarial": "zero/equilibrium; generator loss; battery destruction; brownout rounding",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed exercised service/rounding cases",
+    "evidence": [
+      "evidence/workspace-final.log",
+      "evidence/qa-regressions.log"
+    ]
+  },
+  {
+    "system": "Construction and repair",
+    "happy_path": "all 11 human structures; valid previews; completion",
+    "adversarial": "overlap; borders; occupied tile; spam; sell twice; sell then repair",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Partial; refund/repair defects fixed, not every placement permutation",
+    "evidence": [
+      "evidence/adversarial-before.log",
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Unit production",
+    "happy_path": "five human roles; cost/time/crew/rally",
+    "adversarial": "full queue; insufficient funds; blocked exit; factory destruction; multiple queues",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed exercised cost/queue/crew/blocked-exit cases",
+    "evidence": [
+      "evidence/spawn-before.log",
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Selection and groups",
+    "happy_path": "click/drag/shift/groups; mixed army",
+    "adversarial": "dead/recycled entity; double click; modal input; command spam",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed clean UI control assertions; recycled identity limited evidence",
+    "evidence": [
+      "evidence/reused-entity.json"
+    ]
+  },
+  {
+    "system": "Movement and formations",
+    "happy_path": "open terrain; walls; narrow corridor; retreat",
+    "adversarial": "large armies; unreachable destination; clipping; rapid retarget",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Failed spacing: 100 units share one final position",
+    "evidence": [
+      "evidence/movement.log"
+    ]
+  },
+  {
+    "system": "Combat and targeting",
+    "happy_path": "controlled DPS/TTK/range/counters",
+    "adversarial": "exact range; out of range; simultaneous lethal fire; air restrictions; empty ammo",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed six independent counter/TTK cases plus inherited regressions",
+    "evidence": [
+      "evidence/combat-matrix.log",
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Defences",
+    "happy_path": "walls/turrets/AA and layered defence",
+    "adversarial": "power loss; ammo depletion; wall maze; unreachable enemy",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Partial; real defenses, wall supply and AA tests; no maze tournament",
+    "evidence": [
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Enemy waves and relays",
+    "happy_path": "timing; locked doctrine; actual spawn count",
+    "adversarial": "relay loss/power cut; spawn blocked; late-wave cap; impossible routes",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Partial; timing/relay/composition tests; no exhaustive spawn traps",
+    "evidence": [
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "AI and strategies",
+    "happy_path": "infantry/armour/air/boom/defence/mixed strategies",
+    "adversarial": "kiting; economy raids; retreat; stalled economy; troop replacement",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Partial; live raids observed, strategy/exploit sweep incomplete",
+    "evidence": [
+      "evidence/learning-campaign/journey.jsonl"
+    ]
+  },
+  {
+    "system": "Logistics",
+    "happy_path": "ammo manufacture \u2192 route \u2192 unit \u2192 shot",
+    "adversarial": "sever/recover; empty depot; exhausted unit; material conservation",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed ammo/buffer/cut-path cases; fuel unavailable",
+    "evidence": [
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Research and eras",
+    "happy_path": "all 12 live technologies; theory/prototype; era 0\u21921",
+    "adversarial": "no power/lab/factory; duplicate request; lost facilities; parallel labs",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Core integration passes; all-project UI progression in progress",
+    "evidence": [
+      "evidence/workspace-final.log"
+    ]
+  },
+  {
+    "system": "Technology graph/science",
+    "happy_path": "live graph plus 200 design examples validated separately",
+    "adversarial": "cycles; bad refs; impossible unlocks; speculative labels",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed 12 runtime graph and 200 separate design records",
+    "evidence": [
+      "evidence/catalog-tests.log",
+      "evidence/qa-regressions.log"
+    ]
+  },
+  {
+    "system": "Persistence and replay",
+    "happy_path": "discover actual save UI and serialized formats",
+    "adversarial": "research/combat/queues during persistence; repeated load; replay equivalence",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Campaign save/load unavailable; deterministic replay only",
+    "evidence": [
+      "evidence/chaos.log"
+    ]
+  },
+  {
+    "system": "Pause/speed and transport",
+    "happy_path": "actual Godot controls and native parity",
+    "adversarial": "commands during modal; partial write; duplicate delivery; restart stale commands",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Transport fixed; Godot pause/speed unavailable",
+    "evidence": [
+      "evidence/transport-before.log",
+      "evidence/transport-after.log"
+    ]
+  },
+  {
+    "system": "UI and camera",
+    "happy_path": "all tabs/alerts/minimap; 1080p/1440p/4K/ultrawide",
+    "adversarial": "clipping; overlap; bounds; zoom; input through panels",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Partial; four resolutions, GPU, picking and modal; scrolling defect open",
+    "evidence": [
+      "evidence/ui-resolutions.json",
+      "evidence/gpu-comparison.json"
+    ]
+  },
+  {
+    "system": "Performance and scale",
+    "happy_path": "100/1000/5000/10000 entities where feasible",
+    "adversarial": "tick percentiles; memory; dense combat; command/path cost; render frame times",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Failed 5000/10000 real-time budget; 1000 sustained passed",
+    "evidence": [
+      "evidence/sustained.jsonl",
+      "evidence/subsystem-profile.log"
+    ]
+  },
+  {
+    "system": "Long-run and chaos",
+    "happy_path": "30min/2h/8h accelerated active simulation",
+    "adversarial": "drift; bounded inventory; determinism; command storms; entity lifecycle",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Passed two economy soaks and command storm; not continuous combat soak",
+    "evidence": [
+      "evidence/soak-a.jsonl",
+      "evidence/soak-b.jsonl",
+      "evidence/chaos.log"
+    ]
+  },
+  {
+    "system": "Later eras and strategic layers",
+    "happy_path": "availability audit",
+    "adversarial": "not mark design-only content as runtime pass",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Unavailable in primary runtime; design-only content audited",
+    "evidence": [
+      "FEATURE_MAP.md"
+    ]
+  },
+  {
+    "system": "Network lockstep",
+    "happy_path": "existing peer/input/hash tests",
+    "adversarial": "malformed peer; duplicate frames; authority; transport availability",
+    "cross_system": "economic/command/state lifecycle interactions where applicable",
+    "status": "Inherited deterministic tests pass; malformed authority not proven",
+    "evidence": [
+      "evidence/workspace-final.log"
+    ]
+  }
+]

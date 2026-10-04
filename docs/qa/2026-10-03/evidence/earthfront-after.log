@@ -1,0 +1,23 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (target/debug/deps/rts_core-778a7adb43dc9d10)
+
+running 16 tests
+test game::sim::earthfront::tests::ai_science_accelerates_theory_but_cannot_skip_or_accelerate_prototypes ... ok
+test game::sim::earthfront::tests::full_refineries_keep_ore_in_trucks_and_accept_partial_deliveries ... ok
+test game::sim::earthfront::tests::ammunition_exhaustion_stops_fire_and_depots_restore_it ... ok
+test game::sim::earthfront::tests::future_tech_and_magic_abilities_are_not_in_the_slice ... ok
+test game::sim::earthfront::tests::ore_must_be_delivered_and_processed_to_become_material ... ok
+test game::sim::earthfront::tests::prototype_reserves_only_one_factory_and_reassigns_after_destruction ... ok
+test game::sim::earthfront::tests::prototypes_compete_with_factory_production ... ok
+test game::sim::earthfront::tests::relay_role_is_hashed_and_never_makes_the_core_invulnerable ... ok
+test game::sim::earthfront::tests::research_pauses_when_power_or_facility_is_lost ... ok
+test game::sim::earthfront::tests::trucks_deliver_to_available_processor_and_survive_its_loss_with_cargo ... ok
+test game::sim::tests::earthfront_is_won_by_destroying_the_hostile_core ... ok
+test game::sim::earthfront::tests::walls_sever_ground_supply_routes ... ok
+test game::sim::earthfront::tests::relay_power_and_destruction_change_actual_wave_strength ... ok
+test game::sim::earthfront::tests::tank_production_requires_its_factory_and_power ... ok
+test game::sim::earthfront::tests::service_state_is_replayable_and_hashed ... ok
+test game::sim::earthfront::tests::power_is_a_flow_and_storage_requires_a_battery ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 243 filtered out; finished in 0.00s
+
