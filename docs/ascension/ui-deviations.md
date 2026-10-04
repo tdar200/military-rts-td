@@ -72,9 +72,11 @@ Title:
   no next chapter, checkpoint or replay to offer.
 
 ### Gameplay boards, R7 (decided 2026-10-04)
-- Veteran chevrons: BUILT. Source: per-unit `rank` (0..3) already in the sim.
-- Combat preview: BUILT as damage-type multiplier and rank bonus only. Hit chance and
+- Veteran chevrons: DECIDED TO BUILD (Task 12). Source: per-unit `rank` (0..3) already in the sim.
+- Combat preview: DECIDED TO BUILD (Task 12) as damage-type multiplier and rank bonus only. Hit chance and
   "across the river -25%" are NOT shown (no such mechanic).
+- Harness: when adding chrome rects to `tools/ui/compare_gpNN.json`, append them AFTER the `"mask": true` rect (rects are
+  applied in order; an earlier chrome rect would be masked by the later full-board mask).
 
 ## 5. Known cosmetic items
 

@@ -56,14 +56,14 @@ class Component extends DCLogic {
     const c = (name, where, tag, tc, wx, wy, k1, v1, k2, v2, k3, v3, note) => Object.assign({ name, where, tag, tc, k1, v1, k2, v2, k3, v3, note }, at(wx, wy));
     const cards = [
       c('Grassland','Sunfield and the west bank','Home ground','#50e6a0',200,1100,'Movement','1.0x','Cover','None','Build','Anything','The default ground. Your first territory is mostly this.'),
-      c('Meadow','Pale patches round the base','Open','#cee8f0',620,520,'Movement','1.0x','Cover','+5% light','Sight','Normal','Same rules as grassland, softer on the eye. Good for expansion.'),
-      c('Dry Flats','East bank, towards the sea','Fast, exposed','#f0b040',1950,560,'Movement','1.1x','Cover','None','Sight','+2 open','Where waves gather. Tanks speed up here, so do the enemy.'),
+      c('Meadow','Pale patches round the base','Open','#cee8f0',620,520,'Movement','1.0x','Cover','+5% light','Build','Anything','Same rules as grassland, softer on the eye. Good for expansion.'),
+      c('Dry Flats','East bank, towards the sea','Fast, exposed','#f0b040',1950,560,'Movement','1.1x','Cover','None','Path cost','Cheapest (9)','Where waves gather. Tanks speed up here, so do the enemy.'),
       c('Ironback Ridge','Highland, north east','High ground','#d4b8ff',2500,60,'Movement','0.7x','Cover','+25%','Range','+25% on top','Turrets and sensors only. Alloy crystals sit on the crest.'),
-      c('Hollow Wood','Forest south of the base','Cover','#50e6a0',520,900,'Movement','0.8x','Cover','+20%','Sight','-3 inside','Infantry hide here. Walls and turrets may be placed on the edge.'),
+      c('Hollow Wood','Forest south of the base','Cover','#50e6a0',520,900,'Movement','0.8x','Cover','+20%','Build','Anything','Infantry shelter here, taking 20% less damage at 80% speed.'),
       c('Calder River','Runs from north west to the bay','Barrier','#7fd4e0',1060,430,'Movement','Blocked','Reactor beside','+12 kW','Attack across','-25%','Ground units cross at the ford or a built bridge only.'),
       c('Wyllow Ford','The one crossing, mid river','Chokepoint','#f0b040',1150,548,'Infantry','0.7x','Tanks','0.5x','Cover','None','Every wave comes through here. Hold it and the base is safe.'),
       c('Shore','Sand along Kestrel Bay','No building','#c9b27a',1560,1040,'Movement','0.8x','Cover','None','Build','Not allowed','Sand is soft and tidal. Depots and walls must stay inland.'),
-      c('Kestrel Bay','Open sea, south east','Water','#7fd4e0',2300,1500,'Ground units','Blocked','Air units','Cross freely','Sight','+6 over water','Reinforcements may land on the far shore, 45 s from the flats.'),
+      c('Kestrel Bay','Open sea, south east','Water','#7fd4e0',2300,1500,'Ground units','Blocked','Air units','Cross freely','Build','Not allowed','Reinforcements may land on the far shore, 45 s from the flats.'),
       c('Ore deposit','River bank, west side','Resource','#96f5ff',860,430,'Haul','+4 material','Refinery near','+20%','Supply','1,800 units','Claim it early. Depletes, then the tile reverts to grassland.'),
       c('Alloy crystals','On the ridge crest','Strategic','#d4b8ff',2330,170,'Haul','+6 alloy','Needs','Alloy extraction','Defence','High ground','Locked until the lab finishes the research. The aliens want it too.'),
       c('Impact crater','Scattered on the flats','Feature','#f0b040',2485,655,'Movement','0.8x','Cover','+15%','Build','Cleared first','Left by earlier landings. Good cover, awkward to build on.')
