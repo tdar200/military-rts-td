@@ -825,7 +825,6 @@ const fn max_hp(balance: &Balance, kind: Kind) -> Fixed {
     }
 }
 
-/// World-space center of hex cell `(x, y)`.
 /// Vehicles (wheeled/tracked) follow `vehicle_pct`; foot units follow `infantry_pct`.
 const fn is_vehicle(k: UnitKind) -> bool {
     matches!(k, UnitKind::Harvester | UnitKind::Tank | UnitKind::Capital)
@@ -861,6 +860,7 @@ fn pct_i32(p: u32) -> i32 {
     i32::try_from(p).unwrap_or(i32::MAX)
 }
 
+/// World-space center of hex cell `(x, y)`.
 fn tile_center(x: u16, y: u16) -> Vec2 {
     crate::game::hex::center(x, y)
 }

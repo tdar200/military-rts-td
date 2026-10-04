@@ -1,5 +1,9 @@
 //! Grounded Earthfront rules, isolated from legacy replay semantics.
-use super::{BuildingKind, Command, EntityId, Fixed, Kind, PlayerId, Sim, UnitKind, Vec, Vec2};
+use super::{
+    BuildingKind, Command, Entity, EntityId, Fixed, Kind, PlayerId, Sim, UnitKind, Vec, Vec2,
+};
+use crate::game::hex;
+use crate::game::map::Ground;
 use crate::game::tech_grid::{GridNode, RealityClass, Unlock, UnlockFamily};
 
 /// Authored scenario role, independent of a building's production or supply behavior.
@@ -310,16 +314,40 @@ impl Sim {
             .filter(|e| e.alive && e.owner == owner && e.construction_remaining == 0)
             .map(|e| match e.kind {
                 Kind::Building(BuildingKind::PowerPlant) => {
-                    if smart {
-                        96
-                    } else {
-                        80
-                    }
+                    let base = if smart { 96 } else { 80 };
+                    base + self.river_bonus_kw(e)
                 }
                 Kind::Building(BuildingKind::CommandCenter) => 10,
                 _ => 0,
             })
             .sum()
+    }
+
+    /// Extra kW (12) a power plant draws from a River or Ford hex beside it; Earthfront only.
+    pub(super) fn river_bonus_kw(&self, e: &Entity) -> u32 {
+        if !self.earthfront || !matches!(e.kind, Kind::Building(BuildingKind::PowerPlant)) {
+            return 0;
+        }
+        let (x, y) = self.world_to_tile(e.pos);
+        let wet = hex::neighbors(x, y)
+            .iter()
+            .any(|&(nx, ny)| matches!(self.map.ground_at(nx, ny), Ground::River | Ground::Ford));
+        if wet {
+            12
+        } else {
+            0
+        }
+    }
+
+    /// Whether an ore deposit lies within one hex of this refinery; Earthfront only.
+    pub(super) fn refinery_near_ore(&self, e: &Entity) -> bool {
+        if !self.earthfront || !matches!(e.kind, Kind::Building(BuildingKind::Refinery)) {
+            return false;
+        }
+        let tile = self.world_to_tile(e.pos);
+        self.map
+            .deposits()
+            .any(|(dx, dy, _)| hex::distance(tile, (dx, dy)) <= 1)
     }
 
     /// Read-only economic state, including the binding research constraint.
@@ -627,7 +655,12 @@ impl Sim {
             });
         }
         // Process exact batches: 5 ore -> 4 material. Never mine automatically beneath a building.
-        for e in &mut self.entities {
+        let near_ore: Vec<bool> = self
+            .entities
+            .iter()
+            .map(|e| self.refinery_near_ore(e))
+            .collect();
+        for (e, near) in self.entities.iter_mut().zip(near_ore) {
             if !e.alive
                 || e.construction_remaining > 0
                 || e.kind != Kind::Building(BuildingKind::Refinery)
@@ -639,7 +672,9 @@ impl Sim {
                 let ore = (e.ore_buffer / 5).min(1 + e.power_fraction / 500) * 5;
                 e.ore_buffer -= ore;
                 let c = &mut self.civs[usize::from(e.owner.0)];
-                c.money = c.money + Fixed::from_int(i32::try_from(ore / 5 * 4).unwrap_or(0));
+                let material = ore / 5 * 4;
+                let material = if near { material * 120 / 100 } else { material };
+                c.money = c.money + Fixed::from_int(i32::try_from(material).unwrap_or(0));
             }
         }
         if !self.tick.is_multiple_of(30) {
@@ -1062,7 +1097,7 @@ impl Sim {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::map::{Deposit, DepositKind, Map, Tile};
+    use crate::game::map::{Deposit, DepositKind, Ground, Map, Tile};
 
     const HUMAN: PlayerId = PlayerId(0);
     const ALIEN: PlayerId = PlayerId(1);
@@ -1144,10 +1179,121 @@ mod tests {
         for _ in 0..30 {
             sim.step(&[]);
         }
-        // At second boundary 15 ore -> 12 material, then one material -> 12 supply rounds.
+        // At second boundary 15 ore -> 12 material, +20 percent (14) because the deposit lies
+        // within one hex of the refinery, then one material -> 12 supply rounds.
         assert_eq!(sim.entities[processor.0 as usize].ore_buffer, 0);
-        assert_eq!(sim.money(HUMAN), Fixed::from_int(11));
+        assert_eq!(sim.money(HUMAN), Fixed::from_int(13));
         assert_eq!(sim.economy_view(HUMAN).ammunition, 12);
+    }
+
+    /// The `i`th hex neighbour of `(x, y)` as map coordinates.
+    fn nbr(x: u16, y: u16, i: usize) -> (u16, u16) {
+        let (nx, ny) = crate::game::hex::neighbors(x, y)[i];
+        (u16::try_from(nx).unwrap(), u16::try_from(ny).unwrap())
+    }
+
+    fn plant_sim(earthfront: bool) -> (Sim, u16, u16) {
+        let mut s = Sim::new(Map::new(16, 16), 1, Fixed::ZERO);
+        if earthfront {
+            s.enable_earthfront();
+        }
+        s.add_building(HUMAN, BuildingKind::PowerPlant, 6, 6);
+        (s, 6, 6)
+    }
+
+    #[test]
+    fn power_plant_beside_river_generates_twelve_more() {
+        let (mut s, x, y) = plant_sim(true);
+        let before = s.generation_for(HUMAN);
+        let (nx, ny) = nbr(x, y, 0);
+        s.map_mut().set_ground(nx, ny, Ground::River);
+        assert_eq!(s.generation_for(HUMAN), before + 12);
+    }
+
+    #[test]
+    fn ford_neighbour_also_counts_and_dry_neighbours_do_not() {
+        let (mut s, x, y) = plant_sim(true);
+        let before = s.generation_for(HUMAN);
+        let (nx, ny) = nbr(x, y, 1);
+        s.map_mut().set_ground(nx, ny, Ground::Flats);
+        assert_eq!(s.generation_for(HUMAN), before);
+        s.map_mut().set_ground(nx, ny, Ground::Ford);
+        assert_eq!(s.generation_for(HUMAN), before + 12);
+    }
+
+    #[test]
+    fn power_bonus_is_zero_off_earthfront() {
+        let (mut s, x, y) = plant_sim(false);
+        let before = s.generation_for(HUMAN);
+        let (nx, ny) = nbr(x, y, 0);
+        s.map_mut().set_ground(nx, ny, Ground::River);
+        assert_eq!(s.generation_for(HUMAN), before);
+    }
+
+    fn refinery_money_after_a_second(deposit_at: Option<(u16, u16)>, ore: u32) -> i64 {
+        let mut sim = Sim::new(Map::new(16, 16), 1, Fixed::ZERO);
+        sim.enable_earthfront();
+        sim.add_building(HUMAN, BuildingKind::PowerPlant, 3, 12);
+        let r = sim.add_building(HUMAN, BuildingKind::Refinery, 8, 8);
+        if let Some((dx, dy)) = deposit_at {
+            sim.map_mut().set_deposit(
+                dx,
+                dy,
+                Deposit {
+                    kind: DepositKind::Ore,
+                    remaining: 100,
+                },
+            );
+        }
+        sim.entities[r.0 as usize].ore_buffer = ore;
+        sim.civs[0].money = Fixed::ZERO;
+        for _ in 0..30 {
+            sim.step(&[]);
+        }
+        sim.money(HUMAN).to_bits()
+    }
+
+    #[test]
+    fn refinery_next_to_a_deposit_yields_twenty_percent_more() {
+        let one = Fixed::from_int(1).to_bits();
+        let (nx, ny) = nbr(8, 8, 2);
+        let near_cell = Some((nx, ny));
+        // 15 ore -> 12 material at 100 percent, 14 (12 * 120 / 100, truncated) beside ore.
+        assert_eq!(refinery_money_after_a_second(Some((1, 1)), 15), 12 * one);
+        assert_eq!(refinery_money_after_a_second(near_cell, 15), 14 * one);
+    }
+
+    #[test]
+    fn refinery_ore_bonus_is_zero_off_earthfront() {
+        let mut sim = Sim::new(Map::new(16, 16), 1, Fixed::ZERO);
+        let r = sim.add_building(HUMAN, BuildingKind::Refinery, 8, 8);
+        let (nx, ny) = nbr(8, 8, 2);
+        sim.map_mut().set_deposit(
+            nx,
+            ny,
+            Deposit {
+                kind: DepositKind::Ore,
+                remaining: 100,
+            },
+        );
+        let e = sim.entities[r.0 as usize].clone();
+        assert!(!sim.refinery_near_ore(&e));
+    }
+
+    #[test]
+    fn refinery_near_ore_requires_a_deposit_within_one_hex() {
+        let mut sim = Sim::new(Map::new(16, 16), 1, Fixed::ZERO);
+        sim.enable_earthfront();
+        let r = sim.add_building(HUMAN, BuildingKind::Refinery, 8, 8);
+        let e = sim.entities[r.0 as usize].clone();
+        assert!(!sim.refinery_near_ore(&e));
+        let (nx, ny) = nbr(8, 8, 2);
+        let ore = Deposit {
+            kind: DepositKind::Ore,
+            remaining: 100,
+        };
+        sim.map_mut().set_deposit(nx, ny, ore);
+        assert!(sim.refinery_near_ore(&e));
     }
 
     #[test]
