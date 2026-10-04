@@ -850,6 +850,17 @@ fn ground_speed_pct(map: &Map, pos: Vec2, uk: UnitKind) -> u32 {
     pct.max(MIN_GROUND_SPEED_PCT)
 }
 
+/// Rules (cover / range bonus) of the ground under world position `pos` (Earthfront).
+fn ground_props_at(map: &Map, pos: Vec2) -> crate::game::map::GroundProps {
+    let (tx, ty) = crate::game::hex::from_world(pos, map.width(), map.height());
+    map.ground_at(i32::from(tx), i32::from(ty)).props()
+}
+
+/// A small percent as `i32` for `Fixed::from_int` (ground percents are tiny; saturates).
+fn pct_i32(p: u32) -> i32 {
+    i32::try_from(p).unwrap_or(i32::MAX)
+}
+
 fn tile_center(x: u16, y: u16) -> Vec2 {
     crate::game::hex::center(x, y)
 }
@@ -4218,7 +4229,19 @@ impl Sim {
             }
             candidates.sort_unstable();
 
-            let range_sq = profile.range * profile.range;
+            // Earthfront: the attacker's tile extends its range (Highland +25 percent).
+            let range_sq = if self.earthfront {
+                let range_pct = ground_props_at(&self.map, e.pos).range_pct;
+                if range_pct == 0 {
+                    profile.range * profile.range
+                } else {
+                    let r = profile.range * Fixed::from_int(pct_i32(100 + range_pct))
+                        / Fixed::from_int(100);
+                    r * r
+                }
+            } else {
+                profile.range * profile.range
+            };
             // Target the NEAREST valid enemy (preserves lane/base pressure so
             // matches resolve), breaking distance ties by LOWEST HP — a focus-fire
             // tie-break that secures kills when several foes are equidistant. Ties
@@ -4257,6 +4280,14 @@ impl Sim {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
                 let raw = profile.damage * mult * era_dmg[usize::from(e.owner.0)]
                     + weapon[usize::from(e.owner.0)];
+                // Earthfront cover: the target's tile removes `cover_pct` of the hit. Air
+                // targets take none. Applied before the push so splash inherits it.
+                let raw = if self.earthfront && !snap[j].4 {
+                    let cover = ground_props_at(&self.map, snap[j].2).cover_pct;
+                    raw * Fixed::from_int(pct_i32(100 - cover)) / Fixed::from_int(100)
+                } else {
+                    raw
+                };
                 // Supply-line decay: a UNIT firing far from its owner's nearest
                 // Command Center deals less damage (overextension penalty), ramping
                 // from full strength within `SUPPLY_FULL_RADIUS` down to
@@ -6135,6 +6166,78 @@ mod tests {
             first_tick_dx(Ground::Highland, false, UnitKind::Tank),
             first_tick_dx(Ground::Grass, false, UnitKind::Tank)
         );
+    }
+
+    /// HP the lone P1 wall loses over a 30-tick volley from a P0 tank, with the given ground
+    /// under each and `gap_tiles` of separation along row 2. A wall (200 HP) is the target
+    /// because infantry (50 HP) dies inside the window, which would cap the measured loss.
+    fn volley_loss(
+        att_ground: Ground,
+        tgt_ground: Ground,
+        gap_tiles: u16,
+        earthfront: bool,
+    ) -> i64 {
+        let mut m = Map::new(40, 8);
+        for x in 0..40u16 {
+            m.set_ground(x, 2, Ground::Grass);
+        }
+        m.set_ground(2, 2, att_ground);
+        m.set_ground(2 + gap_tiles, 2, tgt_ground);
+        let mut s = Sim::new(m, 1, f(0));
+        if earthfront {
+            s.enable_earthfront();
+        }
+        let _att = s.add_unit(P0, UnitKind::Tank, tile_center(2, 2));
+        let tgt = s.add_building(P1, BuildingKind::Wall, 2 + gap_tiles, 2);
+        let hp0 = s.entities[tgt.0 as usize].hp.to_bits();
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        hp0 - s.entities[tgt.0 as usize].hp.to_bits()
+    }
+
+    /// Smallest column gap (from the attacker at column 2, row 2) whose true hex-grid
+    /// distance exceeds the tank's base range; asserts it still sits within +25 percent.
+    fn gap_beyond_base_range_within_highland_reach() -> u16 {
+        let range = UnitKind::Tank.stats().attack.range;
+        let range_sq = range * range;
+        let from = tile_center(2, 2);
+        let gap = (1..30u16)
+            .find(|&g| (tile_center(2 + g, 2) - from).length_squared() > range_sq)
+            .unwrap();
+        let dist_sq = (tile_center(2 + gap, 2) - from).length_squared();
+        // (1.25 * range)^2 == range^2 * 15625 / 10000
+        assert!(dist_sq * Fixed::from_int(10_000) <= range_sq * Fixed::from_int(15_625));
+        gap
+    }
+
+    #[test]
+    fn highland_attacker_reaches_targets_a_grass_attacker_cannot() {
+        let gap = gap_beyond_base_range_within_highland_reach();
+        assert_eq!(volley_loss(Ground::Grass, Ground::Grass, gap, true), 0);
+        assert!(volley_loss(Ground::Highland, Ground::Grass, gap, true) > 0);
+    }
+
+    #[test]
+    fn forest_cover_removes_twenty_percent_of_damage() {
+        let open = volley_loss(Ground::Grass, Ground::Grass, 1, true);
+        let wood = volley_loss(Ground::Grass, Ground::Forest, 1, true);
+        assert!(open > 0);
+        // allow 2 Fixed bits per tick of rounding across the 30-tick window
+        assert!(
+            (wood * 100 - open * 80).abs() <= 60 * 100,
+            "wood={wood} open={open}"
+        );
+    }
+
+    #[test]
+    fn legacy_scenarios_ignore_cover_and_range_bonus() {
+        assert_eq!(
+            volley_loss(Ground::Grass, Ground::Forest, 1, false),
+            volley_loss(Ground::Grass, Ground::Grass, 1, false)
+        );
+        let gap = gap_beyond_base_range_within_highland_reach();
+        assert_eq!(volley_loss(Ground::Highland, Ground::Grass, gap, false), 0);
     }
 
     #[test]
