@@ -2,23 +2,47 @@
 //!
 //! Movement around walls and buildings uses A* over the **hexagonal** tile grid
 //! (six neighbors per cell, see [`hex`](super::hex)). To stay bit-identical across
-//! platforms it uses an integer per-step cost and an open set ordered by
+//! platforms it uses an integer per-step cost (the ground cost of the tile entered) and an open set ordered by
 //! `(f_score, tile_index)` — the tile index tie-breaker gives a total order, so the
 //! search expands nodes in the same sequence everywhere. No floats.
 
 use crate::game::hex;
-use crate::game::map::Map;
+use crate::game::map::{Ground, Map};
 use alloc::collections::BinaryHeap;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
-/// Uniform cost of stepping to any of the six hex neighbors.
-const STEP: i64 = 10;
+/// Cost of stepping onto tile `(x, y)`: the [`Ground`] `path_cost` of the tile being
+/// entered (`Grass` is 10, so all-grass maps cost what the old uniform step did).
+fn step_cost(map: &Map, x: u16, y: u16) -> i64 {
+    i64::from(map.ground_at(i32::from(x), i32::from(y)).props().path_cost)
+}
 
-/// Hex-distance heuristic, in the same integer units as the step cost
-/// (admissible, so A* stays optimal).
-fn heuristic(from: (u16, u16), to: (u16, u16)) -> i64 {
-    i64::from(hex::distance(from, to)) * STEP
+/// Cheapest step cost of any passable tile on `map`: the heuristic's per-hex factor.
+///
+/// Scaling by the map's own cheapest tile (never below [`Ground::MIN_PASSABLE_COST`])
+/// keeps the heuristic admissible while leaving all-grass maps at the legacy factor of
+/// 10, so their expansion order and tie-breaking, hence their paths, are unchanged.
+fn min_step_cost(map: &Map) -> i64 {
+    let floor = i64::from(Ground::MIN_PASSABLE_COST);
+    let mut min = i64::MAX;
+    for y in 0..map.height() {
+        for x in 0..map.width() {
+            if passable(map, i32::from(x), i32::from(y)) {
+                min = min.min(step_cost(map, x, y));
+                if min <= floor {
+                    return floor;
+                }
+            }
+        }
+    }
+    min.max(floor)
+}
+
+/// Hex-distance heuristic in the same integer units as the step cost (admissible, so A*
+/// stays optimal): `per_hex` is the map's cheapest step, see [`min_step_cost`].
+fn heuristic(from: (u16, u16), to: (u16, u16), per_hex: i64) -> i64 {
+    i64::from(hex::distance(from, to)) * per_hex
 }
 
 fn passable(map: &Map, x: i32, y: i32) -> bool {
@@ -54,6 +78,7 @@ pub fn find_path(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<Vec<(
     let count = width * height;
     let index = |x: u16, y: u16| usize::from(y) * width + usize::from(x);
 
+    let per_hex = min_step_cost(map);
     let mut g_score = alloc::vec![i64::MAX; count];
     let mut came_from = alloc::vec![usize::MAX; count];
     let start_i = index(start.0, start.1);
@@ -62,7 +87,7 @@ pub fn find_path(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<Vec<(
 
     // Min-heap on (f_score, tile_index); the index breaks ties for determinism.
     let mut open = BinaryHeap::new();
-    open.push(Reverse((heuristic(start, goal), start_i)));
+    open.push(Reverse((heuristic(start, goal, per_hex), start_i)));
 
     while let Some(Reverse((_, current))) = open.pop() {
         if current == goal_i {
@@ -79,11 +104,11 @@ pub fn find_path(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<Vec<(
                 continue;
             }
             let neighbor = index(nx as u16, ny as u16);
-            let tentative = here + STEP;
+            let tentative = here + step_cost(map, nx as u16, ny as u16);
             if tentative < g_score[neighbor] {
                 g_score[neighbor] = tentative;
                 came_from[neighbor] = current;
-                let f = tentative + heuristic((nx as u16, ny as u16), goal);
+                let f = tentative + heuristic((nx as u16, ny as u16), goal, per_hex);
                 open.push(Reverse((f, neighbor)));
             }
         }
@@ -159,6 +184,138 @@ mod tests {
         let b = find_path(&m, (0, 0), (7, 7));
         assert_eq!(a, b);
         assert!(a.is_some());
+    }
+}
+
+#[cfg(test)]
+mod ground_cost_tests {
+    use super::find_path;
+    use crate::game::map::{Ground, Map, Tile};
+
+    #[test]
+    fn all_grass_path_matches_legacy_step_cost() {
+        let m = Map::new(10, 10);
+        let p = find_path(&m, (0, 0), (5, 0)).unwrap();
+        assert_eq!(*p.last().unwrap(), (5, 0));
+    }
+
+    #[test]
+    fn river_blocks_and_ford_is_the_only_crossing() {
+        let mut m = Map::new(9, 5);
+        for y in 0..5 {
+            m.set_ground(4, y, Ground::River);
+        }
+        assert!(find_path(&m, (0, 2), (8, 2)).is_none());
+        m.set_ground(4, 4, Ground::Ford);
+        let p = find_path(&m, (0, 2), (8, 2)).unwrap();
+        assert!(p.contains(&(4, 4)));
+    }
+
+    #[test]
+    fn path_prefers_cheap_flats_over_a_short_highland_cut() {
+        let mut m = Map::new(12, 5);
+        for x in 3..9 {
+            m.set_ground(x, 2, Ground::Highland);
+            m.set_ground(x, 0, Ground::Flats);
+        }
+        let p = find_path(&m, (0, 2), (11, 2)).unwrap();
+        let highland = p
+            .iter()
+            .filter(|&&(x, y)| m.ground_at(i32::from(x), i32::from(y)) == Ground::Highland)
+            .count();
+        assert!(
+            highland < 6,
+            "should detour over cheaper ground, crossed {highland} highland tiles"
+        );
+    }
+
+    #[test]
+    fn unreachable_goal_returns_none_without_hanging() {
+        let mut m = Map::new(6, 6);
+        m.set_ground(5, 5, Ground::Sea);
+        assert!(find_path(&m, (0, 0), (5, 5)).is_none());
+    }
+
+    #[test]
+    fn heuristic_is_admissible_on_a_mixed_map() {
+        let mut m = Map::new(16, 10);
+        for x in 0..16u16 {
+            m.set_ground(x, 5, Ground::Flats);
+        }
+        // Cheapest possible cost per step is MIN_PASSABLE_COST, so the heuristic never
+        // overestimates. The path excludes `start`, so a 15-step row path has 15 waypoints.
+        let p = find_path(&m, (0, 5), (15, 5)).unwrap();
+        assert_eq!(p.len(), 15);
+    }
+
+    /// Legacy (uniform step 10, heuristic 10/hex) path pinned from before ground costs
+    /// existed: with h=9 on grass the equal-cost tie-break would pick a different route.
+    #[test]
+    fn all_grass_obstacle_map_keeps_the_legacy_tie_break() {
+        let mut seed: u64 = 12_345;
+        // `n % bound` is below `bound`, which fits u16, so the narrowing never fails.
+        let mut roll = |bound: u16| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            u16::try_from(((seed >> 33) as u32) % u32::from(bound)).unwrap()
+        };
+        let width = 12 + roll(10);
+        let height = 12 + roll(10);
+        let mut map = Map::new(width, height);
+        for _ in 0..(u32::from(width) * u32::from(height) / 4) {
+            let (tx, ty) = (roll(width), roll(height));
+            map.set_tile(tx, ty, Tile::BLOCKED);
+        }
+        let start = (roll(width), roll(height));
+        let goal = (roll(width), roll(height));
+        let path = find_path(&map, start, goal).unwrap();
+        let want = [
+            (12, 13),
+            (12, 12),
+            (12, 11),
+            (12, 10),
+            (12, 9),
+            (12, 8),
+            (12, 7),
+            (12, 6),
+            (12, 5),
+            (12, 4),
+            (11, 3),
+            (11, 2),
+            (10, 2),
+            (9, 1),
+            (8, 1),
+            (7, 0),
+        ];
+        assert_eq!(path, want);
+    }
+
+    /// Cost of a path (sum of entered-tile costs) on `m`.
+    fn cost(m: &Map, p: &[(u16, u16)]) -> i64 {
+        p.iter()
+            .map(|&(x, y)| i64::from(m.ground_at(i32::from(x), i32::from(y)).props().path_cost))
+            .sum()
+    }
+
+    #[test]
+    fn flats_corridor_is_cheaper_than_equal_length_grass() {
+        let mut m = Map::new(16, 10);
+        for x in 0..16u16 {
+            m.set_ground(x, 5, Ground::Flats);
+        }
+        let p = find_path(&m, (0, 5), (15, 5)).unwrap();
+        assert_eq!(cost(&m, &p), 15 * 9);
+    }
+
+    #[test]
+    fn blocked_tiles_still_block_on_mixed_maps() {
+        let mut m = Map::new(5, 5);
+        for y in 0..5 {
+            m.set_tile(2, y, Tile::BLOCKED);
+        }
+        m.set_ground(1, 1, Ground::Flats);
+        assert_eq!(find_path(&m, (0, 0), (4, 0)), None);
     }
 }
 
