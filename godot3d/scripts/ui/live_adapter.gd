@@ -60,6 +60,8 @@ const LiveAssault = preload("res://scripts/ui/live_assault.gd")
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 
 var tab := "build"
+## The active minimap lens (vm_gameplay.LENSES); lives here so the HUD stays a pure view.
+var lens := "land"
 var assault
 var _alerts: Array = []
 var _ticker := ""
@@ -172,22 +174,83 @@ func _with_gameplay(vm: Dictionary) -> Dictionary:
 		"idle": VmGameplay.idle_crews(snap),
 		"alert": VmGameplay.next_alert(snap),
 		"veterans": VmGameplay.veterans(snap),
+		"yields": VmGameplay.yields(snap),
+		"pins": _pins(snap),
 	}
-	var hovered = g.get("hover_cell")
-	if hovered is Vector2i:
-		slices["inspect"] = VmGameplay.tile_inspect(snap, ground, hovered.x, hovered.y)
+	# The bottom-centre colony panel, the minimap header and the lens exist only in the main layout: the build layout
+	# draws its own deck, minimap and placement panel there, and a selection owns the bottom centre.
+	var main_layout := not vm.has("build_top")
+	if main_layout:
+		slices["lens"] = _lens(snap)
+		if not vm.has("selection"):
+			var hovered = g.get("hover_cell")
+			if hovered is Vector2i:
+				var inspect := VmGameplay.tile_inspect(snap, ground, hovered.x, hovered.y)
+				if not inspect.is_empty():
+					inspect.merge(VmGameplay.tile_context(snap, ground, hovered.x, hovered.y))
+					slices["inspect"] = inspect
+			slices["ledger"] = VmGameplay.ledger(snap)
+			slices["army"] = VmGameplay.army(snap)
 	var regions := VmGameplay.regions(snap)
 	if not regions.is_empty():
 		slices["regions"] = regions
 	for key in slices:
 		if not slices[key].is_empty():
 			vm[key] = slices[key]
+	if main_layout and vm.has("minimap") and vm["minimap"] is Dictionary and str(snap.get("map_name", "")) != "":
+		vm["minimap"]["name"] = str(snap["map_name"])
+	if str(snap.get("map_name", "")) != "" and vm.has("brand") and vm["brand"] is Dictionary:
+		vm["brand"]["sub"] = str(snap["map_name"])
 	# The top bar's wave chip owns vm["wave"]; the expected route and ETA ride on it so that chip's own keys are untouched.
 	var inbound := VmGameplay.wave_inbound(snap)
 	if not inbound.is_empty() and vm.has("wave") and vm["wave"] is Dictionary:
 		for key in inbound:
 			vm["wave"][key] = inbound[key]
 	return vm
+
+
+## Deposit pins: the deposits on screen, anchored to where the camera sees them. Needs a game that can project a hex.
+func _pins(snap: Dictionary) -> Array:
+	if not g.has_method("screen_point_of_hex"):
+		return []
+	var pins: Array = []
+	for pin in VmGameplay.deposit_pins(snap):
+		var at: Vector2 = g.screen_point_of_hex(int(pin["x"]), int(pin["y"]))
+		if at == Vector2.INF or at.x < 20.0 or at.x > 1900.0 or at.y < 110.0 or at.y > 760.0:
+			continue
+		pin["cell"] = [pin["x"], pin["y"]]
+		pin["x"] = roundf(at.x)
+		pin["y"] = roundf(at.y)
+		pins.append(pin)
+	return pins
+
+
+## The minimap lens: which one is on, and its overlay in 0..1 minimap space (hex centres through the minimap's world rect).
+func _lens(snap: Dictionary) -> Dictionary:
+	var out := {"on": lens}
+	if lens == "land" or not g.has_method("hex_world_point"):
+		return out
+	var world: Rect2 = g.minimap_world_rect()
+	if world.size.x <= 0.0 or world.size.y <= 0.0:
+		return out
+	var hexes := VmGameplay.lens_hexes(snap, lens)
+	if hexes.is_empty():
+		return out
+	var to_unit := func(c) -> Dictionary:
+		var p: Vector3 = g.hex_world_point(int(c["x"]) if c is Dictionary else int(c[0]), int(c["y"]) if c is Dictionary else int(c[1]))
+		var d := {"u": snappedf((p.x - world.position.x) / world.size.x, 0.001), "v": snappedf((p.z - world.position.y) / world.size.y, 0.001)}
+		if c is Dictionary and c.has("k"):
+			d["k"] = c["k"]
+		return d
+	var overlay := {}
+	for key in ["dots", "cells", "route"]:
+		if hexes.has(key):
+			overlay[key] = hexes[key].map(to_unit)
+	var step_x: float = absf(g.hex_world_point(2, 0).x - g.hex_world_point(0, 0).x) * 0.5
+	var step_z: float = absf(g.hex_world_point(0, 1).z - g.hex_world_point(0, 0).z)
+	overlay["cell"] = {"w": snappedf(step_x / world.size.x, 0.001), "h": snappedf(step_z / world.size.y, 0.001)}
+	out["overlay"] = overlay
+	return out
 
 
 func _chips() -> Array:
@@ -626,6 +689,20 @@ func on_action(name: String, arg: Variant) -> void:
 					break
 		"jump_hq":
 			_focus_hq()
+		"select_army":
+			if g.has_method("select_army"):
+				g.select_army()
+		"select_idle":
+			var node = g.bridge_nodes.get(int(arg), null)
+			if is_instance_valid(node):
+				g._set_selection([node])
+				g.focus_camera(node.global_position if node.is_inside_tree() else node.position, 8.2)
+		"focus_deposit":
+			if arg is Array and arg.size() >= 2 and g.has_method("hex_world_point"):
+				g.focus_camera(g.hex_world_point(int(arg[0]), int(arg[1])), 8.2)
+		"minimap_lens":
+			if str(arg) in VmGameplay.LENSES:
+				lens = str(arg)
 		"minimap_layer", "speed":
 			pass
 

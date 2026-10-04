@@ -15,6 +15,8 @@ func _ready() -> void:
 	match screen:
 		"main":
 			_hud(_l("gallery/fixtures.gd").hud_main(), false)
+		"gp01":
+			_hud(_l("gallery/fixtures_gp.gd").main(), false)
 		"builddeck":
 			_hud(_l("gallery/fixtures_build.gd").build_deck(), true)
 		"builddeck_many", "builddeck_none", "builddeck_locked", "builddeck_short", "builddeck_no_queue", "builddeck_invalid":

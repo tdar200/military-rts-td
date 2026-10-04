@@ -7,6 +7,14 @@ const KeyCap = preload("res://scripts/ui/components/key_cap.gd")
 const TextBox = preload("res://scripts/ui/components/text_box.gd")
 const Icons = preload("res://scripts/ui/icons.gd")
 const MapMarks = preload("res://scripts/ui/components/map_marks.gd")
+const ResourcePins = preload("res://scripts/ui/sections/resource_pins.gd")
+const TerritoryCard = preload("res://scripts/ui/sections/territory_card.gd")
+const BottomPanel = preload("res://scripts/ui/sections/bottom_panel.gd")
+const TileInspector = preload("res://scripts/ui/sections/tile_inspector.gd")
+const ColonyLedger = preload("res://scripts/ui/sections/colony_ledger.gd")
+const ArmyOrders = preload("res://scripts/ui/sections/army_orders.gd")
+const AlertChips = preload("res://scripts/ui/sections/alert_chips.gd")
+const MinimapLenses = preload("res://scripts/ui/sections/minimap_lenses.gd")
 
 signal action(name: String, arg: Variant)
 
@@ -25,6 +33,20 @@ const SECTIONS := [
 	["deck_tabs", "_build_deck_tabs"],
 	["deck_body", "_build_deck_body"],
 ]
+
+## Gameplay sections (sections/*.gd), registered in board stacking order: hud key -> the view-model keys its builder reads.
+## A section's slice is the dictionary of those keys that are present (null when none is), so it rebuilds only when its
+## own data changes.
+const GAMEPLAY_KEYS := {
+	"resource_pins": ["pins"],
+	"territory_card": ["territory", "yields"],
+	"bottom_panel": ["inspect", "ledger", "army"],
+	"tile_inspector": ["inspect"],
+	"colony_ledger": ["ledger"],
+	"army_orders": ["army"],
+	"alert_chips": ["idle", "alert"],
+	"minimap_lenses": ["lens"],
+}
 
 ## Where the live minimap is drawn. A layout that builds its own slot (core assault) sets this; once that layout's nodes
 ## are removed the Hud's own slot is used again, so the host never holds a freed node.
@@ -55,6 +77,20 @@ func _init() -> void:
 	_home_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	K.place(_home_slot, 21, 811, 288, 250)
 	_layers["minimap_slot"].add_child(_home_slot)
+	_register_gameplay()
+
+
+## The gameplay sections. Pins sit under every panel (they are world-anchored); the rest stack in the board's order.
+func _register_gameplay() -> void:
+	var emit := Callable(self, "_emit")
+	register_section("resource_pins", func(layer: Control, slice: Variant) -> void: ResourcePins.build(layer, slice, emit), "top_chips")
+	register_section("territory_card", func(layer: Control, slice: Variant) -> void: TerritoryCard.build(layer, slice))
+	register_section("bottom_panel", func(layer: Control, slice: Variant) -> void: BottomPanel.build(layer, slice))
+	register_section("tile_inspector", func(layer: Control, slice: Variant) -> void: TileInspector.build(layer, slice))
+	register_section("colony_ledger", func(layer: Control, slice: Variant) -> void: ColonyLedger.build(layer, slice))
+	register_section("army_orders", func(layer: Control, slice: Variant) -> void: ArmyOrders.build(layer, slice, emit))
+	register_section("alert_chips", func(layer: Control, slice: Variant) -> void: AlertChips.build(layer, slice, emit))
+	register_section("minimap_lenses", func(layer: Control, slice: Variant) -> void: MinimapLenses.build(layer, slice, emit))
 
 
 func _layer(key: String) -> Control:
@@ -116,6 +152,12 @@ func _slice(vm: Dictionary, key: String) -> Variant:
 		"deck_body":
 			return vm["deck"].get("body", {}) if vm.has("deck") else null
 		_:
+			if GAMEPLAY_KEYS.has(key):
+				var part := {}
+				for k in GAMEPLAY_KEYS[key]:
+					if vm.has(k):
+						part[k] = vm[k]
+				return part if not part.is_empty() else null
 			return vm.get(key, null)
 
 
@@ -290,7 +332,7 @@ func _build_minimap(root: Control, vm: Dictionary) -> void:
 	K.panel(root, 12, 770, 304, 298)
 	K.text(root, "Tactical", {"x": 25, "y": 778, "f": "mono", "px": 12, "sp": 0.12, "col": T.CYAN_HI, "up": true})
 	K.text(root, "/", {"x": 102.8, "y": 778, "f": "mono", "px": 12, "sp": 0.12, "col": T.FAINT})
-	K.text(root, "Earthfront", {"x": 25, "y": 793, "f": "mono", "px": 12, "sp": 0.12, "col": T.CYAN_HI, "up": true})
+	K.text(root, str(vm.get("name", "Earthfront")), {"x": 25, "y": 793, "f": "mono", "px": 12, "sp": 0.12, "col": T.CYAN_HI, "up": true})
 	var x := 194.2
 	for key in vm.get("keys", []):
 		var cap := K.key(root, str(key.get("k", "")), x, 782, {"border": T.CYAN if key.get("on", false) else T.LINE, "col": T.CYAN_HI if key.get("on", false) else T.TEXT})

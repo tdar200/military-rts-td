@@ -3,6 +3,7 @@ extends Control
 const T = preload("res://scripts/ui/tokens.gd")
 const Icons = preload("res://scripts/ui/icons.gd")
 const TextBox = preload("res://scripts/ui/components/text_box.gd")
+const KeyCap = preload("res://scripts/ui/components/key_cap.gd")
 
 var icon_name := ""
 var icon_color: Color = T.CYAN
@@ -21,7 +22,7 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
-## parts: [{t: text, col: Color, f: kind, px: size, wt: weight, sp: letter-spacing em}]. Mono 13px is the default run.
+## parts: [{t: text, col: Color, f: kind, px: size, wt: weight, sp: letter-spacing em}] or {key: "X"} for a key cap. Mono 13px is the default run.
 func setup(icon: String, icon_col: Color, parts: Array, o := {}) -> Control:
 	icon_name = icon
 	icon_color = icon_col
@@ -41,6 +42,14 @@ func setup(icon: String, icon_col: Color, parts: Array, o := {}) -> Control:
 		Icons.texture(icon, icon_px)
 		x += icon_px + gap
 	for part in parts:
+		if part.has("key"):
+			var cap := KeyCap.new()
+			add_child(cap)
+			cap.setup(str(part["key"]))
+			cap.position = Vector2(x, (chip_height - cap.size.y) * 0.5)
+			x += cap.size.x + gap
+			_boxes.append(cap)
+			continue
 		var box := TextBox.new()
 		add_child(box)
 		box.configure(part["t"], {"f": part.get("f", "mono"), "px": part.get("px", 13), "wt": part.get("wt", 0), "sp": part.get("sp", 0.0), "col": part.get("col", T.TEXT), "up": part.get("up", false)})

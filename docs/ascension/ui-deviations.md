@@ -78,6 +78,29 @@ Title:
 - Harness: when adding chrome rects to `tools/ui/compare_gpNN.json`, append them AFTER the `"mask": true` rect (rects are
   applied in order; an earlier chrome rect would be masked by the later full-board mask).
 
+### Gameplay board 1 (Main, gp01), decided 2026-10-04 (Task 12A)
+Built from live data: yield pill, territory card, tile inspector, colony ledger, army orders, alert chips (idle crews,
+next alert), deposit pins, minimap lens keys with their overlays. Not built, because the snapshot or the bridge has nothing
+behind them:
+- Per-minute income deltas ("+38 M", "+22/m"): the snapshot has no income field. Only "+168 kW" (total generation) shows.
+- "+4 ore haul" pill, the "+4 haul" tag on the inspector and the "Ore +4" / "Harvesting" pin text: no haul or worker
+  data exists. Pins read "Ore 1,800 left" or "Ore, unclaimed" from the deposit and refinery data alone.
+- Inspector "Movement 1.0x, shore sand 0.8x" becomes "Foot N%, vehicles N%" (the ground table has no neighbour
+  breakdown). "Refinery +20% output" becomes the real bonus text, shown only when a refinery is in reach.
+- Ledger "Supply 72%" becomes "Crew N / cap" (supply is the crew figure the snapshot carries); no worker or per-site
+  production extras.
+- "Open lab L" button: there is no bridge command that opens the lab from the colony panel, so no button is drawn. A
+  Button with no command behind it is never built.
+- "Select army" and "Idle crews N" are Buttons backed by new adapter actions (select_army, select_idle). The Ctrl A key
+  cap is shown because the game now binds Ctrl+A; the "." key on the idle chip is bound too.
+- Deposit pins are Buttons that centre the camera (focus_deposit). Only the first pin is compared by the harness: the
+  mock's second pin sits over a deposit the fixture does not have.
+- Excluded from the pixel gate: the minimap terrain image (an ignore rect; the 3D view is not a UI section), the tile
+  inspector thumbnail (a rendered terrain swatch), the alert chip's "Next alert / Space" cap and the army column's third
+  button slot (no counterpart, see above).
+- Harness limits are achieved percent rounded to 0.1 plus 3, as for the original six screens. idle_chip (17.13) and
+  tile_inspector_title (15.99) are high because of mono text anti-aliasing on short strings.
+
 ## 5. Known cosmetic items
 
 - The research screen has an empty band at the top where the era-gate block would sit.

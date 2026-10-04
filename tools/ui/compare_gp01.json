@@ -1,15 +1,110 @@
 {
- "gp01": {
-  "ignore": [],
-  "rects": [
-   {
-    "name": "battlefield",
-    "x": 0,
-    "y": 0,
-    "w": 1920,
-    "h": 1080,
-    "mask": true
-   }
-  ]
- }
+  "gp01": {
+    "ignore": [
+      [
+        21,
+        811,
+        288,
+        250
+      ]
+    ],
+    "rects": [
+      {
+        "name": "battlefield",
+        "x": 0,
+        "y": 0,
+        "w": 1920,
+        "h": 1080,
+        "mask": true
+      },
+      {
+        "name": "territory_card",
+        "x": 12,
+        "y": 274,
+        "w": 332,
+        "h": 118,
+        "max": 8.0
+      },
+      {
+        "name": "idle_chip",
+        "x": 1549,
+        "y": 249,
+        "w": 143,
+        "h": 28,
+        "max": 20.1
+      },
+      {
+        "name": "minimap",
+        "x": 12,
+        "y": 770,
+        "w": 304,
+        "h": 298,
+        "max": 10.6
+      },
+      {
+        "name": "frame_top",
+        "x": 328,
+        "y": 810,
+        "w": 940,
+        "h": 15,
+        "max": 3.0
+      },
+      {
+        "name": "frame_bottom",
+        "x": 328,
+        "y": 1053,
+        "w": 940,
+        "h": 15,
+        "max": 3.0
+      },
+      {
+        "name": "tile_inspector_head",
+        "x": 337,
+        "y": 825,
+        "w": 349,
+        "h": 19,
+        "max": 9.8
+      },
+      {
+        "name": "tile_inspector_title",
+        "x": 437,
+        "y": 845,
+        "w": 249,
+        "h": 28,
+        "max": 19.0
+      },
+      {
+        "name": "tile_inspector_rows",
+        "x": 337,
+        "y": 935,
+        "w": 349,
+        "h": 118,
+        "max": 11.9
+      },
+      {
+        "name": "colony_ledger",
+        "x": 697,
+        "y": 825,
+        "w": 302,
+        "h": 228,
+        "max": 10.0
+      },
+      {
+        "name": "army_orders",
+        "x": 1010,
+        "y": 860,
+        "w": 250,
+        "h": 106,
+        "max": 12.0
+      },
+      {
+        "name": "resource_pin",
+        "x": 797,
+        "y": 395,
+        "w": 52,
+        "h": 20,
+        "max": 16.4
+      }
+    ]
+  }
 }

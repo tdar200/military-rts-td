@@ -20,7 +20,7 @@ func _texts(node: Node, out: Array = []) -> Array:
 func test_empty_view_model_builds_nothing(t) -> void:
 	var hud := Hud.new()
 	hud.apply({})
-	t.eq(hud.get_child_count(), 12, "one layer per section")
+	t.eq(hud.get_child_count(), 12 + Hud.GAMEPLAY_KEYS.size(), "one layer per section, the gameplay sections included")
 	for layer in hud.get_children():
 		t.eq(layer.get_child_count(), 1 if layer.name == "minimap_slot" else 0, layer.name + " layer is empty")
 	hud.free()
@@ -30,6 +30,9 @@ func test_fixture_builds_all_sections(t) -> void:
 	var hud := Hud.new()
 	hud.apply(Fixtures.hud_main())
 	for layer in hud.get_children():
+		if Hud.GAMEPLAY_KEYS.has(str(layer.name)):
+			t.eq(layer.get_child_count(), 0, layer.name + " builds nothing: the original board fixture carries no gameplay slice")
+			continue
 		t.ok(layer.get_child_count() > 0, layer.name + " has nodes")
 	t.ok(hud.map_slot.get_parent() == hud.get_node("minimap_slot"), "the map slot is a persistent child")
 	hud.free()

@@ -39,6 +39,9 @@ var camera_zoom := 12.2
 var terrain_height: Dictionary = {}
 var terrain_renderer: Node3D
 var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null = cosmetic noise terrain
+var bridge_snapshot: Dictionary = {}  # the latest parsed bridge snapshot; live_adapter.gd derives the gameplay HUD slices from it
+const NO_HOVER := Vector2i(-1, -1)
+var hover_cell := NO_HOVER  # hex under the cursor, NO_HOVER when none; only reassigned when the hex changes
 var terrain_dressing: Array = []  # nodes built on top of the terrain surface (trees, rocks, lattice, river)
 var materials: Dictionary = {}
 var tactical_models = preload("res://scripts/tactical_models.gd").new()
@@ -1243,7 +1246,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					_show_order_path(selected_units, ground, attack_move_armed)
 				attack_move_armed = false
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_A:
+		if event.keycode == KEY_A and event.ctrl_pressed:
+			if select_army() > 0:
+				objective_label.text = "ARMY SELECTED"
+		elif event.keycode == KEY_PERIOD:
+			select_idle_crew()
+		elif event.keycode == KEY_A:
 			attack_move_armed = true
 			build_mode = ""
 			objective_label.text = "ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION"
@@ -1457,6 +1465,45 @@ func focus_camera(position: Vector3, zoom: float) -> void:
 	camera_focus_target = position
 	camera_focus_zoom = zoom
 	camera_cinematic = 0.8
+
+
+## World point of a hex centre on the rendered ground (what the HUD anchors deposit pins and lens overlays to).
+func hex_world_point(x: int, y: int) -> Vector3:
+	var world := _hex_world(x, y)
+	world.y = _height_world(world.x, world.z)
+	return world
+
+
+## Where a hex centre lands on screen, in HUD pixels; Vector2.INF when it is behind the camera.
+func screen_point_of_hex(x: int, y: int) -> Vector2:
+	var world := hex_world_point(x, y)
+	if not is_instance_valid(camera) or camera.is_position_behind(world):
+		return Vector2.INF
+	return camera.unproject_position(world)
+
+
+## Selects every human unit but Harvesters (the "army"). Returns how many were selected; selection is left alone when none.
+func select_army() -> int:
+	var army: Array = []
+	for node in bridge_nodes.values():
+		if is_instance_valid(node) and int(node.get_meta("team", -1)) == HUMAN and String(node.get_meta("category", "")) == "unit" and String(node.get_meta("kind_name", "")) != "Harvester":
+			army.append(node)
+	if not army.is_empty():
+		_set_selection(army)
+	return army.size()
+
+
+## Selects the first idle human unit (never a Harvester) from the latest snapshot and frames it. False when none is idle.
+func select_idle_crew() -> bool:
+	var idle: Dictionary = preload("res://scripts/ui/vm_gameplay.gd").idle_crews(bridge_snapshot)
+	if idle.is_empty():
+		return false
+	var node = bridge_nodes.get(int(idle["first_id"]))
+	if not is_instance_valid(node):
+		return false
+	_set_selection([node])
+	focus_camera(node.global_position, 8.2)
+	return true
 
 
 func era_name() -> String:
@@ -1767,6 +1814,7 @@ func _poll_bridge(delta: float) -> void:
 		selected = null
 		if is_instance_valid(selection_ring):
 			selection_ring.queue_free()
+	bridge_snapshot = parsed
 	bridge_tick = int(parsed.get("tick", 0))
 	bridge_money = int(parsed.get("money_bits", 0)) / 65536
 	bridge_energy = int(parsed.get("energy_bits", 0)) / 65536
@@ -2232,19 +2280,29 @@ func _update_hover_tile() -> void:
 		return
 	if not mission_deployed:
 		hover_tile.visible = false
+		_set_hover_cell(NO_HOVER)
 		return
 	var pointer := get_viewport().get_mouse_position()
 	if ui.blocks_point(pointer):
+		# Over the HUD the last hovered hex stays, so the inspector does not vanish as the cursor reaches for its panel.
 		hover_tile.visible = false
 		return
 	var ground := _screen_to_ground(pointer)
 	if ground == Vector3.INF:
 		hover_tile.visible = false
+		_set_hover_cell(NO_HOVER)
 		return
 	var tile := _world_to_tile(ground)
+	_set_hover_cell(tile)
 	var world := _hex_world(tile.x, tile.y)
 	hover_tile.position = Vector3(world.x, _height_world(world.x, world.z) + 0.055, world.z)
 	hover_tile.visible = build_mode == ""
+
+
+## The HUD hashes its slices, so the hex is only reassigned when it really changes.
+func _set_hover_cell(cell: Vector2i) -> void:
+	if cell != hover_cell:
+		hover_cell = cell
 
 
 func _update_build_ghost() -> void:

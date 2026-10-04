@@ -215,3 +215,165 @@ static func veterans(snap: Dictionary) -> Dictionary:
 		if e is Dictionary and int(e.get("rank", 0)) > 0:
 			out[int(e.get("id", -1))] = int(e["rank"])
 	return out
+
+
+# ------------------------------------------------------------------ gameplay HUD helpers (task 12)
+
+## Context the tile inspector adds to tile_inspect: the hex itself, its ground glyph, whether it lies in the player's
+## construction zone, and the deposit standing on it (kind, remaining) when there is one. {} off the map.
+static func tile_context(snap: Dictionary, ground_model, x: int, y: int) -> Dictionary:
+	if ground_model == null or x < 0 or y < 0 or x >= ground_model.width or y >= ground_model.height:
+		return {}
+	var out := {"x": x, "y": y, "glyph": ground_model.glyph_at(x, y), "zone": false}
+	for c in snap.get("construction_zone", []):
+		if c is Array and c.size() >= 2 and int(c[0]) == x and int(c[1]) == y:
+			out["zone"] = true
+			break
+	for d in snap.get("deposits", []):
+		if d is Dictionary and int(d.get("x", -1)) == x and int(d.get("y", -1)) == y:
+			out["deposit"] = {"kind": str(d.get("kind", "")), "remaining": int(d.get("remaining", 0))}
+			break
+	return out
+
+
+## Pills for the territory card: only quantities the snapshot really carries. Total generation is `power_generation`;
+## there is no per-minute income field, so no per-minute material or work deltas exist to show. [] when none.
+static func yields(snap: Dictionary) -> Array:
+	var out: Array = []
+	var kw := int(snap.get("power_generation", 0))
+	if kw > 0:
+		out.append({"text": "+%d kW" % kw, "tone": "warn"})
+	return out
+
+
+## Resource deposits as {x, y, kind, remaining, claimed}. A deposit is claimed when a human Refinery stands within
+## ORE_BONUS_RADIUS of it (Alloy is never claimed by a refinery). Emptied deposits are left out.
+static func deposit_pins(snap: Dictionary) -> Array:
+	var refineries: Array = []
+	for e in _entities(snap):
+		if e is Dictionary and int(e.get("owner", -1)) == HUMAN and str(e.get("category", "")) == "building" and str(e.get("kind", "")) == "Refinery":
+			refineries.append(entity_cell(e))
+	var out: Array = []
+	var list = snap.get("deposits", [])
+	if not (list is Array):
+		return out
+	for d in list:
+		if not (d is Dictionary) or int(d.get("remaining", 0)) <= 0:
+			continue
+		var dx := int(d.get("x", 0))
+		var dy := int(d.get("y", 0))
+		var claimed := false
+		if str(d.get("kind", "")) == "Ore":
+			for r in refineries:
+				if hex_distance(dx, dy, int(r[0]), int(r[1])) <= ORE_BONUS_RADIUS:
+					claimed = true
+					break
+		out.append({"x": dx, "y": dy, "kind": str(d.get("kind", "")), "remaining": int(d.get("remaining", 0)), "claimed": claimed})
+	return out
+
+
+## Counts for the colony ledger: human buildings and units, crew use, battery charge. Fields the snapshot lacks stay
+## out. {} without entities.
+static func ledger(snap: Dictionary) -> Dictionary:
+	var ents := _entities(snap)
+	if ents.is_empty():
+		return {}
+	var buildings := 0
+	var units := 0
+	for e in ents:
+		if e is Dictionary and int(e.get("owner", -1)) == HUMAN:
+			if str(e.get("category", "")) == "building":
+				buildings += 1
+			elif str(e.get("category", "")) == "unit":
+				units += 1
+	var out := {"structures": buildings, "units": units}
+	var rows := _production_rows(snap)
+	if not rows.is_empty():
+		out["production"] = rows
+	if int(snap.get("supply_cap", 0)) > 0:
+		out["crew_used"] = int(snap.get("supply_used", 0))
+		out["crew_cap"] = int(snap["supply_cap"])
+	if int(snap.get("storage_capacity", 0)) > 0:
+		out["battery_pct"] = roundi(100.0 * float(int(snap.get("energy_bits", 0)) / 65536) / float(snap["storage_capacity"]))
+	return out
+
+
+const PRODUCERS := ["Barracks", "VehicleFactory", "Airfield"]
+
+
+## One row per finished human producer: busy rows carry the unit in production, its progress ratio and seconds left, idle
+## rows (empty queue) say so. A running research becomes one more busy row. Producers are numbered only when there are
+## several of the same kind, in entity order.
+static func _production_rows(snap: Dictionary) -> Array:
+	var names: Dictionary = load("res://scripts/ui/live_adapter.gd").KIND_NAMES
+	var total := {}
+	for e in _entities(snap):
+		if e is Dictionary and int(e.get("owner", -1)) == HUMAN and str(e.get("category", "")) == "building" and str(e.get("kind", "")) in PRODUCERS and int(e.get("construction", 0)) == 0:
+			total[str(e["kind"])] = int(total.get(str(e["kind"]), 0)) + 1
+	var seen := {}
+	var rows: Array = []
+	for e in _entities(snap):
+		if not (e is Dictionary) or int(e.get("owner", -1)) != HUMAN or str(e.get("category", "")) != "building":
+			continue
+		var kind := str(e.get("kind", ""))
+		if not (kind in PRODUCERS) or int(e.get("construction", 0)) != 0:
+			continue
+		seen[kind] = int(seen.get(kind, 0)) + 1
+		var label := str(names.get(kind, kind))
+		if int(total[kind]) > 1:
+			label += " %d" % int(seen[kind])
+		var duration := int(e.get("production_duration", 0))
+		if str(e.get("production_name", "")) != "" and duration > 0:
+			var left := maxi(0, duration - int(e.get("production_progress", 0)))
+			rows.append({"name": label, "state": "busy", "ratio": clampf(float(e.get("production_progress", 0)) / float(duration), 0.0, 1.0), "note": "%s %d:%02d" % [str(e["production_name"]), _seconds(left) / 60, _seconds(left) % 60]})
+		else:
+			rows.append({"name": label, "state": "idle", "note": "queue empty"})
+	var research_ticks := int(snap.get("active_research_ticks", 0))
+	if int(snap.get("active_research_id", -1)) >= 0 and research_ticks > 0 and str(snap.get("active_research_name", "")) != "":
+		var lab := {"name": "Lab", "state": "busy", "note": "%s %d:%02d" % [str(snap["active_research_name"]), _seconds(research_ticks) / 60, _seconds(research_ticks) % 60]}
+		for option in snap.get("research_options", []):
+			if option is Dictionary and int(option.get("id", -2)) == int(snap["active_research_id"]) and int(option.get("duration", 0)) > 0:
+				lab["ratio"] = clampf(1.0 - float(research_ticks) / float(option["duration"]), 0.0, 1.0)
+		rows.append(lab)
+	return rows
+
+
+const LENSES := ["land", "res", "bdr", "thr"]
+
+
+## What a minimap lens draws, in hex coordinates: dots [{x, y, k}] (res: deposits k ore or alloy), cells [{x, y, k}]
+## (bdr: k own for the construction zone, k enemy for enemy_border) and route [[x, y]] (thr: the expected wave route).
+## Land and unknown lenses draw nothing: {}.
+static func lens_hexes(snap: Dictionary, lens: String) -> Dictionary:
+	match lens:
+		"res":
+			var dots: Array = []
+			for d in snap.get("deposits", []):
+				if d is Dictionary and int(d.get("remaining", 0)) > 0:
+					dots.append({"x": int(d.get("x", 0)), "y": int(d.get("y", 0)), "k": "alloy" if str(d.get("kind", "")) == "Alloy" else "ore"})
+			return {"dots": dots} if not dots.is_empty() else {}
+		"bdr":
+			var cells: Array = []
+			for c in snap.get("construction_zone", []):
+				if c is Array and c.size() >= 2:
+					cells.append({"x": int(c[0]), "y": int(c[1]), "k": "own"})
+			for c in enemy_border(snap):
+				cells.append({"x": int(c[0]), "y": int(c[1]), "k": "enemy"})
+			return {"cells": cells} if not cells.is_empty() else {}
+		"thr":
+			var inbound := wave_inbound(snap)
+			return {"route": inbound["route"]} if not inbound.is_empty() else {}
+	return {}
+
+
+## The army column of the colony panel: how many combat units the player has (every human unit but Harvesters) and how
+## many of them stand idle, with the first idle id. {} when there are neither.
+static func army(snap: Dictionary) -> Dictionary:
+	var count := 0
+	for e in _entities(snap):
+		if e is Dictionary and int(e.get("owner", -1)) == HUMAN and str(e.get("category", "")) == "unit" and str(e.get("kind", "")) != "Harvester":
+			count += 1
+	var idle := idle_crews(snap)
+	if count == 0 and idle.is_empty():
+		return {}
+	return {"count": count, "idle": int(idle.get("count", 0)), "first_idle": int(idle.get("first_id", -1))}
