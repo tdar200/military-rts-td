@@ -57,6 +57,7 @@ const BUILD_CARDS := [
 
 var g  # earthfront_3d.gd, or a stub with the same members in tests
 const LiveAssault = preload("res://scripts/ui/live_assault.gd")
+const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 
 var tab := "build"
 var assault
@@ -130,7 +131,7 @@ func hud_vm(now: float) -> Dictionary:
 	if assault_active():
 		return assault.vm(now, _alerts, _tabs(), _selection(), g.attack_move_armed)
 	if tab == "build":
-		return _build_vm(now, deficit)
+		return _with_gameplay(_build_vm(now, deficit))
 	var vm := {
 		"brand": {"title": "Ascension", "sub": "Era %d / %s" % [g.bridge_era + 1, "Earthfront" if g.bridge_earthfront else "Campaign"]},
 		"chips": _chips(),
@@ -153,6 +154,39 @@ func hud_vm(now: float) -> Dictionary:
 	var selection := _selection()
 	if not selection.is_empty():
 		vm["selection"] = selection
+	return _with_gameplay(vm)
+
+
+## Adds the gameplay slices (vm_gameplay.gd) that the latest snapshot can back; absent data adds no key. The snapshot,
+## its ground model and the hovered hex are read off the game when it exposes them (`bridge_snapshot`, `ground_model`,
+## `hover_cell`); a game that does not simply gets none of the slices.
+func _with_gameplay(vm: Dictionary) -> Dictionary:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or snap.is_empty():
+		return vm
+	var ground = g.get("ground_model")
+	if ground == null:
+		ground = preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
+	var slices := {
+		"territory": VmGameplay.territory(snap, ground),
+		"idle": VmGameplay.idle_crews(snap),
+		"alert": VmGameplay.next_alert(snap),
+		"veterans": VmGameplay.veterans(snap),
+	}
+	var hovered = g.get("hover_cell")
+	if hovered is Vector2i:
+		slices["inspect"] = VmGameplay.tile_inspect(snap, ground, hovered.x, hovered.y)
+	var regions := VmGameplay.regions(snap)
+	if not regions.is_empty():
+		slices["regions"] = regions
+	for key in slices:
+		if not slices[key].is_empty():
+			vm[key] = slices[key]
+	# The top bar's wave chip owns vm["wave"]; the expected route and ETA ride on it so that chip's own keys are untouched.
+	var inbound := VmGameplay.wave_inbound(snap)
+	if not inbound.is_empty() and vm.has("wave") and vm["wave"] is Dictionary:
+		for key in inbound:
+			vm["wave"][key] = inbound[key]
 	return vm
 
 

@@ -50,6 +50,8 @@ var cursor_valid := true
 var kestrel := false
 var bridge_snapshot: Dictionary = {}
 var ground_model: RefCounted = null
+## Hex under the cursor as a Vector2i, null when the pointer is off the map. The real game has no such member yet.
+var hover_cell = null
 
 
 func use_kestrel() -> void:
