@@ -1910,6 +1910,34 @@ impl Sim {
             .collect()
     }
 
+    /// Veterancy rank (0..=3) of the living unit `id`; 0 for buildings and
+    /// unknown or dead entities. Read-only, not hashed.
+    #[must_use]
+    pub fn rank_of(&self, id: EntityId) -> u8 {
+        self.entity(id)
+            .filter(|e| e.alive && matches!(e.kind, Kind::Unit(_)))
+            .map_or(0, |e| e.rank)
+    }
+
+    /// Whether the living unit `id` has nothing to do: no move target, no
+    /// remaining path, no queued work. Conservative: Harvesters (which work
+    /// autonomously), buildings and stunned units are never reported idle.
+    /// Read-only, not hashed.
+    #[must_use]
+    pub fn is_idle_unit(&self, id: EntityId) -> bool {
+        self.entity(id).is_some_and(|e| {
+            e.alive
+                && matches!(e.kind, Kind::Unit(u) if u != UnitKind::Harvester)
+                && e.move_target.is_none()
+                && e.path.is_empty()
+                && !e.harvest_returning
+                && e.cargo == 0
+                && e.build_queue.is_empty()
+                && e.construction_remaining == 0
+                && e.stun_ticks == 0
+        })
+    }
+
     /// Production status for a living producer, or `None` when it is idle or
     /// `id` does not identify a living entity.
     #[must_use]

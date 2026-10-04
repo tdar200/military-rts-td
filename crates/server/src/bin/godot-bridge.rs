@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rts_core::fixed::Fixed;
+use rts_core::game::kestrel;
+use rts_core::game::map::Ground;
 use rts_core::game::scenario::Scenario;
 use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId};
 use rts_core::game::stats::{BuildingKind, UnitKind};
@@ -189,7 +191,7 @@ fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
             production.map_or_else(String::new, |status| format!("{:?}", status.unit));
         write!(
             out,
-            "{{\"id\":{},\"owner\":{},\"category\":\"{}\",\"kind\":\"{}\",\"x_bits\":{},\"z_bits\":{},\"hp_bits\":{},\"max_hp_bits\":{},\"shield_bits\":{},\"max_shield_bits\":{},\"ability_cd\":{},\"stun_ticks\":{},\"cargo\":{},\"rally_x_bits\":{},\"rally_z_bits\":{},\"construction\":{},\"construction_total\":{},\"production_name\":{:?},\"production_queued\":{},\"production_progress\":{},\"production_duration\":{}}}",
+            "{{\"id\":{},\"owner\":{},\"category\":\"{}\",\"kind\":\"{}\",\"x_bits\":{},\"z_bits\":{},\"hp_bits\":{},\"max_hp_bits\":{},\"shield_bits\":{},\"max_shield_bits\":{},\"ability_cd\":{},\"stun_ticks\":{},\"cargo\":{},\"rally_x_bits\":{},\"rally_z_bits\":{},\"construction\":{},\"construction_total\":{},\"production_name\":{:?},\"production_queued\":{},\"production_progress\":{},\"production_duration\":{}",
             entity.id.0,
             entity.owner.0,
             category,
@@ -213,6 +215,29 @@ fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
             production.map_or(0, |status| status.duration),
         )
         .expect("writing to String cannot fail");
+        // Additive per-entity fields, appended last so existing consumers are untouched.
+        write!(
+            out,
+            ",\"idle\":{}",
+            entity.owner == human && sim.is_idle_unit(entity.id)
+        )
+        .expect("writing to String cannot fail");
+        match entity.kind {
+            EntityKindView::Unit(_) => write!(out, ",\"rank\":{}", sim.rank_of(entity.id)),
+            EntityKindView::Building(BuildingKind::PowerPlant) => {
+                write!(out, ",\"river_kw\":{}", sim.river_bonus_kw_of(entity.id))
+            }
+            EntityKindView::Building(BuildingKind::Refinery) => {
+                write!(
+                    out,
+                    ",\"ore_bonus\":{}",
+                    sim.ore_bonus_pct_of(entity.id) > 0
+                )
+            }
+            EntityKindView::Building(_) => Ok(()),
+        }
+        .expect("writing to String cannot fail");
+        out.push('}');
     }
     let economy = sim.economy_view(human);
     write!(out, "],\"earthfront\":{},\"technology_total\":{},\"power_generation\":{},\"power_demand\":{},\"stored_energy\":{},\"storage_capacity\":{},\"ore_buffer\":{},\"depot_ammunition\":{},\"active_factories\":{},\"research_status\":{:?},\"incoming_doctrine\":{:?},\"services\":[",
@@ -246,8 +271,93 @@ fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
             }
         }
     }
-    out.push_str("]}");
+    out.push(']');
+    write_additive_fields(&mut out, sim);
+    out.push('}');
     out
+}
+
+/// True when the sim's ground layer is exactly the authored Kestrel Reach text map.
+/// The sim carries no scenario tag, so the bridge recognises the fixed map by content.
+fn is_kestrel_map(sim: &rts_core::game::sim::Sim) -> bool {
+    let ground = sim.map().ground_iter().map(Ground::glyph);
+    ground.eq(kestrel::ROWS.iter().flat_map(|row| row.chars()))
+}
+
+/// The route alien waves take: holdfast tile to home Command Center tile, inclusive of
+/// both ends; empty when the map offers none.
+///
+/// The home Command Center's own tile is blocked once the building stands, so a
+/// forward search to it fails; the free-standing holdfast tile is not, so search
+/// home to holdfast and reverse (the waypoints after `HOME_CC`, including `HOLDFAST`).
+fn kestrel_wave_route(map: &rts_core::game::map::Map) -> Vec<(u16, u16)> {
+    use rts_core::game::path::find_path;
+    if let Some(forward) = find_path(map, kestrel::HOLDFAST, kestrel::HOME_CC) {
+        return std::iter::once(kestrel::HOLDFAST).chain(forward).collect();
+    }
+    find_path(map, kestrel::HOME_CC, kestrel::HOLDFAST).map_or_else(Vec::new, |back| {
+        back.into_iter()
+            .rev()
+            .chain(std::iter::once(kestrel::HOME_CC))
+            .collect()
+    })
+}
+
+/// Additive top-level fields (schema stays 5): appended after every pre-existing key.
+/// `map_name`, `regions` and `core_node` appear only for Kestrel Reach; `ground`,
+/// `ground_table` and `wave_route` appear for every scenario.
+fn write_additive_fields(out: &mut String, sim: &rts_core::game::sim::Sim) {
+    let kestrel_map = is_kestrel_map(sim);
+    if kestrel_map {
+        write!(out, ",\"map_name\":{:?},\"regions\":[", kestrel::MAP_NAME).expect("string write");
+        for (i, r) in kestrel::REGIONS.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            write!(
+                out,
+                "{{\"name\":{:?},\"kind\":{:?},\"x0\":{},\"y0\":{},\"x1\":{},\"y1\":{}}}",
+                r.name, r.kind, r.x0, r.y0, r.x1, r.y1
+            )
+            .expect("string write");
+        }
+        out.push(']');
+    }
+    out.push_str(",\"ground\":\"");
+    out.extend(sim.map().ground_iter().map(Ground::glyph));
+    out.push_str("\",\"ground_table\":[");
+    for (i, g) in Ground::ALL.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let p = g.props();
+        write!(
+            out,
+            "{{\"glyph\":\"{}\",\"name\":{:?},\"path_cost\":{},\"infantry_pct\":{},\"vehicle_pct\":{},\"cover_pct\":{},\"range_pct\":{},\"buildable\":{},\"passable\":{}}}",
+            g.glyph(), g.name(), p.path_cost, p.infantry_pct, p.vehicle_pct, p.cover_pct,
+            p.range_pct, p.buildable, p.passable
+        )
+        .expect("string write");
+    }
+    out.push_str("],\"wave_route\":[");
+    if kestrel_map {
+        for (i, (x, y)) in kestrel_wave_route(sim.map()).into_iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            write!(out, "[{x},{y}]").expect("string write");
+        }
+    }
+    out.push(']');
+    if kestrel_map {
+        write!(
+            out,
+            ",\"core_node\":[{},{}]",
+            kestrel::CORE_NODE.0,
+            kestrel::CORE_NODE.1
+        )
+        .expect("string write");
+    }
 }
 
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -415,18 +525,91 @@ fn clear_command_packets(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn main() -> std::io::Result<()> {
-    let output = std::env::args().nth(1).map_or_else(
-        || PathBuf::from("godot3d/runtime/snapshot.json"),
-        PathBuf::from,
-    );
-    let frame_limit = std::env::args()
-        .nth(2)
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(u64::MAX);
+/// Parsed command line: the two historical positional arguments plus the flags.
+#[derive(Debug)]
+struct Options {
+    output: PathBuf,
+    frame_limit: u64,
+    scenario: Scenario,
+    dump_snapshot: Option<PathBuf>,
+}
 
-    let mut sim = Scenario::Survival.build(2026);
+/// Maps a `--scenario` value to a scenario (Survival is the default).
+fn parse_scenario(value: &str) -> Result<Scenario, String> {
+    match value {
+        "survival" => Ok(Scenario::Survival),
+        "kestrel" => Ok(Scenario::KestrelReach),
+        other => Err(format!(
+            "unknown scenario '{other}' (expected 'kestrel' or 'survival')"
+        )),
+    }
+}
+
+/// Parses `[--scenario S] [--dump-snapshot P] [output [frame_limit]]`. Flags (also
+/// as `--flag=value`) may appear anywhere; they are stripped before the positional
+/// arguments (arg 1 = output path, arg 2 = frame limit) are read.
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
+    let mut positional = Vec::new();
+    let mut scenario = Scenario::Survival;
+    let mut dump_snapshot = None;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => {
+                (flag.to_owned(), Some(value.to_owned()))
+            }
+            _ => (arg.clone(), None),
+        };
+        match flag.as_str() {
+            "--scenario" | "--dump-snapshot" => {
+                let value = inline
+                    .or_else(|| args.next())
+                    .ok_or_else(|| format!("{flag} needs a value"))?;
+                if flag == "--scenario" {
+                    scenario = parse_scenario(&value)?;
+                } else {
+                    dump_snapshot = Some(PathBuf::from(value));
+                }
+            }
+            _ if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
+            _ => positional.push(arg),
+        }
+    }
+    Ok(Options {
+        output: positional.first().map_or_else(
+            || PathBuf::from("godot3d/runtime/snapshot.json"),
+            PathBuf::from,
+        ),
+        frame_limit: positional
+            .get(1)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(u64::MAX),
+        scenario,
+        dump_snapshot,
+    })
+}
+
+fn main() -> std::io::Result<()> {
+    let options = match parse_args(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("godot-bridge: {message}");
+            std::process::exit(2);
+        }
+    };
+    let Options {
+        output,
+        frame_limit,
+        scenario,
+        dump_snapshot,
+    } = options;
+
+    let mut sim = scenario.build(2026);
     sim.set_balance(rts_data::load_default());
+    if let Some(path) = dump_snapshot {
+        // One frame of the chosen scenario's initial snapshot, for Godot test fixtures.
+        return write_atomic(&path, &snapshot_json(&sim));
+    }
     // Match the primary client: the deterministic simulation is authored at 30 Hz.
     // Godot renders between snapshots, but must not double the gameplay speed.
     let frame_time = Duration::from_micros(33_333);
@@ -447,7 +630,7 @@ fn main() -> std::io::Result<()> {
             let _ = std::fs::remove_file(&start_path);
             let _ = std::fs::remove_file(&command_path);
             clear_command_packets(&command_path)?;
-            sim = Scenario::Survival.build(2026);
+            sim = scenario.build(2026);
             sim.set_balance(rts_data::load_default());
             mission_started = false;
         }
@@ -486,8 +669,44 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{snapshot_json, take_commands, BuildingKind, Command, EntityId, UnitKind};
+    use super::{
+        parse_args, snapshot_json, take_commands, BuildingKind, Command, EntityId, UnitKind,
+    };
     use rts_core::game::scenario::Scenario;
+
+    /// Value of the string field `"key":"..."` (first occurrence).
+    fn extract_str(json: &str, key: &str) -> String {
+        let needle = format!("\"{key}\":\"");
+        let start = json.find(&needle).expect("key present") + needle.len();
+        let end = json[start..].find('"').expect("closing quote") + start;
+        json[start..end].to_owned()
+    }
+
+    /// The `{...}` object of the entity with this id (entity objects hold no nesting).
+    fn entity_object(json: &str, id: u32) -> String {
+        let needle = format!("{{\"id\":{id},\"owner\"");
+        let start = json.find(&needle).expect("entity present");
+        let end = json[start..].find('}').expect("entity end") + start;
+        json[start..=end].to_owned()
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    fn human_infantry(sim: &rts_core::game::sim::Sim) -> EntityId {
+        sim.views()
+            .into_iter()
+            .find(|v| {
+                v.owner.0 == 0
+                    && matches!(
+                        v.kind,
+                        rts_core::game::sim::EntityKindView::Unit(UnitKind::Infantry)
+                    )
+            })
+            .expect("a human infantry unit")
+            .id
+    }
 
     #[test]
     fn qa_concurrent_command_transport_preserves_every_order() {
@@ -555,6 +774,179 @@ mod tests {
         assert!(json.contains("\"production_name\":"));
         assert!(json.contains("\"entities\":[{"));
         assert!(json.ends_with("]}"));
+    }
+
+    #[test]
+    fn survival_snapshot_is_unchanged_in_shape_and_has_all_grass_ground() {
+        let sim = Scenario::Survival.build(2026);
+        let json = snapshot_json(&sim);
+        assert!(json.starts_with("{\"schema\":5,"));
+        assert!(!json.contains("\"map_name\""));
+        assert!(!json.contains("\"regions\""));
+        assert!(!json.contains("\"core_node\""));
+        let g = extract_str(&json, "ground");
+        assert_eq!(g.len(), 44 * 26);
+        assert!(g.chars().all(|c| c == 'g'));
+        assert!(json.contains("\"ground_table\":["));
+        assert!(json.contains("\"wave_route\":[]"));
+    }
+
+    #[test]
+    fn kestrel_snapshot_carries_names_regions_ground_and_table() {
+        let sim = Scenario::KestrelReach.build(2026);
+        let json = snapshot_json(&sim);
+        assert!(json.starts_with("{\"schema\":5,"));
+        assert!(json.contains("\"map_name\":\"Kestrel Reach\""));
+        assert!(json.contains("\"name\":\"Wyllow Ford\""));
+        assert!(json.contains("\"ground_table\":["));
+        assert!(json.contains("\"wave_route\":["));
+        assert!(json.contains("\"core_node\":[37,8]"));
+        let g = extract_str(&json, "ground");
+        assert_eq!(g.len(), 44 * 26);
+        assert!(g.contains('r') && g.contains('w') && g.contains('h'));
+    }
+
+    #[test]
+    fn kestrel_snapshot_is_valid_json_shape() {
+        let json = snapshot_json(&Scenario::KestrelReach.build(1));
+        assert_eq!(json.matches('{').count(), json.matches('}').count());
+        assert_eq!(json.matches('[').count(), json.matches(']').count());
+        assert!(!json.contains(",]") && !json.contains(",}"));
+        let survival = snapshot_json(&Scenario::Survival.build(1));
+        assert_eq!(survival.matches('{').count(), survival.matches('}').count());
+        assert!(!survival.contains(",]") && !survival.contains(",}"));
+    }
+
+    #[test]
+    fn kestrel_wave_route_starts_at_the_holdfast_and_reaches_home() {
+        use rts_core::game::kestrel::{HOLDFAST, HOME_CC};
+        let json = snapshot_json(&Scenario::KestrelReach.build(2026));
+        let start = json.find("\"wave_route\":[").expect("wave_route") + "\"wave_route\":".len();
+        let end = json[start..].find("]]").expect("route end") + start + 2;
+        let route = &json[start..end];
+        assert!(route.len() > 2, "route must be non-empty");
+        let first = format!("[[{},{}]", HOLDFAST.0, HOLDFAST.1);
+        assert!(
+            route.starts_with(&first),
+            "route starts at holdfast: {route}"
+        );
+        let last = format!("[{},{}]]", HOME_CC.0, HOME_CC.1);
+        assert!(route.ends_with(&last), "route ends at home CC: {route}");
+    }
+
+    #[test]
+    fn idle_is_false_for_a_moving_unit_and_true_for_a_stationary_one() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::sim::PlayerId;
+        use rts_core::vec::Vec2;
+        // Kestrel opens with four founding rifle squads; Survival opens mid-survey.
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let id = human_infantry(&sim);
+        let json = snapshot_json(&sim);
+        assert!(entity_object(&json, id.0).contains("\"idle\":true"));
+        let pos = sim
+            .views()
+            .into_iter()
+            .find(|v| v.id == id)
+            .expect("unit")
+            .pos;
+        sim.step(&[Command::Move {
+            owner: PlayerId(0),
+            unit: id,
+            target: pos + Vec2::new(Fixed::from_int(5), Fixed::ZERO),
+        }]);
+        let json = snapshot_json(&sim);
+        assert!(entity_object(&json, id.0).contains("\"idle\":false"));
+        let obj = entity_object(&json, id.0);
+        assert!(obj.contains("\"rank\":0"));
+        // Buildings are never idle units.
+        let cc = sim
+            .views()
+            .into_iter()
+            .find(|v| {
+                v.owner.0 == 0
+                    && matches!(
+                        v.kind,
+                        rts_core::game::sim::EntityKindView::Building(BuildingKind::CommandCenter)
+                    )
+            })
+            .map(|v| v.id);
+        if let Some(cc) = cc {
+            assert!(entity_object(&json, cc.0).contains("\"idle\":false"));
+        }
+    }
+
+    #[test]
+    fn river_kw_is_twelve_for_a_riverside_plant_and_zero_elsewhere() {
+        // Kestrel's river-side plant site is (18, 6); (10, 12) is dry meadow.
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let wet = sim.add_building(
+            rts_core::game::sim::PlayerId(0),
+            BuildingKind::PowerPlant,
+            18,
+            6,
+        );
+        let dry = sim.add_building(
+            rts_core::game::sim::PlayerId(0),
+            BuildingKind::PowerPlant,
+            10,
+            12,
+        );
+        let json = snapshot_json(&sim);
+        assert!(entity_object(&json, wet.0).contains("\"river_kw\":12"));
+        assert!(entity_object(&json, dry.0).contains("\"river_kw\":0"));
+        let refinery = sim.add_building(
+            rts_core::game::sim::PlayerId(0),
+            BuildingKind::Refinery,
+            19,
+            7,
+        );
+        let json = snapshot_json(&sim);
+        assert!(entity_object(&json, refinery.0).contains("\"ore_bonus\":true"));
+        // Non-plant entities carry no river_kw.
+        assert!(!entity_object(&json, refinery.0).contains("river_kw"));
+    }
+
+    #[test]
+    fn scenario_flag_parses_anywhere_without_breaking_positional_args() {
+        let o = parse_args(args(&[])).unwrap();
+        assert_eq!(o.scenario, Scenario::Survival);
+        assert_eq!(o.frame_limit, u64::MAX);
+        assert_eq!(
+            o.output,
+            std::path::PathBuf::from("godot3d/runtime/snapshot.json")
+        );
+        let o = parse_args(args(&["out.json", "5"])).unwrap();
+        assert_eq!((o.output.to_str(), o.frame_limit), (Some("out.json"), 5));
+        let o = parse_args(args(&["--scenario", "kestrel", "out.json", "5"])).unwrap();
+        assert_eq!(o.scenario, Scenario::KestrelReach);
+        assert_eq!((o.output.to_str(), o.frame_limit), (Some("out.json"), 5));
+        let o = parse_args(args(&["out.json", "--scenario=survival", "7"])).unwrap();
+        assert_eq!(o.scenario, Scenario::Survival);
+        assert_eq!(o.frame_limit, 7);
+        let o = parse_args(args(&["out.json", "9", "--scenario", "kestrel"])).unwrap();
+        assert_eq!(o.scenario, Scenario::KestrelReach);
+        assert_eq!(o.frame_limit, 9);
+        let o = parse_args(args(&[
+            "--scenario",
+            "kestrel",
+            "--dump-snapshot",
+            "f.json",
+        ]))
+        .unwrap();
+        assert_eq!(
+            o.dump_snapshot.as_deref().and_then(|p| p.to_str()),
+            Some("f.json")
+        );
+    }
+
+    #[test]
+    fn scenario_flag_rejects_unknown_values_and_missing_arguments() {
+        let err = parse_args(args(&["--scenario", "mars"])).unwrap_err();
+        assert!(err.contains("mars") && err.contains("kestrel"), "{err}");
+        assert!(parse_args(args(&["--scenario"])).is_err());
+        assert!(parse_args(args(&["--dump-snapshot"])).is_err());
+        assert!(parse_args(args(&["--bogus"])).is_err());
     }
 
     #[test]

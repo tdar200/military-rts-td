@@ -339,6 +339,29 @@ impl Sim {
         }
     }
 
+    /// Extra kW (0 or 12) the living entity `id` draws from a river or ford hex.
+    /// Read-only; for HUD display.
+    #[must_use]
+    pub fn river_bonus_kw_of(&self, id: EntityId) -> u32 {
+        self.entity(id)
+            .filter(|e| e.alive)
+            .map_or(0, |e| self.river_bonus_kw(e))
+    }
+
+    /// Ore-yield bonus percent (0 or 20) of the living refinery `id`.
+    /// Read-only; for HUD display.
+    #[must_use]
+    pub fn ore_bonus_pct_of(&self, id: EntityId) -> u32 {
+        if self
+            .entity(id)
+            .is_some_and(|e| e.alive && self.refinery_near_ore(e))
+        {
+            20
+        } else {
+            0
+        }
+    }
+
     /// Whether an ore deposit lies within one hex of this refinery; Earthfront only.
     pub(super) fn refinery_near_ore(&self, e: &Entity) -> bool {
         if !self.earthfront || !matches!(e.kind, Kind::Building(BuildingKind::Refinery)) {
