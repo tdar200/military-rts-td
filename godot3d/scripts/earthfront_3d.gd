@@ -43,6 +43,12 @@ var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null
 var ground_warnings := 0  # times a malformed ground layer was reported: once, not on every poll
 var bridge_snapshot: Dictionary = {}  # the latest parsed bridge snapshot; live_adapter.gd derives the gameplay HUD slices from it
 const NO_HOVER := Vector2i(-1, -1)
+## Snapshots are polled every BRIDGE_POLL seconds. Units glide toward the last polled position every frame at the rate that
+## used to be applied once per poll (38 percent of the gap per poll), so they move smoothly at the frame rate instead of
+## jumping about eight times a second, and trail the simulation by the same amount as before.
+const BRIDGE_POLL := 0.12
+const GLIDE_RATE := 3.98  # = -ln(1 - 0.38) / BRIDGE_POLL, per second
+const TURN_RATE := 3.46  # = -ln(1 - 0.34) / BRIDGE_POLL, per second
 var hover_cell := NO_HOVER  # hex under the cursor, NO_HOVER when none; only reassigned when the hex changes
 var terrain_dressing: Array = []  # nodes built on top of the terrain surface (trees, rocks, lattice, river)
 var materials: Dictionary = {}
@@ -1083,6 +1089,7 @@ func _process(delta: float) -> void:
 	if not ui.world_blocked():
 		_update_camera_controls(delta)  # a paused game (or the strategic map) does not pan or orbit under the screen
 	_update_units(delta)
+	_glide_bridge_nodes(delta)
 	_animate_world(delta)
 	for unit in units:
 		if not is_instance_valid(unit):
@@ -1127,6 +1134,21 @@ func _process(delta: float) -> void:
 	if mission_deployed and not battle_started and time_alive > 1.5:
 		battle_started = true
 	ui.process(delta)
+
+
+## Every frame: each bridge entity closes GLIDE_RATE of its gap to the last polled position (and turns toward its heading
+## at TURN_RATE), so motion is as smooth as the frame rate while the snapshot is read only every BRIDGE_POLL seconds.
+func _glide_bridge_nodes(delta: float) -> void:
+	var move := 1.0 - exp(-delta * GLIDE_RATE)
+	var turn := 1.0 - exp(-delta * TURN_RATE)
+	for node in bridge_nodes.values():
+		if not is_instance_valid(node) or not node.has_meta("glide_to"):
+			continue
+		var goal: Vector3 = node.get_meta("glide_to")
+		if node.position.distance_squared_to(goal) > 0.000001:
+			node.position = node.position.lerp(goal, move)
+		if node.has_meta("glide_yaw"):
+			node.rotation.y = lerp_angle(node.rotation.y, float(node.get_meta("glide_yaw")), turn)
 
 
 func _animate_world(delta: float) -> void:
@@ -1826,7 +1848,7 @@ func _science_status() -> String:
 
 func _poll_bridge(delta: float) -> void:
 	bridge_poll_elapsed += delta
-	if bridge_poll_elapsed < 0.12:
+	if bridge_poll_elapsed < BRIDGE_POLL:
 		return
 	bridge_poll_elapsed = 0.0
 	var snapshot_path := runtime_directory.path_join("snapshot.json")
@@ -2103,11 +2125,13 @@ func _sync_bridge_entities(entities: Array) -> void:
 		bridge_motion.y = 0.0
 		if category == "unit" and bridge_motion.length_squared() > 0.001:
 			var direction := bridge_motion.normalized()
-			entity_node.rotation.y = lerp_angle(entity_node.rotation.y, atan2(-direction.x, -direction.z), 0.34)
+			entity_node.set_meta("glide_yaw", atan2(-direction.x, -direction.z))
 			if time_alive - float(entity_node.get_meta("last_dust", 0.0)) > 0.38 and int(entity_node.get_meta("kind", 0)) > 0:
 				entity_node.set_meta("last_dust", time_alive)
 				_dust_puff(entity_node.position - direction * 0.26)
-		entity_node.position = entity_node.position.lerp(destination, 0.38)
+		else:
+			entity_node.remove_meta("glide_yaw")
+		entity_node.set_meta("glide_to", destination)  # _glide_bridge_nodes moves the node there over the next frames
 		var hp: float = float(entity_data.get("hp_bits", 0)) / 65536.0
 		var max_hp: float = maxf(1.0, float(entity_data.get("max_hp_bits", 65536)) / 65536.0)
 		var shield: float = float(entity_data.get("shield_bits", 0)) / 65536.0

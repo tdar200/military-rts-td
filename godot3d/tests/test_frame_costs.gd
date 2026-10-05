@@ -48,3 +48,24 @@ func test_a_dash_off_screen_adds_nothing_to_the_stroke(t) -> void:
 	t.eq(marks._segs, PackedVector2Array([Vector2(-20, 500), Vector2(40, 500), Vector2(40, 500), Vector2(60, 520)]), "a dash crossing the edge goes into the one multiline as segment pairs")
 	t.eq(marks._caps, PackedVector2Array([Vector2(-20, 500), Vector2(60, 520)]), "with a cap at each end")
 	marks.free()
+
+
+func test_bridge_units_glide_at_the_same_speed_at_any_frame_rate(t) -> void:
+	var game = (load("res://scripts/earthfront_3d.gd") as GDScript).new()
+	var fast := Node3D.new()
+	var slow := Node3D.new()
+	for node in [fast, slow]:
+		node.set_meta("glide_to", Vector3(10, 0, 0))
+		node.set_meta("glide_yaw", PI * 0.5)
+	game.bridge_nodes = {1: fast}
+	for i in 18:
+		game._glide_bridge_nodes(0.12 / 18.0)  # one snapshot poll at 150 fps
+	game.bridge_nodes = {1: slow}
+	game._glide_bridge_nodes(0.12)  # the same poll in a single frame
+	t.near(fast.position.x, 3.8, 0.05, "a poll interval covers 38% of the way, as the per-poll step it replaced did")
+	t.near(fast.position.x, slow.position.x, 0.001, "and does not depend on the frame rate")
+	t.near(fast.rotation.y, slow.rotation.y, 0.001, "turning neither")
+	t.ok(fast.rotation.y > 0.4 and fast.rotation.y < 0.6, "the turn covers about a third of the angle per poll")
+	fast.free()
+	slow.free()
+	game.free()
