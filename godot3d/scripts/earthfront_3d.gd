@@ -47,6 +47,7 @@ var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
+var _fit_parts: Dictionary = {}  # Kestrel only: model key -> each fitted mesh box in its root's space (picking)
 var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
 var _ground_route: Array = []  # its wave route: the scatter keeps cards off it (and off the ford and its approach)
 var ocean_box: MeshInstance3D
@@ -1059,10 +1060,15 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 		var tiles := float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)])
 		var visual := root.get_node_or_null("UnitVisual") as Node3D
 		if visual != null:
-			var fit := _fitted(visual, "unit:%d:%d:%s" % [team, kind, tiles], tiles)
+			var fit_key := "unit:%d:%d:%s" % [team, kind, tiles]
+			var fit := _fitted(visual, fit_key, tiles)
 			visual.scale = Vector3.ONE * fit.x
 			bar_y = [fit.y + 0.12, fit.y + 0.125, fit.y + 0.195, fit.y + 0.198]
 			badge_y = maxf(badge_y, fit.y + 0.05)  # just above the fitted model, under the bars
+			var whole := AABB(Vector3.ZERO, Vector3.ZERO)
+			for box in _fit_parts[fit_key]:
+				whole = box if whole.size == Vector3.ZERO else whole.merge(box)
+			root.set_meta("pick_parts", [whole])  # a squad's whole box: a click between its soldiers is still on it
 		root.set_meta("visual_tiles", tiles)
 	_add_unit_badge(root, team, kind, badge_y)
 	var team_material: Material = materials.human_marker if team == HUMAN else materials.alien_marker
@@ -1469,16 +1475,8 @@ func _select_in_rect(rect: Rect2, additive := false) -> void:
 
 
 func _select_at(screen_position: Vector2, additive := false, similar := false) -> void:
-	var nearest: Node3D
-	var nearest_distance := 32.0
-	for candidate in bridge_nodes.values():
-		if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN:
-			continue
-		var projected := camera.unproject_position(candidate.global_position + Vector3.UP * 0.15)
-		var distance := projected.distance_to(screen_position)
-		if distance < nearest_distance:
-			nearest = candidate
-			nearest_distance = distance
+	var to_screen := func(node: Node3D, offset: Vector3) -> Vector2: return camera.unproject_position(node.global_position + offset)
+	var nearest := _pick_entity(screen_position, to_screen)
 	var found: Array = selected_units.duplicate() if additive else []
 	if is_instance_valid(nearest):
 		if similar:
@@ -1490,6 +1488,51 @@ func _select_at(screen_position: Vector2, additive := false, similar := false) -
 		elif not found.has(nearest):
 			found.append(nearest)
 	_set_selection(found)
+
+
+## The human entity a click at `screen_position` lands on, or null. `to_screen(node, offset)` projects the node's root
+## moved by the world offset `offset`. Survival: the root lifted 0.15, within 32 px, nearest wins (unchanged). Kestrel
+## (spec addendum W6): a fitted model is wider and taller than that, so a click inside the screen rectangle of any of its
+## fitted mesh boxes (`pick_parts`; a unit has one, its whole box) picks it; when several models hold the click the
+## narrowest wins (a unit beside the CC still takes its own click although the CC's hull covers it), then the nearest
+## root. A click on no model falls back to the Survival rule, so a small unit keeps its 32 px reach.
+func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
+	var nearest: Node3D
+	if world_art_on:
+		var best := Vector2(INF, INF)  # (visual tiles, distance to the root)
+		for candidate in bridge_nodes.values():
+			if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN:
+				continue
+			if not _parts_hold(candidate, screen_position, to_screen):
+				continue
+			var root_at: Vector2 = to_screen.call(candidate, Vector3.ZERO)
+			var key := Vector2(float(candidate.get_meta("visual_tiles", 0.0)), root_at.distance_to(screen_position))
+			if key.x < best.x or (key.x == best.x and key.y < best.y):
+				nearest = candidate
+				best = key
+		if nearest != null:
+			return nearest
+	var nearest_distance := 32.0
+	for candidate in bridge_nodes.values():
+		if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN:
+			continue
+		var distance: float = (to_screen.call(candidate, Vector3.UP * 0.15) as Vector2).distance_to(screen_position)
+		if distance < nearest_distance:
+			nearest = candidate
+			nearest_distance = distance
+	return nearest
+
+
+## Whether `point` falls inside the screen rectangle of one of `node`'s fitted part boxes (its eight corners projected).
+func _parts_hold(node: Node3D, point: Vector2, to_screen: Callable) -> bool:
+	for box in node.get_meta("pick_parts", []):
+		var rect := Rect2()
+		for corner in 8:
+			var at: Vector2 = to_screen.call(node, node.basis * (box as AABB).get_endpoint(corner))
+			rect = Rect2(at, Vector2.ZERO) if corner == 0 else rect.expand(at)
+		if rect.has_point(point):
+			return true
+	return false
 
 
 ## Selects control group `group` (the number keys and the control group list both end here).
@@ -2133,18 +2176,23 @@ func _sync_spent_deposits(snapshot: Dictionary) -> void:
 		world_props.mark_spent(snapshot.get("deposits", []))
 
 
-## Kestrel only (spec addendum W6): the absolute scale that makes `visual` `tiles` tiles wide (x) and the fitted model's
-## top in its parent's space (y). `merged_aabb` measures before the visual's own scale, so x is never multiplied by the
-## authored scale. Cached per model key.
 ## Height of a building's floating label (the invasion relay): over the fitted model on Kestrel, the legacy 0.9 elsewhere.
 func _label_y(node: Node3D) -> float:
 	return float(node.get_meta("label_y", 0.9))
 
 
+## Kestrel only (spec addendum W6): the absolute scale that makes `visual` `tiles` tiles wide (x) and the fitted model's
+## top in its parent's space (y). `merged_aabb` measures before the visual's own scale, so x is never multiplied by the
+## authored scale. Cached per model key, with the fitted part boxes (`_fit_parts`)
+## that `_pick_entity` tests.
 func _fitted(visual: Node3D, key: String, tiles: float) -> Vector2:
 	if not _fit_cache.has(key):
 		var k := WorldArt.fit_factor(visual, tiles)
 		_fit_cache[key] = Vector2(k, WorldArt.merged_aabb(visual).end.y * k)
+		var parts: Array[AABB] = []
+		for box in WorldArt.part_aabbs(visual):
+			parts.append(AABB(box.position * k, box.size * k))
+		_fit_parts[key] = parts
 	return _fit_cache[key]
 
 
@@ -2204,10 +2252,12 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	if world_art_on:
 		# spec addendum W6: the model is fitted to its width in tiles; the props under it go, a soft pad goes under it
 		var tiles := float(WorldArt.BUILDING_TILES.get(kind_name, 1.7))
-		var fit := _fitted(visual, "%d:%s:%s" % [owner, asset_name, tiles], tiles)  # one model can serve two widths
+		var fit_key := "%d:%s:%s" % [owner, asset_name, tiles]  # one model can serve two widths
+		var fit := _fitted(visual, fit_key, tiles)
 		visual.scale = Vector3.ONE * fit.x
 		visual.set_meta("authored_scale", visual.scale)  # construction grows the fitted model, not the legacy scale
 		root.set_meta("visual_tiles", tiles)
+		root.set_meta("pick_parts", _fit_parts[fit_key])  # a click anywhere on the fitted model picks it (_pick_entity)
 		bar_y = [fit.y + 0.18, fit.y + 0.185, fit.y + 0.27, fit.y + 0.275]
 		root.set_meta("label_y", fit.y + 0.45)  # a relay label floats over the bars, not inside the fitted model
 		if world_props != null:

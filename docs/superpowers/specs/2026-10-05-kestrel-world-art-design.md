@@ -51,9 +51,11 @@ W5. Props are camera-facing billboard cards drawn by one MultiMesh from a baked 
     swap the card mesh for low-poly models; the placement table and atlas stay.
 W6. Buildings and units stay 3D. Under the profile human buildings use the authored glbs (as alien ones already do), are
     scaled to a visual width table in tiles (CC 2.8, production 2.1, power and depot 1.7, turrets 1.3, wall 1.0; tank 1.6,
-    harvester 1.5, infantry 1.0), get a soft contact pad and a selection ring sized to that width. Picking stays per
-    tile, so visual overlap between neighbours never changes what a click hits. The `COMMAND` / `CORE NODE` Label3D
-    banners are dropped under the profile (the HUD names buildings) and health bars sit above the scaled model.
+    harvester 1.5, infantry 1.0), get a soft contact pad and a selection ring sized to that width. Placement stays per
+    tile, but picking follows the fitted model: a click inside the screen rectangle of one of its mesh boxes selects it
+    (a unit's whole box), the narrowest model wins when several hold the click, and a click on no model falls back to
+    the legacy 32 px reach around the root. The `COMMAND` / `CORE NODE` Label3D banners are dropped under the profile
+    (the HUD names buildings) and health bars sit above the scaled model.
 W7. The amber hover torus becomes a thin cyan hex outline under the profile.
 W8. Atmosphere: a non-interactive CanvasLayer under the HUD paints the gen.py `gSun` gradient and a soft vignette; the
     environment background becomes deep sea `#0c2a40` so no sky can show.

@@ -23,6 +23,15 @@ const MODEL_PALETTE := {"concrete": "75684f", "olive": "727848", "gunmetal": "3d
 static func merged_aabb(root: Node3D) -> AABB:
 	var out := AABB()
 	var first := true
+	for box in part_aabbs(root):
+		out = box if first else out.merge(box)
+		first = false
+	return out
+
+
+## Each mesh's box in `root`'s space, before `root`'s own transform (the parts `merged_aabb` merges; picking tests them).
+static func part_aabbs(root: Node3D) -> Array[AABB]:
+	var out: Array[AABB] = []
 	for n in root.find_children("*", "MeshInstance3D", true, false):
 		var mi := n as MeshInstance3D
 		if mi.mesh == null:
@@ -32,9 +41,7 @@ static func merged_aabb(root: Node3D) -> AABB:
 		while p != root and p is Node3D:
 			xf = (p as Node3D).transform * xf
 			p = p.get_parent()
-		var box: AABB = xf * mi.get_aabb()
-		out = box if first else out.merge(box)
-		first = false
+		out.append(xf * mi.get_aabb())
 	return out
 
 

@@ -507,9 +507,12 @@ every legacy path. What still differs from the boards, and why:
   tiles (`WorldArt.BUILDING_TILES`, `WorldArt.UNIT_TILES`: CC 2.8, production 2.1, power and depot 1.7, turrets 1.3, wall
   1.0; tank 1.6, harvester 1.5, infantry 1.0) and gets a soft contact pad and a selection ring sized to that width.
 - Placement stays one hex per building, so a big model overhangs its neighbours and two big neighbours can overlap on
-  screen. Picking stays per tile. The hover outline draws without a depth test, so it is hidden on a hex a model stands
-  on and on a hex whose centre a fitted model covers (the six neighbours of a CC); a 2.1-tile building does not reach its
-  neighbours' centres, so the outline still shows there over the edge of the model.
+  screen. Picking follows the fitted model, not the hex: a click on any part of a model (its roof, its hull, a mast)
+  selects it, a unit beside a CC still takes its own click (the narrowest model holding the click wins), and a click on
+  no model keeps the legacy 32 px reach around a root (`_pick_entity`). The hover outline draws without a depth test, so
+  it is hidden on a hex a model stands on and on a hex whose centre a fitted model covers: all six neighbours of a CC
+  (half width 0.95), and the north and south neighbours of a 2.1-tile building (half width 0.714, past the 0.70 row
+  pitch). Its four diagonal neighbours sit 0.77 away, so the outline still shows there over the edge of the model.
 - The camera keeps its 57 degree pitch. The boards are painted at a steeper three-quarter view, so roofs read smaller
   and fronts taller in the live frame. The camera is north-up with a default zoom of 10.
 - Home and the deploy shot look 4.1 world units (about 6 columns) east of your Command Center

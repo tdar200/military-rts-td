@@ -156,3 +156,18 @@ func test_survival_blocked_tiles_keep_their_ruins_and_rocks(t) -> void:
 	t.ok(legacy > 0, "the fixture has legacy ruin and rock tiles")
 	t.eq(scene.get_child_count() - before, snap.deposits.size() + legacy, "one deposit root per deposit plus the legacy ruins and rocks")
 	scene.free()
+
+
+func test_survival_keeps_the_32_pixel_root_pick(t) -> void:
+	var scene := _survival_scene()
+	var to_screen := func(node: Node3D, offset: Vector3) -> Vector2:
+		var p := node.position + offset
+		return Vector2(p.x, p.z - p.y) * 100.0
+	scene._create_unit(0, Vector3(10, 0, 10), 1)  # a tank (the box-built buildings need the scene in the tree)
+	var tank: Node3D = scene.units.back()
+	scene.bridge_nodes[920] = tank
+	t.ok(not tank.has_meta("pick_box"), "no fitted pick height outside the profile")
+	var root: Vector2 = to_screen.call(tank, Vector3.UP * 0.15)
+	t.eq(scene._pick_entity(root + Vector2(31.0, 0.0), to_screen), tank, "31 px from the root lifted 0.15 picks")
+	t.eq(scene._pick_entity(root + Vector2(0.0, -33.0), to_screen), null, "33 px above it does not")
+	scene.free()

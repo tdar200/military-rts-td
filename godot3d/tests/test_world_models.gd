@@ -183,7 +183,9 @@ func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
 	t.eq(scene.hover_cell, tile, "the hex is still hovered (the inspector reads it)")
 	var east: Vector3 = scene._hex_world(tile.x + 1, tile.y)
 	scene._show_hover_at(east)
-	t.ok(scene.hover_tile.visible, "shown on the neighbour hex under the model's overhang")
+	t.ok(scene.hover_tile.visible, "shown on the diagonal neighbour hex under the model's overhang (0.77 away)")
+	scene._show_hover_at(scene._hex_world(tile.x, tile.y - 1))
+	t.ok(not scene.hover_tile.visible, "hidden on the north neighbour: the 2.1-tile half width 0.714 passes its centre (0.70)")
 	scene._create_unit(0, east, 1)
 	scene.bridge_nodes[906] = scene.units.back()
 	scene._show_hover_at(east)
@@ -192,7 +194,7 @@ func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
 
 
 func test_kestrel_hover_outline_stays_off_a_command_center_overhang(t) -> void:
-	# a 2.8-tile Command Center covers the centres of its six neighbour hexes; a Barracks (2.1) does not (test above)
+	# a 2.8-tile Command Center covers the centres of its six neighbour hexes; a Barracks (2.1) only its north and south ones
 	var scene := _kestrel_scene()
 	var tile := Vector2i(10, 10)
 	var world: Vector3 = scene._hex_world(tile.x, tile.y)
@@ -313,4 +315,60 @@ func test_kestrel_missing_deposit_list_marks_nothing_spent(t) -> void:
 		if scene.world_props._card_color[i] != before[i]:
 			changed += 1
 	t.eq(changed, 0, "a snapshot without a deposits key changes no crystal")
+	scene.free()
+
+
+## A stand-in for the Kestrel orthographic camera (north up, pitched): x across, z and height share the screen y axis.
+## The camera cannot unproject while the test scene sits outside the tree.
+func _ortho(ppu: float) -> Callable:
+	var cos_pitch := sqrt(1.0 - WorldArt.PITCH_SIN * WorldArt.PITCH_SIN)
+	return func(node: Node3D, offset: Vector3) -> Vector2:
+		var p := node.position + offset
+		return Vector2(p.x, p.z * WorldArt.PITCH_SIN - p.y * cos_pitch) * ppu
+
+
+func test_kestrel_click_on_a_fitted_roof_selects_the_building(t) -> void:
+	# live QA (Task 9 final review): a click on the CC's roof, 35 px above its root, selected nothing
+	var scene := _kestrel_scene()
+	var to_screen := _ortho(108.0)  # the Home view: the 2.8-tile CC is about 206 px wide
+	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 910)
+	scene.bridge_nodes[910] = cc
+	var parts: Array = cc.get_meta("pick_parts", [])
+	t.ok(parts.size() > 3, "the CC records its fitted part boxes for picking")
+	var whole: AABB = parts[0]
+	var top: AABB = parts[0]
+	for box in parts:
+		whole = whole.merge(box)
+		if (box as AABB).end.y > top.end.y:
+			top = box
+	t.near(maxf(whole.size.x, whole.size.z), 2.8 * WorldArt.TILE, 0.05, "the parts make up the fitted model")
+	var roof: Vector2 = to_screen.call(cc, Vector3(top.get_center().x, top.end.y, top.get_center().z))
+	t.eq(scene._pick_entity(roof, to_screen), cc, "a click on the CC's highest part selects it")
+	t.ok(to_screen.call(cc, Vector3.UP * 0.15).distance_to(roof) > 32.0, "and that click is past the legacy 32 px reach")
+	var hull: Vector2 = to_screen.call(cc, Vector3(whole.end.x * 0.8, 0.3, 0.0))
+	t.eq(scene._pick_entity(hull, to_screen), cc, "a click on the hull's east side selects the CC")
+	for n in [Vector2i(12, 10), Vector2i(8, 10), Vector2i(10, 8), Vector2i(10, 12)]:
+		var away := Node3D.new()
+		away.position = scene._hex_world(n.x, n.y)
+		t.eq(scene._pick_entity(to_screen.call(away, Vector3.ZERO), to_screen), null, "hex %s, clear of the model: nothing" % n)
+		away.free()
+	scene.free()
+
+
+func test_kestrel_unit_beside_a_building_still_wins_its_own_click(t) -> void:
+	var scene := _kestrel_scene()
+	var to_screen := _ortho(108.0)
+	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 911)
+	scene.bridge_nodes[911] = cc
+	scene._create_unit(0, scene._hex_world(11, 10), 0)
+	var squad: Node3D = scene.units.back()
+	scene.bridge_nodes[912] = squad
+	t.ok(not (squad.get_meta("pick_parts", []) as Array).is_empty(), "a fitted unit records its parts too")
+	var click: Vector2 = to_screen.call(squad, Vector3.UP * 0.15)
+	t.ok(scene._parts_hold(cc, click, to_screen), "the CC's hull covers the squad's root on screen")
+	t.eq(scene._pick_entity(click, to_screen), squad, "the squad on the neighbour hex, not the CC over it")
+	scene._create_unit(1, scene._hex_world(13, 10), 1)
+	scene.bridge_nodes[913] = scene.units.back()
+	var enemy_click: Vector2 = to_screen.call(scene.units.back(), Vector3.UP * 0.15)
+	t.eq(scene._pick_entity(enemy_click, to_screen), null, "an enemy is never picked, and the CC does not reach three hexes")
 	scene.free()
