@@ -94,6 +94,9 @@ var assault
 var _alerts: Array = []
 var _ticker := ""
 var _deficit_since := -1.0
+var _territory_ground: Variant = null  # the territory slice and the ground model and zone it was computed from
+var _territory_zone: Variant = null
+var _territory_slice: Dictionary = {}
 
 
 func _init(game) -> void:
@@ -188,6 +191,17 @@ func hud_vm(now: float) -> Dictionary:
 	return _with_gameplay(vm)
 
 
+## VmGameplay.territory walks every construction-zone hex (about 0.6 ms on Kestrel), but the zone only changes when a
+## building goes up or comes down and the ground model never changes once built, so the answer is kept until either does.
+func _territory(snap: Dictionary, ground) -> Dictionary:
+	var zone = snap.get("construction_zone", [])
+	if ground != _territory_ground or zone != _territory_zone:
+		_territory_ground = ground
+		_territory_zone = zone
+		_territory_slice = VmGameplay.territory(snap, ground)
+	return _territory_slice.duplicate(true)
+
+
 ## Adds the gameplay slices (vm_gameplay.gd) that the latest snapshot can back; absent data adds no key. The snapshot,
 ## its ground model and the hovered hex are read off the game when it exposes them (`bridge_snapshot`, `ground_model`,
 ## `hover_cell`); a game that does not simply gets none of the slices.
@@ -199,7 +213,7 @@ func _with_gameplay(vm: Dictionary) -> Dictionary:
 	if ground == null:
 		ground = preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
 	var slices := {
-		"territory": VmGameplay.territory(snap, ground),
+		"territory": _territory(snap, ground),
 		"idle": VmGameplay.idle_crews(snap),
 		"alert": VmGameplay.next_alert(snap),
 		"veterans": VmGameplay.veterans(snap),

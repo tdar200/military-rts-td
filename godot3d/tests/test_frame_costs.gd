@@ -70,6 +70,20 @@ func test_a_dash_off_screen_adds_nothing_to_the_stroke(t) -> void:
 	marks.free()
 
 
+func test_the_territory_slice_is_reused_until_the_zone_changes(t) -> void:
+	var snap: Dictionary = JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
+	var ground = GroundModel.from_snapshot(snap)
+	var a := Adapter.new(Stub.new())
+	var first: Dictionary = a._territory(snap, ground)
+	t.ok(int(first.get("tiles", 0)) > 0, "the fixture has a construction zone")
+	first["tiles"] = -1  # a caller scribbling on its copy must not reach the cache
+	var again: Dictionary = a._territory(snap.duplicate(true), ground)
+	t.eq(again, VM.territory(snap, ground), "an equal zone gives the same slice")
+	var smaller := snap.duplicate(true)
+	smaller["construction_zone"] = (snap["construction_zone"] as Array).slice(0, 3)
+	t.eq(int(a._territory(smaller, ground)["tiles"]), 3, "a changed zone is recomputed")
+
+
 func test_the_game_reads_the_pointer_from_mouse_events(t) -> void:
 	var src: String = (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
 	# Viewport.get_mouse_position is a window-system round trip per call (0.15 to 0.65 ms measured); once a frame is too many.
