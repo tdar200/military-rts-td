@@ -681,10 +681,13 @@ fn main() -> std::io::Result<()> {
     let command_path = output.with_file_name("commands.txt");
     let start_path = output.with_file_name("start.flag");
     let restart_path = output.with_file_name("restart.flag");
+    // Godot's pause menu holds the world still by keeping this file in place; removing it resumes the run.
+    let pause_path = output.with_file_name("pause.flag");
     // Never let an order left by a previous closed match disable opening AI.
     let _ = std::fs::remove_file(&command_path);
     let _ = std::fs::remove_file(&start_path);
     let _ = std::fs::remove_file(&restart_path);
+    let _ = std::fs::remove_file(&pause_path);
     clear_command_packets(&command_path)?;
     let mut mission_started = false;
     let mut supply_cache = SupplyLinkCache::new();
@@ -695,6 +698,7 @@ fn main() -> std::io::Result<()> {
             // A rapid second Deploy click must not auto-start the next mission.
             let _ = std::fs::remove_file(&start_path);
             let _ = std::fs::remove_file(&command_path);
+            let _ = std::fs::remove_file(&pause_path);
             clear_command_packets(&command_path)?;
             sim = scenario.build(2026);
             sim.set_balance(rts_data::load_default());
@@ -710,6 +714,12 @@ fn main() -> std::io::Result<()> {
                 std::thread::sleep(frame_time);
                 continue;
             }
+        }
+        if pause_path.exists() {
+            // Paused: no step, no commands taken (they wait for the resume), the same snapshot stays current.
+            write_atomic(&output, &snapshot_json_with(&sim, supply_cache.get(&sim)))?;
+            std::thread::sleep(frame_time);
+            continue;
         }
         let started = Instant::now();
         let player_commands = take_commands(&command_path);
