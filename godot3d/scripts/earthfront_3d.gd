@@ -18,6 +18,7 @@ const GroundModel = preload("res://scripts/terrain/ground_model.gd")
 const WorldArt := preload("res://scripts/world/world_art.gd")
 const WorldProps := preload("res://scripts/world/world_props.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
+const WorldFx := preload("res://scripts/world/world_fx.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -47,6 +48,7 @@ var environment: Environment  # the WorldEnvironment's resource, kept so the Kes
 var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under the HUD
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
+var world_fx: RefCounted  # Kestrel only: WorldFx, pooled fire, smoke and spark cards (null in Survival: spheres)
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
 var _fit_parts: Dictionary = {}  # Kestrel only: model key -> each fitted mesh box in its root's space (picking)
 var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
@@ -478,6 +480,9 @@ func _sync_ground(snapshot: Dictionary) -> void:
 		_apply_world_art(snapshot)
 		WorldSprites.prewarm()  # every sprite's alpha scan and graded copy now, not on the frame a kind first appears
 		_warm_sprite_shaders()
+		world_fx = WorldFx.new()
+		world_fx.build(self)
+		world_fx.camera = camera
 	_ground_deposits = snapshot.get("deposits", [])
 	_ground_route = snapshot.get("wave_route", [])
 	_build_terrain_dressing()
@@ -1232,6 +1237,9 @@ func _process(delta: float) -> void:
 	_update_units(delta)
 	_glide_bridge_nodes(delta)
 	_animate_world(delta)
+	if world_fx != null:
+		world_fx.set_view(camera_view_target(), WorldArt.view_half_extent(camera_zoom, camera_aspect, camera_yaw))
+		world_fx.advance(delta)
 	for unit in units:
 		if not is_instance_valid(unit):
 			continue
@@ -2605,7 +2613,10 @@ func _sync_bridge_entities(entities: Array) -> void:
 		var max_shield: float = float(entity_data.get("max_shield_bits", 0)) / 65536.0
 		var previous_data = bridge_frame_entities.get(bridge_id)
 		if bridge_initialized and previous_data is Dictionary and int(previous_data.get("hp_bits", 0)) > int(entity_data.get("hp_bits", 0)):
-			_impact_effect(destination, int(entity_data.get("owner", 0)) == HUMAN)
+			if world_fx != null:
+				_kestrel_impact(destination, entity_data)
+			else:
+				_impact_effect(destination, int(entity_data.get("owner", 0)) == HUMAN)
 		next_frame_entities[bridge_id] = {
 			"hp_bits": int(entity_data.get("hp_bits", 0)),
 			"owner": int(entity_data.get("owner", 0)),
@@ -2685,7 +2696,10 @@ func _sync_bridge_entities(entities: Array) -> void:
 		if is_instance_valid(stale):
 			if bridge_initialized:
 				ui.session_log.unit_removed(String(stale.get_meta("kind_name", "")), int(stale.get_meta("team", ALIEN)), String(stale.get_meta("category", "")))
-				_death_effect(stale.position, int(stale.get_meta("team", ALIEN)))
+				if world_fx != null:
+					_kestrel_death(stale)
+				else:
+					_death_effect(stale.position, int(stale.get_meta("team", ALIEN)))
 			stale.queue_free()
 	bridge_frame_entities = next_frame_entities
 	bridge_initialized = true
@@ -3069,6 +3083,39 @@ func _impact_effect(position: Vector3, human_hit: bool) -> void:
 		alert_cooldown = 1.3
 		camera_shake = maxf(camera_shake, 0.42)
 		_play_tone(92.0, 0.09, 0.12, -25.0)
+
+
+## Kestrel hit (Survival keeps _impact_effect): a flash, sparks, a fireball and smoke by the struck entity's weight class,
+## in the firing side's colours (the other side's), with _impact_effect's human-hit shake and tone.
+func _kestrel_impact(position: Vector3, entity_data: Dictionary) -> void:
+	var owner := int(entity_data.get("owner", 0))
+	world_fx.hit(position, WorldFx.weight_for(String(entity_data.get("kind", ""))), ALIEN if owner == HUMAN else HUMAN)
+	if owner == HUMAN and alert_cooldown <= 0.0:
+		alert_cooldown = 1.3
+		camera_shake = maxf(camera_shake, 0.42)
+		if is_inside_tree():
+			_play_tone(92.0, 0.09, 0.12, -25.0)
+
+
+## Kestrel death (Survival keeps _death_effect): a unit explodes where it stood, a building's painting goes at once and a
+## staged collapse burns where it stood; both in the dying side's colours, with _death_effect's camera shake.
+func _kestrel_death(entity: Node3D) -> void:
+	var owner := int(entity.get_meta("team", ALIEN))
+	var kind := String(entity.get_meta("kind_name", ""))
+	entity.visible = false  # never one more frame of the finished painting under the fire
+	if String(entity.get_meta("category", "")) == "building":
+		var tiles := float(WorldArt.BUILDING_TILES.get(kind, 1.7))
+		var at := entity.position
+		var card := entity.get_node_or_null("Visual") as MeshInstance3D
+		if card != null and card.has_meta("sprite_texture"):
+			at += WorldSprites.pad_spot(card.get_meta("sprite_texture"), card.scale.x)  # the painted footprint, north of the root
+			at.y = _height_world(at.x, at.z)
+		world_fx.collapse(at, tiles, owner)
+	else:
+		var index := _bridge_kind_index(kind)
+		var tiles := float(WorldArt.UNIT_TILES[clampi(index, 0, WorldArt.UNIT_TILES.size() - 1)])
+		world_fx.explode(entity.position, tiles, owner)  # on the ground under the card: its scorch lies there
+	camera_shake = maxf(camera_shake, 0.78)
 
 
 func _death_effect(position: Vector3, owner: int) -> void:

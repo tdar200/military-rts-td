@@ -4,6 +4,7 @@ extends RefCounted
 const WorldFx := preload("res://scripts/world/world_fx.gd")
 const WorldArt := preload("res://scripts/world/world_art.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
+const MainScene = preload("res://main.tscn")
 
 
 func _fx() -> Array:
@@ -201,3 +202,73 @@ func test_weight_classes(t) -> void:
 	t.eq(WorldFx.weight_for("Helicopter"), 3, "gunship")
 	t.eq(WorldFx.weight_for("Capital"), 3, "capital")
 	t.eq(WorldFx.weight_for("Barracks"), 3, "a building")
+
+
+func _kestrel_scene() -> Node3D:
+	var scene = MainScene.instantiate()
+	scene._create_materials()
+	scene._setup_environment()
+	scene._build_terrain()
+	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+	scene._sync_ground(JSON.parse_string(f.get_as_text()))
+	return scene
+
+
+func _building(scene, id: int, kind: String, owner: int, tile: Vector2i) -> Dictionary:
+	var bits: Vector2i = scene._world_to_sim_bits(scene._hex_world(tile.x, tile.y))
+	return {"id": id, "category": "building", "kind": kind, "owner": owner, "x_bits": bits.x, "z_bits": bits.y,
+		"hp_bits": 65536 * 100, "max_hp_bits": 65536 * 100, "construction": 0, "construction_total": 100}
+
+
+func test_kestrel_gets_effects_and_survival_does_not(t) -> void:
+	var scene := _kestrel_scene()
+	t.ok(scene.world_fx != null, "Kestrel builds the effect system")
+	scene.free()
+	var survival = MainScene.instantiate()
+	t.eq(survival.world_fx, null, "Survival keeps its sphere effects")
+	survival.free()
+
+
+func test_a_destroyed_building_collapses_and_its_sprite_goes_at_once(t) -> void:
+	var scene := _kestrel_scene()
+	scene._sync_bridge_entities([_building(scene, 930, "Barracks", 1, Vector2i(10, 12))])
+	var root: Node3D = scene.bridge_nodes[930]
+	var before: int = scene.world_fx.pool_count()
+	scene._kestrel_death(root)
+	t.ok(not root.visible, "the finished painting is hidden the moment the sim drops it")
+	t.ok(scene.world_fx.pool_count() - before > 4, "a staged collapse spawned (%d cards)" % (scene.world_fx.pool_count() - before))
+	t.ok(scene.world_fx.live_sprites().has(WorldFx.RUBBLE), "with a burning rubble decal")
+	t.ok(scene.world_fx.live_bands().has(1) and not scene.world_fx.live_bands().has(0), "an alien building burns in alien colours")
+	t.ok(scene.camera_shake >= 0.78, "the camera shakes as before")
+	scene.free()
+	if is_instance_valid(root):
+		root.free()
+
+
+func test_a_dying_unit_explodes_in_its_own_colours(t) -> void:
+	var scene := _kestrel_scene()
+	var at: Vector3 = scene._hex_world(12, 12)
+	var bits: Vector2i = scene._world_to_sim_bits(at)
+	scene._sync_bridge_entities([{"id": 931, "category": "unit", "kind": "Tank", "owner": 0, "x_bits": bits.x, "z_bits": bits.y,
+		"hp_bits": 65536 * 100, "max_hp_bits": 65536 * 100}])
+	var root: Node3D = scene.bridge_nodes[931]
+	scene._kestrel_death(root)
+	t.ok(scene.world_fx.live_sprites().has(WorldFx.FIREBALL), "a fireball")
+	t.ok(scene.world_fx.live_sprites().has(WorldFx.SMOKE), "a smoke plume")
+	t.ok(scene.world_fx.live_sprites().has(WorldFx.DEBRIS), "debris")
+	t.ok(scene.world_fx.live_bands().has(0) and not scene.world_fx.live_bands().has(1), "a human tank burns amber")
+	scene.free()
+	if is_instance_valid(root):
+		root.free()
+
+
+func test_a_hit_draws_the_firing_side_and_keeps_the_alert(t) -> void:
+	var scene := _kestrel_scene()
+	scene.alert_cooldown = 0.0
+	scene.camera_shake = 0.0
+	scene._kestrel_impact(scene._hex_world(12, 12), {"owner": 0, "kind": "Tank"})
+	t.ok(scene.world_fx.pool_count() > 0 and scene.world_fx.pool_count() <= WorldFx.HIT_MAX_CARDS, "a hit's cards")
+	t.ok(scene.world_fx.live_bands().has(1), "a human unit is hit by alien plasma")
+	t.near(scene.camera_shake, 0.42, 1e-6, "the human-hit shake as before")
+	t.near(scene.alert_cooldown, 1.3, 1e-6, "and its cooldown")
+	scene.free()

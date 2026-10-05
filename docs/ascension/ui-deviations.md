@@ -627,3 +627,39 @@ Every board is at least 20 points above `tools/ui/world_baseline.json`. Notes on
   within 0.05 of the table (gp01 80.83, gp03 82.62, gp04 77.84, gp05 80.64, gp06 80.54, gp07 80.26, gp08 74.38; the
   deploy frames hold no variant kind and no site), so `tools/ui/world_scores.json` was left as it is. Draw calls and
   primitives are unchanged (home 25 / 156,776, max 78 / 209,766). Survival pairs at 99.38.
+
+### Combat effects (combat and motion plan Task 2, 2026-10-05)
+
+The user read the hit flash and the death shard ring as blobs. On Kestrel (`world_art_on`) they are now layered flipbook
+cards (`godot3d/scripts/world/world_fx.gd`); Survival keeps `_impact_effect` and `_death_effect` untouched. No board draws
+combat, so every look here is ours.
+
+- Atlas: `tools/ui/build_fx_atlas.py` writes `godot3d/assets/world/fx/fx_atlas.png` (1024 x 768, 128 px cells) from
+  hashed value noise and fixed seeds: fireball (8 frames, a turbulent white-yellow core cooling through orange to a dark
+  smoke edge), smoke puff (8 frames), muzzle star, sparks, debris, ember, ground glow, dust ring and a burning-rubble decal.
+  Band 0 is human amber fire, band 1 alien teal and magenta plasma. Texels are premultiplied and the import keeps the
+  colour of transparent texels (`fix_alpha_border=false`); `test_build_fx_atlas` holds the committed PNG to the script.
+- Cards: 64 slots at most over three MultiMeshes (ground decals, smoke, fire), one shared material each: the frame, tint
+  and fade travel in the instance data, so a firefight adds three draw calls and no node or material per card. The shader
+  blends premultiplied (ONE, ONE_MINUS_SRC_ALPHA): fire, flash and sparks add light, smoke, debris and rubble cover. Fire
+  cards also cover a little of what is behind them and pre-grade their saturation by 1.9, or the Kestrel grade (saturation
+  0.5, filmic shoulder) washed them to pale yellow. Cards face the camera and sit 1.2 world units toward it (same place on
+  screen, drawn over the card they burn on); glow, dust ring and rubble lie flat on the ground (a camera-facing decal was
+  cut by the terrain in front of it). A spawn past the cap recycles the oldest card; every card frees itself; idle
+  frames draw nothing; an effect outside the view plus 2.5 world units is not drawn.
+- Hit (an HP drop): flash and sparks, a small fireball from weight 1, a smoke puff from weight 2 (weight by the struck
+  kind: 0 infantry, 1 anti-armour and guns, 2 tanks and harvesters, 3 gunships, capitals, buildings), in the firing side's
+  colours. The struck side is known, the shooter is not, so the hit sizes by the target until the shots window (Task 3).
+- Unit death: ground glow, two fireballs, sparks, spinning debris, a two-puff smoke plume, embers and a scorch that
+  smoulders 4 s, in the dying side's colours, over the ground point under the card.
+- Building death: the painting is hidden the moment the sim drops the building (the node frees at the end of the frame);
+  a staged collapse burns on its painted footprint: dust ring and two dust puffs, a rolling fireball (three balls climbing
+  over 0.36 s), sparks, debris, a four-puff smoke column rising from 0.5 s to about 5 s and embers over a burning rubble decal that fades
+  over 6 s.
+- Camera shake and the human-hit tone are those of the legacy effects. The legacy wreck box and the OmniLight flashes are
+  not drawn on Kestrel (the ground glow card stands in for the light).
+- Cost: idle frames unchanged (home 25 draw calls / 156,776 primitives, max 78 / 209,766). 62 live cards: +3 draw calls
+  and +384 primitives (software capture). `WorldFx.advance` with about 60 live cards: 0.16 ms p50 headless on the loaded
+  machine; spawning a collapse 0.55 ms. Idle boards against the previous scores: every board within 0.15 (gp01 80.88,
+  gp03 82.62, gp04 77.85, gp05 80.68, gp06 80.56, gp07 80.30, gp08 74.38), `tools/ui/world_scores.json` left as it is.
+  The GPU firefight budget (10 ms p50) was not measured here: QA never opens a window on the user's display.
