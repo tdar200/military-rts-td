@@ -93,22 +93,38 @@ func test_kestrel_human_models_take_the_board_palette(t) -> void:
 	scene.free()
 
 
-func test_kestrel_buildings_clear_by_width_and_take_a_pad(t) -> void:
-	var scene := _kestrel_scene()
-	var props = scene.world_props
-	var free_before: int = props._free_pads.size()
-	var at := Vector3(14.0, 0.0, 9.0)
-	scene._create_bridge_building(0, "CommandCenter", at, 903)
-	t.eq(props._free_pads.size(), free_before - 1, "one pad slot taken")
-	var slot: int = props._decal_base + WorldProps.PAD_SLOTS - free_before  # the dummy renderer reads transforms back as identity
-	var radius: float = float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE * 0.5
+func _cards_within(props, at: Vector3, radius: float) -> int:
+	var n := 0
 	for i in props._card_at.size():
 		var p: Vector3 = props._card_at[i]
 		if props._card_pinned[i] == 0 and Vector2(p.x, p.z).distance_to(Vector2(at.x, at.z)) < radius:
-			t.ok(false, "a prop card is left under the CC at %s" % p)
+			n += 1
+	return n
+
+
+func test_kestrel_buildings_clear_by_width_and_take_a_pad(t) -> void:
+	var scene := _kestrel_scene()
+	var props = scene.world_props
+	var radius: float = float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE * 0.5
+	var at := Vector3.INF
+	for i in props._card_at.size():  # build on a real prop card, so the clear has something to clear
+		if props._card_pinned[i] == 0 and props._card_at[i] != WorldProps.HIDDEN:
+			at = Vector3(props._card_at[i].x, 0.0, props._card_at[i].z)
 			break
+	t.ok(at != Vector3.INF and _cards_within(props, at, radius) > 0, "a prop card stands inside the CC's radius before the build")
+	var free_before: int = props._free_pads.size()
+	scene._create_bridge_building(0, "CommandCenter", at, 903)
+	t.eq(_cards_within(props, at, radius), 0, "no prop card left under the CC")
+	t.eq(props._free_pads.size(), free_before - 1, "one pad slot taken")
+	var slot: int = props._decal_base + WorldProps.PAD_SLOTS - free_before
+	var width := 2.8 * WorldArt.TILE
+	var pad: Transform3D = props.pad_transform(slot)  # CPU mirror: the dummy renderer reads transforms back as identity
+	t.near(pad.basis.x.length(), width * 1.15, 0.001, "the pad is as wide as the model, plus a soft margin")
+	t.near(pad.origin.x, at.x + 0.08 * width, 0.001, "the pad sits under the model, nudged toward the sun's shadow (x)")
+	t.near(pad.origin.z, at.z + 0.06 * width, 0.001, "and z")
 	props.release_pad(slot)
 	t.eq(props._free_pads.size(), free_before, "release gives the slot back")
+	t.near(props.pad_transform(slot).basis.x.length(), 0.0, 0.0001, "a released pad is collapsed")
 	scene.free()
 
 
@@ -169,3 +185,41 @@ func test_kestrel_shared_models_keep_each_kinds_width(t) -> void:
 			var want := float(WorldArt.BUILDING_TILES.get(kind, 1.7)) * WorldArt.TILE
 			t.near(_width(root.get_node("Visual") as Node3D), want, 0.05, "%s width after %s" % [kind, order[0]])
 		scene.free()
+
+
+func test_merged_aabb_and_fit_factor_against_a_hand_built_model(t) -> void:
+	# root (scaled 3: ignored, the box is in root's own space)
+	#   arm: at (1, 0, 0), turned 90 degrees about y, scaled 2
+	#     box 1 x 1 x 0.5 at (0, 0.5, 0): scale -> x [-1, 1] y [0, 2] z [-0.5, 0.5]; turn -> x [-0.5, 0.5] z [-1, 1];
+	#     move -> x [0.5, 1.5] y [0, 2] z [-1, 1]
+	#   cube 0.5 at (-2, 0, 0): x [-2.25, -1.75] y [-0.25, 0.25] z [-0.25, 0.25]
+	var root := Node3D.new()
+	root.scale = Vector3.ONE * 3.0
+	var arm := Node3D.new()
+	arm.position = Vector3(1, 0, 0)
+	arm.rotation_degrees.y = 90.0
+	arm.scale = Vector3.ONE * 2.0
+	root.add_child(arm)
+	var box := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(1, 1, 0.5)
+	box.mesh = bm
+	box.position = Vector3(0, 0.5, 0)
+	arm.add_child(box)
+	var cube := MeshInstance3D.new()
+	var cm := BoxMesh.new()
+	cm.size = Vector3.ONE * 0.5
+	cube.mesh = cm
+	cube.position = Vector3(-2, 0, 0)
+	root.add_child(cube)
+	var empty := MeshInstance3D.new()  # a mesh-less instance adds nothing
+	empty.position = Vector3(50, 50, 50)
+	root.add_child(empty)
+	var got := WorldArt.merged_aabb(root)
+	t.ok(got.position.is_equal_approx(Vector3(-2.25, -0.25, -1.0)), "aabb position %s" % got.position)
+	t.ok(got.size.is_equal_approx(Vector3(3.75, 2.25, 2.0)), "aabb size %s" % got.size)
+	t.near(WorldArt.fit_factor(root, 2.0), 2.0 * 0.68 / 3.75, 0.00001, "fit factor = tiles * TILE / widest ground axis")
+	var bare := Node3D.new()
+	t.near(WorldArt.fit_factor(bare, 2.0), 1.0, 0.0, "no mesh: scale 1")
+	bare.free()
+	root.free()

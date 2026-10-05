@@ -37,6 +37,7 @@ var decals: MultiMeshInstance3D
 var _meta: Dictionary = {}
 var _decal_base := 0
 var _free_pads: Array[int] = []
+var _pad_xf: Dictionary = {}  # CPU mirror of the pad slots' transforms (slot -> Transform3D), like _card_at
 ## CPU copies of every planned instance's ground point, so `clear_around` never reads the MultiMesh buffers back from
 ## the renderer (the dummy renderer keeps no transforms, and a GL buffer read stalls). Cleared slots move to HIDDEN.
 ## A drop shadow is keyed by the foot of its card.
@@ -212,6 +213,7 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		decals.multimesh.set_instance_custom_data(i, _rect(it.sprite, it.flip))
 	_decal_base = decal_items.size()
 	_free_pads.clear()
+	_pad_xf.clear()
 	for k in range(PAD_SLOTS - 1, -1, -1):
 		_free_pads.append(_decal_base + k)
 		decals.multimesh.set_instance_transform(_decal_base + k, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
@@ -273,14 +275,21 @@ func add_pad(world: Vector3, width: float) -> int:
 	var slot: int = _free_pads.pop_back()
 	var aspect := float(_meta.sprites["shadow"].aspect)
 	var at := world + Vector3(0.08 * width, 0.03, 0.06 * width)
-	decals.multimesh.set_instance_transform(slot, Transform3D(Basis.from_scale(Vector3(width * 1.15, 1.0, width * 1.15 * aspect * 2.2)), at))
+	_pad_xf[slot] = Transform3D(Basis.from_scale(Vector3(width * 1.15, 1.0, width * 1.15 * aspect * 2.2)), at)
+	decals.multimesh.set_instance_transform(slot, _pad_xf[slot])
 	return slot
+
+
+## The transform a pad slot was given (collapsed when free); readable without a renderer.
+func pad_transform(slot: int) -> Transform3D:
+	return _pad_xf.get(slot, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 
 
 func release_pad(slot: int) -> void:
 	if slot < 0 or not is_instance_valid(decals):  # a building can leave the tree with the whole scene
 		return
 	decals.multimesh.set_instance_transform(slot, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
+	_pad_xf.erase(slot)
 	_free_pads.append(slot)
 
 
