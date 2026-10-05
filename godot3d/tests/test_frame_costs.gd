@@ -19,6 +19,24 @@ func _make(t) -> Array:
 	return [g, ui]
 
 
+func test_the_minimap_renders_five_times_a_second_not_every_frame(t) -> void:
+	var p := _make(t)
+	var ui = p[1]
+	ui.process(0.2)
+	var view := ui.minimap_view.get_child(0) as SubViewport
+	t.ok(view.render_target_update_mode != SubViewport.UPDATE_ALWAYS, "the minimap viewport never redraws on its own every frame")
+	var start: int = ui.minimap_renders
+	for i in 60:
+		ui.process(1.0 / 60.0)
+	var renders: int = ui.minimap_renders - start
+	t.ok(renders >= 4 and renders <= 5, "one second at 60 fps asks for about five minimap frames (got %d)" % renders)
+	ui.hud.visible = false
+	for i in 60:
+		ui.process(1.0 / 60.0)
+	t.eq(ui.minimap_renders - start, renders, "no minimap frames while the HUD is hidden")
+	p[1].free()
+
+
 func test_a_dash_off_screen_adds_nothing_to_the_stroke(t) -> void:
 	var marks := WorldMarks.new()
 	var view := Rect2(0, 0, 1920, 1080)

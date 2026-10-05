@@ -31,6 +31,10 @@ const STOP_STILL_SECONDS := 0.6
 ## The strategic map re-reads the snapshot this often (seconds); it redraws only when what it shows changed.
 const REGION_INTERVAL := 0.5
 const BRIEFING_INTERVAL := 0.2
+## The minimap is a second render of the whole battlefield (with its own shadow passes): about 1.9 ms and 1,160 draw calls
+## a frame on Kestrel Reach when it redrew every frame. It redraws this often instead (seconds); the view box and marks
+## over it are HUD controls, so they keep their own pace.
+const MINIMAP_INTERVAL := 0.2
 const MINIMAP_CENTER := Vector3(16.7, 34.0, 10.0)
 const MINIMAP_SPAN := 35.0
 
@@ -66,6 +70,8 @@ var _pause_still_s := 0.0
 var _pause_moving := false  # the bridge tick moved on after the pause began and has not stood still since
 var _pause_hash := 0
 var minimap_view: SubViewportContainer
+var _minimap_clock := 0.0
+var minimap_renders := 0  # test hook: minimap redraws requested
 var _clock := 0.0
 var _since_vm := VM_INTERVAL
 var _left_down := false
@@ -130,7 +136,7 @@ func _mount_minimap() -> void:
 	hud.map_slot.add_child(minimap_view)
 	var view := SubViewport.new()
 	view.world_3d = g.get_viewport().world_3d
-	view.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	view.render_target_update_mode = SubViewport.UPDATE_ONCE  # then every MINIMAP_INTERVAL (_refresh_minimap)
 	view.transparent_bg = false
 	minimap_view.add_child(view)
 	var cam := Camera3D.new()
@@ -169,6 +175,7 @@ func process(delta: float) -> void:
 			_refresh_pause()
 		return
 	_clock += delta
+	_refresh_minimap(delta)
 	session_log.observe(g)
 	adapter.poll_ticker(g.objective_label.text, _clock)
 	_update_marks()
@@ -195,6 +202,17 @@ func process(delta: float) -> void:
 	if minimap_view.get_parent() != hud.map_slot:
 		minimap_view.reparent(hud.map_slot, false)  # the assault layout draws its own slot
 	minimap_view.size = hud.map_slot.size  # the Build layout reshapes the slot
+
+
+## Asks the minimap viewport for one more frame every MINIMAP_INTERVAL while the HUD is up (UPDATE_ONCE falls back to
+## disabled by itself after drawing).
+func _refresh_minimap(delta: float) -> void:
+	_minimap_clock += delta
+	if _minimap_clock < MINIMAP_INTERVAL or not hud.visible or minimap_view.get_child_count() == 0:
+		return
+	_minimap_clock = 0.0
+	(minimap_view.get_child(0) as SubViewport).render_target_update_mode = SubViewport.UPDATE_ONCE
+	minimap_renders += 1
 
 
 ## World marks follow the 3D scene every frame: the assault layout's hostile marks there, otherwise the selected building's
