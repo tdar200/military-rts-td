@@ -36,6 +36,20 @@ func test_every_building_kind_has_a_width(t) -> void:
 		t.ok(WorldArt.BUILDING_TILES.has(kind), kind)
 
 
+func test_a_building_whose_sprite_fails_keeps_its_model_at_the_model_width(t) -> void:
+	# the card widths (BUILDING_TILES) include a painting's transparent margin; a model has none, so it keeps its own table
+	var scene := _kestrel_scene()
+	WorldSprites.unavailable["barracks_v2"] = true
+	var root: Node3D = scene._create_bridge_building(0, "Barracks", Vector3(10, 0, 10), 908)
+	var visual := root.get_node("Visual") as Node3D
+	t.ok(visual.scene_file_path.ends_with(".glb"), "the authored model")
+	t.near(float(root.get_meta("visual_tiles", 0.0)), float(WorldArt.MODEL_BUILDING_TILES.Barracks), 0.001, "the model's own width")
+	t.near(_width(visual), float(WorldArt.MODEL_BUILDING_TILES.Barracks) * WorldArt.TILE, 0.05, "fitted to it")
+	t.ok(float(WorldArt.MODEL_BUILDING_TILES.Barracks) < float(WorldArt.BUILDING_TILES.Barracks), "narrower than the card")
+	WorldSprites.unavailable.clear()
+	scene.free()
+
+
 func test_kestrel_kinds_without_a_sprite_keep_the_fitted_model(t) -> void:
 	var scene := _kestrel_scene()
 	for owner in [0, 1]:
@@ -77,13 +91,23 @@ func test_kestrel_unit_bars_sit_above_the_sprite_card(t) -> void:
 
 
 func test_kestrel_badges_and_relay_labels_clear_the_fitted_model(t) -> void:
+	# a unit whose sprite failed to load falls back to its fitted model at the model's own width, badge included
 	var scene := _kestrel_scene()
+	var names := {0: "infantry_v2", 1: "tank_v2", 5: "harvester_v2"}
+	for kind in names:
+		WorldSprites.unavailable[names[kind]] = true
 	for kind in [0, 1, 5]:
 		scene._create_unit(0, Vector3(6, 0, 6), kind)
 		var unit: Node3D = scene.units.back()
 		var visual := unit.get_node("UnitVisual") as Node3D
-		var badge := unit.get_node("StrategicBadge") as Node3D
-		t.ok(badge.position.y > WorldArt.merged_aabb(visual).end.y * visual.scale.y, "kind %d badge above the model" % kind)
+		t.ok(not visual.has_meta("sprite_kind"), "kind %d: no sprite, the model" % kind)
+		t.near(float(unit.get_meta("visual_tiles", 0.0)), float(WorldArt.MODEL_UNIT_TILES[kind]), 0.001, "kind %d: the model's own width" % kind)
+		t.near(_width(visual), float(WorldArt.MODEL_UNIT_TILES[kind]) * WorldArt.TILE, 0.05, "kind %d: fitted to it" % kind)
+		var badge := unit.get_node_or_null("StrategicBadge") as Node3D
+		t.ok(badge != null and badge.position.y > WorldArt.merged_aabb(visual).end.y * visual.scale.y, "kind %d badge above the model" % kind)
+	scene._create_unit(1, Vector3(7, 0, 6), 1)
+	t.ok((scene.units.back() as Node3D).get_node("UnitVisual").has_meta("sprite_kind"), "the enemy tank keeps its own sprite")
+	WorldSprites.unavailable.clear()
 	var core: Node3D = scene._create_bridge_building(1, "AntimatterPlant", Vector3(10, 0, 10), 902)
 	var model := core.get_node("Visual") as Node3D
 	t.ok(scene._label_y(core) > WorldArt.merged_aabb(model).end.y * model.scale.y, "a relay label clears the fitted model")
@@ -315,6 +339,40 @@ func test_merged_aabb_and_fit_factor_against_a_hand_built_model(t) -> void:
 	t.near(WorldArt.fit_factor(bare, 2.0), 1.0, 0.0, "no mesh: scale 1")
 	bare.free()
 	root.free()
+
+
+func test_kestrel_hover_outline_reads_a_units_painted_body(t) -> void:
+	# a capital card is 4 tiles wide: its painted body covers the hex north of it on screen, not the one south of its base
+	var scene := _kestrel_scene()
+	var tile := Vector2i(12, 10)
+	scene._create_unit(0, scene._hex_world(tile.x, tile.y), 4)
+	scene.bridge_nodes[909] = scene.units.back()
+	scene._show_hover_at(scene._hex_world(tile.x, tile.y - 1))
+	t.ok(not scene.hover_tile.visible, "hidden on the north neighbour, under the painted hull")
+	scene._show_hover_at(scene._hex_world(tile.x, tile.y + 1))
+	t.ok(scene.hover_tile.visible, "shown on the south neighbour, clear of the painting (inside the old 2-tile radius)")
+	scene.free()
+
+
+func test_covers_ground_mirrors_and_lifts_with_the_card(t) -> void:
+	# alien_infantry_v1's painted body is 21 px off centre (PIL: x 35 .. 242 of 256)
+	var tex := WorldSprites.texture_for("Infantry", 1)
+	var w := 2.0
+	var differs := 0
+	for ix in range(-10, 11):
+		for iz in range(-12, 4):
+			var off := Vector2(ix * 0.1, iz * 0.1)
+			var mirrored := WorldSprites.covers_ground(tex, w, off, 0.0, true)
+			t.eq(mirrored, WorldSprites.covers_ground(tex, w, Vector2(-off.x, off.y), 0.0, false), "mirrored at %s" % off)
+			if mirrored != WorldSprites.covers_ground(tex, w, off, 0.0, false):
+				differs += 1
+	t.ok(differs > 0, "and the mirror changes what it covers (%d points)" % differs)
+	# a lifted card (a gunship) shows its painting higher: a ground point just south of the painted base is clear of it
+	var heli := WorldSprites.texture_for("Helicopter", 0)
+	var bottom := WorldSprites.opaque_bounds(heli).end.y
+	var just_in := Vector2(0.0, (bottom - WorldSprites.FOOT - 0.02) * w / WorldArt.PITCH_SIN)
+	t.ok(WorldSprites.covers_ground(heli, w, just_in, 0.0), "on the ground: covered")
+	t.ok(not WorldSprites.covers_ground(heli, w, just_in, 0.3), "lifted 0.3: clear")
 
 
 func test_kestrel_hover_outline_follows_a_unit_leaving_the_hex(t) -> void:

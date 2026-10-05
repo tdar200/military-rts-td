@@ -22,6 +22,12 @@ const BUILDING_TILES := {"CommandCenter": 3.05, "Barracks": 2.44, "VehicleFactor
 ## tank 140 (1.71), anti-armour 90 (1.10), gunship 190 (2.32), capital 330 (4.02), harvester 110 (1.34). Card widths
 ## include the painting's transparent margin. A unit kind without a sprite would fit its 3D model to the same width.
 const UNIT_TILES := [0.98, 1.71, 1.10, 2.32, 4.02, 1.34]  # by _create_unit kind: infantry, tank, anti-armour, gunship, capital, harvester
+## Model widths in tiles, for an entity whose sprite does not load (or a kind without one): a fitted model has no
+## transparent margin, so it keeps the narrower widths it was fitted to before the cards (spec addendum W6 table).
+const MODEL_BUILDING_TILES := {"CommandCenter": 2.8, "Barracks": 2.1, "VehicleFactory": 2.1, "Airfield": 2.1, "ResearchLab": 2.1,
+	"Refinery": 2.1, "AntimatterPlant": 2.1, "PowerPlant": 1.7, "Battery": 1.7, "SupplyDepot": 1.7, "GunTurret": 1.3,
+	"AaTurret": 1.3, "Wall": 1.0}
+const MODEL_UNIT_TILES := [1.0, 1.6, 1.0, 1.5, 1.8, 1.5]  # by _create_unit kind, as UNIT_TILES
 ## Authored material name (lower case contains) -> albedo for the boards' warm concrete, olive and gunmetal.
 const MODEL_PALETTE := {"concrete": "75684f", "olive": "727848", "gunmetal": "3d4040", "energy": "3f8f9c"}
 

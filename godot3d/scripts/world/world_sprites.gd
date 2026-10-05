@@ -23,6 +23,7 @@ const OPAQUE_ALPHA := 128  # a pixel above this alpha is painted body (picking, 
 const MASK_CELLS := 64  # the paint mask's grid (a 256 px sprite: 4 px cells)
 const FOOTPRINT := 0.65  # the painted footprint's centre line, as a fraction of the card height from its top
 const FOUNDATION := "foundation_v1"
+const FOUNDATION_PX := 170.0  # StructureSelected draws the site sprite ('fnd') 170 px wide
 ## The boards' cast shadow (hud.css `.shd`, drawn at the sprite's `sh` opacity): the sprite's silhouette, black, flipped
 ## below its contact line, squashed to SHADOW_SCALE of its height and sheared by SHADOW_SHEAR toward the lower right
 ## (skewX(60deg) scaleY(-.34)), at opacity .40 * .52, blurred (a coarser mip level stands in for the 4 px blur).
@@ -100,6 +101,9 @@ const HOVER := {"Helicopter": 0.30}
 ## Profile kinds that keep their fitted 3D model (none today); any kind outside SPRITES falls back the same way.
 const NO_SPRITE: Array[String] = []
 
+## Sprite name -> true: treated as missing. A load that fails records itself here (the entity keeps its model, warned
+## once); the tests set it to stand in for a missing file.
+static var unavailable := {}
 static var _materials := {}  # texture path -> StandardMaterial3D
 static var _bounds := {}  # texture path -> Rect2
 static var _masks := {}  # texture path -> PackedByteArray, MASK_CELLS x MASK_CELLS (painted_at)
@@ -120,26 +124,75 @@ static func tiles_for(kind: String) -> float:
 	return float(MOCK_PX.get(kind, 0)) / PX_PER_TILE
 
 
-## The sprite for `kind` drawn for `owner` (0 human, 1 enemy; the enemy falls back to the human sprite), or null.
+## The sprite for `kind` drawn for `owner` (0 human, 1 enemy; the enemy falls back to the human sprite), or null when
+## neither loads (the caller keeps its model).
 static func texture_for(kind: String, owner: int) -> Texture2D:
 	if not SPRITES.has(kind):
 		return null
 	var names: Array = SPRITES[kind]
-	var name := String(names[1]) if owner != 0 and names.size() > 1 else String(names[0])
-	if not ResourceLoader.exists(DIR % name):
-		name = String(names[0])
-	return load(DIR % name) as Texture2D
+	var tex: Texture2D = null
+	if owner != 0 and names.size() > 1:
+		tex = _load(String(names[1]))
+	if tex == null:
+		tex = _load(String(names[0]))
+	return tex
 
 
+## The construction site's sprite (the boards paint one, used for both sides), or null.
 static func foundation() -> Texture2D:
-	return load(DIR % FOUNDATION) as Texture2D
+	return _load(FOUNDATION)
+
+
+static func _load(name: String) -> Texture2D:
+	if unavailable.has(name) or not ResourceLoader.exists(DIR % name):
+		return null
+	var tex := load(DIR % name) as Texture2D
+	if tex == null:
+		unavailable[name] = true
+		push_warning("Kestrel sprite %s failed to load: its entities keep their models" % name)
+	return tex
+
+
+## The card width (tiles) a site of `kind` draws its foundation at: the boards' 'fnd' size, FOUNDATION_PX (StructureSelected),
+## never wider than the building it becomes (a wall site is the wall's 100 px).
+static func foundation_tiles(kind: String) -> float:
+	return minf(FOUNDATION_PX / PX_PER_TILE, float(WorldArt.BUILDING_TILES.get(kind, FOUNDATION_PX / PX_PER_TILE)))
+
+
+## Empties the per-texture caches (bounds, masks, materials); the next use rebuilds them. Tests use it.
+static func clear_caches() -> void:
+	_materials.clear()
+	_bounds.clear()
+	_masks.clear()
+	_shadow_materials.clear()
+	_contact_materials.clear()
+
+
+## Builds every catalogue sprite's caches at once (the alpha scan, the graded copy, the shadow materials) so the first
+## frame a kind appears does no image work. earthfront_3d calls it once, as the Kestrel ground comes in.
+static func prewarm() -> void:
+	var seen := {}
+	var all: Array[Texture2D] = [foundation()]
+	for kind in SPRITES:
+		for owner in [0, 1]:
+			all.append(texture_for(kind, owner))
+	for tex in all:
+		if tex == null or seen.has(_key(tex)):
+			continue
+		seen[_key(tex)] = true
+		opaque_bounds(tex)
+		material_for(tex)
+		shadow_material_for(tex)
+		contact_material_for(tex)
 
 
 ## One shared unshaded material per texture: alpha blended with a depth pre-pass, so the painted body hides what stands
 ## behind it and the soft painted edges still blend. It samples the sprite pre-graded by GRADE and names the sprite in its
 ## `source_texture` meta.
 static func material_for(tex: Texture2D) -> Material:
-	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if tex == null:
+		return null
+	var key := _key(tex)
 	if not _materials.has(key):
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -148,6 +201,7 @@ static func material_for(tex: Texture2D) -> Material:
 		m.albedo_texture = graded(tex)
 		m.set_meta("source_texture", tex)
 		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		m.texture_repeat = false  # clamped: a painted edge never bleeds the opposite edge in
 		_materials[key] = m
 	return _materials[key]
 
@@ -331,7 +385,9 @@ static func contact_mesh(mirrored := false) -> ArrayMesh:
 
 
 static func contact_material_for(tex: Texture2D) -> Material:
-	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if tex == null:
+		return null
+	var key := _key(tex)
 	if not _contact_materials.has(key):
 		if _contact_shader == null:
 			_contact_shader = Shader.new()
@@ -375,7 +431,9 @@ static func _uvs(uv: Array, mirrored: bool) -> Array:
 
 
 static func shadow_material_for(tex: Texture2D) -> Material:
-	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if tex == null:
+		return null
+	var key := _key(tex)
 	if not _shadow_materials.has(key):
 		if _shadow_shader == null:
 			_shadow_shader = Shader.new()
@@ -464,15 +522,19 @@ static func face(card: MeshInstance3D, dx: float) -> bool:
 	return true
 
 
-## Shows the foundation while the building is under construction, its own sprite once it is done (same card size).
-static func show_built(card: MeshInstance3D, built: bool) -> void:
-	var tex: Texture2D = card.get_meta("sprite_texture") if built else foundation()
+## Shows the foundation while the building is under construction (its own sprite when no foundation loads), its own
+## sprite once it is done. Returns the sprite now drawn; earthfront_3d sizes the card for it.
+static func show_built(card: MeshInstance3D, built: bool) -> Texture2D:
+	var tex: Texture2D = null if built else foundation()
+	if tex == null:
+		tex = card.get_meta("sprite_texture")
 	var m := material_for(tex)
 	if card.material_override != m:
 		card.material_override = m
 		var shadow := card.get_node_or_null("SpriteShadow") as MeshInstance3D
 		if shadow != null:
 			shadow.material_override = shadow_material_for(tex)
+	return tex
 
 
 ## The painted body's height over the root, as a vertical offset in the root's space whose screen point is the body's top
@@ -493,11 +555,14 @@ static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirr
 	return AABB(Vector3((r.position.x - 0.5) * width, y_bottom, 0.0), Vector3(r.size.x * width, y_top - y_bottom, 0.0))
 
 
-## Whether the painted body covers the ground point `offset` (x, z from the root) on screen: hover outlines skip it.
-static func covers_ground(tex: Texture2D, width: float, offset: Vector2) -> bool:
+## Whether the painted body's box covers the ground point `offset` (x, z from the root) on screen: hover outlines skip it.
+## `lift` is the card's height over the root (it shows the painting lift * cos_pitch higher), `mirrored` its facing.
+static func covers_ground(tex: Texture2D, width: float, offset: Vector2, lift := 0.0, mirrored := false) -> bool:
 	var r := opaque_bounds(tex)
+	if mirrored:
+		r.position.x = 1.0 - r.end.x
 	var h := width * ASPECT
-	var down := offset.y * WorldArt.PITCH_SIN  # screen distance below the root
+	var down := offset.y * WorldArt.PITCH_SIN + lift * cos_pitch()  # screen distance below the card's contact line
 	var u := offset.x / width + 0.5
 	var v := FOOT + down / h
 	return r.has_point(Vector2(u, v))
