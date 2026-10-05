@@ -98,24 +98,43 @@ func _settle(scene, steps: int = 600) -> void:
 		scene._camera_step(1.0 / 60.0, Vector3.ZERO, 16.0 / 9.0, 0.0)
 
 
-func test_deploy_zoom_in_ends_with_the_command_center_centred(t) -> void:
+## Screen pixel of a world point in a 1920x1080 north-up view focused on `view` at `zoom`.
+func _screen(world: Vector3, view: Vector3, zoom: float) -> Vector2:
+	var px_per_unit := 1920.0 / (zoom * 16.0 / 9.0)
+	return Vector2(960.0 + (world.x - view.x) * px_per_unit, 540.0 + (world.z - view.z) * WorldArt.PITCH_SIN * 1080.0 / zoom)
+
+
+func test_deploy_zoom_in_frames_the_base_left_and_the_river_right(t) -> void:
 	var scene := _kestrel_scene()
-	var command := Node3D.new()  # the harness Command Center sits at (7.13, 7.65)
+	var command := Node3D.new()  # the fixture Command Center tile (7, 9) sits at (6.86, 7.65)
 	command.set_meta("team", 0)
 	command.set_meta("kind_name", "CommandCenter")
-	command.position = Vector3(7.13, 0.0, 7.65)
+	command.position = Vector3(6.86, 0.0, 7.65)
 	scene.bridge_nodes[0] = command
 	scene._deploy_camera()
 	t.near(scene.camera_zoom, 15.5, 0.001, "deploy starts zoomed out")
 	_settle(scene)
 	var home: Vector3 = scene.home_focus()
+	var offset: Vector2 = WorldArt.CAMERA.home_offset
+	t.near(home.x, 6.86 + offset.x, 0.001, "home_focus looks east of the Command Center by the table offset")
+	t.near(home.z, 7.65 + offset.y, 0.001, "and north or south by the table offset")
 	t.near(scene.camera_zoom, 10.0, 0.01, "zoom settles at the default")
 	t.near(scene.camera_focus_target.x, home.x, 0.001, "the stored target is not displaced (x)")
 	t.near(scene.camera_focus_target.z, home.z, 0.001, "the stored target is not displaced (z)")
 	var view: Vector3 = scene.camera_view_target()
-	t.near(view.x, home.x, 0.02, "the Command Center is at the screen centre (x)")
-	t.near(view.z, home.z, 0.02, "the Command Center is at the screen centre (z)")
-	t.near(home.x, 7.13, 0.001, "home_focus found the Command Center")
+	t.near(view.x, home.x, 0.02, "the view settles on the home focus (x)")
+	t.near(view.z, home.z, 0.02, "the view settles on the home focus (z)")
+	var cc := _screen(command.position, view, 10.0)
+	t.ok(cc.x >= 220.0 and cc.x <= 1920.0 / 3.0, "the Command Center sits in the left third, whole on screen (x %s)" % cc.x)
+	t.ok(cc.y >= 300.0 and cc.y <= 760.0, "and above the bottom deck (y %s)" % cc.y)
+	var river := 0
+	for y in scene.MAP_H:
+		for x in scene.MAP_W:
+			if scene.ground_model.glyph_at(x, y) in ["r", "w"]:
+				var p := _screen(scene._hex_world(x, y), view, 10.0)
+				if p.x >= 340.0 and p.x <= 1540.0 and p.y >= 70.0 and p.y <= 740.0:
+					river += 1
+	t.ok(river >= 6, "the river shows in the battlefield between the HUD panels (%s river hexes)" % river)
 	command.free()
 	scene.free()
 

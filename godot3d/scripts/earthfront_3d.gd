@@ -1628,13 +1628,15 @@ func view_ground_rect() -> Rect2:
 
 
 ## Where Home and the deploy shot look: the survival colony's fixed corner, or, on a map that sends a ground layer (Kestrel
-## Reach, whose colony is elsewhere), your own Command Center.
+## Reach, whose colony is elsewhere), your own Command Center. Under the world-art profile the view sits
+## `WorldArt.CAMERA.home_offset` east of it, so the base fills the left of the frame and the river shows on the right.
 func home_focus() -> Vector3:
 	if ground_model != null:
 		for node in bridge_nodes.values():
 			if is_instance_valid(node) and int(node.get_meta("team", -1)) == 0 and String(node.get_meta("kind_name", "")) == "CommandCenter":
 				var at: Vector3 = node.global_position if node.is_inside_tree() else node.position
-				return Vector3(at.x, 0.0, at.z)
+				var offset: Vector2 = WorldArt.CAMERA.home_offset if world_art_on else Vector2.ZERO
+				return Vector3(at.x + offset.x, 0.0, at.z + offset.y)
 	return _hex_world(3, 14)
 
 

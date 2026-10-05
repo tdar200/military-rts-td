@@ -6,7 +6,8 @@ const TILE := 0.68  # one hex column in world units; land.jpg maps one column to
 const PITCH_SIN := 0.839  # 1.05 / sqrt(1.05^2 + 0.68^2): the camera rig in earthfront_3d._update_camera
 const TERRAIN_MARGIN_CELLS := 10
 const ENVIRONMENT := {"exposure": 0.95, "saturation": 0.50, "contrast": 1.04, "ambient_energy": 0.72, "background": "0c2a40"}
-const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoom": 7.5, "max_zoom": 18.0, "edge_cells": 8, "focus_zoom": 10.0}
+const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoom": 7.5, "max_zoom": 18.0, "edge_cells": 8, "focus_zoom": 10.0,
+	"home_offset": Vector2(4.1, 0.0)}  # Home and deploy look east of the CC (world units): base left, river right, like the boards
 
 
 ## Visual width of every building and unit in tiles (spec addendum W6); the authored model is scaled to it.
