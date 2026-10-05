@@ -903,6 +903,8 @@ func test_the_placement_ghost_is_the_kinds_painting_tinted_by_validity(t) -> voi
 		t.ok(green.get_shader_parameter("sprite") == (WorldSprites.material_for(tex) as StandardMaterial3D).albedo_texture, "the graded painting")
 		var opacity := float(green.get_shader_parameter("opacity"))
 		t.ok(opacity > 0.3 and opacity < 0.8, "translucent (%.2f)" % opacity)
+		t.ok(green.shader.code.contains("depth_test_disabled"), "never hidden behind a tall building in front")
+		t.ok(green.render_priority > 0, "drawn after the cards' transparent pass")
 	t.ok(ghost.visible, "shown")
 	scene._place_build_ghost(Vector2i(10, 10), false)
 	var red := ghost.material_override as ShaderMaterial
@@ -915,4 +917,40 @@ func test_the_placement_ghost_is_the_kinds_painting_tinted_by_validity(t) -> voi
 	scene.build_mode = ""
 	scene._update_build_ghost()
 	t.ok(not scene.build_ghost.visible, "cancelled: hidden")
+	scene.free()
+
+
+func test_the_ghost_switches_between_the_cylinder_and_a_card(t) -> void:
+	# a kind with a painting needs a card even when the cylinder is up (and the reverse), never the stale ghost
+	var scene := _kestrel_scene()
+	scene.world_art_on = false
+	scene._ensure_build_ghost("Barracks")
+	var cylinder: MeshInstance3D = scene.build_ghost
+	t.ok(cylinder.mesh is CylinderMesh, "without the profile: the cylinder")
+	scene.world_art_on = true
+	scene._ensure_build_ghost("Barracks")
+	t.ok(scene.build_ghost.has_meta("sprite_kind"), "with it: a card")
+	t.ok(not is_instance_valid(cylinder), "the cylinder is gone")
+	var card: MeshInstance3D = scene.build_ghost
+	WorldSprites.unavailable["gun_turret_v2"] = true
+	scene._ensure_build_ghost("GunTurret")
+	WorldSprites.unavailable.erase("gun_turret_v2")
+	t.ok(scene.build_ghost.mesh is CylinderMesh, "a kind without a painting: the cylinder again")
+	t.ok(not is_instance_valid(card), "the card is gone")
+	scene.free()
+
+
+func test_a_fresh_sites_hover_cover_uses_the_pick_floor(t) -> void:
+	# at progress 0 nothing is drawn, but the site picks by its bottom SITE_PICK_FLOOR; the hover outline is hidden over
+	# the same box, so hover and pick agree
+	var scene := _kestrel_scene()
+	scene._sync_bridge_entities([_site(scene, 975, "CommandCenter", 0, Vector2i(9, 12), 0.0)])
+	var card := scene.bridge_nodes[975].get_node("Visual") as MeshInstance3D
+	var tex := _card_texture(card)
+	var floor_box := WorldSprites.drawn_bounds(tex, WorldSprites.SITE_PICK_FLOOR)
+	var w := card.scale.x
+	var v := floor_box.end.y - floor_box.size.y * 0.5
+	var offset := Vector2((floor_box.get_center().x - 0.5) * w, ((v - WorldSprites.FOOT) * w * WorldSprites.ASPECT - card.position.y * _cos_pitch()) / WorldArt.PITCH_SIN)
+	t.ok(not WorldSprites.covers_ground(tex, w, offset, card.position.y, false, 0.0), "nothing drawn there yet")
+	t.ok(WorldSprites.card_covers_ground(card, offset), "but the hover cover takes the pick floor")
 	scene.free()

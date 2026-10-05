@@ -44,7 +44,7 @@ const SHADOW_ALPHA := 0.208 * SHADOW_GAIN
 const SHADOW_LOD := 2.0
 
 ## Board pixel widths (Main.dc.html, BuildDeck, StructureSelected, OrdersArmed, WaveInbound, CoreAssault). Battery is the
-## board's second, smaller power plant; SupplyDepot is drawn at the board's depot size (the foundation, 170); the
+## board's second, smaller power plant; SupplyDepot is 170 (the boards' depot slot size); the
 ## AntimatterPlant has no board: 190, so its painting (the power plant's base at 0.86 under a taller core) stands a
 ## little over the power plant's 170. Units (WorldArt.UNIT_TILES): infantry 80 (every board but
 ## CoreAssault's 90), tank 140, anti-armour 90 (CoreAssault 100), gunship 190 (CoreAssault, WaveInbound), capital 330
@@ -55,9 +55,10 @@ const MOCK_PX := {
 	"AntimatterPlant": 190,
 	"Infantry": 80, "Tank": 140, "AntiArmor": 90, "Helicopter": 190, "Capital": 330, "Harvester": 110,
 }
-## kind -> [human sprite, enemy sprite]. The boards paint eight buildings per side; the other five kinds (and the lab, which
-## the boards' build deck draws as the capital tank) take the painted variants tools/ui/build_building_variants.py
-## composites from crops of those eight: no two kinds, and no two sides, share a painting.
+## kind -> [human sprite, enemy sprite]. The boards paint seven building kinds per side (CC, power plant, refinery,
+## barracks, gun turret, AA turret, wall); the other six (vehicle factory, airfield, battery, antimatter plant, supply
+## depot, research lab) take the variants tools/ui/build_building_variants.py composites from crops of the boards'
+## sprites: no two kinds, and no two sides, share a painting.
 const SPRITES := {
 	"CommandCenter": ["command_center_v2", "alien_command_center_v1"],
 	"PowerPlant": ["power_plant_v2", "alien_power_plant_v1"],
@@ -547,7 +548,8 @@ void fragment() {
 
 
 ## The placement ghost's material for `tex` tinted `tint` (the legacy validity colour; its alpha is ignored): the graded
-## painting pulled GHOST_TINT toward the tint at GHOST_OPACITY, drawn over the transparent pass without writing depth.
+## painting pulled GHOST_TINT toward the tint at GHOST_OPACITY, drawn after the transparent pass without a depth test, so
+## a tall building in front never hides whether the hex is valid.
 ## One per texture and tint, shared.
 static func ghost_material_for(tex: Texture2D, tint: Color) -> Material:
 	if tex == null:
@@ -558,7 +560,7 @@ static func ghost_material_for(tex: Texture2D, tint: Color) -> Material:
 			_ghost_shader = Shader.new()
 			_ghost_shader.code = """
 shader_type spatial;
-render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
+render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, shadows_disabled;
 uniform sampler2D sprite : source_color, filter_linear_mipmap, repeat_disable;
 uniform vec4 tint : source_color = vec4(0.2, 0.82, 0.64, 1.0);
 uniform float amount = 0.5;
@@ -691,6 +693,12 @@ static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirr
 	var y_top := lift + (FOOT - r.position.y) * h / cos_pitch()
 	var y_bottom := lift + (FOOT - r.end.y) * h / cos_pitch()
 	return AABB(Vector3((r.position.x - 0.5) * width, y_bottom, 0.0), Vector3(r.size.x * width, y_top - y_bottom, 0.0))
+
+
+## Whether `card`'s painted body covers the ground point `offset` (x, z from the root) on screen, as the hover outline
+## sees it: lifted and mirrored as drawn, a site by what it picks (pick_reveal: at least SITE_PICK_FLOOR of its body).
+static func card_covers_ground(card: MeshInstance3D, offset: Vector2) -> bool:
+	return covers_ground(drawn_texture(card), card.scale.x, offset, card.position.y, bool(card.get_meta("mirrored", false)), pick_reveal(card))
 
 
 ## Whether the painted body's box covers the ground point `offset` (x, z from the root) on screen: hover outlines skip it.

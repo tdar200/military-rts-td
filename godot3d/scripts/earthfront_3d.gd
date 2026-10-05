@@ -2845,8 +2845,7 @@ func _hex_occupied(tile: Vector2i) -> bool:
 			return true
 		var card := _sprite_card(node)
 		if card != null:  # a sprite covers the hexes its painted body hides on screen (as drawn: lifted, mirrored, a site)
-			if WorldSprites.covers_ground(WorldSprites.drawn_texture(card), card.scale.x, Vector2(centre.x - at.x, centre.z - at.z),
-					card.position.y, bool(card.get_meta("mirrored", false)), WorldSprites.drawn_reveal(card)):
+			if WorldSprites.card_covers_ground(card, Vector2(centre.x - at.x, centre.z - at.z)):
 				return true
 			continue
 		# a fitted model wider than its hex (the 2.8-tile CC) covers its neighbours' centres too
@@ -3154,8 +3153,8 @@ func _arm_build(kind_name: String) -> void:
 ## per armed kind, no cast shadow), elsewhere (or for a kind without a painting) the legacy hex cylinder, one for all.
 func _ensure_build_ghost(kind_name: String) -> void:
 	var tex: Texture2D = WorldSprites.texture_for(kind_name, HUMAN) if world_art_on else null
-	if is_instance_valid(build_ghost) and build_ghost.has_meta("sprite_kind") and build_ghost.get_meta("sprite_texture") != tex:
-		build_ghost.free()
+	if is_instance_valid(build_ghost) and build_ghost.get_meta("sprite_texture", null) != tex:
+		build_ghost.free()  # another painting, a card where the cylinder stands, or the cylinder where a card stands
 	if tex != null:
 		if is_instance_valid(build_ghost):
 			return
