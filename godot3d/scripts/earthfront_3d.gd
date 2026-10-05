@@ -2890,11 +2890,24 @@ func _update_build_ghost() -> void:
 		build_ghost.visible = false
 		return
 	var tile := _world_to_tile(ground)
+	build_cursor_is_valid = _is_build_valid(tile)
+	_place_build_ghost(tile, build_cursor_is_valid)
+
+
+## Puts the placement ghost on hex `tile`, tinted by `valid`: the legacy hex cylinder 0.06 over the ground in its
+## green or red material, or on Kestrel the armed kind's painting lifted as a building's card, tinted the same colours.
+func _place_build_ghost(tile: Vector2i, valid: bool) -> void:
 	var snapped := _hex_world(tile.x, tile.y)
+	if build_ghost.has_meta("sprite_kind"):
+		snapped.y = _height_world(snapped.x, snapped.z)
+		build_ghost.position = snapped + Vector3(0.0, _card_lift(snapped, build_ghost.scale.x), 0.0)
+		var tint: Color = (materials.ghost_valid if valid else materials.ghost_invalid).albedo_color
+		build_ghost.material_override = WorldSprites.ghost_material_for(build_ghost.get_meta("sprite_texture"), tint)
+		build_ghost.visible = true
+		return
 	snapped.y = _height_world(snapped.x, snapped.z) + 0.06
 	build_ghost.position = snapped
-	build_cursor_is_valid = _is_build_valid(tile)
-	build_ghost.material_override = materials.ghost_valid if build_cursor_is_valid else materials.ghost_invalid
+	build_ghost.material_override = materials.ghost_valid if valid else materials.ghost_invalid
 	build_ghost.visible = true
 
 
@@ -3132,6 +3145,26 @@ func _arm_build(kind_name: String) -> void:
 	build_mode = kind_name
 	attack_move_armed = false
 	rally_armed = false
+	_ensure_build_ghost(kind_name)
+	build_ghost.visible = true
+	objective_label.text = "PLACE %s — GREEN IS VALID • ESC CANCELS" % kind_name.to_upper()
+
+
+## The placement ghost for `kind_name`: on Kestrel a translucent card of the kind's painting for the player's side (one
+## per armed kind, no cast shadow), elsewhere (or for a kind without a painting) the legacy hex cylinder, one for all.
+func _ensure_build_ghost(kind_name: String) -> void:
+	var tex: Texture2D = WorldSprites.texture_for(kind_name, HUMAN) if world_art_on else null
+	if is_instance_valid(build_ghost) and build_ghost.has_meta("sprite_kind") and build_ghost.get_meta("sprite_texture") != tex:
+		build_ghost.free()
+	if tex != null:
+		if is_instance_valid(build_ghost):
+			return
+		build_ghost = WorldSprites.make_card(kind_name, HUMAN, float(WorldArt.BUILDING_TILES.get(kind_name, 1.7)))
+		build_ghost.name = "BuildGhost"
+		build_ghost.get_node("SpriteShadow").free()
+		build_ghost.material_override = WorldSprites.ghost_material_for(tex, materials.ghost_valid.albedo_color)
+		add_child(build_ghost)
+		return
 	if not is_instance_valid(build_ghost):
 		var ghost_mesh := CylinderMesh.new()
 		ghost_mesh.top_radius = 0.58
@@ -3140,8 +3173,6 @@ func _arm_build(kind_name: String) -> void:
 		ghost_mesh.radial_segments = 6
 		build_ghost = _mesh(ghost_mesh, materials.ghost_valid, Vector3.ZERO)
 		build_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	build_ghost.visible = true
-	objective_label.text = "PLACE %s — GREEN IS VALID • ESC CANCELS" % kind_name.to_upper()
 
 
 func _deploy_camera() -> void:

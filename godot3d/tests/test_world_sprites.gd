@@ -876,3 +876,43 @@ func test_survival_units_keep_their_models(t) -> void:
 		t.ok(not visual.has_meta("sprite_kind"), "kind %d: no card" % kind)
 		t.ok(not visual.has_meta("base_y") and not unit.has_meta("pick_parts"), "kind %d: no profile metas" % kind)
 	scene.free()
+
+
+func test_the_placement_ghost_is_the_kinds_painting_tinted_by_validity(t) -> void:
+	# Kestrel: the ghost is a translucent card of the armed kind's painting for the player's side, on the hovered hex,
+	# tinted by the legacy validity colours; it casts no shadow and hides on cancel
+	var scene := _kestrel_scene()
+	scene._ensure_build_ghost("Barracks")
+	var ghost := scene.build_ghost as MeshInstance3D
+	var tex := WorldSprites.texture_for("Barracks", 0)
+	t.ok(ghost != null and ghost.has_meta("sprite_kind"), "a sprite card, not the hex cylinder")
+	t.ok(ghost.get_meta("sprite_texture") == tex, "the player's barracks painting")
+	t.near(ghost.scale.x, float(WorldArt.BUILDING_TILES.Barracks) * WorldArt.TILE, 1e-6, "at the barracks' own width")
+	t.ok(ghost.get_node_or_null("SpriteShadow") == null, "a ghost casts no shadow")
+	t.eq(ghost.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "nor a real one")
+	scene._place_build_ghost(Vector2i(10, 10), true)
+	var at: Vector3 = scene._hex_world(10, 10)
+	at.y = scene._height_world(at.x, at.z)
+	t.near(ghost.position.x, at.x, 1e-6, "on the hovered hex")
+	t.near(ghost.position.z, at.z, 1e-6, "on the hovered hex")
+	t.near(ghost.position.y, at.y + scene._card_lift(at, ghost.scale.x), 1e-6, "lifted as a building's card is")
+	var green := ghost.material_override as ShaderMaterial
+	t.ok(green != null and green == WorldSprites.ghost_material_for(tex, scene.materials.ghost_valid.albedo_color), "the shared green ghost material")
+	if green != null:
+		t.ok(Color(green.get_shader_parameter("tint")).is_equal_approx(scene.materials.ghost_valid.albedo_color), "tinted by the legacy valid colour")
+		t.ok(green.get_shader_parameter("sprite") == (WorldSprites.material_for(tex) as StandardMaterial3D).albedo_texture, "the graded painting")
+		var opacity := float(green.get_shader_parameter("opacity"))
+		t.ok(opacity > 0.3 and opacity < 0.8, "translucent (%.2f)" % opacity)
+	t.ok(ghost.visible, "shown")
+	scene._place_build_ghost(Vector2i(10, 10), false)
+	var red := ghost.material_override as ShaderMaterial
+	t.ok(red != null and Color(red.get_shader_parameter("tint")).is_equal_approx(scene.materials.ghost_invalid.albedo_color), "red where it cannot go")
+	scene._ensure_build_ghost("Barracks")
+	t.ok(scene.build_ghost == ghost, "the same kind keeps its ghost")
+	scene._ensure_build_ghost("Battery")
+	t.ok(not is_instance_valid(ghost), "another kind replaces it")
+	t.ok(scene.build_ghost.get_meta("sprite_texture") == WorldSprites.texture_for("Battery", 0), "with its own painting")
+	scene.build_mode = ""
+	scene._update_build_ghost()
+	t.ok(not scene.build_ghost.visible, "cancelled: hidden")
+	scene.free()

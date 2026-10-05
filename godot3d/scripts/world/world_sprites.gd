@@ -29,6 +29,9 @@ const SITE_TINT := 0.18  # the built part's pull toward SITE_SCAFFOLD
 const SITE_SCAFFOLD := Color(0.62, 0.56, 0.40)
 const SITE_LATTICE := 0.52  # the unbuilt lattice's alpha
 const SITE_PICK_FLOOR := 0.15  # a fresh site picks by at least this share of its body, from the base up
+## The placement ghost: the armed kind's painting, pulled GHOST_TINT toward the validity colour, at GHOST_OPACITY.
+const GHOST_TINT := 0.62
+const GHOST_OPACITY := 0.6
 ## The boards' cast shadow (hud.css `.shd`, drawn at the sprite's `sh` opacity): the sprite's silhouette, black, flipped
 ## below its contact line, squashed to SHADOW_SCALE of its height and sheared by SHADOW_SHEAR toward the lower right
 ## (skewX(60deg) scaleY(-.34)), at opacity .40 * .52, blurred (a coarser mip level stands in for the 4 px blur).
@@ -121,6 +124,8 @@ static var _shadow_shader: Shader
 static var _shadow_materials := {}  # texture path -> ShaderMaterial
 static var _site_shader: Shader
 static var _site_materials := {}  # texture path -> ShaderMaterial (each site card draws a duplicate: its own cut)
+static var _ghost_shader: Shader
+static var _ghost_materials := {}  # texture path + tint -> ShaderMaterial
 static var _contact_shader: Shader
 static var _contact_materials := {}  # texture path -> ShaderMaterial
 
@@ -165,6 +170,7 @@ static func clear_caches() -> void:
 	_shadow_materials.clear()
 	_contact_materials.clear()
 	_site_materials.clear()
+	_ghost_materials.clear()
 
 
 ## Builds every catalogue sprite's caches at once (the alpha scan, the graded copy, the shadow materials) so the first
@@ -538,6 +544,41 @@ void fragment() {
 		m.set_meta("source_texture", tex)
 		_site_materials[key] = m
 	return _site_materials[key]
+
+
+## The placement ghost's material for `tex` tinted `tint` (the legacy validity colour; its alpha is ignored): the graded
+## painting pulled GHOST_TINT toward the tint at GHOST_OPACITY, drawn over the transparent pass without writing depth.
+## One per texture and tint, shared.
+static func ghost_material_for(tex: Texture2D, tint: Color) -> Material:
+	if tex == null:
+		return null
+	var key := "%s|%s" % [_key(tex), tint.to_html()]
+	if not _ghost_materials.has(key):
+		if _ghost_shader == null:
+			_ghost_shader = Shader.new()
+			_ghost_shader.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
+uniform sampler2D sprite : source_color, filter_linear_mipmap, repeat_disable;
+uniform vec4 tint : source_color = vec4(0.2, 0.82, 0.64, 1.0);
+uniform float amount = 0.5;
+uniform float opacity = 0.6;
+void fragment() {
+    vec4 c = texture(sprite, UV);
+    ALBEDO = mix(c.rgb, tint.rgb, amount);
+    ALPHA = c.a * opacity;
+}
+"""
+		var m := ShaderMaterial.new()
+		m.shader = _ghost_shader
+		m.set_shader_parameter("sprite", (material_for(tex) as StandardMaterial3D).albedo_texture)
+		m.set_shader_parameter("tint", tint)
+		m.set_shader_parameter("amount", GHOST_TINT)
+		m.set_shader_parameter("opacity", GHOST_OPACITY)
+		m.set_meta("source_texture", tex)
+		m.render_priority = 1  # over the buildings' transparent pass
+		_ghost_materials[key] = m
+	return _ghost_materials[key]
 
 
 static func _quad(st: SurfaceTool, p: Array, uv: Array) -> void:

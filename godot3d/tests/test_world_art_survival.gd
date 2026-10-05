@@ -184,3 +184,32 @@ func test_survival_era_crown_keeps_its_height(t) -> void:
 	scene._apply_era_visuals()
 	t.near((site.get_node("EraCrown") as Node3D).position.y, 0.78, 1e-6, "legacy crown height")
 	scene.free()
+
+
+func test_survival_keeps_the_legacy_build_ghost(t) -> void:
+	var scene := _survival_scene()
+	scene._ensure_build_ghost("Barracks")
+	var ghost: MeshInstance3D = scene.build_ghost
+	var mesh := ghost.mesh as CylinderMesh
+	t.ok(mesh != null, "the legacy hex cylinder")
+	if mesh != null:
+		t.near(mesh.top_radius, 0.58, 1e-6, "top radius")
+		t.near(mesh.bottom_radius, 0.58, 1e-6, "bottom radius")
+		t.near(mesh.height, 0.08, 1e-6, "height")
+		t.eq(mesh.radial_segments, 6, "six sides")
+	t.ok(not ghost.has_meta("sprite_kind") and ghost.get_child_count() == 0, "no sprite card")
+	t.ok(ghost.material_override == scene.materials.ghost_valid, "the legacy valid material")
+	t.eq(ghost.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "casts no shadow")
+	var valid: StandardMaterial3D = scene.materials.ghost_valid
+	var invalid: StandardMaterial3D = scene.materials.ghost_invalid
+	t.ok(valid.albedo_color == Color(0.20, 0.82, 0.64, 0.34) and valid.emission == Color("4fe0b0"), "legacy green")
+	t.ok(invalid.albedo_color == Color(0.92, 0.18, 0.24, 0.4) and invalid.emission == Color("f4415a"), "legacy red")
+	scene._place_build_ghost(Vector2i(10, 10), false)
+	var at: Vector3 = scene._hex_world(10, 10)
+	t.ok(ghost.position == Vector3(at.x, scene._height_world(at.x, at.z) + 0.06, at.z), "on the hex, 0.06 over its ground")
+	t.ok(ghost.material_override == invalid and ghost.visible, "red where it cannot go")
+	scene._place_build_ghost(Vector2i(10, 10), true)
+	t.ok(ghost.material_override == valid, "green where it can")
+	scene._ensure_build_ghost("Refinery")
+	t.ok(scene.build_ghost == ghost, "one cylinder for every kind")
+	scene.free()
