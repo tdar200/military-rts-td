@@ -519,7 +519,9 @@ every legacy path. What still differs from the boards, and why:
   fails to load never breaks a building or a unit: an entity without its sprite keeps its fitted model at the model width table
   (`WorldArt.MODEL_BUILDING_TILES`, `MODEL_UNIT_TILES`; the card widths include a painting's transparent margin). Every
   sprite's alpha scan, paint mask and graded copy are built once as the Kestrel ground loads (`WorldSprites.prewarm`,
-  about 160 ms headless), not on the frame a kind first appears. Every one of the 13 building kinds draws its own painting
+  about 160 ms headless), not on the frame a kind first appears; one throwaway card each with the site and the ghost
+  shader is drawn too small to see just past the camera's near plane for half a second as the ground loads, so the
+  renderer compiles both pipelines then, not on the first site or the first armed build. Every one of the 13 building kinds draws its own painting
   for each side. Seven come from the boards (CC, power plant, refinery, barracks, gun turret, AA turret, wall). The other
   six, which no board paints (vehicle factory, airfield, battery, antimatter plant, supply depot, research lab), are
   composites built by `tools/ui/build_building_variants.py` from crops of the boards' own sprites, recoloured and
@@ -532,7 +534,8 @@ every legacy path. What still differs from the boards, and why:
   decks are flatter than the boards' alien buildings.
 - Placement ghost: on Kestrel the ghost is a translucent card of the armed kind's painting for your side on the hovered
   hex (60 % opacity), tinted 62 % toward the legacy validity colours (green valid, red invalid; the post chain mutes the
-  red toward terracotta), with no cast shadow; it hides on cancel. Survival keeps the hex cylinder.
+  red toward terracotta), with no cast shadow; it draws without a depth test, so a tall building in front never hides
+  its colour; it hides on cancel. Survival keeps the hex cylinder.
   Units are sprite cards too, one per unit (`WorldArt.UNIT_TILES`: infantry 0.98, tank 1.71, anti-armour 1.10, gunship
   2.32, capital 4.02, harvester 1.34): the infantry sprite is itself the boards' three-figure squad, so a squad is one
   card, as the boards draw it. A card never turns; it shows its painting mirrored while it moves against the way it is
