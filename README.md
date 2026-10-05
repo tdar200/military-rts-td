@@ -45,8 +45,13 @@ The Godot frontend displays the authoritative Rust battlefield with a restrained
 hand-authored 44x26 coastal basin: a river that only the Wyllow Ford crosses (vehicles move at half pace on the
 ford, infantry at 70%), highland that adds weapon range, forest cover, dry flats, a bay and a named region map. It adds the tile inspector,
 territory card, Logistics lenses, the strategic map (`M`), the terrain guide (pause menu) and the briefing card. Survival
-shows none of those. Start Kestrel Reach by running the bridge yourself, then the client, which reads
-`godot3d/runtime/snapshot.json`:
+shows none of those. Start Kestrel Reach with the `SCENARIO` pass-through, which keeps the launcher's GPU setup:
+
+```bash
+SCENARIO=kestrel ./run-3d.sh
+```
+
+Or run the bridge yourself, then the client, which reads `godot3d/runtime/snapshot.json`:
 
 ```bash
 cargo build --release -p rts-server --bin godot-bridge

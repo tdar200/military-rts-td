@@ -93,7 +93,9 @@ adjusting lane/wave design until the attack/defend loop is genuinely engaging.
 
 State: Kestrel Reach (`godot-bridge --scenario kestrel`) and the twelve gameplay boards are built and checked against the
 mocks in `docs/ascension/ui-mocks-gameplay/`; every deviation is listed in `docs/ascension/ui-deviations.md` (section 4,
-"Live QA and cleanup"). Survival is unchanged and shows none of the new ground UI. The golden hash is unmoved.
+"Live QA and cleanup"). Survival shows none of the new ground UI (its ground layer is flat Grassland), but it is not unchanged: it is an Earthfront
+scenario, so it gets the refinery +20% ore bonus and its state hash now includes the ground layer. Legacy non-Earthfront
+scenarios are unchanged, and the golden hash is unmoved.
 
 Open items, in rough order of value:
 - Play Kestrel on a real GPU. Live QA ran at about 3 fps under software GL, so frame pacing, hover latency and shadow
