@@ -1533,6 +1533,121 @@ mod tests {
         }
     }
 
+    /// Orders a fresh infantry at `from` to `to` on Kestrel Reach and steps 300
+    /// ticks; returns the unit's final tile.
+    fn kestrel_walk(from: (u16, u16), to: (u16, u16)) -> (crate::game::sim::Sim, (u16, u16), bool) {
+        use crate::game::hex;
+        let mut sim = kestrel_reach(2026);
+        let unit = sim.add_unit(PlayerId(0), UnitKind::Infantry, hex::center(from.0, from.1));
+        // Garrisons and relays are hostile: keep the walker alive so the test
+        // measures movement only.
+        sim.debug_set_hp(unit, crate::fixed::Fixed::from_int(1_000_000));
+        let target = hex::center(to.0, to.1);
+        sim.step(&[Command::Move {
+            owner: PlayerId(0),
+            unit,
+            target,
+        }]);
+        let mut passable_every_tick = true;
+        let mut visited_ford = false;
+        for _ in 0..300 {
+            sim.step(&[]);
+            if let Some(p) = sim.position(unit) {
+                let (x, y) = hex::from_world(p, sim.map().width(), sim.map().height());
+                let g = sim.map().ground_at(x.into(), y.into());
+                passable_every_tick &= g.props().passable;
+                visited_ford |= g == crate::game::map::Ground::Ford;
+            }
+        }
+        assert!(passable_every_tick, "unit stepped onto an impassable tile");
+        let p = sim.position(unit).expect("unit alive");
+        let tile = hex::from_world(p, sim.map().width(), sim.map().height());
+        (sim, tile, visited_ford)
+    }
+
+    #[test]
+    fn kestrel_ground_unit_ordered_onto_river_or_sea_stays_on_passable_ground() {
+        use crate::game::map::Ground;
+        for (from, to, ground) in [
+            ((12, 2), (16, 2), Ground::River),
+            ((27, 23), (32, 24), Ground::Sea),
+        ] {
+            let (sim, (x, y), _) = kestrel_walk(from, to);
+            assert_eq!(
+                sim.map().ground_at(i32::from(to.0), i32::from(to.1)),
+                ground
+            );
+            assert!(
+                sim.map().ground_at(x.into(), y.into()).props().passable,
+                "unit ended on impassable ({x},{y}) after ordered onto {ground:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kestrel_east_bank_unit_ordered_to_west_bank_river_does_not_cross_off_the_ford() {
+        // (13,2) is west of the river band at row 2; the unit starts on the east bank.
+        let (sim, (x, y), visited_ford) = kestrel_walk((26, 10), (13, 2));
+        assert!(sim.map().ground_at(x.into(), y.into()).props().passable);
+        let west_bank = x < 16;
+        assert!(
+            !west_bank || visited_ford,
+            "unit reached the west bank at ({x},{y}) without using the ford"
+        );
+    }
+
+    #[test]
+    fn kestrel_apply_build_rejects_non_buildable_ground() {
+        use crate::game::map::Ground;
+        let build_at = |ground: Ground| {
+            let mut sim = kestrel_reach(2026);
+            sim.map_mut().set_ground(9, 9, ground);
+            let before = sim.buildings_owned_by(PlayerId(0));
+            sim.step(&[Command::Build {
+                owner: PlayerId(0),
+                kind: BuildingKind::Wall,
+                x: 9,
+                y: 9,
+            }]);
+            sim.buildings_owned_by(PlayerId(0)) - before
+        };
+        assert_eq!(build_at(Ground::Grass), 1, "control: grass is buildable");
+        for g in [
+            Ground::Shore,
+            Ground::Crater,
+            Ground::River,
+            Ground::Sea,
+            Ground::Ford,
+        ] {
+            assert_eq!(build_at(g), 0, "{g:?} must not accept a building");
+        }
+    }
+
+    #[test]
+    fn kestrel_rally_set_on_water_resolves_to_a_passable_tile() {
+        use crate::game::hex;
+        let mut sim = kestrel_reach(2026);
+        let barracks = sim.add_building(PlayerId(0), BuildingKind::Barracks, 9, 9);
+        for water in [(16, 2), (32, 24)] {
+            sim.step(&[Command::SetRally {
+                owner: PlayerId(0),
+                producer: barracks,
+                target: hex::center(water.0, water.1),
+            }]);
+            let rally = sim
+                .views()
+                .into_iter()
+                .find(|v| v.id == barracks)
+                .and_then(|v| v.rally)
+                .expect("rally set");
+            let (x, y) = hex::from_world(rally, sim.map().width(), sim.map().height());
+            assert!(
+                sim.map().ground_at(x.into(), y.into()).props().passable,
+                "rally for {water:?} landed on impassable ({x},{y})"
+            );
+        }
+    }
+
     #[test]
     fn kestrel_reach_is_deterministic_and_replays() {
         let (mut a, mut b) = (kestrel_reach(7), kestrel_reach(7));

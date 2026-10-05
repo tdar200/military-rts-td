@@ -2551,13 +2551,22 @@ impl Sim {
         }
         let start = self.world_to_tile(self.entities[idx].pos);
         let goal_tile = self.world_to_tile(target);
-        let goal = if self.is_passable_tile(goal_tile) {
+        let goal_passable = self.is_passable_tile(goal_tile);
+        let goal = if goal_passable {
             goal_tile
         } else {
             match self.nearest_passable_tile(goal_tile) {
                 Some(tile) => tile,
                 None => return,
             }
+        };
+        // Earthfront: a substituted goal (water, a building) must not leave the
+        // raw impassable point as the final straight leg, or the unit would walk
+        // onto River/Sea once its path runs out. Aim at the passable tile instead.
+        let target = if self.earthfront && !goal_passable {
+            tile_center(goal.0, goal.1)
+        } else {
+            target
         };
         if let Some(path) = find_path(&self.map, start, goal) {
             let e = &mut self.entities[idx];
@@ -4062,6 +4071,9 @@ impl Sim {
             .iter()
             .map(|e| (e.alive, e.owner.0, e.pos))
             .collect();
+        let antigrav: Vec<bool> = (0..self.civs.len())
+            .map(|p| self.player_has_antigrav(PlayerId(u16::try_from(p).unwrap())))
+            .collect();
         for (i, e) in self.entities.iter_mut().enumerate() {
             if !e.alive || e.construction_remaining > 0 {
                 continue;
@@ -4104,6 +4116,24 @@ impl Sim {
             } else {
                 base
             };
+            // Earthfront: the straight final leg must never carry a ground unit
+            // onto an impassable tile. Once the path is exhausted, a target that
+            // sits on one (terrain changed under the order, a building raised on
+            // it) ends the order where the unit stands, on its last passable tile.
+            if self.earthfront && e.path.is_empty() && !antigrav[usize::from(e.owner.0)] {
+                let (tx, ty) = hex::from_world(target, self.map.width(), self.map.height());
+                let air = is_air_of(&self.balance, e.kind);
+                if !air
+                    && !self
+                        .map
+                        .tile(i32::from(tx), i32::from(ty))
+                        .is_some_and(|t| t.passable)
+                {
+                    e.move_target = None;
+                    e.attack_move = false;
+                    continue;
+                }
+            }
             // Head to the next waypoint, or straight to the target once the path
             // is exhausted.
             let subgoal = e
