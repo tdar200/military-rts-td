@@ -311,6 +311,63 @@ left, key cap right, as the pause board's space-between buttons).
   groups, the menu's lower buttons or the Units alive row is a rect: their rows, labels and heights differ from the mock by
   content, so a rect there would measure wording, not fidelity.
 
+### Gameplay boards 6, 11 and 12 (Early mission gp06, Region map gp11, Terrain guide gp12), decided 2026-10-05 (Task 14B)
+Built: `scripts/ui/vm_maps.gd` (view-model slices `region_map`, `terrain_guide`, `briefing`, pure, `{}` without data),
+`components/hex_map.gd` (hex geometry and the cached ground mesh), `sections/region_map.gd`, `sections/terrain_guide.gd`,
+`sections/early_mission.gd`, the `map` icon, `Keybinds.REGION_MAP`.
+- Strategic map (gp11). Opened with M (`Keybinds.REGION_MAP`, the one key source; M was free: not a build, train, ability, camera
+  or project.godot key, and `test_keybinds` pins that it belongs to one constant). Esc closes it through `escape_route`
+  ("close_region", after the pause stack and before the Science modal). It is not a pause: the simulation keeps running and the
+  world only stops taking input (`GameUI.world_blocked()` replaces the two `ui.paused()` gates in `earthfront_3d.gd`). M does
+  nothing over the pause menu, the Science modal or the debrief, and nothing without a ground layer and named regions. The real
+  `ground` layer is drawn flat in the 3D ground palette (`ContinuousTerrain.GROUND_LOOK`, so the colours cannot drift), as one
+  cached `ArrayMesh` (`Hex.ground_mesh`, kept per ground string; a lens toggle or an unchanged snapshot never rebuilds it).
+  The overlay (zone and enemy tints, border edges from the Task 13 feed, the `wave_route` as the expected assault route,
+  hostile diamonds, the colony marker) is rebuilt by the host only when the hash of the view model changes (checked every
+  0.5 s, never between a press and its release). Labels come from `regions`, each on a cell of the ground it names, with
+  collision avoidance. Right panel: map name, Era, Composition (bar and legend from the ground counts, largest remainder so the
+  legend totals 100), Territory (real `construction_zone` count), Hostile sites (real alien structure count), five lens Buttons
+  (Terrain, Resources, Borders, Threat, Hex grid). A deposit pin click closes the map and centres the camera (`focus_deposit`).
+- Strategic map, dropped (no data or no feature): Yields per minute (the snapshot has no per-minute yields), fog, explored
+  percent, Unexplored and Islet pins, "Resources seen", Next goals, the painted terrain art (a flat hex fill replaces it, so the
+  map area is masked in the diff), the compass and the scale bar, the board's "Coastal river basin" subtitle (the snapshot has no
+  such text; the sub line is the era). The board's Alloy and Ore pins use the existing resource-pin section (Resources lens).
+- Terrain guide (gp12). One card per `ground_table` row, then an Ore card and an Alloy card with real numbers (deposit counts,
+  ore left from the snapshot, the mirrored refinery bonus; the Alloy card says Mining: None because alloy is scenery in the
+  Earthfront sim, and exists only when the snapshot is Earthfront and has alloy deposits). Every number on a ground card is a
+  table value; the notes are words only. The Rules footer is built from the table (high-ground range, fast open ground, the
+  river crossing only at the ford, forest cover) and drops a rule when its table fact is absent. Dropped: "-25% across the
+  river" and the Fog rule (the sim has neither), the Terrain / Resources / Structures / Units tabs (only the terrain page
+  exists), "Home ground", "Chokepoint" and per-card place copy that would be invented (the sub line is the smallest region that
+  holds the ground plus its real tile count), the painted swatch images (a flat hex crop of the ground colour stands in).
+  The board names the cards after places (Ironback Ridge, Hollow Wood); the guide names the ground kinds, because the table is
+  per kind, so the card set and order differ from the board (the card grid and frames match).
+- Codex entry point. The pause menu gets a "Terrain guide" Button between Controls and Restart, shown only when the host sets
+  `can_guide` (the snapshot has a ground table). The gp09 fixture does not set it, so board 9 keeps its own height. The guide
+  replaces the pause menu in the pause layer; Back or Esc returns to the menu (never straight to the game). There is no
+  dedicated key: the Codex has one page, and M, F1 and Esc already cover the rest.
+- Early mission (gp06). The snapshot carries no objective data; the real objectives are the client's tutorial stages
+  (`live_adapter.STAGE_DETAIL`, the text the HUD objectives panel already shows). The briefing card reads those: "Step N of 10"
+  (the real count, the board says 9), a title per stage, a short paragraph, the done / current / next lines, a progress bar.
+  Paragraph copy that names a place (the river) uses the snapshot's river region and is left out when there is none; the
+  numbers in it are the mirrored sim constants. It shows from tutorial stage 0 to 2 (the first objective group, "Establish a
+  supplied base"), while the match is undecided and the HUD is up, and never again after the player presses Hide (a button
+  inside the card; the board has none). The card's nodes are freed on hide or after stage 2, so it cannot block input; while it
+  is up the HUD leaves its own objectives panel out and the left card stack and territory card start below it
+  (`LiveAdapter.briefing_up`). Not built: the "Mission updated" and "Reactor site is valid" toasts, the placement card and the
+  tile inspector of the board (their data is the other boards' own screens), the board's survey wording.
+- F1 over the Science modal (14A hardening). F1 no longer opens the controls over the open Science modal (`research.visible`).
+- Stale pause flag (14A hardening). `earthfront_3d.gd` `_ready` calls `set_sim_paused(false)` after reading `--runtime-dir`,
+  so a `pause.flag` left by a crash cannot hold the next run still. Same path logic as the pause itself.
+- Harness: gp06, gp11 and gp12 gallery arms use the committed Kestrel snapshot (`fixtures_gp.gd` `region_board`, `guide_board`,
+  `early_board`, `briefing_board`). The battlefield (the board's painted art) is masked, with chrome rects after it: gp06
+  briefing_card 15.95 (18.95), briefing_head 8.47 (11.47), tactical_head 14.68 (17.68); gp11 title_bar 6.62 (9.62), panel_head
+  8.06 (11.06), composition_top 11.24 (14.24), composition_rows 15.62 (18.62), lenses_panel 13.22 (16.22); gp12 header 5.52
+  (8.52), row1_cards 14.80 (17.80), row2_cards 17.71 (20.71), row3_cards 18.17 (21.17), footer 13.65 (16.65). The values are
+  high because the mock carries invented numbers and copy where the live screens print real ones (card text, legend rows,
+  step wording); limits are achieved plus 3, none loosened. The gp06 top bar and Build deck are not rects: the mock draws the
+  older bar and deck, which the Build layout (gp02) already measures.
+
 ## 5. Known cosmetic items
 
 - The research screen has an empty band at the top where the era-gate block would sit.

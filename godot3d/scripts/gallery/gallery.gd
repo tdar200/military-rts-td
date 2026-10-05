@@ -25,6 +25,9 @@ func _ready() -> void:
 			_hud(_l("gallery/fixtures_gp.gd").structure_board(), false)
 		"gp05":
 			_hud(_l("gallery/fixtures_gp.gd").orders_board(), false)
+		"gp06":
+			_hud(_l("gallery/fixtures_gp.gd").early_board(), true)
+			_l("ui/sections/early_mission.gd").build(self, _l("gallery/fixtures_gp.gd").briefing_board())
 		"gp07":
 			_hud(_l("gallery/fixtures_gp.gd").wave_board(), false)
 		"gp08":
@@ -36,6 +39,10 @@ func _ready() -> void:
 			_l("ui/sections/pause_menu.gd").build(self, _l("gallery/fixtures_gp.gd").pause_board())
 		"gp10":
 			_l("ui/sections/controls_reference.gd").build(self, _l("gallery/fixtures_gp.gd").controls_board())
+		"gp11":
+			_l("ui/sections/region_map.gd").build(self, _l("gallery/fixtures_gp.gd").region_board())
+		"gp12":
+			_l("ui/sections/terrain_guide.gd").build(self, _l("gallery/fixtures_gp.gd").guide_board())
 		"builddeck":
 			_hud(_l("gallery/fixtures_build.gd").build_deck(), true)
 		"builddeck_many", "builddeck_none", "builddeck_locked", "builddeck_short", "builddeck_no_queue", "builddeck_invalid":

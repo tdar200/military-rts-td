@@ -271,3 +271,52 @@ static func pause_board() -> Dictionary:
 ## Board 10 (Controls): the one keybinding list, opened from the pause menu.
 static func controls_board() -> Dictionary:
 	return load("res://scripts/ui/keybinds.gd").vm(true)
+
+
+static func _kestrel() -> Dictionary:
+	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
+
+
+## Board 11 (RegionMap): the committed Kestrel snapshot at the board's clock (wave 03 due in 01:52), through the same
+## vm_maps.region_map() the live game runs. Not built (no data): fog and explored percent, Unexplored and Islet pins, Resources
+## seen, Yields per minute, Next goals, scale bar and compass.
+static func region_board() -> Dictionary:
+	var snap := _kestrel()
+	var tps: int = load("res://scripts/ui/live_adapter.gd").TICKS_PER_SECOND
+	snap["waves_survived"] = 2
+	snap["next_wave_ticks"] = (60 + 52) * tps
+	var ground = load("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
+	return load("res://scripts/ui/vm_maps.gd").region_map(snap, ground)
+
+
+## Board 12 (TerrainGuide): the Kestrel ground_table and regions through vm_maps.terrain_guide(). The board's -25% across the
+## river, Fog rule, Codex tabs and map-image swatches are not built.
+static func guide_board() -> Dictionary:
+	var snap := _kestrel()
+	var ground = load("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
+	return load("res://scripts/ui/vm_maps.gd").terrain_guide(snap, ground)
+
+
+## Board 6 (EarlyMission): the Build layout at the start of the mission with the briefing for tutorial stage 1 (power the
+## beachhead). The briefing card is the section under test; the rest is the Build screen's own fixture, with the Kestrel
+## start's numbers (material, power, crew) in the top strip. The board's placement card, tile card and "Mission updated" toast
+## are other boards' sections or have no data and are not here.
+static func early_board() -> Dictionary:
+	var snap := _kestrel()
+	var vm := build_board()
+	for key in ["placing", "power_grid", "placement_hint", "pins"]:
+		vm.erase(key)
+	vm["build_top"] = {
+		"era": "Era 01 Contemporary",
+		"chips": [
+			{"label": "Material", "value": str(int(snap["money_bits"]) / 65536)},
+			{"label": "Power", "value": "%d / %d kW" % [int(snap["power_demand"]), int(snap["power_generation"])]},
+			{"label": "Crew", "value": "%d / %d" % [int(snap["supply_used"]), int(snap["supply_cap"])]},
+		],
+		"wave": {"label": "Wave 01", "timer": "01:30"},
+	}
+	return vm
+
+
+static func briefing_board() -> Dictionary:
+	return load("res://scripts/ui/vm_maps.gd").briefing(1, _kestrel())
