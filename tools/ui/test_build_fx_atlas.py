@@ -54,8 +54,10 @@ class FxAtlasTests(unittest.TestCase):
                 top, bottom = lum[:64].astype(float).sum(), lum[64:].astype(float).sum()
                 self.assertGreater(top, bottom, "%s band %d: the head is at the top" % (name, band))
         tracer = cell(self.arr, 0, 3, 0)
-        self.assertLess((cell(self.arr, 0, 3, 0)[..., :3].max(axis=2) > 40).mean(), (cell(self.arr, 0, 3, 1)[..., :3].max(axis=2) > 40).mean() + 1e-9,
-                        "the tracer is thinner than the shell")
+        shell = cell(self.arr, 0, 3, 1)[..., :3].max(axis=2)
+        hot = np.argwhere(shell >= shell.max() - 4)
+        self.assertLess(hot[:, 0].mean(), 128 / 3, "the shell's hot slug rides at the head")
+        self.assertGreater(np.ptp(hot[:, 1]) + 1, 6, "and is round, not a line")
         lit = tracer[..., :3].reshape(-1, 3)
         lit = lit[lit.max(axis=1) > 80].mean(axis=0)
         self.assertGreater(lit[0], lit[2] + 60, "the human tracer is amber %s" % lit)

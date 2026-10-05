@@ -74,11 +74,12 @@ const SATURATION := 1.9
 ## (s), card width, longest streak (world units)], human then alien.
 enum {STYLE_RIFLE, STYLE_SHELL, STYLE_BURST}
 const SHOT_LOOK := [
-	[[26.0, 0.05, 0.15, 0.085, 0.62], [16.0, 0.07, 0.22, 0.16, 0.5]],
-	[[10.0, 0.12, 0.38, 0.17, 0.46], [9.0, 0.13, 0.4, 0.24, 0.56]],
-	[[28.0, 0.04, 0.13, 0.07, 0.46], [18.0, 0.06, 0.18, 0.13, 0.4]],
+	[[26.0, 0.05, 0.15, 0.15, 0.72], [16.0, 0.07, 0.22, 0.26, 0.55]],
+	[[10.0, 0.12, 0.38, 0.30, 0.55], [9.0, 0.13, 0.4, 0.36, 0.62]],
+	[[28.0, 0.04, 0.13, 0.13, 0.55], [18.0, 0.06, 0.18, 0.22, 0.45]],
 ]
-const BURST_GAP := 0.06  # screen units between a gunship's paired streaks
+const SHOT_TINT := Color(1.5, 1.5, 1.5)  # streaks and muzzle flashes over 1: they must read on sunlit grass
+const BURST_GAP := 0.09  # screen units between a gunship's paired streaks
 const BURST_STAGGER := 0.05  # s between them
 ## Where a round leaves and lands, as a screen-up offset over the ground point: MUZZLE of the attacker's card width (plus
 ## the card's hover), and IMPACT_LIFT over the target's ground point (the dispatcher passes its own for tall targets).
@@ -402,9 +403,9 @@ func shot(from: Vector3, to: Vector3, attacker_kind: String, owner: int, delay :
 	var angle := atan2(-dir.x, dir.y)  # turns the card's up (the streak's head) along the shot
 	var n := 0
 	var fw := 1 if style == STYLE_BURST else clampi(w, 0, 3)  # a gunship's rounds are light, however heavy the gunship
-	var fs := float(FLASH_SIZE[fw]) * (0.85 if style == STYLE_RIFLE else 1.0)
-	_card(FLASH, b, from, {"delay": delay, "life": 0.07 + 0.02 * fw, "size": [fs, fs * 1.15], "off": muzzle + dir * fs * 0.2,
-		"rot": _spin_of(_serial) * 0.8, "tint": FIRE_TINT, "fade_out": 0.45})
+	var fs := float(FLASH_SIZE[fw])
+	_card(FLASH, b, from, {"delay": delay, "life": 0.09 + 0.02 * fw, "size": [fs, fs * 1.15], "off": muzzle + dir * fs * 0.2,
+		"rot": _spin_of(_serial) * 0.8, "tint": SHOT_TINT, "fade_out": 0.45})
 	n += 1
 	if style == STYLE_SHELL:
 		_card(SMOKE, b, from, {"delay": delay + 0.03, "life": 0.7, "size": [fs * 0.6, fs * 1.4], "off": muzzle, "vel": Vector2(-dir.x * 0.25, 0.35),
@@ -419,9 +420,9 @@ func shot(from: Vector3, to: Vector3, attacker_kind: String, owner: int, delay :
 		var side := Vector2(-dir.y, dir.x) * (BURST_GAP * (k - 0.5) if streaks == 2 else 0.0)
 		_card(sprite, b, from, {"delay": delay + BURST_STAGGER * k, "life": flight, "size": [width, width],
 			"aspect": length / width, "off": muzzle + side + dir * (length * 0.5), "vel": dir * (travel / flight), "rot": angle,
-			"tint": FIRE_TINT, "fade_in": 0.08, "fade_out": 0.8})
+			"tint": SHOT_TINT, "fade_in": 0.08, "fade_out": 0.8})
 		n += 1
-	var hs := float(HIT_SIZE[fw]) * (0.8 if style == STYLE_SHELL else 0.62)
+	var hs := float(HIT_SIZE[fw]) * (1.0 if style == STYLE_SHELL else 0.8)
 	var hit_at := Vector2(0.0, target_lift)
 	var lands := delay + flight + (BURST_STAGGER if streaks == 2 else 0.0)
 	_card(FLASH, b, to, {"delay": lands, "life": 0.11, "size": [hs, hs * 1.3], "off": hit_at, "rot": _spin_of(_serial), "tint": FIRE_TINT,

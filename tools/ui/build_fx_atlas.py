@@ -293,9 +293,9 @@ def _streak(x, y, head, tail, core_w, halo_w, taper=1.0):
 def tracer(band):
     """A thin bright streak: a white-hot core in a band-coloured halo."""
     x, y = grid()
-    i, core = _streak(x, y, -0.86, 0.86, 0.10, 0.30, 0.5)
-    i = np.clip(i, 0, 1)
-    heat = np.clip(0.42 + 0.58 * core, 0, 1)
+    i, core = _streak(x, y, -0.86, 0.86, 0.14, 0.36, 0.5)
+    i = np.clip(i * 1.15, 0, 1)
+    heat = np.clip(0.40 + 0.48 * core, 0, 1)  # a pale yellow core in an amber halo (white would grey out in the grade)
     emission = ramp(heat, band) * i[..., None]
     return pack(np.zeros(x.shape + (3,)), np.zeros(x.shape), emission)
 
@@ -326,7 +326,7 @@ def bolt(band):
     tail, _ = _streak(x + (n - 0.5) * 0.18, y, cy + 0.2, 0.88, 0.10, 0.26, 0.6)
     tail = tail * (0.45 + 0.7 * n)
     i = np.clip(body + rim + tail * 0.7, 0, 1)
-    heat = np.clip(0.36 + 0.64 * np.clip(body, 0, 1) - 0.05 * rim, 0, 1)
+    heat = np.clip(0.40 + 0.30 * np.clip(body, 0, 1) - 0.04 * rim, 0, 1)  # a teal core, a magenta rim (alien band)
     emission = ramp(heat, band) * i[..., None]
     return pack(np.zeros(x.shape + (3,)), np.zeros(x.shape), emission)
 
