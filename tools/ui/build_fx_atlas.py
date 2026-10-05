@@ -127,6 +127,7 @@ def fireball(t, band):
     emission = ramp(heat, band) * glow[..., None]
     smoke_amount = (0.30 + 0.70 * t) * (1 - 0.9 * glow) * (1 - 0.4 * smoothstep(0.8, 1.0, t))
     alpha = density * np.clip(smoke_amount, 0, 1) * (0.6 + 0.4 * smoothstep(0.0, 0.25, edge))
+    alpha = np.maximum(alpha, glow * 0.6 * density)  # the fire also hides what is behind it: saturated, never washed out
     shade = np.clip(0.75 + (n - 0.5) * 1.3 - y * 0.35, 0.3, 1.4)
     cover = np.array(SMOKE_DARK[band]) / 255.0 * shade[..., None]
     return pack(np.clip(cover, 0, 1), alpha, emission)
@@ -174,14 +175,15 @@ def _segments(w, h, segs, width):
 def sparks(band):
     rng = random.Random(31 + band)
     segs = []
-    for k in range(13):
-        a = 2 * math.pi * k / 13 + rng.uniform(-0.2, 0.2)
-        r0, r1 = rng.uniform(0.10, 0.30), rng.uniform(0.55, 0.92)
-        segs.append((math.cos(a) * r0, math.sin(a) * r0, math.cos(a) * r1, math.sin(a) * r1, rng.uniform(0.7, 1.0)))
-    i = _segments(CELL, CELL, segs, 0.022)
+    for k in range(10):
+        a = 2 * math.pi * k / 10 + rng.uniform(-0.3, 0.3)
+        r0 = rng.uniform(0.25, 0.5)
+        r1 = r0 + rng.uniform(0.12, 0.35)
+        segs.append((math.cos(a) * r0, math.sin(a) * r0, math.cos(a) * r1, math.sin(a) * r1, rng.uniform(0.55, 0.95)))
+    i = _segments(CELL, CELL, segs, 0.016)
     x, y = grid()
-    i = np.clip(i + 0.5 * np.exp(-((x * x + y * y) / 0.012)), 0, 1)
-    emission = ramp(0.45 + 0.55 * i, band) * i[..., None]
+    i = np.clip(i + 0.35 * np.exp(-((x * x + y * y) / 0.008)), 0, 1)
+    emission = ramp(0.35 + 0.5 * i, band) * i[..., None]
     return pack(np.zeros(x.shape + (3,)), np.zeros(x.shape), emission)
 
 
