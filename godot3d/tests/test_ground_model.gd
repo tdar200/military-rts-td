@@ -1,6 +1,7 @@
 extends RefCounted
 const GroundModel := preload("res://scripts/terrain/ground_model.gd")
 const Terrain := preload("res://scripts/continuous_terrain.gd")
+const OverlayFeed := preload("res://scripts/world/overlay_feed.gd")
 const Stub = preload("res://tests/stub_game.gd")
 
 
@@ -44,6 +45,22 @@ func test_missing_ground_returns_null(t) -> void:
 
 func test_wrong_length_returns_null(t) -> void:
 	t.ok(GroundModel.from_snapshot({"map_width": 44, "map_height": 26, "ground": "ggg", "ground_table": []}) == null, "short string -> null")
+
+
+func test_a_flat_survival_layer_is_not_a_terrain_layer(t) -> void:
+	var flat := {"map_width": 44, "map_height": 26, "ground": "g".repeat(44 * 26), "ground_table": _snap()["ground_table"]}
+	t.ok(GroundModel.is_flat(flat), "an all-Grassland layer is flat")
+	t.ok(GroundModel.from_snapshot(flat) == null, "no model is built from it")
+	t.ok(not GroundModel.is_flat(_snap()), "the Kestrel layer is not flat")
+	t.ok(not GroundModel.is_flat({"map_width": 4, "map_height": 4}), "no layer is not 'flat' either")
+	t.ok(not OverlayFeed.tab_available(flat), "Survival gets no Logistics tab")
+	t.ok(OverlayFeed.tab_available(_snap()), "Kestrel does")
+	var game: Node3D = (load("res://scripts/earthfront_3d.gd") as GDScript).new()
+	for poll in range(3):
+		game._sync_ground(flat)
+	t.ok(game.ground_model == null, "the client keeps its noise terrain")
+	t.eq(game.ground_warnings, 0, "and a flat layer is not reported as malformed")
+	game.free()
 
 
 func test_counts_in_matches_hand_count(t) -> void:
@@ -165,4 +182,26 @@ func test_a_malformed_ground_layer_is_reported_once_and_keeps_the_noise_terrain(
 		game._sync_ground(bad)
 	t.eq(game.ground_warnings, 1, "five polls of the same bad layer warn once")
 	t.ok(game.ground_model == null, "no model is built from it, the noise terrain stays")
+	game.free()
+
+
+func test_home_looks_at_your_command_center_only_when_a_ground_layer_exists(t) -> void:
+	var game: Node3D = (load("res://scripts/earthfront_3d.gd") as GDScript).new()
+	var cc := Node3D.new()
+	cc.set_meta("team", 0)
+	cc.set_meta("kind_name", "CommandCenter")
+	cc.position = Vector3(5.75, 0.0, 10.0)
+	var enemy := Node3D.new()
+	enemy.set_meta("team", 1)
+	enemy.set_meta("kind_name", "CommandCenter")
+	enemy.position = Vector3(28.0, 0.0, 9.0)
+	game.bridge_nodes = {0: cc, 5: enemy}
+	var survival: Vector3 = game.home_focus()
+	t.eq(survival, game._hex_world(3, 14), "no ground layer: the survival colony corner, unchanged")
+	game.ground_model = GroundModel.from_snapshot(_snap())
+	var kestrel: Vector3 = game.home_focus()
+	t.near(kestrel.x, 5.75, 0.001, "with a ground layer Home centres on your Command Center (x)")
+	t.near(kestrel.z, 10.0, 0.001, "and (z), never the enemy's")
+	cc.free()
+	enemy.free()
 	game.free()

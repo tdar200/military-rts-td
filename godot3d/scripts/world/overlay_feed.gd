@@ -47,9 +47,9 @@ const CALLOUT_LIFT := 56.0
 
 # ------------------------------------------------------------------ availability
 
-## True when the snapshot is an Earthfront one (it carries the ground layer): the Logistics tab shows.
+## True when the snapshot carries a real ground layer (Kestrel Reach, not Survival's flat grass): the Logistics tab shows.
 static func tab_available(snap: Dictionary) -> bool:
-	return str(snap.get("ground", "")) != ""
+	return str(snap.get("ground", "")) != "" and not GroundModel.is_flat(snap)
 
 
 ## The lenses this snapshot can really back, in button order. `supply` needs at least one real link in supply_links.

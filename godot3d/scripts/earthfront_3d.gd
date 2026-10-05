@@ -424,7 +424,7 @@ func _build_terrain_dressing() -> void:
 ## sent after a bridge restart in the same process is ignored (a new map needs a new launch). A malformed layer is reported
 ## once and the cosmetic noise terrain stays.
 func _sync_ground(snapshot: Dictionary) -> void:
-	if ground_model != null or not snapshot.has("ground"):
+	if ground_model != null or not snapshot.has("ground") or GroundModel.is_flat(snapshot):
 		return
 	var model: RefCounted = GroundModel.from_snapshot(snapshot)
 	if model == null:
@@ -1314,7 +1314,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera_focus_zoom = 8.2
 			camera_cinematic = 0.8
 		elif event.keycode == Keybinds.HOME:
-			camera_focus_target = _hex_world(3, 14)
+			camera_focus_target = home_focus()
 			camera_focus_zoom = 8.8
 
 
@@ -1485,6 +1485,17 @@ func view_ground_rect() -> Rect2:
 		else:
 			rect = rect.expand(Vector2(ground.x, ground.z))
 	return rect
+
+
+## Where Home and the deploy shot look: the survival colony's fixed corner, or, on a map that sends a ground layer (Kestrel
+## Reach, whose colony is elsewhere), your own Command Center.
+func home_focus() -> Vector3:
+	if ground_model != null:
+		for node in bridge_nodes.values():
+			if is_instance_valid(node) and int(node.get_meta("team", -1)) == 0 and String(node.get_meta("kind_name", "")) == "CommandCenter":
+				var at: Vector3 = node.global_position if node.is_inside_tree() else node.position
+				return Vector3(at.x, 0.0, at.z)
+	return _hex_world(3, 14)
 
 
 func focus_camera(position: Vector3, zoom: float) -> void:
@@ -2614,7 +2625,7 @@ func _deploy_mission() -> void:
 	tutorial_stage = 0
 	camera_target = Vector3(12.4, 0.0, 9.4)
 	camera_zoom = 15.5
-	camera_focus_target = _hex_world(3, 14)
+	camera_focus_target = home_focus()
 	camera_focus_zoom = 8.8
 	camera_cinematic = 1.4
 	_play_deploy_sound()

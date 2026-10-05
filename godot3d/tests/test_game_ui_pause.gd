@@ -179,6 +179,26 @@ func test_the_process_is_not_frozen_the_menu_stays_live(t) -> void:
 	_drop(p)
 
 
+func test_the_marker_recovers_when_a_slow_bridge_stops_late(t) -> void:
+	var p := _make(t)
+	var g = p[0]
+	var ui = p[1]
+	ui.open_pause()
+	g.bridge_tick += 90  # a slow frame rate: the bridge stepped on well past the slack before it saw pause.flag
+	ui.process(0.2)
+	t.ok(U.has_text(ui.pause_layer, "Simulation still running"), "it says so while the tick moves")
+	ui.process(0.2)
+	ui.process(0.2)
+	t.ok(U.has_text(ui.pause_layer, "Simulation still running"), "and a tick that stood still only briefly proves nothing")
+	ui.process(0.2)
+	ui.process(0.2)
+	t.ok(U.has_text(ui.pause_layer, "Simulation stopped"), "once the tick has stood still, the marker says stopped for good")
+	g.bridge_tick += 1
+	ui.process(0.2)
+	t.ok(U.has_text(ui.pause_layer, "Simulation stopped"), "a tick or two inside the slack is not movement")
+	_drop(p)
+
+
 # ------------------------------------------------------------------ restart and quit
 
 func test_restart_needs_the_confirm_and_uses_the_existing_restart(t) -> void:

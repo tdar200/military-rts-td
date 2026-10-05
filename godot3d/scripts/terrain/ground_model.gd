@@ -8,12 +8,20 @@ var _ground := ""
 var _table := {}  # glyph -> ground_table row
 
 
-## Null when the snapshot carries no ground string, or its length is not map_width * map_height.
+## True for a well-formed layer that is Grassland everywhere. Survival's bridge emits one (the sim always carries a ground
+## layer), and it describes no terrain: the client keeps its noise terrain and shows no ground UI for it. A wrong-sized
+## all-g string is not "flat", it is malformed, and still reported as such.
+static func is_flat(snap: Dictionary) -> bool:
+	var g: String = str(snap.get("ground", ""))
+	return g != "" and g.length() == int(snap.get("map_width", 0)) * int(snap.get("map_height", 0)) and g.count("g") == g.length()
+
+
+## Null when the snapshot carries no ground string, a flat all-Grassland one, or one whose length is not map_width * map_height.
 static func from_snapshot(snap: Dictionary) -> RefCounted:
 	var g: String = str(snap.get("ground", ""))
 	var w := int(snap.get("map_width", 0))
 	var h := int(snap.get("map_height", 0))
-	if g == "" or w <= 0 or h <= 0 or g.length() != w * h:
+	if g == "" or w <= 0 or h <= 0 or g.length() != w * h or is_flat(snap):
 		return null
 	var m := new()
 	m.width = w

@@ -146,6 +146,7 @@ func test_tile_inspect_bonus_text_only_from_real_entity_fields(t) -> void:
 	var rows := []
 	for i in 10:
 		rows.append("gggggggggg")
+	rows[0] = "gggggggggm"  # an all-Grassland layer is Survival's flat one and builds no model
 	var ents := [
 		_ent(1, 0, "building", "PowerPlant", 5, 5, {"river_kw": 12}),
 		_ent(2, 0, "building", "PowerPlant", 6, 5, {"river_kw": 0}),

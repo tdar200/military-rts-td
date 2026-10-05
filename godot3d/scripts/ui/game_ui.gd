@@ -23,8 +23,11 @@ const TerrainGuide = preload("res://scripts/ui/sections/terrain_guide.gd")
 const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
 
 const VM_INTERVAL := 0.1
-## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it ignores the flag.
+## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it still runs
+## (or has not seen the flag yet: a slow frame rate stretches that gap well past this, so the marker also recovers).
 const STOP_SLACK_TICKS := 6
+## The tick must stand still this long (seconds) before a marker that said "still running" says "stopped" again.
+const STOP_STILL_SECONDS := 0.6
 ## The strategic map re-reads the snapshot this often (seconds); it redraws only when what it shows changed.
 const REGION_INTERVAL := 0.5
 const BRIEFING_INTERVAL := 0.2
@@ -58,6 +61,9 @@ var _briefing_hash := 0
 var _briefing_clock := BRIEFING_INTERVAL
 var _controls_over_play := false  # F1 opened the controls with no pause menu behind them: Back resumes
 var _pause_tick := 0
+var _pause_seen_tick := 0
+var _pause_still_s := 0.0
+var _pause_moving := false  # the bridge tick moved on after the pause began and has not stood still since
 var _pause_hash := 0
 var minimap_view: SubViewportContainer
 var _clock := 0.0
@@ -156,6 +162,7 @@ func _input(event: InputEvent) -> void:
 func process(delta: float) -> void:
 	if paused():
 		# Frozen: no HUD rebuild, no ticker, no log samples, and the alert clock stands still. Only the pause screens refresh.
+		_watch_stop(delta)
 		_since_vm += delta
 		if _since_vm >= VM_INTERVAL:
 			_since_vm = 0.0
@@ -442,8 +449,27 @@ func close_guide() -> void:
 	_refresh_pause(true)
 
 
+## Whether the bridge really stopped: the marker follows the tick, never the request. Moving past the slack means it still
+## runs; standing still for STOP_STILL_SECONDS means it stopped (late, on a slow frame rate), whatever the gap was.
+func _watch_stop(delta: float) -> void:
+	var tick := int(g.bridge_tick)
+	if tick != _pause_seen_tick:
+		_pause_seen_tick = tick
+		_pause_still_s = 0.0
+		if tick - _pause_tick > STOP_SLACK_TICKS:
+			_pause_moving = true
+	else:
+		_pause_still_s += delta
+		if _pause_still_s >= STOP_STILL_SECONDS:
+			_pause_moving = false
+			_pause_tick = tick  # the stopped tick is the new baseline for the slack
+
+
 func _enter_pause() -> void:
 	_pause_tick = int(g.bridge_tick)
+	_pause_seen_tick = _pause_tick
+	_pause_still_s = 0.0
+	_pause_moving = false
 	if g.has_method("set_sim_paused"):
 		g.set_sim_paused(true)
 	_refresh_pause(true)
@@ -503,7 +529,7 @@ func _pause_vm() -> Dictionary:
 		losses = 0
 		for kind in session_log.lost:
 			losses += int(session_log.lost[kind])
-	var stopped: bool = int(g.bridge_tick) - _pause_tick <= STOP_SLACK_TICKS
+	var stopped: bool = not _pause_moving
 	var vm := VmGameplay.pause(snap if snap is Dictionary else {}, losses, stopped)
 	if vm.is_empty():
 		vm = {"stopped": stopped, "keys": VmGameplay.pause_keys()}
