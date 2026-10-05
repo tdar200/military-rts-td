@@ -50,10 +50,15 @@ class VariantTests(unittest.TestCase):
                 self.assertEqual(pathlib.Path(p).read_bytes(), pathlib.Path(self.paths[n]).read_bytes(), n)
 
     def test_committed_sprites_are_the_script_output(self):
+        """The committed PNGs match a fresh build. Resampling and blur rounding can move a channel by a step or two between
+        Pillow or numpy versions, so a pixel may differ by up to 4 per channel and at most 1 % of pixels by more than 1;
+        a stale sprite (an edited script not rerun) moves far more than that."""
         for n, im in self.img.items():
             committed = bbv.OUT / (n + ".png")
             self.assertTrue(committed.exists(), n)
-            self.assertTrue(np.array_equal(np.asarray(Image.open(committed).convert("RGBA")), np.asarray(im.convert("RGBA"))), n + " is stale: rerun the script")
+            d = np.abs(np.asarray(Image.open(committed).convert("RGBA")).astype(np.int16) - np.asarray(im.convert("RGBA")).astype(np.int16))
+            self.assertLessEqual(int(d.max()), 4, n + " is stale: rerun the script (max channel difference %d)" % d.max())
+            self.assertLess(float((d.max(axis=2) > 1).mean()), 0.01, n + " is stale: rerun the script")
 
     def test_stands_on_the_boards_contact_line(self):
         """The painted base reaches the contact line (y 218) and runs at most about 25 px past it, as the board sprites do
@@ -94,7 +99,8 @@ class VariantTests(unittest.TestCase):
         """Batteries glow lime, antimatter plants violet, labs carry a cyan glass dome, the human factory's trim is amber."""
         checks = [("battery_v1", (40, 60, 220, 200), 60, 110), ("alien_battery_v1", (40, 60, 220, 200), 60, 120),
                   ("antimatter_plant_v1", (90, 30, 170, 150), 255, 300), ("alien_antimatter_plant_v1", (90, 30, 170, 150), 255, 300),
-                  ("research_lab_v1", (80, 60, 180, 140), 175, 205), ("alien_research_lab_v1", (80, 50, 180, 140), 175, 205)]
+                  ("research_lab_v1", (80, 60, 180, 140), 175, 205), ("alien_research_lab_v1", (80, 50, 180, 140), 175, 205),
+                  ("vehicle_factory_v1", (40, 60, 220, 230), 25, 50)]
         for n, box, lo, hi in checks:
             hue, count = mean_hue_of_glow(self.img[n], box)
             self.assertGreater(count, 40, n)
