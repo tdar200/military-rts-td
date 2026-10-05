@@ -10,10 +10,18 @@ const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoo
 	"home_offset": Vector2(4.1, 0.0)}  # Home and deploy look east of the CC (world units): base left, river right, like the boards
 
 
-## Visual width of every building and unit in tiles (spec addendum W6); the authored model is scaled to it.
-const BUILDING_TILES := {"CommandCenter": 2.8, "Barracks": 2.1, "VehicleFactory": 2.1, "Airfield": 2.1, "ResearchLab": 2.1,
-	"Refinery": 2.1, "AntimatterPlant": 2.1, "PowerPlant": 1.7, "Battery": 1.7, "SupplyDepot": 1.7, "GunTurret": 1.3,
-	"AaTurret": 1.3, "Wall": 1.0}
+## Visual width of every building in tiles: the width of its sprite card (WorldSprites), from the boards' pixel sizes.
+## The boards draw land.jpg 1:1 and land.jpg maps one TILE to 82 px, so tiles = board px / 82 (WorldSprites.MOCK_PX):
+## CC 250 px = 3.05, barracks / factory / refinery 200 = 2.44, power plant 170 = 2.07 (the board's second one, the
+## battery here, 160 = 1.95), lab 150 = 1.83, gun turret 115 = 1.40, wall 100 = 1.22, AA 85 = 1.04. The card includes the
+## sprite's transparent margin; the painted body is about 0.85 to 0.9 of it. A kind without a sprite fits its model to it.
+const BUILDING_TILES := {"CommandCenter": 3.05, "Barracks": 2.44, "VehicleFactory": 2.44, "Airfield": 2.44, "ResearchLab": 1.83,
+	"Refinery": 2.44, "AntimatterPlant": 2.07, "PowerPlant": 2.07, "Battery": 1.95, "SupplyDepot": 2.07, "GunTurret": 1.40,
+	"AaTurret": 1.04, "Wall": 1.22}
+## Visual width of every unit's 3D model in tiles (spec addendum W6). The boards' unit sprites are infantry 80 px (0.98
+## tiles), tank 140 (1.71), anti-armour 90 (1.10), gunship 190 (2.32), capital 330 (4.02), harvester 110 (1.34)
+## (WorldSprites.MOCK_PX); those are card widths with the transparent margin, so they replace these values when units
+## become sprite cards (plan Task 2), not before.
 const UNIT_TILES := [1.0, 1.6, 1.0, 1.5, 1.8, 1.5]  # by _create_unit kind: infantry, tank, anti-armour, gunship, capital, harvester
 ## Authored material name (lower case contains) -> albedo for the boards' warm concrete, olive and gunmetal.
 const MODEL_PALETTE := {"concrete": "75684f", "olive": "727848", "gunmetal": "3d4040", "energy": "3f8f9c"}

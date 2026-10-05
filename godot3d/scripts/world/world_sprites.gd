@@ -1,0 +1,216 @@
+extends RefCounted
+## Kestrel sprite entities (plan 2026-10-05-kestrel-sprite-entities; reverses spec addendum W6 on the user's call): every
+## building is the boards' own painted sprite on a card that faces the fixed north-up Kestrel camera, drawn at the boards'
+## pixel size. earthfront_3d.gd uses it only when `world_art_on` is true; Survival keeps its models.
+##
+## Scale: the boards draw land.jpg 1:1 (3600 x 2400 px), and land.jpg maps one hex column (WorldArt.TILE) to 82 px, so a
+## sprite drawn `w` px wide on a board is w / 82 tiles wide (the whole 256 px card, transparent margin included).
+## Anchor: the boards sort sprites by `top + w * 0.85` and hang their drop shadows from the 84 % line, so the painted
+## ground contact is FOOT of the card height below its top; that line sits on the entity's root.
+##
+## The card mesh folds at the contact line: above it a quad square to the view direction (so it shows the painting
+## undistorted and has one depth, the root's, like the boards' painter order), below it a strip lying on the ground (so the
+## painted base in front of the root is never buried by the terrain, and anything standing on it draws over it).
+
+const WorldArt := preload("res://scripts/world/world_art.gd")
+
+const DIR := "res://assets/world/sprites/%s.png"
+const PX_PER_TILE := 82.0
+const FOOT := 0.85
+const ASPECT := 1.0  # every mock sprite is 256 x 256
+const CARD_LIFT := 0.03  # the card's ground strip rides this far over the terrain under the root
+const OPAQUE_ALPHA := 128  # a pixel above this alpha is painted body (picking, bars, pad); softer pixels are edge glow
+const FOOTPRINT := 0.65  # the painted footprint's centre line, as a fraction of the card height from its top
+const FOUNDATION := "foundation_v1"
+
+## Board pixel widths (Main.dc.html, BuildDeck, StructureSelected, OrdersArmed, WaveInbound, CoreAssault). Battery is the
+## board's second, smaller power plant; SupplyDepot is drawn at the board's depot size (the foundation, 170); the
+## AntimatterPlant has no board and takes the power plant's. Units are Task 2's (WorldArt.UNIT_TILES still sizes the
+## 3D unit models by their own width until units become cards).
+const MOCK_PX := {
+	"CommandCenter": 250, "PowerPlant": 170, "Battery": 160, "Refinery": 200, "Barracks": 200, "VehicleFactory": 200,
+	"Airfield": 200, "ResearchLab": 150, "GunTurret": 115, "AaTurret": 85, "Wall": 100, "SupplyDepot": 170,
+	"AntimatterPlant": 170,
+	"Infantry": 80, "Tank": 140, "AntiArmor": 90, "Helicopter": 190, "Capital": 330, "Harvester": 110,
+}
+## kind -> [human sprite, enemy sprite]. The boards' build deck shows the factory as the barracks sprite and the lab as
+## capital_v1; the airfield has no board sprite and shares the barracks (as its legacy model did), the depot the refinery's.
+const SPRITES := {
+	"CommandCenter": ["command_center_v2", "alien_command_center_v1"],
+	"PowerPlant": ["power_plant_v2", "alien_power_plant_v1"],
+	"Battery": ["power_plant_v2", "alien_power_plant_v1"],
+	"AntimatterPlant": ["power_plant_v2", "alien_power_plant_v1"],
+	"Refinery": ["refinery_v2", "alien_refinery_v1"],
+	"SupplyDepot": ["refinery_v2", "alien_refinery_v1"],
+	"Barracks": ["barracks_v2", "alien_barracks_v1"],
+	"VehicleFactory": ["barracks_v2", "alien_barracks_v1"],
+	"Airfield": ["barracks_v2", "alien_barracks_v1"],
+	"ResearchLab": ["capital_v1", "alien_capital_v1"],
+	"GunTurret": ["gun_turret_v2", "alien_gun_turret_v1"],
+	"AaTurret": ["aa_turret_v2", "alien_aa_turret_v1"],
+	"Wall": ["wall_v2", "alien_wall_v1"],
+}
+## Profile kinds that keep their fitted 3D model (none today); any kind outside SPRITES falls back the same way.
+const NO_SPRITE: Array[String] = []
+
+static var _materials := {}  # texture path -> StandardMaterial3D
+static var _bounds := {}  # texture path -> Rect2
+static var _mesh: ArrayMesh
+
+
+static func cos_pitch() -> float:
+	return sqrt(1.0 - WorldArt.PITCH_SIN * WorldArt.PITCH_SIN)
+
+
+static func tiles_for(kind: String) -> float:
+	return float(MOCK_PX.get(kind, 0)) / PX_PER_TILE
+
+
+## The sprite for `kind` drawn for `owner` (0 human, 1 enemy; the enemy falls back to the human sprite), or null.
+static func texture_for(kind: String, owner: int) -> Texture2D:
+	if not SPRITES.has(kind):
+		return null
+	var names: Array = SPRITES[kind]
+	var name := String(names[1]) if owner != 0 and names.size() > 1 else String(names[0])
+	if not ResourceLoader.exists(DIR % name):
+		name = String(names[0])
+	return load(DIR % name) as Texture2D
+
+
+static func foundation() -> Texture2D:
+	return load(DIR % FOUNDATION) as Texture2D
+
+
+## One shared unshaded material per texture: alpha blended with a depth pre-pass, so the painted body hides what stands
+## behind it and the soft painted edges still blend.
+static func material_for(tex: Texture2D) -> Material:
+	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if not _materials.has(key):
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		m.albedo_texture = tex
+		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		_materials[key] = m
+	return _materials[key]
+
+
+## The painted body's box in card UV (0..1, v down from the top): the bounding box of the pixels whose alpha passes
+## OPAQUE_ALPHA. Scanned once per texture.
+static func opaque_bounds(tex: Texture2D) -> Rect2:
+	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if not _bounds.has(key):
+		var img := tex.get_image()
+		var out := Rect2(0, 0, 1, 1)
+		if img != null and not img.is_empty():
+			if img.is_compressed():
+				img.decompress()
+			if img.get_format() != Image.FORMAT_RGBA8:
+				img.convert(Image.FORMAT_RGBA8)
+			var size := img.get_size()
+			var data := img.get_data()  # level 0 comes first; the mipmaps follow it
+			var lo := Vector2i(size.x, size.y)
+			var hi := Vector2i(-1, -1)
+			for y in size.y:
+				var row := y * size.x * 4
+				for x in size.x:
+					if data[row + x * 4 + 3] > OPAQUE_ALPHA:
+						lo = Vector2i(mini(lo.x, x), mini(lo.y, y))
+						hi = Vector2i(maxi(hi.x, x), maxi(hi.y, y))
+			if hi.x >= 0:
+				out = Rect2(float(lo.x) / size.x, float(lo.y) / size.y, float(hi.x - lo.x + 1) / size.x, float(hi.y - lo.y + 1) / size.y)
+		_bounds[key] = out
+	return _bounds[key]
+
+
+## The unit card (1 wide, ASPECT tall on screen) shared by every sprite entity; the node's uniform scale sets the width.
+static func card_mesh() -> ArrayMesh:
+	if _mesh == null:
+		var c := cos_pitch()
+		var s := WorldArt.PITCH_SIN
+		var up := Vector3(0.0, c, -s) * ASPECT  # the camera's up vector: square to the view, one depth
+		var fwd := Vector3(0.0, 0.0, 1.0) * (ASPECT / s)  # along the ground toward the camera: v grows by 1 per ASPECT/s
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_normal(Vector3(0.0, s, c))
+		# standing part: v 0 (top) .. FOOT (contact line, on the root)
+		var a0 := Vector3(-0.5, 0, 0) + up * FOOT
+		var a1 := Vector3(0.5, 0, 0) + up * FOOT
+		var b0 := Vector3(-0.5, 0, 0)
+		var b1 := Vector3(0.5, 0, 0)
+		# ground strip: v FOOT .. 1, lying before the root
+		var g0 := b0 + fwd * (1.0 - FOOT)
+		var g1 := b1 + fwd * (1.0 - FOOT)
+		_quad(st, [a0, a1, b1, b0], [Vector2(0, 0), Vector2(1, 0), Vector2(1, FOOT), Vector2(0, FOOT)])
+		_quad(st, [b0, b1, g1, g0], [Vector2(0, FOOT), Vector2(1, FOOT), Vector2(1, 1), Vector2(0, 1)])
+		_mesh = st.commit()
+	return _mesh
+
+
+static func _quad(st: SurfaceTool, p: Array, uv: Array) -> void:
+	for i in [0, 1, 2, 0, 2, 3]:
+		st.set_uv(uv[i])
+		st.add_vertex(p[i])
+
+
+## A sprite card for `kind` and `owner`, `tiles` tiles wide, its contact line on the parent's origin (null without a
+## sprite). It casts no shadow; the caller adds the contact pad.
+static func make_card(kind: String, owner: int, tiles: float) -> MeshInstance3D:
+	var tex := texture_for(kind, owner)
+	if tex == null:
+		return null
+	var card := MeshInstance3D.new()
+	card.mesh = card_mesh()
+	card.material_override = material_for(tex)
+	card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	card.scale = Vector3.ONE * tiles * WorldArt.TILE
+	card.position = Vector3(0.0, CARD_LIFT, 0.0)
+	card.set_meta("sprite_kind", kind)
+	card.set_meta("sprite_texture", tex)
+	return card
+
+
+## Shows the foundation while the building is under construction, its own sprite once it is done (same card size).
+static func show_built(card: MeshInstance3D, built: bool) -> void:
+	var tex: Texture2D = card.get_meta("sprite_texture") if built else foundation()
+	var m := material_for(tex)
+	if card.material_override != m:
+		card.material_override = m
+
+
+## The painted body's height over the root, as a vertical offset in the root's space whose screen point is the body's top
+## (the Kestrel camera shows a vertical metre as cos_pitch() of a screen metre). `width` is the card width (world units).
+static func body_top_y(tex: Texture2D, width: float, lift: float = CARD_LIFT) -> float:
+	return lift + (FOOT - opaque_bounds(tex).position.y) * width * ASPECT / cos_pitch()
+
+
+## The pick box: a flat box in the root's space whose eight corners project onto the painted body's screen rectangle
+## (earthfront_3d._parts_hold), so a click on a transparent corner of the card is not a click on the building.
+static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT) -> AABB:
+	var r := opaque_bounds(tex)
+	var h := width * ASPECT
+	var y_top := lift + (FOOT - r.position.y) * h / cos_pitch()
+	var y_bottom := lift + (FOOT - r.end.y) * h / cos_pitch()
+	return AABB(Vector3((r.position.x - 0.5) * width, y_bottom, 0.0), Vector3(r.size.x * width, y_top - y_bottom, 0.0))
+
+
+## Whether the painted body covers the ground point `offset` (x, z from the root) on screen: hover outlines skip it.
+static func covers_ground(tex: Texture2D, width: float, offset: Vector2) -> bool:
+	var r := opaque_bounds(tex)
+	var h := width * ASPECT
+	var down := offset.y * WorldArt.PITCH_SIN  # screen distance below the root
+	var u := offset.x / width + 0.5
+	var v := FOOT + down / h
+	return r.has_point(Vector2(u, v))
+
+
+## Where the contact pad goes: the painted footprint's centre on the ground (north of the root) and its width.
+static func pad_spot(tex: Texture2D, width: float) -> Vector3:
+	var r := opaque_bounds(tex)
+	var h := width * ASPECT
+	return Vector3((r.get_center().x - 0.5) * width, 0.0, -(FOOT - FOOTPRINT) * h / WorldArt.PITCH_SIN)
+
+
+static func pad_width(tex: Texture2D, width: float) -> float:
+	return opaque_bounds(tex).size.x * width

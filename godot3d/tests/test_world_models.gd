@@ -1,6 +1,8 @@
 extends RefCounted
-## Kestrel buildings and units (spec addendum W6): authored models fitted to a visual width table in tiles.
+## Kestrel buildings and units (spec addendum W6): authored models fitted to a visual width table in tiles. Buildings with a
+## board sprite are sprite cards now (test_world_sprites.gd); a kind without one ("Bunker") keeps the fitted model.
 const WorldArt := preload("res://scripts/world/world_art.gd")
+const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const MainScene = preload("res://main.tscn")
 const WorldProps := preload("res://scripts/world/world_props.gd")
 
@@ -34,17 +36,18 @@ func test_every_building_kind_has_a_width(t) -> void:
 		t.ok(WorldArt.BUILDING_TILES.has(kind), kind)
 
 
-func test_kestrel_buildings_are_authored_and_sized(t) -> void:
+func test_kestrel_kinds_without_a_sprite_keep_the_fitted_model(t) -> void:
 	var scene := _kestrel_scene()
-	for kind in ["CommandCenter", "Barracks", "GunTurret", "Wall"]:
-		var root: Node3D = scene._create_bridge_building(0, kind, Vector3(10, 0, 10), 900)
+	for owner in [0, 1]:
+		var root: Node3D = scene._create_bridge_building(owner, "Bunker", Vector3(10, 0, 10), 900)
 		var visual := root.get_node("Visual") as Node3D
-		t.ok(visual.scene_file_path.ends_with(".glb"), "%s uses the authored model" % kind)
-		t.near(_width(visual), float(WorldArt.BUILDING_TILES[kind]) * WorldArt.TILE, 0.05, "%s width" % kind)
-		t.near(float(root.get_meta("visual_tiles", 0.0)), float(WorldArt.BUILDING_TILES[kind]), 0.001, "%s meta" % kind)
-		t.eq(root.find_children("*", "Label3D", true, false).size(), 0, "%s has no banner" % kind)
+		t.ok(visual.scene_file_path.ends_with(".glb"), "owner %d: the authored model" % owner)
+		t.near(_width(visual), 1.7 * WorldArt.TILE, 0.05, "owner %d: fitted to the default width" % owner)
+		t.near(float(root.get_meta("visual_tiles", 0.0)), 1.7, 0.001, "owner %d: meta" % owner)
+		t.eq(root.find_children("*", "Label3D", true, false).size(), 0, "owner %d: no banner" % owner)
 		var bar := root.get_node("HealthBack") as Node3D
-		t.ok(bar.position.y > WorldArt.merged_aabb(visual).end.y * visual.scale.y, "%s health bar above the model" % kind)
+		t.ok(bar.position.y > WorldArt.merged_aabb(visual).end.y * visual.scale.y, "owner %d: health bar above the model" % owner)
+		root.free()
 	scene.free()
 
 
@@ -87,7 +90,7 @@ func test_kestrel_badges_and_relay_labels_clear_the_fitted_model(t) -> void:
 
 func test_kestrel_construction_grows_the_fitted_model(t) -> void:
 	var scene := _kestrel_scene()
-	var root: Node3D = scene._create_bridge_building(0, "Barracks", Vector3(10, 0, 10), 901)
+	var root: Node3D = scene._create_bridge_building(0, "Bunker", Vector3(10, 0, 10), 901)
 	var visual := root.get_node("Visual") as Node3D
 	t.ok(visual.get_meta("authored_scale").is_equal_approx(visual.scale), "the construction scale is the fitted one")
 	scene.free()
@@ -95,7 +98,7 @@ func test_kestrel_construction_grows_the_fitted_model(t) -> void:
 
 func test_kestrel_human_models_take_the_board_palette(t) -> void:
 	var scene := _kestrel_scene()
-	var root: Node3D = scene._create_bridge_building(0, "CommandCenter", Vector3(10, 0, 10), 902)
+	var root: Node3D = scene._create_bridge_building(0, "Bunker", Vector3(10, 0, 10), 902)
 	var colours := {}
 	for mi in root.get_node("Visual").find_children("*", "MeshInstance3D", true, false):
 		for i in (mi as MeshInstance3D).mesh.get_surface_count():
@@ -133,11 +136,14 @@ func test_kestrel_buildings_clear_by_width_and_take_a_pad(t) -> void:
 	t.eq(_cards_within(props, at, radius), 0, "no prop card left under the CC")
 	t.eq(props._free_pads.size(), free_before - 1, "one pad slot taken")
 	var slot: int = props._decal_base + WorldProps.PAD_SLOTS - free_before
-	var width := 2.8 * WorldArt.TILE
+	var tex := WorldSprites.texture_for("CommandCenter", 0)
+	var card_w := float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE
+	var width := WorldSprites.pad_width(tex, card_w)
+	var spot := at + WorldSprites.pad_spot(tex, card_w)
 	var pad: Transform3D = props.pad_transform(slot)  # CPU mirror: the dummy renderer reads transforms back as identity
-	t.near(pad.basis.x.length(), width * 1.15, 0.001, "the pad is as wide as the model, plus a soft margin")
-	t.near(pad.origin.x, at.x + 0.08 * width, 0.001, "the pad sits under the model, nudged toward the sun's shadow (x)")
-	t.near(pad.origin.z, at.z + 0.06 * width, 0.001, "and z")
+	t.near(pad.basis.x.length(), width * 1.15, 0.001, "the pad is as wide as the painted body, plus a soft margin")
+	t.near(pad.origin.x, spot.x + 0.08 * width, 0.001, "the pad sits under the painted footprint, nudged toward the sun's shadow (x)")
+	t.near(pad.origin.z, spot.z + 0.06 * width, 0.001, "and z")
 	props.release_pad(slot)
 	t.eq(props._free_pads.size(), free_before, "release gives the slot back")
 	t.near(props.pad_transform(slot).basis.x.length(), 0.0, 0.0001, "a released pad is collapsed")
@@ -153,7 +159,7 @@ func test_kestrel_selection_ring_wraps_the_model(t) -> void:
 	scene.ui.set_script(ui_stub)
 	var root: Node3D = scene._create_bridge_building(0, "CommandCenter", Vector3(10, 0, 10), 904)
 	scene._set_selection([root])
-	t.near(scene.selection_ring.scale.x, 2.8 * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to the CC width")
+	t.near(scene.selection_ring.scale.x, float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to the CC width")
 	scene._create_unit(0, Vector3(6, 0, 6), 0)
 	scene._set_selection([scene.units.back()])
 	t.near(scene.selection_ring.scale.x, 1.0 * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to a squad")
@@ -183,9 +189,9 @@ func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
 	t.eq(scene.hover_cell, tile, "the hex is still hovered (the inspector reads it)")
 	var east: Vector3 = scene._hex_world(tile.x + 1, tile.y)
 	scene._show_hover_at(east)
-	t.ok(scene.hover_tile.visible, "shown on the diagonal neighbour hex under the model's overhang (0.77 away)")
+	t.ok(scene.hover_tile.visible, "shown on the south-east neighbour: its centre is below the painted base on screen")
 	scene._show_hover_at(scene._hex_world(tile.x, tile.y - 1))
-	t.ok(not scene.hover_tile.visible, "hidden on the north neighbour: the 2.1-tile half width 0.714 passes its centre (0.70)")
+	t.ok(not scene.hover_tile.visible, "hidden on the north neighbour: the barracks' painted body covers its centre on screen")
 	scene._create_unit(0, east, 1)
 	scene.bridge_nodes[906] = scene.units.back()
 	scene._show_hover_at(east)
@@ -194,29 +200,33 @@ func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
 
 
 func test_kestrel_hover_outline_stays_off_a_command_center_overhang(t) -> void:
-	# a 2.8-tile Command Center covers the centres of its six neighbour hexes; a Barracks (2.1) only its north and south ones
+	# the CC sprite stands on its root and rises north on screen: its painted body covers the centres of the hexes north,
+	# north-east, north-west and two north of it, not the ones beside or south of its base
 	var scene := _kestrel_scene()
 	var tile := Vector2i(10, 10)
 	var world: Vector3 = scene._hex_world(tile.x, tile.y)
 	scene.bridge_nodes[907] = scene._create_bridge_building(0, "CommandCenter", world, 907)
-	for n in [Vector2i(11, 10), Vector2i(9, 10), Vector2i(10, 9), Vector2i(10, 11)]:
+	for n in [Vector2i(10, 9), Vector2i(11, 9), Vector2i(9, 9), Vector2i(10, 8)]:
 		scene._show_hover_at(scene._hex_world(n.x, n.y))
-		t.ok(not scene.hover_tile.visible, "hidden on the neighbour %s under the CC" % n)
-		t.eq(scene.hover_cell, n, "the neighbour is still hovered (the inspector reads it)")
-	scene._show_hover_at(scene._hex_world(12, 10))
-	t.ok(scene.hover_tile.visible, "shown two hexes away, clear of the model")
+		t.ok(not scene.hover_tile.visible, "hidden on %s under the CC's painted body" % n)
+		t.eq(scene.hover_cell, n, "the hex is still hovered (the inspector reads it)")
+	for n in [Vector2i(11, 10), Vector2i(9, 10), Vector2i(10, 11), Vector2i(12, 10), Vector2i(10, 7)]:
+		scene._show_hover_at(scene._hex_world(n.x, n.y))
+		t.ok(scene.hover_tile.visible, "shown on %s, clear of the painted body" % n)
 	scene.free()
 
 
-func test_kestrel_shared_models_keep_each_kinds_width(t) -> void:
-	# Refinery (2.1) and SupplyDepot (1.7) share human_refinery; an unknown kind falls back to human_industry (1.7), the
-	# VehicleFactory model (2.1). Build order must not decide the size.
+func test_kestrel_shared_sprites_keep_each_kinds_width(t) -> void:
+	# Refinery (2.44) and SupplyDepot (2.07) share the refinery sprite, Barracks and VehicleFactory the barracks one; an
+	# unknown kind falls back to a fitted model (1.7). Build order must not decide the size.
 	for order in [["Refinery", "SupplyDepot"], ["SupplyDepot", "Refinery"], ["VehicleFactory", "Bunker"], ["Bunker", "VehicleFactory"]]:
 		var scene := _kestrel_scene()
 		for kind in order:
 			var root: Node3D = scene._create_bridge_building(0, kind, Vector3(10, 0, 10), 910)
 			var want := float(WorldArt.BUILDING_TILES.get(kind, 1.7)) * WorldArt.TILE
-			t.near(_width(root.get_node("Visual") as Node3D), want, 0.05, "%s width after %s" % [kind, order[0]])
+			var visual := root.get_node("Visual") as Node3D
+			var got := visual.scale.x if visual.has_meta("sprite_kind") else _width(visual)
+			t.near(got, want, 0.05, "%s width after %s" % [kind, order[0]])
 		scene.free()
 
 
@@ -302,7 +312,9 @@ func test_kestrel_destroyed_building_gives_its_pad_back(t) -> void:
 	t.near(props.pad_transform(slot).basis.x.length(), 0.0, 0.0001, "and its pad collapsed")
 	scene._create_bridge_building(0, "Barracks", Vector3(12, 0, 9), 921)
 	t.eq(props._free_pads.size(), free_before - 1, "rebuilt: a slot is taken again")
-	t.near(props.pad_transform(slot).basis.x.length(), 2.1 * WorldArt.TILE * 1.15, 0.001, "the same slot, placed for the new building")
+	var card_w := float(WorldArt.BUILDING_TILES.Barracks) * WorldArt.TILE
+	var pad_w := WorldSprites.pad_width(WorldSprites.texture_for("Barracks", 0), card_w)
+	t.near(props.pad_transform(slot).basis.x.length(), pad_w * 1.15, 0.001, "the same slot, placed for the new building")
 	scene.free()
 
 
@@ -327,27 +339,14 @@ func _ortho(ppu: float) -> Callable:
 		return Vector2(p.x, p.z * WorldArt.PITCH_SIN - p.y * cos_pitch) * ppu
 
 
-func test_kestrel_click_on_a_fitted_roof_selects_the_building(t) -> void:
-	# live QA (Task 9 final review): a click on the CC's roof, 35 px above its root, selected nothing
+func test_kestrel_click_clear_of_the_painted_body_selects_nothing(t) -> void:
+	# the roof, body and transparent-corner clicks are in test_world_sprites.gd; here, hexes clear of the CC sprite
 	var scene := _kestrel_scene()
-	var to_screen := _ortho(108.0)  # the Home view: the 2.8-tile CC is about 206 px wide
+	var to_screen := _ortho(108.0)  # the Home view: the 3.05-tile CC card is about 224 px wide
 	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 910)
 	scene.bridge_nodes[910] = cc
-	var parts: Array = cc.get_meta("pick_parts", [])
-	t.ok(parts.size() > 3, "the CC records its fitted part boxes for picking")
-	var whole: AABB = parts[0]
-	var top: AABB = parts[0]
-	for box in parts:
-		whole = whole.merge(box)
-		if (box as AABB).end.y > top.end.y:
-			top = box
-	t.near(maxf(whole.size.x, whole.size.z), 2.8 * WorldArt.TILE, 0.05, "the parts make up the fitted model")
-	var roof: Vector2 = to_screen.call(cc, Vector3(top.get_center().x, top.end.y, top.get_center().z))
-	t.eq(scene._pick_entity(roof, to_screen), cc, "a click on the CC's highest part selects it")
-	t.ok(to_screen.call(cc, Vector3.UP * 0.15).distance_to(roof) > 32.0, "and that click is past the legacy 32 px reach")
-	var hull: Vector2 = to_screen.call(cc, Vector3(whole.end.x * 0.8, 0.3, 0.0))
-	t.eq(scene._pick_entity(hull, to_screen), cc, "a click on the hull's east side selects the CC")
-	for n in [Vector2i(12, 10), Vector2i(8, 10), Vector2i(10, 8), Vector2i(10, 12)]:
+	t.eq((cc.get_meta("pick_parts", []) as Array).size(), 1, "the CC picks by its painted body's box")
+	for n in [Vector2i(12, 10), Vector2i(8, 10), Vector2i(10, 7), Vector2i(10, 12)]:
 		var away := Node3D.new()
 		away.position = scene._hex_world(n.x, n.y)
 		t.eq(scene._pick_entity(to_screen.call(away, Vector3.ZERO), to_screen), null, "hex %s, clear of the model: nothing" % n)
@@ -360,7 +359,7 @@ func test_kestrel_unit_beside_a_building_still_wins_its_own_click(t) -> void:
 	var to_screen := _ortho(108.0)
 	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 911)
 	scene.bridge_nodes[911] = cc
-	scene._create_unit(0, scene._hex_world(11, 10), 0)
+	scene._create_unit(0, scene._hex_world(11, 9), 0)  # north-east: under the CC sprite's painted body on screen
 	var squad: Node3D = scene.units.back()
 	scene.bridge_nodes[912] = squad
 	t.ok(not (squad.get_meta("pick_parts", []) as Array).is_empty(), "a fitted unit records its parts too")

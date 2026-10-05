@@ -17,6 +17,7 @@ const Keybinds = preload("res://scripts/ui/keybinds.gd")
 const GroundModel = preload("res://scripts/terrain/ground_model.gd")
 const WorldArt := preload("res://scripts/world/world_art.gd")
 const WorldProps := preload("res://scripts/world/world_props.gd")
+const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -2183,6 +2184,17 @@ func _fitted(visual: Node3D, key: String, tiles: float) -> Vector2:
 	return _fit_cache[key]
 
 
+## Kestrel: the height over the root that keeps a sprite card's ground strip (before the root, as deep as the card's base
+## is tall on screen) above the terrain under it.
+func _card_lift(destination: Vector3, width: float) -> float:
+	var depth := (1.0 - WorldSprites.FOOT) * width * WorldSprites.ASPECT / WorldArt.PITCH_SIN
+	var top := destination.y
+	for fx in [-0.5, 0.0, 0.5]:
+		for fz in [0.0, 1.0]:
+			top = maxf(top, _height_world(destination.x + fx * width, destination.z + fz * depth))
+	return top - destination.y + WorldSprites.CARD_LIFT
+
+
 func _create_bridge_building(owner: int, kind_name: String, destination: Vector3, bridge_id: int) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Core_%s_%03d" % [kind_name, bridge_id]
@@ -2230,13 +2242,37 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 		asset_name = "human_industry"  # the profile shows every human building as its authored model; the factory has its own
 	var model_scale := 0.32 if kind_name == "CommandCenter" else (0.40 if kind_name == "Wall" else 0.30)
 	var visual: Node3D
-	if not world_art_on and owner == HUMAN and kind_name in ["CommandCenter", "ResearchLab", "Barracks", "VehicleFactory", "Airfield", "PowerPlant", "Battery", "Refinery", "SupplyDepot"]:
+	var card: MeshInstance3D = null
+	if world_art_on:  # the boards' painted sprite on a camera-facing card; a kind without a sprite keeps its model
+		card = WorldSprites.make_card(kind_name, owner, float(WorldArt.BUILDING_TILES.get(kind_name, 1.7)))
+	if card != null:
+		root.add_child(card)
+		visual = card
+	elif not world_art_on and owner == HUMAN and kind_name in ["CommandCenter", "ResearchLab", "Barracks", "VehicleFactory", "Airfield", "PowerPlant", "Battery", "Refinery", "SupplyDepot"]:
 		visual = tactical_models.building(self, root, kind_name)
 	else:
 		visual = _place_scene(root, "res://assets/models/authored/%s.glb" % asset_name, Vector3.ZERO, Vector3.ONE * model_scale, 0.0)
 	visual.name = "Visual"
 	var bar_y: Array = [1.15, 1.155, 1.24, 1.245]  # health back, fill, shield back, fill
-	if world_art_on:
+	if card != null:
+		# the card is BUILDING_TILES wide; bars, crown and label ride the painted top, picking takes the painted body only
+		var tiles := float(WorldArt.BUILDING_TILES.get(kind_name, 1.7))
+		var tex: Texture2D = card.get_meta("sprite_texture")
+		var width := card.scale.x
+		card.position.y = _card_lift(destination, width)
+		root.set_meta("visual_tiles", tiles)
+		root.set_meta("pick_parts", [WorldSprites.pick_box(tex, width, card.position.y)])
+		var top := WorldSprites.body_top_y(tex, width, card.position.y)
+		bar_y = [top + 0.18, top + 0.185, top + 0.27, top + 0.275]
+		root.set_meta("label_y", top + 0.45)
+		root.set_meta("crown_y", top + 0.06)
+		if world_props != null:
+			world_props.clear_around(destination, tiles * WorldArt.TILE * 0.5)
+			var slot: int = world_props.add_pad(destination + WorldSprites.pad_spot(tex, width), WorldSprites.pad_width(tex, width))
+			if slot >= 0:
+				var props: RefCounted = world_props
+				root.tree_exiting.connect(func(): props.release_pad(slot))
+	elif world_art_on:
 		# spec addendum W6: the model is fitted to its width in tiles; the props under it go, a soft pad goes under it
 		var tiles := float(WorldArt.BUILDING_TILES.get(kind_name, 1.7))
 		var fit_key := "%d:%s:%s" % [owner, asset_name, tiles]  # one model can serve two widths
@@ -2254,7 +2290,7 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 			if slot >= 0:
 				var props: RefCounted = world_props
 				root.tree_exiting.connect(func(): props.release_pad(slot))
-	else:
+	elif is_inside_tree():  # always in the game; the headless tests build outside the tree
 		for prop in get_tree().get_nodes_in_group("scenery"):
 			if prop is Node3D and prop.global_position.distance_to(destination) < 0.85:
 				prop.hide()
@@ -2399,7 +2435,10 @@ func _sync_bridge_entities(entities: Array) -> void:
 				var shield_back := entity_node.get_node_or_null("ShieldBack") as MeshInstance3D
 				shield_back.visible = shield_fill.visible
 		var visual := entity_node.get_node_or_null("Visual") as Node3D
-		if visual:
+		if visual and visual.has_meta("sprite_kind"):  # a sprite card: the foundation while it is built, never squashed
+			WorldSprites.show_built(visual as MeshInstance3D, int(entity_data.get("construction", 0)) <= 0)
+			visual.visible = true
+		elif visual:
 			var remaining := int(entity_data.get("construction", 0))
 			var total := maxi(1, int(entity_data.get("construction_total", 1)))
 			var authored_scale: Vector3 = visual.get_meta("authored_scale", visual.scale)
@@ -2599,6 +2638,11 @@ func _hex_occupied(tile: Vector2i) -> bool:
 		var at := (node as Node3D).position
 		if _world_to_tile(at) == tile:
 			return true
+		var card := node.get_node_or_null("Visual") as Node3D
+		if card != null and card.has_meta("sprite_kind"):  # a sprite covers the hexes its painted body hides on screen
+			if WorldSprites.covers_ground(card.get_meta("sprite_texture"), card.scale.x, Vector2(centre.x - at.x, centre.z - at.z)):
+				return true
+			continue
 		# a fitted model wider than its hex (the 2.8-tile CC) covers its neighbours' centres too
 		var half := float(node.get_meta("visual_tiles", 0.0)) * WorldArt.TILE * 0.5
 		if Vector2(at.x - centre.x, at.z - centre.z).length() < half:
