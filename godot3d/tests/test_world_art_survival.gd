@@ -99,3 +99,10 @@ func test_only_kestrel_gets_the_painted_ground(t) -> void:
 	t.ok(mat.get_shader_parameter("rock_texture") is Texture2D, "Kestrel ground carries the rock texture")
 	t.ok((inst.mesh as ArrayMesh).surface_get_format(0) & Mesh.ARRAY_FORMAT_TEX_UV2 != 0, "Kestrel ground carries UV2 (sea, rock)")
 	terrain.free()
+
+
+func test_survival_keeps_the_legacy_dressing(t) -> void:
+	var scene := _survival_scene()
+	t.ok(scene.world_props == null, "no prop MultiMeshes")
+	t.eq(scene.find_children("*", "MultiMeshInstance3D", true, false).size(), 0, "nothing new in the scene")
+	scene.free()

@@ -16,6 +16,7 @@ const GameUI = preload("res://scripts/ui/game_ui.gd")
 const Keybinds = preload("res://scripts/ui/keybinds.gd")
 const GroundModel = preload("res://scripts/terrain/ground_model.gd")
 const WorldArt := preload("res://scripts/world/world_art.gd")
+const WorldProps := preload("res://scripts/world/world_props.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -44,6 +45,8 @@ var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null
 var environment: Environment  # the WorldEnvironment's resource, kept so the Kestrel grade can be applied later
 var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under the HUD
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
+var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
+var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
 var ocean_box: MeshInstance3D
 var sea_backdrop: MeshInstance3D  # Kestrel: flat sea far below the terrain, so the minimap and any frame past the mesh never show the clear colour
 var camera_aspect := 16.0 / 9.0
@@ -425,14 +428,19 @@ func _build_terrain_dressing() -> void:
 			var elevation: float = terrain_renderer.height_at_world(world.x, world.z)
 			var biome_signal: float = terrain_renderer.biome_at_world(world.x, world.z)
 			terrain_height[Vector2i(x, z)] = elevation
-			if ground_model != null:
-				_dress_ground_tile(x, z, world, elevation)
-			else:
+			if ground_model == null:
 				_dress_tile(x, z, world, elevation, biome_signal)
+			elif not world_art_on:
+				_dress_ground_tile(x, z, world, elevation)
 	if ground_model == null:
 		_build_shoreline_details()
 		_build_river()
 		_build_strategic_routes()
+	world_props = null
+	if world_art_on:
+		world_props = WorldProps.new()
+		var items := WorldProps.plan(ground_model, _ground_deposits, Vector2(MAP_ORIGIN_X, MAP_ORIGIN_Z), Vector2(HEX_X, HEX_Z), int(WorldArt.CAMERA.edge_cells))
+		world_props.build(self, items, func(x: float, z: float) -> float: return terrain_renderer.height_at_world(x, z))
 	_build_hex_grid()
 	if ground_model == null:
 		_place_scene(self, "res://assets/models/world/bridge.glb", Vector3(12.0, _height_world(12.0, 6.9) + 0.08, 6.9), Vector3.ONE * 0.62, 90.0)
@@ -461,6 +469,7 @@ func _sync_ground(snapshot: Dictionary) -> void:
 	world_art_on = WorldArt.active(model)
 	if world_art_on:
 		_apply_world_art(snapshot)
+	_ground_deposits = snapshot.get("deposits", [])
 	_build_terrain_dressing()
 
 
@@ -2142,6 +2151,8 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	for prop in get_tree().get_nodes_in_group("scenery"):
 		if prop is Node3D and prop.global_position.distance_to(destination) < 0.85:
 			prop.hide()
+	if world_props != null:
+		world_props.clear_around(destination, 0.85)  # the same clearing for the Kestrel prop MultiMeshes
 	if kind_name == "CommandCenter":
 		var banner := Label3D.new()
 		banner.text = "COMMAND" if owner == HUMAN else "CORE NODE"
