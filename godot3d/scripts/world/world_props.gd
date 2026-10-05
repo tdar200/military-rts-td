@@ -20,6 +20,7 @@ const BANK := ["forest", 6, 1.1, 1.5, 0.25]  # riverside willows on dry land nex
 const BANK_GLYPHS := ["g", "m"]  # the grass bank only: the boards keep the dry flats bank open
 const CRYSTALS := [[1.25, Vector2(0.0, 0.0)], [0.85, Vector2(0.25, 0.15)]]
 const DECAL_SPRITES := ["crater", "pebbles", "shadow"]
+const CRYSTAL_SPRITES := ["ore", "alloy"]  # deposit markers: never cleared, a deposit must stay visible
 const HIDDEN := Vector3(1e9, 0.0, 1e9)
 const SHADOW_OFFSET := Vector2(0.16, 0.10)  # times the card width, toward the lower right (the NW sun)
 const SHADOW_SCALE := 0.9
@@ -37,6 +38,9 @@ var _free_pads: Array[int] = []
 ## A drop shadow is keyed by the foot of its card.
 var _card_at := PackedVector3Array()
 var _decal_at := PackedVector3Array()
+## 1 for deposit crystals and their shadows (a deposit tile carries nothing else), which clear_around never hides.
+var _card_pinned := PackedByteArray()
+var _decal_pinned := PackedByteArray()
 
 
 static func _hash(x: int, y: int, salt: int) -> int:
@@ -123,12 +127,19 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 	decals = _multimesh(parent, "WorldPropDecals", _decal_material(atlas), _decal_mesh(), decal_items.size() + PAD_SLOTS)
 	_card_at.resize(card_items.size())
 	_decal_at.resize(decal_items.size())
+	_card_pinned.resize(card_items.size())
+	_decal_pinned.resize(decal_items.size())
+	var crystal_tiles := {}
+	for it in card_items:
+		if String(it.sprite) in CRYSTAL_SPRITES:
+			crystal_tiles[it.tile] = true
 	for i in card_items.size():
 		var it: Dictionary = card_items[i]
 		var s: Dictionary = _meta.sprites[it.sprite]
 		var w: float = it.size
 		var basis := Basis.from_scale(Vector3(w, w * float(s.aspect), 1.0))
 		_card_at[i] = Vector3(it.pos.x, height_at.call(it.pos.x, it.pos.y), it.pos.y)
+		_card_pinned[i] = 1 if String(it.sprite) in CRYSTAL_SPRITES else 0
 		cards.multimesh.set_instance_transform(i, Transform3D(basis, _card_at[i]))
 		cards.multimesh.set_instance_custom_data(i, _rect(it.sprite, it.flip))
 		cards.multimesh.set_instance_color(i, Color(float(s.sink), 0.92 + float(_hash(it.tile.x, it.tile.y, i) % 16) / 100.0, 0, 1))
@@ -141,6 +152,7 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		# a drop shadow is cleared with its card, so it is keyed by the card's foot, not its own offset centre
 		var foot: Vector2 = it.pos - SHADOW_OFFSET * float(it.size) / SHADOW_SCALE if String(it.sprite) == "shadow" else it.pos
 		_decal_at[i] = Vector3(foot.x, at.y, foot.y)
+		_decal_pinned[i] = 1 if String(it.sprite) == "shadow" and crystal_tiles.has(it.tile) else 0
 		decals.multimesh.set_instance_custom_data(i, _rect(it.sprite, it.flip))
 	_decal_base = decal_items.size()
 	_free_pads.clear()
@@ -163,14 +175,14 @@ static func decal_height(height_at: Callable, pos: Vector2, size: float) -> floa
 func clear_around(world: Vector3, radius: float) -> int:
 	if cards == null or decals == null:
 		return 0
-	return _clear(cards.multimesh, _card_at, world, radius) + _clear(decals.multimesh, _decal_at, world, radius)
+	return _clear(cards.multimesh, _card_at, _card_pinned, world, radius) + _clear(decals.multimesh, _decal_at, _decal_pinned, world, radius)
 
 
-func _clear(mm: MultiMesh, at: PackedVector3Array, world: Vector3, radius: float) -> int:
+func _clear(mm: MultiMesh, at: PackedVector3Array, pinned: PackedByteArray, world: Vector3, radius: float) -> int:
 	var hidden := 0
 	var centre := Vector2(world.x, world.z)
 	for i in at.size():
-		if Vector2(at[i].x, at[i].z).distance_to(centre) < radius:
+		if pinned[i] == 0 and Vector2(at[i].x, at[i].z).distance_to(centre) < radius:
 			mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 			at[i] = HIDDEN
 			hidden += 1

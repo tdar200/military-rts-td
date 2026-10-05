@@ -90,13 +90,15 @@ func test_clear_around_hides_only_nearby_props(t) -> void:
 	var centre := Vector3(2.1 + 8.0 * 0.68, 0, 1.0 + 19.0 * 0.70)  # Hollow Wood
 	var hidden: int = props.clear_around(centre, 1.0)
 	t.ok(hidden > 0, "trees near a new building are cleared (%s)" % hidden)
-	var mm: MultiMesh = props.cards.multimesh
-	var still := 0
-	for i in mm.instance_count:
-		var tr := mm.get_instance_transform(i)
-		if tr.basis.get_scale().length() > 0.001 and Vector2(tr.origin.x, tr.origin.z).distance_to(Vector2(centre.x, centre.z)) < 1.0:
-			still += 1
-	t.eq(still, 0, "nothing visible is left inside the radius")
+	# The headless renderer keeps no MultiMesh transforms, so read the CPU mirror: exactly the cards inside the radius
+	# are hidden, and every other card keeps its place.
+	var cards := items.filter(func(i): return not String(i.sprite) in WorldProps.DECAL_SPRITES)
+	var wrong := 0
+	for i in cards.size():
+		var inside: bool = cards[i].pos.distance_to(Vector2(centre.x, centre.z)) < 1.0
+		if (props._card_at[i] == WorldProps.HIDDEN) != inside:
+			wrong += 1
+	t.eq(wrong, 0, "hidden exactly when inside the radius")
 	parent.free()
 
 
@@ -117,7 +119,7 @@ func test_clear_around_remembers_what_it_hid(t) -> void:
 	var wood := Vector3(2.1 + 8.0 * 0.68, 0, 1.0 + 19.0 * 0.70)
 	t.ok(props.clear_around(wood, 1.0) > 0, "first clear hides props")
 	t.eq(props.clear_around(wood, 1.0), 0, "a second clear finds nothing left")
-	t.ok(props.clear_around(Vector3(2.1 + 30.0 * 0.68, 0, 1.0 + 2.0 * 0.70), 1.0) > 0, "the ridge is untouched by the wood clear")
+	t.ok(props.clear_around(Vector3(2.1 + 27.0 * 0.68, 0, 1.0 + 3.5 * 0.70), 1.0) > 0, "the ridge is untouched by the wood clear")
 	parent.free()
 
 
@@ -154,3 +156,29 @@ func test_decals_rest_on_the_highest_ground_they_cover(t) -> void:
 	var y: float = WorldProps.decal_height(bowl, Vector2.ZERO, 1.0)
 	t.ok(y >= 0.3 * 0.25 + 0.03, "the decal clears the rim instead of sinking under it (%s)" % y)
 	t.near(WorldProps.decal_height(func(_x, _z): return 0.5, Vector2(3, 4), 1.0), 0.535, 0.0001, "flat ground: a hair above it")
+
+
+func test_clearing_next_to_a_deposit_keeps_its_crystals(t) -> void:
+	var parent := Node3D.new()
+	var props = WorldProps.new()
+	var items := _plan()
+	props.build(parent, items, func(_x, _z): return 0.0)
+	var ore := Vector2i(18, 7)
+	var centre := Vector2(2.1 + 18.0 * 0.68, 1.0 + 7.0 * 0.70)
+	props.clear_around(Vector3(centre.x, 0, centre.y), 0.85)  # a building on the deposit itself
+	props.clear_around(Vector3(centre.x, 0, centre.y + 0.70), 0.85)  # and one on the tile below it
+	var cards := items.filter(func(i): return not String(i.sprite) in WorldProps.DECAL_SPRITES)
+	var decals := items.filter(func(i): return String(i.sprite) in WorldProps.DECAL_SPRITES)
+	var crystals := 0
+	for i in cards.size():
+		if cards[i].tile == ore:
+			crystals += 1
+			t.ok(props._card_at[i] != WorldProps.HIDDEN, "crystal %s stays" % i)
+	var shadows := 0
+	for i in decals.size():
+		if decals[i].tile == ore:
+			shadows += 1
+			t.ok(props._decal_at[i] != WorldProps.HIDDEN, "crystal shadow %s stays" % i)
+	t.eq(crystals, 2, "both crystal cards checked")
+	t.eq(shadows, 2, "both crystal shadows checked")
+	parent.free()
