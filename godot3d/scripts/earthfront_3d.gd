@@ -477,9 +477,34 @@ func _sync_ground(snapshot: Dictionary) -> void:
 	if world_art_on:
 		_apply_world_art(snapshot)
 		WorldSprites.prewarm()  # every sprite's alpha scan and graded copy now, not on the frame a kind first appears
+		_warm_sprite_shaders()
 	_ground_deposits = snapshot.get("deposits", [])
 	_ground_route = snapshot.get("wave_route", [])
 	_build_terrain_dressing()
+
+
+## Kestrel: draws one throwaway card with the site shader and one with the ghost shader for a few frames, just past the
+## camera's near plane and far too small to cover a pixel, so the renderer compiles both pipelines as the ground loads,
+## not on the frame the first site or the first armed build appears (every other card shader is on screen from deploy).
+## Headless, or outside the tree, there is nothing to compile.
+func _warm_sprite_shaders() -> void:
+	if not is_inside_tree() or camera == null or DisplayServer.get_name() == "headless":
+		return
+	var tex := WorldSprites.texture_for("Barracks", HUMAN)
+	if tex == null:
+		return
+	var warm := Node3D.new()
+	warm.name = "SpriteShaderWarm"
+	for m in [WorldSprites.site_material_for(tex), WorldSprites.ghost_material_for(tex, materials.ghost_valid.albedo_color)]:
+		var card := MeshInstance3D.new()
+		card.mesh = WorldSprites.card_mesh()
+		card.material_override = m
+		card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		card.scale = Vector3.ONE * 0.0005
+		warm.add_child(card)
+	camera.add_child(warm)
+	warm.position = Vector3(0.0, 0.0, -(camera.near + 0.05))
+	get_tree().create_timer(0.5).timeout.connect(warm.queue_free)
 
 
 ## Kestrel world-art profile (spec addendum W1 to W9). Runs once, when the first real ground layer arrives.
