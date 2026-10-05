@@ -41,8 +41,8 @@ func _card_point(card: Node3D, u: float, v: float) -> Vector3:
 
 ## The sprite a card draws (its material samples a pre-graded copy and names the source).
 func _card_texture(card: Node3D) -> Texture2D:
-	var m := (card as MeshInstance3D).material_override as StandardMaterial3D
-	return m.get_meta("source_texture", m.albedo_texture)
+	var m := (card as MeshInstance3D).material_override
+	return m.get_meta("source_texture", (m as StandardMaterial3D).albedo_texture if m is StandardMaterial3D else null)
 
 
 ## Mean luma and mean chroma (max - min channel) of the painted body (alpha > 250) of an RGBA8 image.
@@ -275,56 +275,103 @@ func test_bars_crown_and_label_sit_over_the_painted_top(t) -> void:
 	scene.free()
 
 
-func test_construction_shows_the_foundation_then_the_building(t) -> void:
-	# StructureSelected draws a site as the 'fnd' sprite at 170 px (the barracks it becomes is 200 px); the bars, the pick
-	# box and the crown follow what is drawn
+func _site(scene: Node3D, id: int, kind: String, owner: int, tile: Vector2i, progress: float) -> Dictionary:
+	var bits: Vector2i = scene._world_to_sim_bits(scene._hex_world(tile.x, tile.y))
+	return {"id": id, "category": "building", "kind": kind, "owner": owner, "x_bits": bits.x, "z_bits": bits.y,
+		"hp_bits": 65536 * 100, "max_hp_bits": 65536 * 100, "construction": int(round((1.0 - progress) * 100.0)), "construction_total": 100}
+
+
+func test_a_site_rises_as_its_own_painting_from_the_bottom_up(t) -> void:
+	# the user read the foundation slab as a ruin: a site now draws the building's own painting, revealed from the bottom
+	# of its painted body up by the build progress under a scaffold tint, at the building's own width; the bars, the pick
+	# box and the crown follow the revealed part
 	var scene := _kestrel_scene()
 	var cos_pitch := _cos_pitch()
-	var bits: Vector2i = scene._world_to_sim_bits(scene._hex_world(10, 10))
-	var entity := {"id": 940, "category": "building", "kind": "Barracks", "owner": 0, "x_bits": bits.x, "z_bits": bits.y,
-		"hp_bits": 65536 * 100, "max_hp_bits": 65536 * 100, "construction": 60, "construction_total": 100}
-	scene._sync_bridge_entities([entity])
-	var root: Node3D = scene.bridge_nodes[940]
-	var visual := root.get_node("Visual") as Node3D
-	t.ok(_card_texture(visual).resource_path.ends_with("/foundation_v1.png"), "under construction: the foundation sprite")
-	t.near(visual.scale.x, 170.0 / 82.0 * WorldArt.TILE, 0.001, "drawn at the boards' 170 px foundation size")
-	t.near(visual.scale.y, visual.scale.x, 1e-6, "never squashed by the growth")
-	t.ok((root.get_meta("pick_parts") as Array)[0].is_equal_approx(_expected_pick_box(visual)), "the site picks by the foundation's body")
-	var top := _card_point(visual, 0.5, WorldSprites.opaque_bounds(_card_texture(visual)).position.y).y * cos_pitch
-	var bar := (root.get_node("HealthBack") as Node3D).position.y * cos_pitch
-	t.ok(bar > top and bar < top + 0.2, "the site's bars ride the foundation's top (%.3f over it)" % (bar - top))
-	var site_scale := visual.scale.x
-	entity.construction = 0
-	scene._sync_bridge_entities([entity])
-	t.ok(_card_texture(visual) == WorldSprites.texture_for("Barracks", 0), "complete: the finished sprite")
-	t.near(visual.scale.x, float(WorldArt.BUILDING_TILES.Barracks) * WorldArt.TILE, 0.001, "at the barracks' own 200 px")
-	t.ok(visual.scale.x > site_scale * 1.1, "it grows from the smaller site (%.3f > %.3f)" % [visual.scale.x, site_scale])
-	t.ok((root.get_meta("pick_parts") as Array)[0].is_equal_approx(_expected_pick_box(visual)), "and picks by the barracks' body")
-	top = _card_point(visual, 0.5, WorldSprites.opaque_bounds(_card_texture(visual)).position.y).y * cos_pitch
-	bar = (root.get_node("HealthBack") as Node3D).position.y * cos_pitch
-	t.ok(bar > top and bar < top + 0.2, "its bars moved up with it (%.3f over the top)" % (bar - top))
-	t.ok(float(root.get_meta("crown_y")) * cos_pitch > top, "the crown rides the finished roof")
+	var entity := _site(scene, 940, "Barracks", 0, Vector2i(10, 10), 0.25)
+	var tex := WorldSprites.texture_for("Barracks", 0)
+	var body := WorldSprites.opaque_bounds(tex)
+	var last_bar := -INF
+	var root: Node3D = null
+	var visual: MeshInstance3D = null
+	for progress in [0.25, 0.5, 1.0]:
+		entity.construction = int(round((1.0 - progress) * 100.0))
+		scene._sync_bridge_entities([entity])
+		root = scene.bridge_nodes[940]
+		visual = root.get_node("Visual") as MeshInstance3D
+		var what := "at %d %%" % int(progress * 100.0)
+		t.ok(_card_texture(visual) == tex, "%s: its own painting, never the foundation slab" % what)
+		t.near(visual.scale.x, float(WorldArt.BUILDING_TILES.Barracks) * WorldArt.TILE, 0.001, "%s: at the barracks' own 200 px" % what)
+		t.near(WorldSprites.drawn_reveal(visual), progress, 0.001, "%s: revealed by the progress" % what)
+		var drawn := WorldSprites.drawn_bounds(tex, progress)
+		t.near(drawn.end.y, body.end.y, 1e-6, "%s: from the painted base" % what)
+		t.near(drawn.size.y, body.size.y * progress, 1e-4, "%s: up by the progress" % what)
+		var shadow := visual.get_node("SpriteShadow") as MeshInstance3D
+		if progress < 1.0:
+			var m := visual.material_override as ShaderMaterial
+			t.ok(m != null and m != WorldSprites.material_for(tex), "%s: the site shader, not the finished material" % what)
+			if m != null:
+				t.near(float(m.get_shader_parameter("cut")), drawn.position.y, 1e-6, "%s: the build line at the revealed top" % what)
+				t.ok(m.get_shader_parameter("sprite") == (WorldSprites.material_for(tex) as StandardMaterial3D).albedo_texture, "%s: the graded painting" % what)
+				t.ok(float(m.get_shader_parameter("tint")) > 0.0 and float(m.get_shader_parameter("tint")) < 0.35, "%s: a faint scaffold tint" % what)
+			var sm := shadow.material_override as ShaderMaterial
+			t.near(float(sm.get_shader_parameter("cut")), drawn.position.y, 1e-6, "%s: the cast shadow is the revealed part's" % what)
+		else:
+			t.ok(visual.material_override == WorldSprites.material_for(tex), "complete: the shared finished material")
+			t.ok(shadow.material_override == WorldSprites.shadow_material_for(tex), "and the shared shadow")
+			t.near(float((shadow.material_override as ShaderMaterial).get_shader_parameter("cut")), 0.0, 0.0, "which hides nothing")
+		t.ok((root.get_meta("pick_parts") as Array)[0].is_equal_approx(_expected_pick_box(visual)), "%s: picks by the revealed body" % what)
+		var top := _card_point(visual, 0.5, drawn.position.y).y * cos_pitch
+		var bar := (root.get_node("HealthBack") as Node3D).position.y * cos_pitch
+		t.ok(bar > top and bar < top + 0.2, "%s: the bars ride the revealed top (%.3f over it)" % [what, bar - top])
+		t.ok(bar > last_bar, "%s: and rise with it" % what)
+		t.ok(float(root.get_meta("crown_y")) * cos_pitch > top, "%s: the crown over it" % what)
+		last_bar = bar
 	scene.free()
 
 
-func test_a_site_never_draws_wider_than_its_building_and_an_enemy_site_takes_the_one_foundation(t) -> void:
+func test_site_materials_are_per_card_and_finished_ones_shared(t) -> void:
 	var scene := _kestrel_scene()
-	var entities := []
-	var id := 942
-	for kind_owner in [["Wall", 0], ["GunTurret", 0], ["CommandCenter", 1]]:
-		var bits: Vector2i = scene._world_to_sim_bits(scene._hex_world(6 + id - 942, 12))
-		entities.append({"id": id, "category": "building", "kind": kind_owner[0], "owner": kind_owner[1], "x_bits": bits.x,
-			"z_bits": bits.y, "hp_bits": 65536 * 100, "max_hp_bits": 65536 * 100, "construction": 10, "construction_total": 100})
-		id += 4
-	scene._sync_bridge_entities(entities)
-	var wall := scene.bridge_nodes[942].get_node("Visual") as Node3D
-	t.near(wall.scale.x, float(WorldArt.BUILDING_TILES.Wall) * WorldArt.TILE, 0.001, "a wall site is the wall's 100 px, not 170")
-	var turret := scene.bridge_nodes[946].get_node("Visual") as Node3D
-	t.near(turret.scale.x, float(WorldArt.BUILDING_TILES.GunTurret) * WorldArt.TILE, 0.001, "a turret site its 115 px")
-	var alien := scene.bridge_nodes[950].get_node("Visual") as Node3D
-	t.ok(_card_texture(alien).resource_path.ends_with("/foundation_v1.png"), "the boards paint no alien foundation: an enemy site takes the one")
-	t.near(alien.scale.x, 170.0 / 82.0 * WorldArt.TILE, 0.001, "at 170 px")
+	scene._sync_bridge_entities([_site(scene, 960, "PowerPlant", 0, Vector2i(6, 12), 0.3), _site(scene, 961, "PowerPlant", 0, Vector2i(10, 12), 0.7),
+		_site(scene, 962, "PowerPlant", 0, Vector2i(14, 12), 1.0), _site(scene, 963, "PowerPlant", 0, Vector2i(18, 12), 1.0)])
+	var cards := []
+	for id in [960, 961, 962, 963]:
+		cards.append(scene.bridge_nodes[id].get_node("Visual") as MeshInstance3D)
+	t.ok(cards[0].material_override != cards[1].material_override, "two sites each carry their own progress")
+	t.near(float((cards[0].material_override as ShaderMaterial).get_shader_parameter("cut")), WorldSprites.drawn_bounds(_card_texture(cards[0]), 0.3).position.y, 1e-6, "the first at 30 %")
+	t.near(float((cards[1].material_override as ShaderMaterial).get_shader_parameter("cut")), WorldSprites.drawn_bounds(_card_texture(cards[1]), 0.7).position.y, 1e-6, "the second at 70 %")
+	t.ok((cards[0].material_override as ShaderMaterial).shader == (cards[1].material_override as ShaderMaterial).shader, "one site shader")
+	t.ok(cards[2].material_override == cards[3].material_override, "finished buildings share one material per texture")
 	scene.free()
+
+
+func test_a_fresh_site_is_scaffold_with_a_pickable_base_and_never_the_finished_painting(t) -> void:
+	# progress 0 (just placed): nothing of the painting is built yet, the scaffold stands over the footprint; the pick box
+	# keeps a floor of SITE_PICK_FLOOR of the body so the site can be clicked. Destroyed (dropped by the sim) it is gone,
+	# and it never drew the finished painting on the way.
+	var scene := _kestrel_scene()
+	var entity := _site(scene, 970, "Refinery", 1, Vector2i(9, 14), 0.0)
+	scene._sync_bridge_entities([entity])
+	var root: Node3D = scene.bridge_nodes[970]
+	var visual := root.get_node("Visual") as MeshInstance3D
+	var tex := WorldSprites.texture_for("Refinery", 1)
+	t.ok(_card_texture(visual) == tex, "an enemy site raises its own alien painting (no shared foundation)")
+	t.near(WorldSprites.drawn_reveal(visual), 0.0, 1e-6, "nothing built yet")
+	var m := visual.material_override as ShaderMaterial
+	t.ok(m != null, "the site shader")
+	if m != null:
+		t.near(float(m.get_shader_parameter("cut")), WorldSprites.opaque_bounds(tex).end.y, 1e-6, "the build line at the painted base")
+	var floor_box := WorldSprites.drawn_bounds(tex, WorldSprites.SITE_PICK_FLOOR)
+	var pick: AABB = (root.get_meta("pick_parts") as Array)[0]
+	t.ok(pick.size.y > 0.0, "a fresh site can be clicked")
+	t.near(pick.size.y, WorldSprites.pick_box(tex, visual.scale.x, visual.position.y, false, WorldSprites.SITE_PICK_FLOOR).size.y, 1e-5, "by its base, %.2f of the body" % WorldSprites.SITE_PICK_FLOOR)
+	t.ok(floor_box.size.y > 0.0, "floor box")
+	scene.bridge_initialized = false  # headless: no session log or death effect to report the loss to
+	scene._sync_bridge_entities([])
+	t.ok(not scene.bridge_nodes.has(970), "destroyed: the site leaves the world")
+	t.ok(root.is_queued_for_deletion(), "and its card goes with it")
+	scene.free()
+	if is_instance_valid(root):
+		root.free()
 
 
 func test_missing_sprites_never_crash_and_keep_what_draws(t) -> void:
@@ -332,10 +379,10 @@ func test_missing_sprites_never_crash_and_keep_what_draws(t) -> void:
 	t.eq(WorldSprites.shadow_material_for(null), null, "nor a shadow material")
 	t.eq(WorldSprites.contact_material_for(null), null, "nor a contact material")
 	var card := WorldSprites.make_card("Barracks", 0, 2.44)
-	WorldSprites.unavailable[WorldSprites.FOUNDATION] = true
-	t.eq(WorldSprites.foundation(), null, "an unavailable foundation is null")
-	WorldSprites.show_built(card, false)
-	t.ok(_card_texture(card) == WorldSprites.texture_for("Barracks", 0), "a site without a foundation sprite keeps its finished one")
+	WorldSprites.show_progress(card, 0.5)
+	t.ok(_card_texture(card) == WorldSprites.texture_for("Barracks", 0), "a site draws its own painting")
+	WorldSprites.show_progress(card, 1.0)
+	t.ok(card.material_override == WorldSprites.material_for(WorldSprites.texture_for("Barracks", 0)), "and finishes on the shared one")
 	WorldSprites.unavailable["barracks_v2"] = true
 	WorldSprites.unavailable["alien_barracks_v1"] = true
 	t.eq(WorldSprites.texture_for("Barracks", 1), null, "both paintings unavailable: no texture (the caller keeps its model)")
@@ -351,7 +398,7 @@ func test_the_sprite_catalogue_is_prewarmed_with_the_kestrel_ground(t) -> void:
 	WorldSprites.clear_caches()
 	t.eq(WorldSprites._bounds.size(), 0, "cleared")
 	var scene := _kestrel_scene()
-	var paths := {WorldSprites.DIR % WorldSprites.FOUNDATION: true}
+	var paths := {}
 	for kind in WorldSprites.SPRITES:
 		for owner in [0, 1]:
 			paths[WorldSprites.texture_for(kind, owner).resource_path] = true
@@ -414,7 +461,7 @@ func _overlay(anchor: Node3D, at: Vector3, node: Node3D, own: Vector3) -> void:
 ## The pick box a card must have, from its opaque rect through this file's own projection (_card_point): its corners land
 ## on the rect's corners on screen (mirrored: the rect read right to left).
 func _expected_pick_box(card: Node3D, mirrored := false) -> AABB:
-	var r := WorldSprites.opaque_bounds(_card_texture(card))
+	var r := WorldSprites.drawn_bounds(_card_texture(card), maxf(WorldSprites.drawn_reveal(card), WorldSprites.SITE_PICK_FLOOR))
 	var u0 := 1.0 - r.end.x if mirrored else r.position.x
 	var lo := _card_point(card, u0, r.end.y)
 	var hi := _card_point(card, u0 + r.size.x, r.position.y)
@@ -539,8 +586,10 @@ func test_card_casts_the_boards_silhouette_shadow(t) -> void:
 	t.ok(WorldSprites.SHADOW_GAIN > 1.0, "the post chain lifts dark ground: the live shadows are drawn stronger")
 	t.near(float(m.get_shader_parameter("strength")), 0.40 * 0.52 * WorldSprites.SHADOW_GAIN, 0.001, "the boards' opacity, compensated")
 	t.ok(m.get_shader_parameter("sprite") == WorldSprites.texture_for("CommandCenter", 0), "the sprite's own silhouette")
-	WorldSprites.show_built(card, false)
-	t.ok((shadow.material_override as ShaderMaterial).get_shader_parameter("sprite") == WorldSprites.foundation(), "a site's shadow is the foundation's")
+	WorldSprites.show_progress(card, 0.4)
+	var site_shadow := shadow.material_override as ShaderMaterial
+	t.ok(site_shadow != m and site_shadow.get_shader_parameter("sprite") == WorldSprites.texture_for("CommandCenter", 0), "a site casts its own painting's shadow")
+	t.near(float(site_shadow.get_shader_parameter("cut")), WorldSprites.drawn_bounds(WorldSprites.texture_for("CommandCenter", 0), 0.4).position.y, 1e-6, "cut at the build line")
 	card.free()
 	other.free()
 

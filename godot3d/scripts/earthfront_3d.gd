@@ -1584,7 +1584,7 @@ func _parts_hold(node: Node3D, point: Vector2, to_screen: Callable) -> bool:
 		if card == null or rect.size.x <= 0.0 or rect.size.y <= 0.0:
 			return true
 		var tex := WorldSprites.drawn_texture(card)
-		if tex == null or WorldSprites.box_hit(tex, (point - rect.position) / rect.size, bool(card.get_meta("mirrored", false))):
+		if tex == null or WorldSprites.box_hit(tex, (point - rect.position) / rect.size, bool(card.get_meta("mirrored", false)), WorldSprites.pick_reveal(card)):
 			return true
 	return false
 
@@ -1605,8 +1605,8 @@ var _ring_materials: Array[StandardMaterial3D] = []  # depth tested (buildings),
 
 
 ## Kestrel: the selection ellipse under `node`: {centre: its ground point (scene space), rx, rz: its radii along x and z}.
-## A sprite card takes the boards' ellipse round its painted base (WorldSprites.ring: the drawn sprite, the foundation on
-## a site, mirrored with a unit's card, on the ground under a gunship); a fitted model a circle 0.55 of its width.
+## A sprite card takes the boards' ellipse round its painted base (WorldSprites.ring: the drawn sprite, a site's own,
+## mirrored with a unit's card, on the ground under a gunship); a fitted model a circle 0.55 of its width.
 func _ring_shape(node: Node3D) -> Dictionary:
 	var card := _sprite_card(node)
 	var shape := {}
@@ -2415,8 +2415,8 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	visual.name = "Visual"
 	var bar_y: Array = [1.15, 1.155, 1.24, 1.245]  # health back, fill, shield back, fill
 	if card != null:
-		# the card is BUILDING_TILES wide (a site: the foundation's width); _fit_building_card puts the bars, crown and label
-		# on the painted top and the pick box on the painted body, once the bars exist
+		# the card is BUILDING_TILES wide (a site too: it rises as its own painting); _fit_building_card puts the bars, crown
+		# and label on the drawn top and the pick box on the drawn body, once the bars exist
 		var tiles := float(WorldArt.BUILDING_TILES.get(kind_name, 1.7))
 		var tex: Texture2D = card.get_meta("sprite_texture")
 		var width := card.scale.x
@@ -2475,26 +2475,25 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	shield_fill.name = "ShieldFill"
 	shield_fill.visible = false
 	if card != null:
-		_fit_building_card(root, card, true)
+		_fit_building_card(root, card, 1.0)
 	return root
 
 
-## Kestrel: sizes a building's card for the sprite it draws (WorldSprites.show_built: the foundation at the boards' site
-## width while under construction, the finished sprite at its own) and moves what rides the painting with it: the card's
-## lift over the ground strip, the visual width, the pick box, the bars, the crown and the relay label.
-func _fit_building_card(root: Node3D, card: MeshInstance3D, built: bool) -> void:
-	var tex := WorldSprites.show_built(card, built)
-	card.set_meta("built", built)
+## Kestrel: shows a building `progress` (0..1) built (WorldSprites.show_progress: a site rises as its own painting from
+## the painted base up, under a scaffold tint, at the building's own width) and moves what rides the drawn top with it:
+## the card's lift over the ground strip, the visual width, the pick box (the drawn body, a fresh site's base), the bars,
+## the crown and the relay label.
+func _fit_building_card(root: Node3D, card: MeshInstance3D, progress: float) -> void:
+	var tex := WorldSprites.show_progress(card, progress)
+	var reveal := WorldSprites.drawn_reveal(card)
 	var kind := String(root.get_meta("kind_name", ""))
 	var tiles := float(WorldArt.BUILDING_TILES.get(kind, 1.7))
-	if tex != card.get_meta("sprite_texture"):
-		tiles = WorldSprites.foundation_tiles(kind)
 	var width := tiles * WorldArt.TILE
 	card.scale = Vector3.ONE * width
 	card.position.y = _card_lift(root.position, width)
 	root.set_meta("visual_tiles", tiles)
-	root.set_meta("pick_parts", [WorldSprites.pick_box(tex, width, card.position.y)])
-	var top := WorldSprites.body_top_y(tex, width, card.position.y)
+	root.set_meta("pick_parts", [WorldSprites.pick_box(tex, width, card.position.y, false, WorldSprites.pick_reveal(card))])
+	var top := WorldSprites.body_top_y(tex, width, card.position.y, reveal)
 	var bar_y := {"HealthBack": 0.18, "HealthFill": 0.185, "ShieldBack": 0.27, "ShieldFill": 0.275}
 	for bar in bar_y:
 		var part := root.get_node_or_null(bar) as Node3D
@@ -2636,10 +2635,13 @@ func _sync_bridge_entities(entities: Array) -> void:
 				var shield_back := entity_node.get_node_or_null("ShieldBack") as MeshInstance3D
 				shield_back.visible = shield_fill.visible
 		var visual := entity_node.get_node_or_null("Visual") as Node3D
-		if visual and visual.has_meta("sprite_kind"):  # a sprite card: the foundation while it is built, never squashed
-			var built := int(entity_data.get("construction", 0)) <= 0
-			if bool(visual.get_meta("built", true)) != built:
-				_fit_building_card(entity_node, visual as MeshInstance3D, built)
+		if visual and visual.has_meta("sprite_kind"):  # a sprite card: a site rises as its own painting, never squashed
+			var remaining := int(entity_data.get("construction", 0))
+			var progress := 1.0 if remaining <= 0 else clampf(1.0 - float(remaining) / float(maxi(1, int(entity_data.get("construction_total", 1)))), 0.0, 1.0)
+			if remaining > 0:
+				progress = minf(progress, 0.999)  # still a site until the sim says it is done
+			if not is_equal_approx(WorldSprites.drawn_reveal(visual), progress):
+				_fit_building_card(entity_node, visual as MeshInstance3D, progress)
 			visual.visible = true
 		elif visual:
 			var remaining := int(entity_data.get("construction", 0))
@@ -2844,7 +2846,7 @@ func _hex_occupied(tile: Vector2i) -> bool:
 		var card := _sprite_card(node)
 		if card != null:  # a sprite covers the hexes its painted body hides on screen (as drawn: lifted, mirrored, a site)
 			if WorldSprites.covers_ground(WorldSprites.drawn_texture(card), card.scale.x, Vector2(centre.x - at.x, centre.z - at.z),
-					card.position.y, bool(card.get_meta("mirrored", false))):
+					card.position.y, bool(card.get_meta("mirrored", false)), WorldSprites.drawn_reveal(card)):
 				return true
 			continue
 		# a fitted model wider than its hex (the 2.8-tile CC) covers its neighbours' centres too

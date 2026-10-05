@@ -22,8 +22,13 @@ const CARD_LIFT := 0.03  # the card's ground strip rides this far over the terra
 const OPAQUE_ALPHA := 128  # a pixel above this alpha is painted body (picking, bars, pad); softer pixels are edge glow
 const MASK_CELLS := 64  # the paint mask's grid (a 256 px sprite: 4 px cells)
 const FOOTPRINT := 0.65  # the painted footprint's centre line, as a fraction of the card height from its top
-const FOUNDATION := "foundation_v1"
-const FOUNDATION_PX := 170.0  # StructureSelected draws the site sprite ('fnd') 170 px wide
+## A construction site draws its own building's painting revealed from the painted base up by the build progress (the
+## user read the boards' shared foundation slab as a ruin). The built part takes a faint scaffold tint, the rest stands as
+## a faint scaffold lattice over the painting's silhouette.
+const SITE_TINT := 0.18  # the built part's pull toward SITE_SCAFFOLD
+const SITE_SCAFFOLD := Color(0.62, 0.56, 0.40)
+const SITE_LATTICE := 0.52  # the unbuilt lattice's alpha
+const SITE_PICK_FLOOR := 0.15  # a fresh site picks by at least this share of its body, from the base up
 ## The boards' cast shadow (hud.css `.shd`, drawn at the sprite's `sh` opacity): the sprite's silhouette, black, flipped
 ## below its contact line, squashed to SHADOW_SCALE of its height and sheared by SHADOW_SHEAR toward the lower right
 ## (skewX(60deg) scaleY(-.34)), at opacity .40 * .52, blurred (a coarser mip level stands in for the 4 px blur).
@@ -114,6 +119,8 @@ static var _shadow_meshes: Array[ArrayMesh] = [null, null]
 static var _contact_meshes: Array[ArrayMesh] = [null, null]
 static var _shadow_shader: Shader
 static var _shadow_materials := {}  # texture path -> ShaderMaterial
+static var _site_shader: Shader
+static var _site_materials := {}  # texture path -> ShaderMaterial (each site card draws a duplicate: its own cut)
 static var _contact_shader: Shader
 static var _contact_materials := {}  # texture path -> ShaderMaterial
 
@@ -140,11 +147,6 @@ static func texture_for(kind: String, owner: int) -> Texture2D:
 	return tex
 
 
-## The construction site's sprite (the boards paint one, used for both sides), or null.
-static func foundation() -> Texture2D:
-	return _load(FOUNDATION)
-
-
 static func _load(name: String) -> Texture2D:
 	if unavailable.has(name) or not ResourceLoader.exists(DIR % name):
 		return null
@@ -155,12 +157,6 @@ static func _load(name: String) -> Texture2D:
 	return tex
 
 
-## The card width (tiles) a site of `kind` draws its foundation at: the boards' 'fnd' size, FOUNDATION_PX (StructureSelected),
-## never wider than the building it becomes (a wall site is the wall's 100 px).
-static func foundation_tiles(kind: String) -> float:
-	return minf(FOUNDATION_PX / PX_PER_TILE, float(WorldArt.BUILDING_TILES.get(kind, FOUNDATION_PX / PX_PER_TILE)))
-
-
 ## Empties the per-texture caches (bounds, masks, materials); the next use rebuilds them. Tests use it.
 static func clear_caches() -> void:
 	_materials.clear()
@@ -168,13 +164,14 @@ static func clear_caches() -> void:
 	_masks.clear()
 	_shadow_materials.clear()
 	_contact_materials.clear()
+	_site_materials.clear()
 
 
 ## Builds every catalogue sprite's caches at once (the alpha scan, the graded copy, the shadow materials) so the first
 ## frame a kind appears does no image work. earthfront_3d calls it once, as the Kestrel ground comes in.
 static func prewarm() -> void:
 	var seen := {}
-	var all: Array[Texture2D] = [foundation()]
+	var all: Array[Texture2D] = []
 	for kind in SPRITES:
 		for owner in [0, 1]:
 			all.append(texture_for(kind, owner))
@@ -186,6 +183,7 @@ static func prewarm() -> void:
 		material_for(tex)
 		shadow_material_for(tex)
 		contact_material_for(tex)
+		site_material_for(tex)
 
 
 ## One shared unshaded material per texture: alpha blended with a depth pre-pass, so the painted body hides what stands
@@ -250,17 +248,41 @@ static func painted_at(tex: Texture2D, uv: Vector2) -> bool:
 	return mask[cy * MASK_CELLS + cx] != 0
 
 
-## A click at `frac` of a pick box's screen rectangle (0..1, left to right and top to bottom) lands on paint: the box spans
-## the opaque rect, read right to left on a `mirrored` card.
-static func box_hit(tex: Texture2D, frac: Vector2, mirrored := false) -> bool:
+## The card v of a site's build line: the painted body is drawn from its base (opaque_bounds' bottom) up to here, a share
+## `reveal` (0..1) of its height. A finished building's is the body's top.
+static func reveal_cut(tex: Texture2D, reveal: float) -> float:
 	var r := opaque_bounds(tex)
+	return r.end.y - clampf(reveal, 0.0, 1.0) * r.size.y
+
+
+## The part of the painted body drawn at `reveal`: opaque_bounds from the build line down.
+static func drawn_bounds(tex: Texture2D, reveal := 1.0) -> Rect2:
+	var r := opaque_bounds(tex)
+	var cut := reveal_cut(tex, reveal)
+	return Rect2(r.position.x, cut, r.size.x, r.end.y - cut)
+
+
+## How much of its painting a card draws (show_progress): 1 for a finished building or a unit.
+static func drawn_reveal(card: Node) -> float:
+	return float(card.get_meta("reveal", 1.0))
+
+
+## The reveal a card picks by: what it draws, never less than SITE_PICK_FLOOR (a fresh site can be clicked).
+static func pick_reveal(card: Node) -> float:
+	return maxf(drawn_reveal(card), SITE_PICK_FLOOR)
+
+
+## A click at `frac` of a pick box's screen rectangle (0..1, left to right and top to bottom) lands on paint: the box spans
+## the drawn part of the opaque rect (drawn_bounds at `reveal`), read right to left on a `mirrored` card.
+static func box_hit(tex: Texture2D, frac: Vector2, mirrored := false, reveal := 1.0) -> bool:
+	var r := drawn_bounds(tex, reveal)
 	var u := r.position.x + frac.x * r.size.x
 	if mirrored:
 		u = r.end.x - frac.x * r.size.x
 	return painted_at(tex, Vector2(u, r.position.y + frac.y * r.size.y))
 
 
-## The sprite a card draws now (the foundation while its building is under construction).
+## The sprite a card draws now (a site draws its own building's, revealed: drawn_reveal).
 static func drawn_texture(card: Node) -> Texture2D:
 	var m := (card as GeometryInstance3D).material_override if card is GeometryInstance3D else null
 	if m != null and m.has_meta("source_texture"):
@@ -445,9 +467,10 @@ render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabl
 uniform sampler2D sprite : source_color, filter_linear_mipmap, repeat_disable;
 uniform float strength = 0.208;
 uniform float lod = 2.0;
+uniform float cut = 0.0;
 void fragment() {
     ALBEDO = vec3(0.0);
-    ALPHA = textureLod(sprite, UV, lod).a * strength;
+    ALPHA = textureLod(sprite, UV, lod).a * strength * step(cut, UV.y);
 }
 """
 		var m := ShaderMaterial.new()
@@ -455,9 +478,66 @@ void fragment() {
 		m.set_shader_parameter("sprite", tex)
 		m.set_shader_parameter("strength", SHADOW_ALPHA)
 		m.set_shader_parameter("lod", SHADOW_LOD)
+		m.set_shader_parameter("cut", 0.0)  # a site's copy casts only what it has built (show_progress)
 		m.render_priority = -1  # with the prop decals: under the grid, territory and hover overlays
 		_shadow_materials[key] = m
 	return _shadow_materials[key]
+
+
+## The construction site's material for `tex` (a template: show_progress gives each site card its own copy, since each
+## carries its own build line): the graded painting under the build line `cut`, pulled SITE_TINT toward the scaffold
+## colour with a lit seam along the line; over it, a faint scaffold lattice clipped to the painting's blurred silhouette.
+## It names the sprite in its `source_texture` meta, as material_for does.
+static func site_material_for(tex: Texture2D) -> Material:
+	if tex == null:
+		return null
+	var key := _key(tex)
+	if not _site_materials.has(key):
+		if _site_shader == null:
+			_site_shader = Shader.new()
+			_site_shader.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_prepass_alpha, cull_disabled, shadows_disabled;
+uniform sampler2D sprite : source_color, filter_linear_mipmap, repeat_disable;
+uniform float cut = 1.0;
+uniform float tint = 0.18;
+uniform vec3 scaffold : source_color = vec3(0.62, 0.56, 0.40);
+uniform float lattice = 0.34;
+void fragment() {
+    vec4 c = texture(sprite, UV);
+    float built = step(cut, UV.y);
+    // the built part: the painting under a faint scaffold tint, a lit weld seam along the build line
+    float seam = (1.0 - smoothstep(0.0, 0.02, UV.y - cut)) * built;
+    vec3 body = mix(c.rgb, scaffold, tint);
+    body = mix(body, vec3(1.0, 0.84, 0.48), seam * 0.75);
+    // the unbuilt part: a scaffold lattice (poles, ledgers, braces) and a faint sheeting over the painting's silhouette,
+    // with a plank deck just over the build line
+    float sil = smoothstep(0.2, 0.6, textureLod(sprite, UV, 2.5).a);
+    vec2 g = UV * vec2(11.0, 13.0);
+    vec2 cell = fract(g);
+    vec2 w = fwidth(g) * 1.4 + 0.05;
+    float pole = 1.0 - smoothstep(0.0, w.x, min(cell.x, 1.0 - cell.x));
+    float ledger = 1.0 - smoothstep(0.0, w.y, min(cell.y, 1.0 - cell.y));
+    float brace = 1.0 - smoothstep(0.0, w.x * 1.3, abs(cell.x - cell.y));
+    float deck = 1.0 - smoothstep(0.012, 0.022, cut - UV.y);
+    float frame = max(max(pole, ledger), brace * 0.55);
+    vec3 steel = mix(scaffold * 0.55, vec3(0.76, 0.70, 0.54), frame);
+    steel = mix(steel, vec3(0.42, 0.33, 0.22), deck);
+    float sheet = 0.16;
+    ALBEDO = mix(steel, body, built);
+    ALPHA = mix(sil * max(max(frame * lattice, sheet), deck * 0.9), c.a, built);
+}
+"""
+		var m := ShaderMaterial.new()
+		m.shader = _site_shader
+		m.set_shader_parameter("sprite", (material_for(tex) as StandardMaterial3D).albedo_texture)
+		m.set_shader_parameter("cut", 1.0)
+		m.set_shader_parameter("tint", SITE_TINT)
+		m.set_shader_parameter("scaffold", SITE_SCAFFOLD)
+		m.set_shader_parameter("lattice", SITE_LATTICE)
+		m.set_meta("source_texture", tex)
+		_site_materials[key] = m
+	return _site_materials[key]
 
 
 static func _quad(st: SurfaceTool, p: Array, uv: Array) -> void:
@@ -524,31 +604,46 @@ static func face(card: MeshInstance3D, dx: float) -> bool:
 	return true
 
 
-## Shows the foundation while the building is under construction (its own sprite when no foundation loads), its own
-## sprite once it is done. Returns the sprite now drawn; earthfront_3d sizes the card for it.
-static func show_built(card: MeshInstance3D, built: bool) -> Texture2D:
-	var tex: Texture2D = null if built else foundation()
-	if tex == null:
-		tex = card.get_meta("sprite_texture")
-	var m := material_for(tex)
-	if card.material_override != m:
-		card.material_override = m
-		var shadow := card.get_node_or_null("SpriteShadow") as MeshInstance3D
+## Shows a building `progress` (0..1) built: under 1, its own painting from the base up to reveal_cut, through its own
+## copy of the site material (and its cast shadow through its own copy of the shadow material, cut the same); at 1 the
+## shared finished materials. Returns the sprite drawn; earthfront_3d fits the bars and the pick box to drawn_reveal.
+static func show_progress(card: MeshInstance3D, progress: float) -> Texture2D:
+	var tex: Texture2D = card.get_meta("sprite_texture")
+	progress = clampf(progress, 0.0, 1.0)
+	card.set_meta("reveal", progress)
+	var shadow := card.get_node_or_null("SpriteShadow") as MeshInstance3D
+	if progress >= 1.0:
+		var m := material_for(tex)
+		if card.material_override != m:
+			card.material_override = m
+			if shadow != null:
+				shadow.material_override = shadow_material_for(tex)
+		return tex
+	var site := card.material_override as ShaderMaterial
+	if site == null or not site.has_meta("site_of"):
+		site = site_material_for(tex).duplicate() as ShaderMaterial
+		site.set_meta("source_texture", tex)
+		site.set_meta("site_of", card.get_instance_id())
+		card.material_override = site
 		if shadow != null:
-			shadow.material_override = shadow_material_for(tex)
+			shadow.material_override = shadow_material_for(tex).duplicate()
+	var cut := reveal_cut(tex, progress)
+	site.set_shader_parameter("cut", cut)
+	if shadow != null:
+		(shadow.material_override as ShaderMaterial).set_shader_parameter("cut", cut)
 	return tex
 
 
 ## The painted body's height over the root, as a vertical offset in the root's space whose screen point is the body's top
 ## (the Kestrel camera shows a vertical metre as cos_pitch() of a screen metre). `width` is the card width (world units).
-static func body_top_y(tex: Texture2D, width: float, lift: float = CARD_LIFT) -> float:
-	return lift + (FOOT - opaque_bounds(tex).position.y) * width * ASPECT / cos_pitch()
+static func body_top_y(tex: Texture2D, width: float, lift: float = CARD_LIFT, reveal := 1.0) -> float:
+	return lift + (FOOT - reveal_cut(tex, reveal)) * width * ASPECT / cos_pitch()
 
 
 ## The pick box: a flat box in the root's space whose eight corners project onto the painted body's screen rectangle
 ## (earthfront_3d._parts_hold), so a click on a transparent corner of the card is not a click on the building.
-static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirrored := false) -> AABB:
-	var r := opaque_bounds(tex)
+static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirrored := false, reveal := 1.0) -> AABB:
+	var r := drawn_bounds(tex, reveal)
 	if mirrored:
 		r.position.x = 1.0 - r.end.x
 	var h := width * ASPECT
@@ -559,8 +654,8 @@ static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirr
 
 ## Whether the painted body's box covers the ground point `offset` (x, z from the root) on screen: hover outlines skip it.
 ## `lift` is the card's height over the root (it shows the painting lift * cos_pitch higher), `mirrored` its facing.
-static func covers_ground(tex: Texture2D, width: float, offset: Vector2, lift := 0.0, mirrored := false) -> bool:
-	var r := opaque_bounds(tex)
+static func covers_ground(tex: Texture2D, width: float, offset: Vector2, lift := 0.0, mirrored := false, reveal := 1.0) -> bool:
+	var r := drawn_bounds(tex, reveal)
 	if mirrored:
 		r.position.x = 1.0 - r.end.x
 	var h := width * ASPECT
