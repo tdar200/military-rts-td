@@ -60,10 +60,9 @@ static func clear_caches() -> void:
 	cache_hits = 0
 
 
-## The colour the 3D terrain gives a ground glyph (continuous_terrain.gd GROUND_LOOK): the one palette of the whole client.
+## The UI key colour of a ground glyph (continuous_terrain.gd GROUND_LEGEND, next to the 3D albedo in GROUND_LOOK).
 static func ground_color(glyph: String) -> Color:
-	var look: Array = Look.GROUND_LOOK.get(glyph, Look.GROUND_LOOK["g"])
-	return Color(str(look[2]))
+	return Color(str(Look.GROUND_LEGEND.get(glyph, Look.GROUND_LEGEND["g"])))
 
 
 ## One mesh for a list of cells [[x, y]] with a colour each (vertex colours), so a whole map is a single draw call.

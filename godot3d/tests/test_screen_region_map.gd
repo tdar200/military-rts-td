@@ -137,8 +137,14 @@ func test_ground_mesh_is_cached_per_ground(t) -> void:
 	t.ok(src.contains("Hex.ground_mesh(vm)"), "the ground is drawn from the cached mesh")
 
 
-func test_ground_colours_come_from_the_3d_palette(t) -> void:
-	var look: Dictionary = preload("res://scripts/continuous_terrain.gd").GROUND_LOOK
+func test_ground_colours_come_from_the_shared_legend(t) -> void:
+	var terrain := preload("res://scripts/continuous_terrain.gd")
+	var look: Dictionary = terrain.GROUND_LOOK
+	var legend: Dictionary = terrain.GROUND_LEGEND
 	for glyph in look:
-		t.eq(Hex.ground_color(glyph), Color(str(look[glyph][2])), "glyph %s uses the 3D ground colour" % glyph)
+		t.ok(legend.has(glyph), "glyph %s has a legend colour" % glyph)
+		t.eq(Hex.ground_color(glyph), Color(str(legend.get(glyph, ""))), "glyph %s uses the shared legend colour" % glyph)
+	# The UI key stays the palette the gp11 board was matched against; the 3D albedo is calibrated for the grade separately.
+	t.eq(String(legend["f"]), "c9923a", "Dry Flats key colour")
+	t.eq(String(legend["h"]), "6e747a", "Highland key colour")
 	Hex.clear_caches()  # the static mesh caches outlive the tests; drop them so the exit leak check stays quiet

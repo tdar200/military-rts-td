@@ -151,10 +151,10 @@ func test_stub_kestrel_flag_loads_the_fixture(t) -> void:
 func test_ground_look_pins_height_colour_and_wetness_per_glyph(t) -> void:
 	var look: Dictionary = Terrain.GROUND_LOOK
 	t.near(float(look["w"][0]), -0.15, 0.001, "the ford sits at -0.15, between the river bed and the flats")
-	t.eq(String(look["w"][2]), "6fb0c4", "the ford has its own shallow-water colour")
+	t.eq(String(look["w"][2]), "87d6e8", "the ford has its own shallow-water colour")
 	t.eq(float(look["w"][3]), 1.0, "the ford reads as wet")
 	t.near(float(look["r"][0]), -0.50, 0.001, "the river bed is deeper than the ford")
-	t.near(float(look["h"][0]), 1.60, 0.001, "highland is the tall ground")
+	t.near(float(look["h"][0]), 0.70, 0.001, "highland is low rocky ground (spec addendum W4)")
 	t.eq(float(look["h"][3]), 0.0, "highland is dry")
 	var m = GroundModel.from_snapshot(_snap())
 	var terrain := _terrain(m)
@@ -163,7 +163,7 @@ func test_ground_look_pins_height_colour_and_wetness_per_glyph(t) -> void:
 	t.ok(ford.x >= 0 and river.x >= 0, "the fixture has a ford and a river")
 	var i: int = ford.y * 44 + ford.x
 	t.near(float(terrain._cell_h[i]), -0.15, 0.001, "the baked ford cell is at -0.15")
-	t.eq(terrain._cell_color[i], Color("6fb0c4").srgb_to_linear(), "the baked ford cell has the wet colour")
+	t.eq(terrain._cell_color[i], Color("87d6e8").srgb_to_linear(), "the baked ford cell has the wet colour")
 	t.eq(float(terrain._cell_wet[i]), 1.0, "the baked ford cell is wet")
 	var h_ford := _height_at_cell(terrain, ford.x, ford.y)
 	var h_river := _height_at_cell(terrain, river.x, river.y)

@@ -59,3 +59,40 @@ func test_survival_keeps_the_legacy_environment(t) -> void:
 	t.eq(env.background_mode, Environment.BG_SKY, "sky background")
 	t.ok(scene.world_atmosphere == null, "no atmosphere layer")
 	scene.free()
+
+
+## Byte-level pins of the Survival terrain (noise shader source, every mesh channel) taken on f258da1, before the Kestrel
+## painted ground: Survival's terrain look must not move when the snapshot-driven ground changes.
+func _mesh_digest(mesh: ArrayMesh) -> String:
+	var arrays := mesh.surface_get_arrays(0)
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	for slot in [Mesh.ARRAY_VERTEX, Mesh.ARRAY_NORMAL, Mesh.ARRAY_COLOR, Mesh.ARRAY_TEX_UV, Mesh.ARRAY_TEX_UV2, Mesh.ARRAY_INDEX]:
+		ctx.update(var_to_bytes(arrays[slot]))
+	return ctx.finish().hex_encode()
+
+
+func test_survival_keeps_the_legacy_terrain_look(t) -> void:
+	var scene := _survival_scene()
+	var terrain: Node3D = scene.terrain_renderer
+	var inst := terrain.get_node("ContinuousPainterlyTerrain") as MeshInstance3D
+	var mat := inst.material_override as ShaderMaterial
+	t.ok(terrain.ground == null, "no ground model in Survival")
+	t.eq(mat.shader.code.sha256_text(), "7703388a649501384902595f77763aea8ebe71be18ac2c254c4dd34bb51de5bb", "noise shader source unchanged")
+	t.eq(_mesh_digest(inst.mesh as ArrayMesh), "fbadf6e28b06edba4f3dee3ecc601ff0b34ecfc18e54bd66bb7c817a46ec0121", "terrain mesh (positions, normals, colours, UVs, indices) unchanged")
+	t.ok(mat.get_shader_parameter("rock_texture") == null, "no rock texture on the Survival terrain")
+	t.eq((inst.mesh as ArrayMesh).surface_get_format(0) & Mesh.ARRAY_FORMAT_TEX_UV2, 0, "no UV2 channel in Survival")
+	scene.free()
+
+
+func test_only_kestrel_gets_the_painted_ground(t) -> void:
+	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+	var m = load("res://scripts/terrain/ground_model.gd").from_snapshot(JSON.parse_string(f.get_as_text()))
+	var terrain: Node3D = load("res://scripts/continuous_terrain.gd").new()
+	terrain.configure(44, 26, 2.1, 1.0, 0.68, 0.70, null)
+	terrain.apply_ground(m)
+	var inst := terrain.get_node("ContinuousPainterlyTerrain") as MeshInstance3D
+	var mat := inst.material_override as ShaderMaterial
+	t.ok(mat.get_shader_parameter("rock_texture") is Texture2D, "Kestrel ground carries the rock texture")
+	t.ok((inst.mesh as ArrayMesh).surface_get_format(0) & Mesh.ARRAY_FORMAT_TEX_UV2 != 0, "Kestrel ground carries UV2 (sea, rock)")
+	terrain.free()

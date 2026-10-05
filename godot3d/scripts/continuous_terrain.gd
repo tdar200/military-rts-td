@@ -18,16 +18,23 @@ var _detail_texture: Texture2D
 
 ## Per-glyph look of the snapshot ground layer: base height, noise amplitude, sRGB colour, water flag.
 const GROUND_LOOK := {
-	"g": [0.20, 0.08, "6a9a3a", 0.0],
-	"m": [0.20, 0.08, "97a64a", 0.0],
-	"f": [0.05, 0.02, "c9923a", 0.0],
-	"h": [1.60, 0.05, "6e747a", 0.0],
-	"t": [0.30, 0.05, "2f8a52", 0.0],
-	"r": [-0.50, 0.0, "3f86b8", 1.0],
-	"w": [-0.15, 0.0, "6fb0c4", 1.0],
-	"s": [0.05, 0.0, "c9b27a", 0.0],
-	"o": [-0.80, 0.0, "2a6a9a", 1.0],
-	"c": [-0.30, 0.0, "5b5346", 0.0],
+	"g": [0.20, 0.08, "a8af5e", 0.0],
+	"m": [0.20, 0.08, "abab66", 0.0],
+	"f": [0.05, 0.03, "c5ac71", 0.0],
+	"h": [0.70, 0.12, "d6d0cc", 0.0],
+	"t": [0.26, 0.05, "7b8a4e", 0.0],
+	"r": [-0.50, 0.0, "488faf", 1.0],
+	"w": [-0.15, 0.0, "87d6e8", 1.0],
+	"s": [0.05, 0.0, "d4bb8a", 0.0],
+	"o": [-0.80, 0.0, "16567a", 1.0],
+	"c": [-0.30, 0.0, "7b6e59", 0.0],
+}
+## UI key colour per glyph (strategic map, composition bar, terrain guide): the saturated legend the gp11 board was
+## matched against. GROUND_LOOK colours are 3D albedo, calibrated against the Kestrel grade (lighter and calmer than what the
+## eye sees on screen), so the HUD keeps its own key instead of showing albedo.
+const GROUND_LEGEND := {
+	"g": "6a9a3a", "m": "97a64a", "f": "c9923a", "h": "6e747a", "t": "2f8a52",
+	"r": "3f86b8", "w": "6fb0c4", "s": "c9b27a", "o": "2a6a9a", "c": "5b5346",
 }
 const RASTER_STEP := 0.25
 const RASTER_MARGIN := 11.0
@@ -36,8 +43,11 @@ var _cell_h := PackedFloat32Array()
 var _cell_amp := PackedFloat32Array()
 var _cell_color := PackedColorArray()
 var _cell_wet := PackedFloat32Array()
+var _cell_rock := PackedFloat32Array()  # 1.0 on Highland (rock splat), else 0.0
+var _cell_sea := PackedFloat32Array()  # 1.0 on Sea, so the river and the bay can be told apart
 var _raster_h := PackedFloat32Array()
 var _raster_c := PackedColorArray()  # rgb linear ground colour, alpha = water share
+var _raster_x := PackedVector4Array()  # water share, sea share, rock share, sea distance in cells (Task 6; 0.0 here)
 var _raster_cols := 0
 var _raster_rows := 0
 
@@ -87,6 +97,13 @@ func height_at_world(world_x: float, world_z: float) -> float:
 	var gx := (world_x - origin_x) / cell_x
 	var gz := (world_z - origin_z) / cell_z
 	return _surface_height(gx, gz)
+
+
+## Ground channels at a world point: (water share, sea share, rock share, sea distance in cells). Zero on the noise terrain.
+func extras_at_world(world_x: float, world_z: float) -> Vector4:
+	if ground == null:
+		return Vector4.ZERO
+	return _raster_sample_extras((world_x - origin_x) / cell_x, (world_z - origin_z) / cell_z)
 
 
 func biome_at_world(world_x: float, world_z: float) -> float:
@@ -139,8 +156,16 @@ func _add_vertex(surface: SurfaceTool, gx: float, gz: float) -> void:
 	var elevation := _surface_height(gx, gz)
 	var world_x := origin_x + gx * cell_x
 	var world_z := origin_z + gz * cell_z
-	surface.set_color(_raster_sample_color(gx, gz) if ground != null else _biome_color(gx, gz, elevation))
-	surface.set_uv(Vector2(world_x, world_z) * 0.17)
+	if ground != null:
+		# COLOR.rgb class colour, COLOR.a water share, UV.x sea distance, UV2 = (sea share, rock share); detail UVs come
+		# from the world position in the shader.
+		var e := _raster_sample_extras(gx, gz)
+		surface.set_color(_raster_sample_color(gx, gz))
+		surface.set_uv(Vector2(e.w, 0.0))
+		surface.set_uv2(Vector2(e.y, e.z))
+	else:
+		surface.set_color(_biome_color(gx, gz, elevation))
+		surface.set_uv(Vector2(world_x, world_z) * 0.17)
 	var epsilon := 0.05
 	var dx := (_surface_height(gx + epsilon, gz) - _surface_height(gx - epsilon, gz)) / (2.0 * epsilon * cell_x)
 	var dz := (_surface_height(gx, gz + epsilon) - _surface_height(gx, gz - epsilon)) / (2.0 * epsilon * cell_z)
@@ -154,6 +179,8 @@ func _terrain_material(detail_texture: Texture2D) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = shader
 	material.set_shader_parameter("detail_texture", detail_texture)
+	if ground != null:
+		material.set_shader_parameter("rock_texture", load("res://assets/terrain/painterly/highland_v3.png"))
 	return material
 
 
@@ -195,14 +222,22 @@ void fragment() {
 """
 
 
-## Snapshot-driven look: vertex colour is the ground palette, vertex alpha the water share (River, Ford, Sea).
+## Snapshot-driven painted ground (Kestrel only): COLOR.rgb is the class colour, COLOR.a the water share, UV2 the sea and
+## rock shares. The detail texture is splatted twice (straight, and a 37 degree rotated soft-light copy as in gen.py), with
+## low-frequency patches; Highland blends to a grey rock texture.
 func _ground_shader_code() -> String:
 	return """
 shader_type spatial;
 render_mode diffuse_burley;
 uniform sampler2D detail_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D rock_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform float detail_strength = 0.75;
+uniform float rotated_strength = 0.45;
+uniform float patch_strength = 0.32;
+uniform float rock_strength = 0.85;
 varying vec3 world_position;
 varying vec3 world_normal;
+varying vec2 extra;
 float ground_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float ground_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -210,24 +245,39 @@ float ground_noise(vec2 p) {
     return mix(mix(ground_hash(i), ground_hash(i + vec2(1, 0)), f.x),
                mix(ground_hash(i + vec2(0, 1)), ground_hash(i + vec2(1, 1)), f.x), f.y);
 }
+float soft_light(float base, float blend) {
+    float d = base <= 0.25 ? ((16.0 * base - 12.0) * base + 4.0) * base : sqrt(base);
+    return blend <= 0.5 ? base - (1.0 - 2.0 * blend) * base * (1.0 - base) : base + (2.0 * blend - 1.0) * (d - base);
+}
 void vertex() {
     world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
     world_normal = normalize(mat3(MODEL_MATRIX) * NORMAL);
+    extra = UV2;
 }
 void fragment() {
-    vec3 detail = texture(detail_texture, UV).rgb;
-    float detail_luma = dot(detail, vec3(0.299, 0.587, 0.114));
-    vec3 micro = vec3(0.90 + detail_luma * 0.16);
+    vec2 uv_a = world_position.xz * 0.17;
+    float ca = 0.7986, sa = 0.6018;  // 37 degrees, gen.py's rotated soft-light copy
+    vec2 uv_b = mat2(vec2(ca, sa), vec2(-sa, ca)) * uv_a * (620.0 / 900.0);
+    float d_a = dot(texture(detail_texture, uv_a).rgb, vec3(0.299, 0.587, 0.114));
+    float d_b = dot(texture(detail_texture, uv_b).rgb, vec3(0.299, 0.587, 0.114));
+    vec3 base = COLOR.rgb;
+    vec3 land = mix(base, base * (0.55 + d_a * 0.9), detail_strength);
+    vec3 soft = vec3(soft_light(land.r, d_b), soft_light(land.g, d_b), soft_light(land.b, d_b));
+    land = mix(land, soft, rotated_strength);
     float patches = ground_noise(world_position.xz * 0.9) * 0.6 + ground_noise(world_position.xz * 3.6) * 0.4;
+    land *= 1.0 - patch_strength * 0.5 + patches * patch_strength;
+    vec3 rock = texture(rock_texture, uv_a * 1.3).rgb;
+    float rock_l = dot(rock, vec3(0.299, 0.587, 0.114));
+    vec3 grey_rock = mix(rock, vec3(rock_l), 0.65) * (base / max(dot(base, vec3(0.299, 0.587, 0.114)), 0.05)) * 0.5;
+    land = mix(land, grey_rock, extra.y * rock_strength);
+    float slope = 1.0 - clamp(world_normal.y, 0.0, 1.0);
+    land = mix(land, land * 0.62, smoothstep(0.25, 0.65, slope) * 0.6);
     float water = smoothstep(0.42, 0.62, COLOR.a);
     float ripple = sin(world_position.x * 3.1 + TIME * 0.7) * cos(world_position.z * 2.7 - TIME * 0.5);
-    vec3 land = COLOR.rgb * micro * (0.90 + patches * 0.20);
     vec3 wet = COLOR.rgb * (0.92 + ripple * 0.05 + patches * 0.08);
-    float slope = 1.0 - clamp(world_normal.y, 0.0, 1.0);
-    vec3 shaded = mix(land, land * 0.62, smoothstep(0.25, 0.65, slope) * 0.6);
-    ALBEDO = mix(shaded, wet, water);
-    ROUGHNESS = mix(0.95, 0.18, water);
-    SPECULAR = mix(0.08, 0.55, water);
+    ALBEDO = mix(land, wet, water);
+    ROUGHNESS = mix(0.95, 0.30, water);
+    SPECULAR = mix(0.06, 0.30, water);
 }
 """
 
@@ -272,18 +322,24 @@ func _bake_ground() -> void:
 	_cell_amp.resize(count)
 	_cell_color.resize(count)
 	_cell_wet.resize(count)
+	_cell_rock.resize(count)
+	_cell_sea.resize(count)
 	for y in range(map_height):
 		for x in range(map_width):
-			var look: Array = GROUND_LOOK.get(ground.glyph_at(x, y), GROUND_LOOK["g"])
+			var glyph := String(ground.glyph_at(x, y))
+			var look: Array = GROUND_LOOK.get(glyph, GROUND_LOOK["g"])
 			var i := y * map_width + x
 			_cell_h[i] = float(look[0])
 			_cell_amp[i] = float(look[1])
 			_cell_color[i] = Color(String(look[2])).srgb_to_linear()
 			_cell_wet[i] = float(look[3])
+			_cell_rock[i] = 1.0 if glyph == "h" else 0.0
+			_cell_sea[i] = 1.0 if glyph == "o" else 0.0
 	_raster_cols = int((float(map_width - 1) + 2.0 * RASTER_MARGIN) / RASTER_STEP) + 1
 	_raster_rows = int((float(map_height - 1) + 2.0 * RASTER_MARGIN) / RASTER_STEP) + 1
 	_raster_h.resize(_raster_cols * _raster_rows)
 	_raster_c.resize(_raster_cols * _raster_rows)
+	_raster_x.resize(_raster_cols * _raster_rows)
 	for row in range(_raster_rows):
 		var gz := -RASTER_MARGIN + float(row) * RASTER_STEP
 		for col in range(_raster_cols):
@@ -291,9 +347,11 @@ func _bake_ground() -> void:
 			var blend := _blend_cells(gx, gz)
 			_raster_h[row * _raster_cols + col] = blend[0]
 			_raster_c[row * _raster_cols + col] = Color(blend[1], blend[2], blend[3], blend[4])
+			_raster_x[row * _raster_cols + col] = Vector4(blend[4], blend[5], blend[6], 0.0)
 
 
-## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share]. Off-map cells continue the
+## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share, sea share, rock
+## share]. Off-map cells continue the
 ## nearest edge cell, so land and sea run past the frame (spec addendum W3).
 func _blend_cells(gx: float, gz: float) -> Array:
 	var total := 0.0
@@ -301,6 +359,8 @@ func _blend_cells(gx: float, gz: float) -> Array:
 	var amp_sum := 0.0
 	var color_sum := Color(0, 0, 0, 0)
 	var wet_sum := 0.0
+	var rock_sum := 0.0
+	var sea_sum := 0.0
 	var col0 := roundi(gx)
 	for c in range(col0 - 1, col0 + 2):
 		var offset := 0.5 if posmod(c, 2) == 1 else 0.0
@@ -323,11 +383,13 @@ func _blend_cells(gx: float, gz: float) -> Array:
 			amp_sum += amp * w
 			color_sum += color * w
 			wet_sum += wet * w
+			rock_sum += _cell_rock[i] * w
+			sea_sum += _cell_sea[i] * w
 	if total <= 0.0:
-		return [-0.8, 0.0, 0.0, 0.0, 1.0]
+		return [-0.8, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0]
 	var inv := 1.0 / total
 	var noise := height_noise.get_noise_2d(gx, gz)
-	return [height_sum * inv + noise * amp_sum * inv, color_sum.r * inv, color_sum.g * inv, color_sum.b * inv, wet_sum * inv]
+	return [height_sum * inv + noise * amp_sum * inv, color_sum.r * inv, color_sum.g * inv, color_sum.b * inv, wet_sum * inv, sea_sum * inv, rock_sum * inv]
 
 
 func _raster_index(gx: float, gz: float) -> Array:
@@ -355,6 +417,16 @@ func _raster_sample_color(gx: float, gz: float) -> Color:
 	var tz: float = at[2]
 	var top := _raster_c[i].lerp(_raster_c[i + 1], tx)
 	var bottom := _raster_c[i + _raster_cols].lerp(_raster_c[i + _raster_cols + 1], tx)
+	return top.lerp(bottom, tz)
+
+
+func _raster_sample_extras(gx: float, gz: float) -> Vector4:
+	var at := _raster_index(gx, gz)
+	var i: int = at[0]
+	var tx: float = at[1]
+	var tz: float = at[2]
+	var top := _raster_x[i].lerp(_raster_x[i + 1], tx)
+	var bottom := _raster_x[i + _raster_cols].lerp(_raster_x[i + _raster_cols + 1], tx)
 	return top.lerp(bottom, tz)
 
 
