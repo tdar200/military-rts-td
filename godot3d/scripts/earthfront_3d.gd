@@ -2260,6 +2260,7 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 		root.set_meta("pick_parts", _fit_parts[fit_key])  # a click anywhere on the fitted model picks it (_pick_entity)
 		bar_y = [fit.y + 0.18, fit.y + 0.185, fit.y + 0.27, fit.y + 0.275]
 		root.set_meta("label_y", fit.y + 0.45)  # a relay label floats over the bars, not inside the fitted model
+		root.set_meta("crown_y", fit.y + 0.06)  # the era crown rides the fitted roof, under the bars (legacy 0.78)
 		if world_props != null:
 			world_props.clear_around(destination, tiles * WorldArt.TILE * 0.5)
 			var slot: int = world_props.add_pad(destination, tiles * WorldArt.TILE)
@@ -2443,7 +2444,7 @@ func _apply_era_visuals() -> void:
 		if not crown:
 			crown = Node3D.new()
 			crown.name = "EraCrown"
-			crown.position = Vector3(0, 0.78, 0)
+			crown.position = Vector3(0, float(entity.get_meta("crown_y", 0.78)), 0)  # Kestrel: just over the fitted roof
 			entity.add_child(crown)
 			var crown_mesh := TorusMesh.new()
 			crown_mesh.inner_radius = 0.34

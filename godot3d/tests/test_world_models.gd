@@ -372,3 +372,17 @@ func test_kestrel_unit_beside_a_building_still_wins_its_own_click(t) -> void:
 	var enemy_click: Vector2 = to_screen.call(scene.units.back(), Vector3.UP * 0.15)
 	t.eq(scene._pick_entity(enemy_click, to_screen), null, "an enemy is never picked, and the CC does not reach three hexes")
 	scene.free()
+
+
+func test_kestrel_era_crown_sits_above_the_fitted_model(t) -> void:
+	var scene := _kestrel_scene()
+	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 914)
+	scene.bridge_nodes[914] = cc
+	scene.bridge_era = 1
+	scene._apply_era_visuals()
+	var crown := cc.get_node_or_null("EraCrown") as Node3D
+	t.ok(crown != null and crown.visible, "the era crown shows")
+	var model := cc.get_node("Visual") as Node3D
+	if crown != null:
+		t.ok(crown.position.y > WorldArt.merged_aabb(model).end.y * model.scale.y, "the crown clears the fitted roof")
+	scene.free()

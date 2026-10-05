@@ -171,3 +171,16 @@ func test_survival_keeps_the_32_pixel_root_pick(t) -> void:
 	t.eq(scene._pick_entity(root + Vector2(31.0, 0.0), to_screen), tank, "31 px from the root lifted 0.15 picks")
 	t.eq(scene._pick_entity(root + Vector2(0.0, -33.0), to_screen), null, "33 px above it does not")
 	scene.free()
+
+
+func test_survival_era_crown_keeps_its_height(t) -> void:
+	var scene := _survival_scene()
+	var site := Node3D.new()
+	site.set_meta("category", "building")
+	site.set_meta("team", 0)
+	scene.add_child(site)
+	scene.bridge_nodes[921] = site
+	scene.bridge_era = 1
+	scene._apply_era_visuals()
+	t.near((site.get_node("EraCrown") as Node3D).position.y, 0.78, 1e-6, "legacy crown height")
+	scene.free()
