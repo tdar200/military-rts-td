@@ -1053,6 +1053,7 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 	else:
 		_create_alien_unit_model(root, kind)
 	var bar_y: Array = [0.88, 0.885, 0.955, 0.958]  # health back, fill, shield back, fill
+	var badge_y := 0.48
 	if world_art_on:
 		# spec addendum W6: every unit model (the box-built squads included, they build UnitVisual too) fits its width
 		var tiles := float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)])
@@ -1061,8 +1062,9 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 			var fit := _fitted(visual, "unit:%d:%d:%s" % [team, kind, tiles], tiles)
 			visual.scale = Vector3.ONE * fit.x
 			bar_y = [fit.y + 0.12, fit.y + 0.125, fit.y + 0.195, fit.y + 0.198]
+			badge_y = maxf(badge_y, fit.y + 0.05)  # just above the fitted model, under the bars
 		root.set_meta("visual_tiles", tiles)
-	_add_unit_badge(root, team, kind)
+	_add_unit_badge(root, team, kind, badge_y)
 	var team_material: Material = materials.human_marker if team == HUMAN else materials.alien_marker
 	var marker_mesh := TorusMesh.new()
 	marker_mesh.inner_radius = 0.15 if kind == 0 else 0.26
@@ -1088,10 +1090,10 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 	units.append(root)
 
 
-func _add_unit_badge(root: Node3D, team: int, kind: int) -> void:
+func _add_unit_badge(root: Node3D, team: int, kind: int, y: float = 0.48) -> void:
 	var badge := Node3D.new()
 	badge.name = "StrategicBadge"
-	badge.position = Vector3(0, 0.48, 0)
+	badge.position = Vector3(0, y, 0)
 	root.add_child(badge)
 	var badge_mesh := QuadMesh.new()
 	badge_mesh.size = Vector2(0.22, 0.13)
@@ -2134,6 +2136,11 @@ func _sync_spent_deposits(snapshot: Dictionary) -> void:
 ## Kestrel only (spec addendum W6): the absolute scale that makes `visual` `tiles` tiles wide (x) and the fitted model's
 ## top in its parent's space (y). `merged_aabb` measures before the visual's own scale, so x is never multiplied by the
 ## authored scale. Cached per model key.
+## Height of a building's floating label (the invasion relay): over the fitted model on Kestrel, the legacy 0.9 elsewhere.
+func _label_y(node: Node3D) -> float:
+	return float(node.get_meta("label_y", 0.9))
+
+
 func _fitted(visual: Node3D, key: String, tiles: float) -> Vector2:
 	if not _fit_cache.has(key):
 		var k := WorldArt.fit_factor(visual, tiles)
@@ -2202,6 +2209,7 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 		visual.set_meta("authored_scale", visual.scale)  # construction grows the fitted model, not the legacy scale
 		root.set_meta("visual_tiles", tiles)
 		bar_y = [fit.y + 0.18, fit.y + 0.185, fit.y + 0.27, fit.y + 0.275]
+		root.set_meta("label_y", fit.y + 0.45)  # a relay label floats over the bars, not inside the fitted model
 		if world_props != null:
 			world_props.clear_around(destination, tiles * WorldArt.TILE * 0.5)
 			var slot: int = world_props.add_pad(destination, tiles * WorldArt.TILE)
@@ -2310,7 +2318,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 			if not relay_marker:
 				relay_marker = Label3D.new()
 				relay_marker.name = "RelayMarker"
-				relay_marker.position = Vector3(0, 0.9, 0)
+				relay_marker.position = Vector3(0, _label_y(entity_node), 0)
 				relay_marker.font_size = 24
 				relay_marker.pixel_size = 0.004
 				relay_marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED

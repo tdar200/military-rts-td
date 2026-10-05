@@ -138,6 +138,8 @@ func test_survival_units_keep_the_legacy_size(t) -> void:
 	t.eq((tank.get_node("UnitVisual") as Node3D).scale, Vector3.ONE * 0.70, "legacy tank scale")
 	t.near((tank.get_node("HealthBack") as Node3D).position.y, 0.88, 1e-6, "legacy health bar height")
 	t.near((tank.get_node("ShieldFill") as Node3D).position.y, 0.958, 1e-6, "legacy shield bar height")
+	t.near((tank.get_node("StrategicBadge") as Node3D).position.y, 0.48, 1e-6, "legacy badge height")
+	t.near(scene._label_y(tank), 0.9, 1e-6, "legacy relay label height")
 	scene.free()
 
 

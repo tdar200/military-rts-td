@@ -71,6 +71,20 @@ func test_kestrel_unit_bars_sit_above_the_fitted_model(t) -> void:
 	scene.free()
 
 
+func test_kestrel_badges_and_relay_labels_clear_the_fitted_model(t) -> void:
+	var scene := _kestrel_scene()
+	for kind in [0, 1, 5]:
+		scene._create_unit(0, Vector3(6, 0, 6), kind)
+		var unit: Node3D = scene.units.back()
+		var visual := unit.get_node("UnitVisual") as Node3D
+		var badge := unit.get_node("StrategicBadge") as Node3D
+		t.ok(badge.position.y > WorldArt.merged_aabb(visual).end.y * visual.scale.y, "kind %d badge above the model" % kind)
+	var core: Node3D = scene._create_bridge_building(1, "AntimatterPlant", Vector3(10, 0, 10), 902)
+	var model := core.get_node("Visual") as Node3D
+	t.ok(scene._label_y(core) > WorldArt.merged_aabb(model).end.y * model.scale.y, "a relay label clears the fitted model")
+	scene.free()
+
+
 func test_kestrel_construction_grows_the_fitted_model(t) -> void:
 	var scene := _kestrel_scene()
 	var root: Node3D = scene._create_bridge_building(0, "Barracks", Vector3(10, 0, 10), 901)
