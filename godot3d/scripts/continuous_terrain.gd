@@ -11,6 +11,7 @@ var height_noise := FastNoiseLite.new()
 var biome_noise := FastNoiseLite.new()
 var coast_noise := FastNoiseLite.new()
 var ground: RefCounted = null  # GroundModel; null keeps the cosmetic noise terrain
+var edge_margin_cells := 4.0  # mesh reach past the map; 9.0 once a ground model is applied
 var _detail_texture: Texture2D
 
 ## Per-glyph look of the snapshot ground layer: base height, noise amplitude, sRGB colour, water flag.
@@ -27,7 +28,7 @@ const GROUND_LOOK := {
 	"c": [-0.30, 0.0, "5b5346", 0.0],
 }
 const RASTER_STEP := 0.25
-const RASTER_MARGIN := 5.0
+const RASTER_MARGIN := 10.0
 const BLEND_RADIUS := 1.3
 var _cell_h := PackedFloat32Array()
 var _cell_amp := PackedFloat32Array()
@@ -71,6 +72,7 @@ func apply_ground(model: RefCounted) -> void:
 	ground = model
 	map_width = int(model.width)
 	map_height = int(model.height)
+	edge_margin_cells = 9.0
 	_bake_ground()
 	var old := get_node_or_null("ContinuousPainterlyTerrain")
 	if old != null:
@@ -232,10 +234,10 @@ func _build_surface(detail_texture: Texture2D) -> void:
 	var surface := SurfaceTool.new()
 	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var subdivisions := 3
-	var min_gx := -4.0
-	var max_gx := float(map_width - 1) + 4.0
-	var min_gz := -4.0
-	var max_gz := float(map_height - 1) + 4.0
+	var min_gx := -edge_margin_cells
+	var max_gx := float(map_width - 1) + edge_margin_cells
+	var min_gz := -edge_margin_cells
+	var max_gz := float(map_height - 1) + edge_margin_cells
 	var columns := int((max_gx - min_gx) * subdivisions)
 	var rows := int((max_gz - min_gz) * subdivisions)
 	for x_index in range(columns):
@@ -289,8 +291,8 @@ func _bake_ground() -> void:
 			_raster_c[row * _raster_cols + col] = Color(blend[1], blend[2], blend[3], blend[4])
 
 
-## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share]. Off-map cells count as sea so
-## the island rolls off into water at the edge.
+## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share]. Off-map cells continue the
+## nearest edge cell, so land and sea run past the frame (spec addendum W3).
 func _blend_cells(gx: float, gz: float) -> Array:
 	var total := 0.0
 	var height_sum := 0.0
@@ -307,22 +309,13 @@ func _blend_cells(gx: float, gz: float) -> Array:
 				continue
 			var w := 1.0 - d / BLEND_RADIUS
 			w *= w
-			var h: float
-			var amp: float
-			var color: Color
-			var wet: float
-			if c < 0 or r < 0 or c >= map_width or r >= map_height:
-				var sea: Array = GROUND_LOOK["o"]
-				h = float(sea[0])
-				amp = 0.0
-				color = Color(String(sea[2])).srgb_to_linear()
-				wet = 1.0
-			else:
-				var i := r * map_width + c
-				h = _cell_h[i]
-				amp = _cell_amp[i]
-				color = _cell_color[i]
-				wet = _cell_wet[i]
+			var cc := clampi(c, 0, map_width - 1)
+			var rr := clampi(r, 0, map_height - 1)
+			var i := rr * map_width + cc
+			var h := _cell_h[i]
+			var amp := _cell_amp[i]
+			var color := _cell_color[i]
+			var wet := _cell_wet[i]
 			total += w
 			height_sum += h * w
 			amp_sum += amp * w

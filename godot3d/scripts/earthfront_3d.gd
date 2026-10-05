@@ -15,6 +15,7 @@ const TICKS_PER_SECOND := 30.0
 const GameUI = preload("res://scripts/ui/game_ui.gd")
 const Keybinds = preload("res://scripts/ui/keybinds.gd")
 const GroundModel = preload("res://scripts/terrain/ground_model.gd")
+const WorldArt := preload("res://scripts/world/world_art.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -40,6 +41,8 @@ var camera_zoom := 12.2
 var terrain_height: Dictionary = {}
 var terrain_renderer: Node3D
 var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null = cosmetic noise terrain
+var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
+var ocean_box: MeshInstance3D
 var ground_warnings := 0  # times a malformed ground layer was reported: once, not on every poll
 var bridge_snapshot: Dictionary = {}  # the latest parsed bridge snapshot; live_adapter.gd derives the gameplay HUD slices from it
 const NO_HOVER := Vector2i(-1, -1)
@@ -377,7 +380,7 @@ func _renderer_supports_ssao() -> bool:
 func _build_terrain() -> void:
 	var ocean := BoxMesh.new()
 	ocean.size = Vector3(96.0, 0.22, 72.0)
-	_mesh(ocean, materials.water, Vector3(16.0, -0.48, 9.0))
+	ocean_box = _mesh(ocean, materials.water, Vector3(16.0, -0.48, 9.0))
 
 	var terrain_script := load("res://scripts/continuous_terrain.gd")
 	terrain_renderer = terrain_script.new()
@@ -448,7 +451,25 @@ func _sync_ground(snapshot: Dictionary) -> void:
 	MAP_W = int(model.width)
 	MAP_H = int(model.height)
 	terrain_renderer.apply_ground(model)
+	world_art_on = WorldArt.active(model)
+	if world_art_on:
+		_apply_world_art(snapshot)
 	_build_terrain_dressing()
+
+
+## Kestrel world-art profile (spec addendum W1 to W9). Runs once, when the first real ground layer arrives.
+func _apply_world_art(_snapshot: Dictionary) -> void:
+	camera_yaw = float(WorldArt.CAMERA.yaw)
+	if is_instance_valid(ocean_box):
+		ocean_box.visible = false
+
+
+func _zoom_limits() -> Vector2:
+	return Vector2(WorldArt.CAMERA.min_zoom, WorldArt.CAMERA.max_zoom) if world_art_on else Vector2(7.5, 24.0)
+
+
+func _zoom_default() -> float:
+	return float(WorldArt.CAMERA.default_zoom) if world_art_on else 8.8
 
 
 func _dress_ground_tile(x: int, z: int, world: Vector3, elevation: float) -> void:
@@ -1219,8 +1240,13 @@ func _update_camera_controls(delta: float) -> void:
 	camera_zoom = lerpf(camera_zoom, camera_focus_zoom, 1.0 - exp(-delta * 8.5))
 	camera_cinematic = maxf(0.0, camera_cinematic - delta)
 	camera_yaw += Input.get_axis("camera_rotate_left", "camera_rotate_right") * delta * 0.72
-	camera_focus_target.x = clampf(camera_focus_target.x, MAP_ORIGIN_X, MAP_ORIGIN_X + float(MAP_W - 1) * HEX_X)
-	camera_focus_target.z = clampf(camera_focus_target.z, MAP_ORIGIN_Z, MAP_ORIGIN_Z + float(MAP_H - 1) * HEX_Z)
+	if world_art_on:
+		var aspect := get_viewport().get_visible_rect().size.aspect()
+		var bounds := WorldArt.world_bounds(MAP_W, MAP_H, MAP_ORIGIN_X, MAP_ORIGIN_Z, HEX_X, HEX_Z, int(WorldArt.CAMERA.edge_cells))
+		camera_focus_target = WorldArt.clamp_focus(camera_focus_target, maxf(camera_zoom, camera_focus_zoom), aspect, camera_yaw, bounds)
+	else:
+		camera_focus_target.x = clampf(camera_focus_target.x, MAP_ORIGIN_X, MAP_ORIGIN_X + float(MAP_W - 1) * HEX_X)
+		camera_focus_target.z = clampf(camera_focus_target.z, MAP_ORIGIN_Z, MAP_ORIGIN_Z + float(MAP_H - 1) * HEX_Z)
 	_update_camera()
 
 
@@ -1249,9 +1275,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
-			camera_focus_zoom = maxf(7.5, camera_focus_zoom - 1.25)
+			camera_focus_zoom = maxf(_zoom_limits().x, camera_focus_zoom - 1.25)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
-			camera_focus_zoom = minf(24.0, camera_focus_zoom + 1.25)
+			camera_focus_zoom = minf(_zoom_limits().y, camera_focus_zoom + 1.25)
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if rally_armed:
@@ -1339,11 +1365,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			_toggle_science_panel()
 		elif event.keycode == Keybinds.FOCUS and is_instance_valid(selected):
 			camera_focus_target = selected.global_position
-			camera_focus_zoom = 8.2
+			camera_focus_zoom = _zoom_default() - 0.6
 			camera_cinematic = 0.8
 		elif event.keycode == Keybinds.HOME:
 			camera_focus_target = home_focus()
-			camera_focus_zoom = 8.8
+			camera_focus_zoom = _zoom_default()
 
 
 func _update_selection_box(current: Vector2) -> void:
@@ -2663,9 +2689,9 @@ func _deploy_mission() -> void:
 	mission_deployed = true
 	tutorial_stage = 0
 	camera_target = Vector3(12.4, 0.0, 9.4)
-	camera_zoom = 15.5
+	camera_zoom = WorldArt.CAMERA.deploy_from if world_art_on else 15.5
 	camera_focus_target = home_focus()
-	camera_focus_zoom = 8.8
+	camera_focus_zoom = _zoom_default()
 	camera_cinematic = 1.4
 	_play_deploy_sound()
 	_play_tone(520.0, 0.13, 0.16, 180.0)
