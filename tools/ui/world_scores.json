@@ -1,19 +1,50 @@
 {
  "gp01": {
-  "palette": 22.64,
-  "saturation": 20.0,
-  "detail": 15.0,
-  "clutter": 10.0,
-  "warmth": 15.0,
-  "total": 17.36,
+  "palette": 5.43,
+  "saturation": 2.98,
+  "warmth": 4.23,
+  "detail": 16.9,
+  "clutter": 9.87,
+  "layout": 14.05,
+  "total": 46.54,
+  "structure": 73.67,
   "raw": {
    "palette_w": 22.64,
-   "sat_mock": 112.9,
-   "sat_live": 237.5,
-   "detail_ratio": 0.183,
-   "clutter_ratio": 0.072,
-   "b_mock": 17.8,
-   "b_live": 41.9
+   "sat_gap": 99.4,
+   "sat_p50": [
+    112.9,
+    237.5
+   ],
+   "sat_p90": [
+    164.3,
+    238.6
+   ],
+   "b": [
+    17.8,
+    41.9
+   ],
+   "detail_ratio": [
+    0.243,
+    0.136,
+    0.2
+   ],
+   "detail_rank_ratio": [
+    1.098,
+    0.417,
+    0.774
+   ],
+   "clutter_ratio": [
+    0.072,
+    0.111
+   ],
+   "clutter_rank_ratio": [
+    0.78,
+    0.589
+   ],
+   "layout_corr": [
+    -0.065,
+    0.193
+   ]
   },
   "swatches": {
    "g": {
@@ -29,20 +60,51 @@
   }
  },
  "gp03": {
-  "palette": 11.68,
-  "saturation": 20.0,
-  "detail": 15.0,
-  "clutter": 10.0,
-  "warmth": 7.14,
-  "total": 36.18,
+  "palette": 2.8,
+  "saturation": 3.13,
+  "warmth": 1.25,
+  "detail": 12.4,
+  "clutter": 7.66,
+  "layout": 18.26,
+  "total": 54.49,
+  "structure": 55.88,
   "raw": {
    "palette_w": 11.68,
-   "sat_mock": 111.5,
-   "sat_live": 233.8,
-   "detail_ratio": 0.226,
-   "clutter_ratio": 0.106,
-   "b_mock": 13.9,
-   "b_live": 21.1
+   "sat_gap": 104.5,
+   "sat_p50": [
+    111.5,
+    233.8
+   ],
+   "sat_p90": [
+    148.8,
+    235.4
+   ],
+   "b": [
+    13.9,
+    21.1
+   ],
+   "detail_ratio": [
+    0.221,
+    0.248,
+    0.456
+   ],
+   "detail_rank_ratio": [
+    0.494,
+    0.314,
+    0.502
+   ],
+   "clutter_ratio": [
+    0.114,
+    0.206
+   ],
+   "clutter_rank_ratio": [
+    0.212,
+    0.224
+   ],
+   "layout_corr": [
+    -0.239,
+    -0.196
+   ]
   },
   "swatches": {
    "f": {
@@ -58,20 +120,51 @@
   }
  },
  "gp04": {
-  "palette": 23.9,
-  "saturation": 20.0,
-  "detail": 15.0,
-  "clutter": 10.0,
-  "warmth": 15.0,
-  "total": 16.1,
+  "palette": 5.73,
+  "saturation": 3.08,
+  "warmth": 4.79,
+  "detail": 18.12,
+  "clutter": 12.02,
+  "layout": 15.51,
+  "total": 40.75,
+  "structure": 72.45,
   "raw": {
    "palette_w": 23.9,
-   "sat_mock": 106.7,
-   "sat_live": 237.5,
-   "detail_ratio": 0.163,
-   "clutter_ratio": 0.046,
-   "b_mock": 15.1,
-   "b_live": 42.5
+   "sat_gap": 102.8,
+   "sat_p50": [
+    106.7,
+    237.5
+   ],
+   "sat_p90": [
+    163.7,
+    238.5
+   ],
+   "b": [
+    15.1,
+    42.5
+   ],
+   "detail_ratio": [
+    0.247,
+    0.102,
+    0.183
+   ],
+   "detail_rank_ratio": [
+    1.343,
+    0.429,
+    0.831
+   ],
+   "clutter_ratio": [
+    0.047,
+    0.06
+   ],
+   "clutter_rank_ratio": [
+    1.04,
+    0.74
+   ],
+   "layout_corr": [
+    -0.131,
+    0.063
+   ]
   },
   "swatches": {
    "g": {
@@ -87,20 +180,51 @@
   }
  },
  "gp05": {
-  "palette": 14.15,
-  "saturation": 20.0,
-  "detail": 15.0,
-  "clutter": 10.0,
-  "warmth": 15.0,
-  "total": 25.85,
+  "palette": 3.4,
+  "saturation": 3.04,
+  "warmth": 3.15,
+  "detail": 13.27,
+  "clutter": 8.55,
+  "layout": 13.04,
+  "total": 55.54,
+  "structure": 69.33,
   "raw": {
    "palette_w": 14.15,
-   "sat_mock": 110.3,
-   "sat_live": 234.9,
-   "detail_ratio": 0.231,
-   "clutter_ratio": 0.085,
-   "b_mock": 16.8,
-   "b_live": 34.8
+   "sat_gap": 101.5,
+   "sat_p50": [
+    110.3,
+    234.9
+   ],
+   "sat_p90": [
+    160.0,
+    238.3
+   ],
+   "b": [
+    16.8,
+    34.8
+   ],
+   "detail_ratio": [
+    0.253,
+    0.215,
+    0.356
+   ],
+   "detail_rank_ratio": [
+    0.693,
+    0.391,
+    0.683
+   ],
+   "clutter_ratio": [
+    0.087,
+    0.175
+   ],
+   "clutter_rank_ratio": [
+    0.362,
+    0.341
+   ],
+   "layout_corr": [
+    0.152,
+    0.109
+   ]
   },
   "swatches": {
    "f": {
@@ -121,20 +245,51 @@
   }
  },
  "gp06": {
-  "palette": 21.72,
-  "saturation": 20.0,
-  "detail": 15.0,
-  "clutter": 10.0,
-  "warmth": 15.0,
-  "total": 18.28,
+  "palette": 5.21,
+  "saturation": 2.96,
+  "warmth": 3.85,
+  "detail": 14.77,
+  "clutter": 8.26,
+  "layout": 14.31,
+  "total": 50.63,
+  "structure": 74.66,
   "raw": {
    "palette_w": 21.72,
-   "sat_mock": 115.3,
-   "sat_live": 237.5,
-   "detail_ratio": 0.226,
-   "clutter_ratio": 0.105,
-   "b_mock": 19.7,
-   "b_live": 41.7
+   "sat_gap": 98.7,
+   "sat_p50": [
+    115.3,
+    237.5
+   ],
+   "sat_p90": [
+    163.3,
+    238.6
+   ],
+   "b": [
+    19.7,
+    41.7
+   ],
+   "detail_ratio": [
+    0.286,
+    0.177,
+    0.245
+   ],
+   "detail_rank_ratio": [
+    1.132,
+    0.476,
+    0.875
+   ],
+   "clutter_ratio": [
+    0.105,
+    0.167
+   ],
+   "clutter_rank_ratio": [
+    0.812,
+    0.643
+   ],
+   "layout_corr": [
+    -0.119,
+    0.211
+   ]
   },
   "swatches": {
    "g": {
@@ -150,20 +305,51 @@
   }
  },
  "gp07": {
-  "palette": 13.6,
-  "saturation": 20.0,
-  "detail": 13.99,
-  "clutter": 10.0,
-  "warmth": 11.72,
-  "total": 30.69,
+  "palette": 3.26,
+  "saturation": 3.29,
+  "warmth": 2.05,
+  "detail": 11.85,
+  "clutter": 7.71,
+  "layout": 11.95,
+  "total": 59.89,
+  "structure": 71.27,
   "raw": {
    "palette_w": 13.6,
-   "sat_mock": 114.0,
-   "sat_live": 234.6,
-   "detail_ratio": 0.274,
-   "clutter_ratio": 0.107,
-   "b_mock": 22.7,
-   "b_live": 34.4
+   "sat_gap": 109.8,
+   "sat_p50": [
+    114.0,
+    234.6
+   ],
+   "sat_p90": [
+    139.4,
+    238.3
+   ],
+   "b": [
+    22.7,
+    34.4
+   ],
+   "detail_ratio": [
+    0.29,
+    0.257,
+    0.398
+   ],
+   "detail_rank_ratio": [
+    0.717,
+    0.45,
+    0.696
+   ],
+   "clutter_ratio": [
+    0.107,
+    0.214
+   ],
+   "clutter_rank_ratio": [
+    0.335,
+    0.318
+   ],
+   "layout_corr": [
+    0.262,
+    0.145
+   ]
   },
   "swatches": {
    "f": {
@@ -184,20 +370,51 @@
   }
  },
  "gp08": {
-  "palette": 26.47,
-  "saturation": 20.0,
-  "detail": 15.0,
-  "clutter": 10.0,
-  "warmth": 15.0,
-  "total": 13.53,
+  "palette": 6.35,
+  "saturation": 3.06,
+  "warmth": 5.68,
+  "detail": 14.09,
+  "clutter": 7.95,
+  "layout": 13.73,
+  "total": 49.14,
+  "structure": 74.22,
   "raw": {
    "palette_w": 26.47,
-   "sat_mock": 103.1,
-   "sat_live": 237.5,
-   "detail_ratio": 0.227,
-   "clutter_ratio": 0.121,
-   "b_mock": 9.4,
-   "b_live": 41.8
+   "sat_gap": 102.0,
+   "sat_p50": [
+    103.1,
+    237.5
+   ],
+   "sat_p90": [
+    168.9,
+    238.5
+   ],
+   "b": [
+    9.4,
+    41.8
+   ],
+   "detail_ratio": [
+    0.287,
+    0.174,
+    0.303
+   ],
+   "detail_rank_ratio": [
+    0.992,
+    0.397,
+    0.777
+   ],
+   "clutter_ratio": [
+    0.121,
+    0.169
+   ],
+   "clutter_rank_ratio": [
+    0.772,
+    0.585
+   ],
+   "layout_corr": [
+    -0.03,
+    0.2
+   ]
   },
   "swatches": {
    "g": {
@@ -254,5 +471,6 @@
    "cpu_render_ms_p50": 2.37
   },
   "note": "RTX 3050 via PRIME offload, uncapped, 8 s windows, Kestrel idle after deploy, whole frame with HUD, 2026-10-05 on 7051540, load average about 6"
- }
+ },
+ "_scorer": "v2: palette 12, saturation 6, warmth 7, detail 28 (3 bands, raw and rank), clutter 17 (2 scales, raw and rank), layout 30; structure = grade-proof subscore; captured 2026-10-05 on 7051540 (3 runs, spread in world_frames.json noise_terms)"
 }

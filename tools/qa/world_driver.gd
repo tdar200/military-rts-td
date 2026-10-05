@@ -4,6 +4,8 @@ extends "ui_driver.gd"
 ## Events must be sent in their own action: {"events": [{"type": "world_shot", ...}]}.
 
 const WORLD_EVENTS := ["world_shot", "probe"]
+## launch_ui.py passes --qa-xvfb only for its private Xvfb display. On a real display warp_mouse would move the user's cursor.
+var _on_xvfb := OS.get_cmdline_user_args().has("--qa-xvfb")
 
 
 func _execute(action: Dictionary) -> void:
@@ -29,7 +31,8 @@ func _world_shot(item: Dictionary) -> void:
 	var focus: Vector3 = game.home_focus() if String(item.get("focus", "")) == "home" else game._hex_world(int(item.tile[0]), int(item.tile[1]))
 	var zoom := float(item.get("zoom", game.camera_focus_zoom))
 	var centre := root.get_visible_rect().size * 0.5
-	root.warp_mouse(centre)  # off the edge-scroll band
+	if _on_xvfb:
+		root.warp_mouse(centre)  # off the edge-scroll band
 	var motion := InputEventMouseMotion.new()
 	motion.position = centre
 	motion.global_position = centre

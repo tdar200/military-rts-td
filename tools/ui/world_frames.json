@@ -1,5 +1,7 @@
 {
  "noise": 0.1,
+ "noise_terms": {"total": 0.1, "structure": 0.1, "palette": 0.0, "saturation": 0.0, "warmth": 0.0, "detail": 0.1, "clutter": 0.1, "layout": 0.1},
+ "noise_runs": 3,
  "palette": {"g": "808844", "m": "848948", "f": "ac965e", "h": "888680", "s": "b9a373", "o": "133a51", "r": "3a6c81"},
  "live": {
   "kestrel": {
