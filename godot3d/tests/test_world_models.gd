@@ -88,8 +88,10 @@ func test_kestrel_human_models_take_the_board_palette(t) -> void:
 			var m := (mi as MeshInstance3D).get_surface_override_material(i) as StandardMaterial3D
 			if m:
 				colours[m.albedo_color.to_html(false)] = true
-	t.ok(colours.has(String(WorldArt.MODEL_PALETTE.concrete)), "warm concrete from the palette: %s" % [colours.keys()])
-	t.ok(not colours.has("777a70"), "not the legacy grey concrete")
+	for key in ["concrete", "olive", "gunmetal"]:
+		t.ok(colours.has(String(WorldArt.MODEL_PALETTE[key])), "%s from the palette: %s" % [key, colours.keys()])
+	for legacy in ["777a70", "59614e", "333c40"]:
+		t.ok(not colours.has(legacy), "no legacy colour %s" % legacy)
 	scene.free()
 
 
@@ -223,3 +225,63 @@ func test_merged_aabb_and_fit_factor_against_a_hand_built_model(t) -> void:
 	t.near(WorldArt.fit_factor(bare, 2.0), 1.0, 0.0, "no mesh: scale 1")
 	bare.free()
 	root.free()
+
+
+func test_kestrel_hover_outline_follows_a_unit_leaving_the_hex(t) -> void:
+	# _update_hover_tile runs every frame (_process), so the occupied state is re-read without any mouse motion
+	var scene := _kestrel_scene()
+	var tile := Vector2i(12, 10)
+	var world: Vector3 = scene._hex_world(tile.x, tile.y)
+	scene._create_unit(0, world, 1)
+	var unit: Node3D = scene.units.back()
+	scene.bridge_nodes[907] = unit
+	scene._show_hover_at(world)
+	t.ok(not scene.hover_tile.visible, "hidden while the unit stands there")
+	unit.position = scene._hex_world(tile.x + 3, tile.y)
+	scene._show_hover_at(world)
+	t.ok(scene.hover_tile.visible, "back as soon as the unit has left, same pointer")
+	scene.free()
+
+
+func test_kestrel_pads_run_out_quietly(t) -> void:
+	var scene := _kestrel_scene()
+	var props = scene.world_props
+	var roots: Array = []
+	for i in WorldProps.PAD_SLOTS + 1:
+		roots.append(scene._create_bridge_building(0, "Wall", scene._hex_world(4 + i % 30, 3 + i / 30), 1000 + i))
+	t.eq(props._free_pads.size(), 0, "every pad slot in use")
+	t.eq((roots.back() as Node3D).tree_exiting.get_connections().size(), 0, "the building past the last slot has no pad to release")
+	t.eq((roots.front() as Node3D).tree_exiting.get_connections().size(), 1, "the first one releases its pad on exit")
+	scene.free()
+
+
+func test_kestrel_destroyed_building_gives_its_pad_back(t) -> void:
+	# The runner calls tests from SceneTree._initialize, before its root is inside the tree, so no node here can really
+	# leave the tree; the building's own tree_exiting signal is emitted by hand, as a destroy (queue_free) would.
+	var scene := _kestrel_scene()
+	var props = scene.world_props
+	var free_before: int = props._free_pads.size()
+	var root: Node3D = scene._create_bridge_building(0, "Barracks", Vector3(12, 0, 9), 920)
+	var slot: int = props._decal_base + WorldProps.PAD_SLOTS - free_before
+	t.eq(props._free_pads.size(), free_before - 1, "built: one slot taken")
+	root.tree_exiting.emit()
+	scene.remove_child(root)
+	root.free()
+	t.eq(props._free_pads.size(), free_before, "destroyed: the slot is free again")
+	t.near(props.pad_transform(slot).basis.x.length(), 0.0, 0.0001, "and its pad collapsed")
+	scene._create_bridge_building(0, "Barracks", Vector3(12, 0, 9), 921)
+	t.eq(props._free_pads.size(), free_before - 1, "rebuilt: a slot is taken again")
+	t.near(props.pad_transform(slot).basis.x.length(), 2.1 * WorldArt.TILE * 1.15, 0.001, "the same slot, placed for the new building")
+	scene.free()
+
+
+func test_kestrel_missing_deposit_list_marks_nothing_spent(t) -> void:
+	var scene := _kestrel_scene()
+	var before: PackedColorArray = scene.world_props._card_color.duplicate()
+	scene._sync_spent_deposits({"tick": 5})
+	var changed := 0
+	for i in before.size():
+		if scene.world_props._card_color[i] != before[i]:
+			changed += 1
+	t.eq(changed, 0, "a snapshot without a deposits key changes no crystal")
+	scene.free()

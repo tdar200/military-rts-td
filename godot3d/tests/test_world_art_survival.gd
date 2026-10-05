@@ -147,5 +147,10 @@ func test_survival_blocked_tiles_keep_their_ruins_and_rocks(t) -> void:
 	var snap: Dictionary = JSON.parse_string(f.get_as_text())
 	var before: int = scene.get_child_count()
 	scene._sync_bridge_map(snap)
-	t.eq(scene.get_child_count() - before, snap.deposits.size() + 25, "the legacy ruins and rocks on blocked tiles (25 in the fixture)")
+	var legacy := 0  # _sync_bridge_map's own rule: a ruin on (x * 3 + z) % 37 == 0, else rocks on (x + z) % 9 == 0
+	for c in snap.blocked:
+		if (int(c[0]) * 3 + int(c[1])) % 37 == 0 or (int(c[0]) + int(c[1])) % 9 == 0:
+			legacy += 1
+	t.ok(legacy > 0, "the fixture has legacy ruin and rock tiles")
+	t.eq(scene.get_child_count() - before, snap.deposits.size() + legacy, "one deposit root per deposit plus the legacy ruins and rocks")
 	scene.free()

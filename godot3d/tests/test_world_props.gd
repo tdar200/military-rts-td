@@ -317,5 +317,14 @@ func test_spent_deposits_dim_and_grey_only_their_crystals(t) -> void:
 		else:
 			t.eq(c, before[i], "card %s keeps its colour" % i)
 	t.eq(changed, 2, "both crystal cards checked")
-	t.ok((props.cards.material_override as ShaderMaterial).shader.code.contains("COLOR.b"), "the card shader reads the grey amount")
+	var decal_items := items.filter(func(i): return String(i.sprite) in WorldProps.DECAL_SPRITES)
+	var dimmed := 0
+	for i in decal_items.size():
+		var c: Color = props._decal_color[i]
+		if String(decal_items[i].sprite) == "shadow" and decal_items[i].tile == Vector2i(18, 7):
+			dimmed += 1
+			t.near(c.a, WorldProps.SPENT_SHADE, 0.0001, "spent crystal shadow %s fades with its crystal" % i)
+		else:
+			t.eq(c, Color.WHITE, "decal %s unchanged" % i)
+	t.eq(dimmed, 2, "both crystal shadows of the spent site dimmed")
 	parent.free()

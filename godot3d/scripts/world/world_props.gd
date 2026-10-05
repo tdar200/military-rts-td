@@ -50,6 +50,8 @@ var _decal_pinned := PackedByteArray()
 ## the deposit tiles already shown as spent.
 var _card_color := PackedColorArray()
 var _crystal_cards: Dictionary = {}
+var _crystal_decals: Dictionary = {}  # deposit tile -> indices of its crystals' drop shadows
+var _decal_color := PackedColorArray()  # CPU mirror of the decal instance colours (white unless a spent shadow fades)
 var _spent: Dictionary = {}
 
 
@@ -180,7 +182,9 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 	_card_pinned.resize(card_items.size())
 	_decal_pinned.resize(decal_items.size())
 	_card_color.resize(card_items.size())
+	_decal_color.resize(decal_items.size())
 	_crystal_cards.clear()
+	_crystal_decals.clear()
 	_spent.clear()
 	var crystal_tiles := {}
 	for i in card_items.size():
@@ -210,6 +214,12 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		var foot: Vector2 = it.pos - SHADOW_OFFSET * float(it.size) / SHADOW_SCALE if String(it.sprite) == "shadow" else it.pos
 		_decal_at[i] = Vector3(foot.x, at.y, foot.y)
 		_decal_pinned[i] = 1 if String(it.sprite) == "shadow" and crystal_tiles.has(it.tile) else 0
+		if _decal_pinned[i] == 1:
+			if not _crystal_decals.has(it.tile):
+				_crystal_decals[it.tile] = []
+			_crystal_decals[it.tile].append(i)
+		_decal_color[i] = Color.WHITE
+		decals.multimesh.set_instance_color(i, Color.WHITE)
 		decals.multimesh.set_instance_custom_data(i, _rect(it.sprite, it.flip))
 	_decal_base = decal_items.size()
 	_free_pads.clear()
@@ -218,6 +228,7 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		_free_pads.append(_decal_base + k)
 		decals.multimesh.set_instance_transform(_decal_base + k, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 		decals.multimesh.set_instance_custom_data(_decal_base + k, _rect("shadow", false))
+		decals.multimesh.set_instance_color(_decal_base + k, Color.WHITE)
 
 
 ## A flat decal rests a hair above the highest ground under its centre and its four half-width points, so a crater
@@ -266,6 +277,9 @@ func mark_spent(live_deposits: Array) -> int:
 			_card_color[i] = Color(c.r, c.g * SPENT_SHADE, SPENT_GREY, c.a)
 			cards.multimesh.set_instance_color(i, _card_color[i])
 			changed += 1
+		for i in _crystal_decals.get(tile, []):  # the drop shadow fades with its darker crystal
+			_decal_color[i] = Color(1, 1, 1, SPENT_SHADE)
+			decals.multimesh.set_instance_color(i, _decal_color[i])
 	return changed
 
 
@@ -362,11 +376,15 @@ shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
 uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
 varying vec4 rect;
-void vertex() { rect = INSTANCE_CUSTOM; }
+varying float fade;
+void vertex() {
+    rect = INSTANCE_CUSTOM;
+    fade = COLOR.a;  // instance alpha: 1, or SPENT_SHADE for a spent deposit's crystal shadows
+}
 void fragment() {
     vec4 c = texture(atlas, rect.xy + UV * rect.zw);
     ALBEDO = c.rgb;
-    ALPHA = c.a;
+    ALPHA = c.a * fade;
 }
 """
 	var m := ShaderMaterial.new()

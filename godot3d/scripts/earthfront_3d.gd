@@ -2125,7 +2125,7 @@ func _sync_bridge_map(snapshot: Dictionary) -> void:
 ## Kestrel only: a deposit the sim has mined out (it leaves the snapshot list, or reads zero) keeps its crystals, dimmed
 ## and greyed, so the site reads as spent; its HUD pin is already gone (vm_gameplay.deposit_pins). Survival is untouched.
 func _sync_spent_deposits(snapshot: Dictionary) -> void:
-	if world_props != null:
+	if world_props != null and snapshot.has("deposits"):  # a snapshot without the list must not spend every site
 		world_props.mark_spent(snapshot.get("deposits", []))
 
 
