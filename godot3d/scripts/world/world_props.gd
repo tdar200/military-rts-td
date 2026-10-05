@@ -20,6 +20,7 @@ const BANK := ["forest", 6, 1.1, 1.5, 0.25]  # riverside willows on dry land nex
 const BANK_GLYPHS := ["g", "m"]  # the grass bank only: the boards keep the dry flats bank open
 const CRYSTALS := [[1.25, Vector2(0.0, 0.0)], [0.85, Vector2(0.25, 0.15)]]
 const DECAL_SPRITES := ["crater", "pebbles", "shadow"]
+const TREE_SPRITES := ["forest", "forest_dry"]
 const CRYSTAL_SPRITES := ["ore", "alloy"]  # deposit markers: never cleared, a deposit must stay visible
 const HIDDEN := Vector3(1e9, 0.0, 1e9)
 const SHADOW_OFFSET := Vector2(0.16, 0.10)  # times the card width, toward the lower right (the NW sun)
@@ -73,7 +74,25 @@ static func _place(out: Array, rule: Array, x: int, y: int, salt: int, origin: V
 		"flip": (h >> 3) & 1 == 1, "tile": Vector2i(x, y)})
 
 
-static func plan(model, deposits: Array, origin: Vector2, hex: Vector2, margin: int) -> Array:
+## Tiles where no card may stand: the wave route, every ford tile and the ford's approach (its neighbours). Opaque cards
+## write depth, so a tree there would hide the route dashes, units and rings behind it.
+static func keep_out(model, wave_route: Array) -> Dictionary:
+	var out := {}
+	for step in wave_route:
+		if step is Array and step.size() >= 2:
+			out[Vector2i(int(step[0]), int(step[1]))] = true
+	for y in model.height:
+		for x in model.width:
+			if String(model.glyph_at(x, y)) == "w":
+				out[Vector2i(x, y)] = true
+				for n in _neighbours(x, y):
+					out[n] = true
+	return out
+
+
+## `keep_out` tiles get decals only (pebbles, craters); their neighbours get no trees or willows, except a forest tile,
+## which keeps its canopy. A deposit's own crystals are placed whatever the keep-out says.
+static func plan(model, deposits: Array, origin: Vector2, hex: Vector2, margin: int, keep: Dictionary = {}) -> Array:
 	var out: Array = []
 	var deposit_tiles := {}
 	for d in deposits:
@@ -85,10 +104,20 @@ static func plan(model, deposits: Array, origin: Vector2, hex: Vector2, margin: 
 			if deposit_tiles.has(tile):
 				continue
 			var g := _glyph(model, x, y)
+			var blocked := keep.has(tile)
+			var beside := false
+			if not blocked and g != "t":
+				for n in _neighbours(x, y):
+					if keep.has(n):
+						beside = true
+						break
 			var rules: Array = RULES.get(g, [])
 			for k in rules.size():
+				var sprite := String(rules[k][0])
+				if (blocked and not sprite in DECAL_SPRITES) or (beside and sprite in TREE_SPRITES):
+					continue
 				_place(out, rules[k], x, y, k + 1, origin, hex)
-			if g in BANK_GLYPHS:
+			if g in BANK_GLYPHS and not blocked and not beside:
 				for n in _neighbours(x, y):
 					if _glyph(model, n.x, n.y) in ["r", "w"]:
 						_place(out, BANK, x, y, 97, origin, hex)

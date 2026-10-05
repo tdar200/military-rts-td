@@ -47,6 +47,7 @@ var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
 var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
+var _ground_route: Array = []  # its wave route: the scatter keeps cards off it (and off the ford and its approach)
 var ocean_box: MeshInstance3D
 var sea_backdrop: MeshInstance3D  # Kestrel: flat sea far below the terrain, so the minimap and any frame past the mesh never show the clear colour
 var camera_aspect := 16.0 / 9.0
@@ -439,7 +440,8 @@ func _build_terrain_dressing() -> void:
 	world_props = null
 	if world_art_on:
 		world_props = WorldProps.new()
-		var items := WorldProps.plan(ground_model, _ground_deposits, Vector2(MAP_ORIGIN_X, MAP_ORIGIN_Z), Vector2(HEX_X, HEX_Z), int(WorldArt.CAMERA.edge_cells))
+		var keep := WorldProps.keep_out(ground_model, _ground_route)
+		var items := WorldProps.plan(ground_model, _ground_deposits, Vector2(MAP_ORIGIN_X, MAP_ORIGIN_Z), Vector2(HEX_X, HEX_Z), int(WorldArt.CAMERA.edge_cells), keep)
 		world_props.build(self, items, func(x: float, z: float) -> float: return terrain_renderer.height_at_world(x, z))
 	_build_hex_grid()
 	if ground_model == null:
@@ -470,6 +472,7 @@ func _sync_ground(snapshot: Dictionary) -> void:
 	if world_art_on:
 		_apply_world_art(snapshot)
 	_ground_deposits = snapshot.get("deposits", [])
+	_ground_route = snapshot.get("wave_route", [])
 	_build_terrain_dressing()
 
 

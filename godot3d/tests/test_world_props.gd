@@ -11,7 +11,8 @@ func _snap() -> Dictionary:
 
 func _plan() -> Array:
 	var s := _snap()
-	return WorldProps.plan(GroundModel.from_snapshot(s), s["deposits"], Vector2(2.1, 1.0), Vector2(0.68, 0.70), 8)
+	var m = GroundModel.from_snapshot(s)
+	return WorldProps.plan(m, s["deposits"], Vector2(2.1, 1.0), Vector2(0.68, 0.70), 8, WorldProps.keep_out(m, s["wave_route"]))
 
 
 func test_plan_is_deterministic(t) -> void:
@@ -182,3 +183,63 @@ func test_clearing_next_to_a_deposit_keeps_its_crystals(t) -> void:
 	t.eq(crystals, 2, "both crystal cards checked")
 	t.eq(shadows, 2, "both crystal shadows checked")
 	parent.free()
+
+
+func test_keep_out_covers_the_route_the_ford_and_its_approach(t) -> void:
+	var s := _snap()
+	var m = GroundModel.from_snapshot(s)
+	var keep: Dictionary = WorldProps.keep_out(m, s["wave_route"])
+	for step in s["wave_route"]:
+		t.ok(keep.has(Vector2i(int(step[0]), int(step[1]))), "route tile %s" % [step])
+	for ford in [Vector2i(22, 10), Vector2i(23, 10)]:
+		t.ok(keep.has(ford), "ford %s" % ford)
+		for n in WorldProps._neighbours(ford.x, ford.y):
+			t.ok(keep.has(n), "ford approach %s" % n)
+	t.eq(WorldProps.keep_out(m, s["wave_route"]), keep, "deterministic")
+
+
+func test_no_card_stands_on_the_wave_route(t) -> void:
+	var s := _snap()
+	var route := {}
+	for step in s["wave_route"]:
+		route[Vector2i(int(step[0]), int(step[1]))] = true
+	var deposits := {}
+	for d in s["deposits"]:
+		deposits[Vector2i(int(d.x), int(d.y))] = true
+	var on_route := 0
+	for item in _plan():
+		var sprite := String(item.sprite)
+		if route.has(item.tile) and not sprite in WorldProps.DECAL_SPRITES:
+			if not (sprite in WorldProps.CRYSTAL_SPRITES and deposits.has(item.tile)):
+				on_route += 1
+	t.eq(on_route, 0, "only a deposit's own crystals may stand on the route")
+
+
+func test_no_tree_beside_the_route_or_the_ford(t) -> void:
+	var s := _snap()
+	var m = GroundModel.from_snapshot(s)
+	var keep: Dictionary = WorldProps.keep_out(m, s["wave_route"])
+	var beside := 0
+	for item in _plan():
+		if not String(item.sprite) in ["forest", "forest_dry"]:
+			continue
+		var tile: Vector2i = item.tile
+		if WorldProps._glyph(m, tile.x, tile.y) == "t":
+			continue  # a forest tile keeps its canopy
+		for n in WorldProps._neighbours(tile.x, tile.y):
+			if keep.has(n):
+				beside += 1
+				break
+	t.eq(beside, 0, "no tree or willow beside the route, the ford or its approach")
+
+
+func test_the_game_scatters_with_the_route_keep_out(t) -> void:
+	var scene = load("res://main.tscn").instantiate()
+	scene._create_materials()
+	scene._setup_environment()
+	scene._build_terrain()
+	scene._sync_ground(_snap())
+	var cards := _plan().filter(func(i): return not String(i.sprite) in WorldProps.DECAL_SPRITES)
+	t.ok(scene.world_props != null, "Kestrel builds props")
+	t.eq(scene.world_props.cards.multimesh.instance_count, cards.size(), "the game plans with the same route and ford keep-out")
+	scene.free()
