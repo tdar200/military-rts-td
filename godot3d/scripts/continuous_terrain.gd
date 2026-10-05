@@ -45,9 +45,12 @@ var _cell_color := PackedColorArray()
 var _cell_wet := PackedFloat32Array()
 var _cell_rock := PackedFloat32Array()  # 1.0 on Highland (rock splat), else 0.0
 var _cell_sea := PackedFloat32Array()  # 1.0 on Sea, so the river and the bay can be told apart
+var _cell_ford := PackedFloat32Array()  # 1.0 on the Ford, so the water bands leave it its own lighter colour
+var _cell_sea_dist := PackedFloat32Array()  # hex steps from the nearest non-sea cell (0.0 on land, river and ford)
 var _raster_h := PackedFloat32Array()
 var _raster_c := PackedColorArray()  # rgb linear ground colour, alpha = water share
-var _raster_x := PackedVector4Array()  # water share, sea share, rock share, sea distance in cells (Task 6; 0.0 here)
+var _raster_x := PackedVector4Array()  # water share, sea share, rock share, sea distance in cells
+var _raster_f := PackedFloat32Array()  # ford share
 var _raster_cols := 0
 var _raster_rows := 0
 
@@ -97,6 +100,13 @@ func height_at_world(world_x: float, world_z: float) -> float:
 	var gx := (world_x - origin_x) / cell_x
 	var gz := (world_z - origin_z) / cell_z
 	return _surface_height(gx, gz)
+
+
+## Ford share at a world point (1.0 on the Ford cells, 0.0 elsewhere and on the noise terrain).
+func ford_at_world(world_x: float, world_z: float) -> float:
+	if ground == null:
+		return 0.0
+	return _raster_sample_ford((world_x - origin_x) / cell_x, (world_z - origin_z) / cell_z)
 
 
 ## Ground channels at a world point: (water share, sea share, rock share, sea distance in cells). Zero on the noise terrain.
@@ -157,11 +167,11 @@ func _add_vertex(surface: SurfaceTool, gx: float, gz: float) -> void:
 	var world_x := origin_x + gx * cell_x
 	var world_z := origin_z + gz * cell_z
 	if ground != null:
-		# COLOR.rgb class colour, COLOR.a water share, UV.x sea distance, UV2 = (sea share, rock share); detail UVs come
-		# from the world position in the shader.
+		# COLOR.rgb class colour, COLOR.a water share, UV = (sea distance, ford share), UV2 = (sea share, rock share);
+		# detail UVs come from the world position in the shader.
 		var e := _raster_sample_extras(gx, gz)
 		surface.set_color(_raster_sample_color(gx, gz))
-		surface.set_uv(Vector2(e.w, 0.0))
+		surface.set_uv(Vector2(e.w, _raster_sample_ford(gx, gz)))
 		surface.set_uv2(Vector2(e.y, e.z))
 	else:
 		surface.set_color(_biome_color(gx, gz, elevation))
@@ -251,9 +261,11 @@ void fragment() {
 """
 
 
-## Snapshot-driven painted ground (Kestrel only): COLOR.rgb is the class colour, COLOR.a the water share, UV2 the sea and
-## rock shares. The detail texture is splatted twice (straight, and a 37 degree rotated soft-light copy as in gen.py), with
-## low-frequency patches; Highland blends to a grey rock texture.
+## Snapshot-driven painted ground (Kestrel only): COLOR.rgb is the class colour, COLOR.a the water share, UV the sea
+## distance and ford share, UV2 the sea and rock shares. The detail texture is splatted twice (straight, and a 37 degree
+## rotated soft-light copy as in gen.py), with low-frequency patches; Highland blends to a grey rock texture. Water is drawn
+## in bands: sand banks, a river from dark edges to its centre (the ford keeps its class colour), a sea that deepens with
+## distance from the shore, and a broken surf line on the coast only.
 func _ground_shader_code() -> String:
 	return """
 shader_type spatial;
@@ -264,9 +276,20 @@ uniform float detail_strength = 0.90;
 uniform float rotated_strength = 0.45;
 uniform float patch_strength = 0.32;
 uniform float rock_strength = 0.85;
+uniform vec3 bank_sand : source_color = vec3(0.741, 0.659, 0.471);   // bda878
+uniform vec3 river_edge : source_color = vec3(0.078, 0.249, 0.343);  // 144057
+uniform vec3 river_mid : source_color = vec3(0.122, 0.400, 0.524);   // 1f6686
+uniform vec3 river_centre : source_color = vec3(0.168, 0.352, 0.444); // 2b5a71
+uniform vec3 sea_shallow : source_color = vec3(0.106, 0.278, 0.369); // 1b475e
+uniform vec3 sea_deep : source_color = vec3(0.031, 0.165, 0.259);    // 082a42
+uniform vec3 surf_colour : source_color = vec3(0.914, 0.937, 0.902); // e9efe6
+uniform float bank_strength = 0.75;
+uniform float surf_strength = 0.90;
 varying vec3 world_position;
 varying vec3 world_normal;
 varying vec2 extra;
+varying float sea_dist;
+varying float ford_share;
 float ground_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float ground_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -282,6 +305,8 @@ void vertex() {
     world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
     world_normal = normalize(mat3(MODEL_MATRIX) * NORMAL);
     extra = UV2;
+    sea_dist = UV.x;
+    ford_share = UV.y;
 }
 void fragment() {
     vec2 uv_a = world_position.xz * 0.17;
@@ -306,12 +331,24 @@ void fragment() {
     }
     float slope = 1.0 - clamp(world_normal.y, 0.0, 1.0);
     land = mix(land, land * 0.62, smoothstep(0.25, 0.65, slope) * 0.6);
-    float water = smoothstep(0.42, 0.62, COLOR.a);
-    float ripple = sin(world_position.x * 3.1 + TIME * 0.7) * cos(world_position.z * 2.7 - TIME * 0.5);
-    vec3 wet = COLOR.rgb * (0.92 + ripple * 0.05 + patches * 0.08);
-    ALBEDO = mix(land, wet, water);
-    ROUGHNESS = mix(0.95, 0.30, water);
-    SPECULAR = mix(0.06, 0.30, water);
+    float share = COLOR.a;
+    float sea = extra.x;
+    float bank = smoothstep(0.10, 0.28, share) * (1.0 - smoothstep(0.30, 0.44, share));
+    land = mix(land, bank_sand * (0.82 + d_a * 0.36), bank * (1.0 - sea) * bank_strength);
+    float water = smoothstep(0.40, 0.56, share);
+    float streak = smoothstep(0.62, 0.80, ground_noise(vec2(world_position.x * 1.1, world_position.z * 5.5) + vec2(TIME * 0.04, 0.0)));
+    vec3 river = mix(river_edge, river_mid, smoothstep(0.50, 0.75, share));
+    river = mix(river, river_centre, smoothstep(0.80, 0.98, share));
+    river = mix(river, COLOR.rgb, smoothstep(0.25, 0.75, ford_share));  // the ford keeps its lighter class colour
+    river += vec3(0.05) * streak;
+    vec3 ocean = mix(sea_shallow, sea_deep, smoothstep(0.5, 4.0, sea_dist));
+    ocean += vec3(0.03) * streak * (1.0 - smoothstep(1.0, 3.0, sea_dist));
+    vec3 wet = mix(river, ocean, smoothstep(0.3, 0.7, sea));
+    float surf = (1.0 - smoothstep(0.0, 0.06, abs(share - 0.47))) * smoothstep(0.4, 0.6, sea);
+    surf *= 0.55 + 0.45 * ground_noise(world_position.xz * 6.0 + vec2(TIME * 0.1));
+    ALBEDO = mix(mix(land, wet, water), surf_colour, surf * surf_strength);
+    ROUGHNESS = mix(0.95, 0.35, water);
+    SPECULAR = mix(0.06, 0.25, water);
 }
 """
 
@@ -358,6 +395,7 @@ func _bake_ground() -> void:
 	_cell_wet.resize(count)
 	_cell_rock.resize(count)
 	_cell_sea.resize(count)
+	_cell_ford.resize(count)
 	for y in range(map_height):
 		for x in range(map_width):
 			var glyph := String(ground.glyph_at(x, y))
@@ -369,11 +407,14 @@ func _bake_ground() -> void:
 			_cell_wet[i] = float(look[3])
 			_cell_rock[i] = 1.0 if glyph == "h" else 0.0
 			_cell_sea[i] = 1.0 if glyph == "o" else 0.0
+			_cell_ford[i] = 1.0 if glyph == "w" else 0.0
+	_bake_sea_distance()
 	_raster_cols = int((float(map_width - 1) + 2.0 * RASTER_MARGIN) / RASTER_STEP) + 1
 	_raster_rows = int((float(map_height - 1) + 2.0 * RASTER_MARGIN) / RASTER_STEP) + 1
 	_raster_h.resize(_raster_cols * _raster_rows)
 	_raster_c.resize(_raster_cols * _raster_rows)
 	_raster_x.resize(_raster_cols * _raster_rows)
+	_raster_f.resize(_raster_cols * _raster_rows)
 	for row in range(_raster_rows):
 		var gz := -RASTER_MARGIN + float(row) * RASTER_STEP
 		for col in range(_raster_cols):
@@ -381,12 +422,44 @@ func _bake_ground() -> void:
 			var blend := _blend_cells(gx, gz)
 			_raster_h[row * _raster_cols + col] = blend[0]
 			_raster_c[row * _raster_cols + col] = Color(blend[1], blend[2], blend[3], blend[4])
-			_raster_x[row * _raster_cols + col] = Vector4(blend[4], blend[5], blend[6], 0.0)
+			_raster_x[row * _raster_cols + col] = Vector4(blend[4], blend[5], blend[6], blend[7])
+			_raster_f[row * _raster_cols + col] = blend[8]
 
 
-## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share, sea share, rock
-## share]. Off-map cells continue the
-## nearest edge cell, so land and sea run past the frame (spec addendum W3).
+## Breadth-first hex distance from the nearest non-sea cell (odd-q columns, odd columns shifted half a row down, as in
+## _blend_cells): land, river and ford are 0.0, a sea cell is 1 + its smallest neighbour. Drives the sea depth bands.
+func _bake_sea_distance() -> void:
+	var count := map_width * map_height
+	_cell_sea_dist.resize(count)
+	var far := float(map_width + map_height)  # an all-sea map has no shore: everything is open water
+	var queue := PackedInt32Array()
+	for i in range(count):
+		if _cell_sea[i] > 0.5:
+			_cell_sea_dist[i] = far
+		else:
+			_cell_sea_dist[i] = 0.0
+			queue.append(i)
+	var head := 0
+	while head < queue.size():
+		var i := queue[head]
+		head += 1
+		var x := i % map_width
+		var y := i / map_width
+		var shift := 0 if x % 2 == 0 else 1  # even columns reach rows y-1 and y on their sides, odd ones y and y+1
+		var next := _cell_sea_dist[i] + 1.0
+		for n: Vector2i in [Vector2i(x, y - 1), Vector2i(x, y + 1), Vector2i(x - 1, y - 1 + shift), Vector2i(x - 1, y + shift),
+				Vector2i(x + 1, y - 1 + shift), Vector2i(x + 1, y + shift)]:
+			if n.x < 0 or n.y < 0 or n.x >= map_width or n.y >= map_height:
+				continue
+			var j := n.y * map_width + n.x
+			if _cell_sea_dist[j] > next:
+				_cell_sea_dist[j] = next
+				queue.append(j)
+
+
+## Distance-weighted blend of the hex cells around a point: [height, r, g, b, water share, sea share, rock share, sea
+## distance, ford share]. Off-map cells continue the nearest edge cell, so land and sea run past the frame (spec addendum W3); an
+## off-map sea cell keeps deepening by how far it lies past the edge.
 func _blend_cells(gx: float, gz: float) -> Array:
 	var total := 0.0
 	var height_sum := 0.0
@@ -395,6 +468,8 @@ func _blend_cells(gx: float, gz: float) -> Array:
 	var wet_sum := 0.0
 	var rock_sum := 0.0
 	var sea_sum := 0.0
+	var dist_sum := 0.0
+	var ford_sum := 0.0
 	var col0 := roundi(gx)
 	for c in range(col0 - 1, col0 + 2):
 		var offset := 0.5 if posmod(c, 2) == 1 else 0.0
@@ -419,11 +494,16 @@ func _blend_cells(gx: float, gz: float) -> Array:
 			wet_sum += wet * w
 			rock_sum += _cell_rock[i] * w
 			sea_sum += _cell_sea[i] * w
+			var sea_d := _cell_sea_dist[i]
+			if sea_d > 0.0:
+				sea_d += maxf(absf(float(c - cc)), absf(float(r - rr)))
+			dist_sum += sea_d * w
+			ford_sum += _cell_ford[i] * w
 	if total <= 0.0:
-		return [-0.8, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0]
+		return [-0.8, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, RASTER_MARGIN, 0.0]
 	var inv := 1.0 / total
 	var noise := height_noise.get_noise_2d(gx, gz)
-	return [height_sum * inv + noise * amp_sum * inv, color_sum.r * inv, color_sum.g * inv, color_sum.b * inv, wet_sum * inv, sea_sum * inv, rock_sum * inv]
+	return [height_sum * inv + noise * amp_sum * inv, color_sum.r * inv, color_sum.g * inv, color_sum.b * inv, wet_sum * inv, sea_sum * inv, rock_sum * inv, dist_sum * inv, ford_sum * inv]
 
 
 func _raster_index(gx: float, gz: float) -> Array:
@@ -462,6 +542,16 @@ func _raster_sample_extras(gx: float, gz: float) -> Vector4:
 	var top := _raster_x[i].lerp(_raster_x[i + 1], tx)
 	var bottom := _raster_x[i + _raster_cols].lerp(_raster_x[i + _raster_cols + 1], tx)
 	return top.lerp(bottom, tz)
+
+
+func _raster_sample_ford(gx: float, gz: float) -> float:
+	var at := _raster_index(gx, gz)
+	var i: int = at[0]
+	var tx: float = at[1]
+	var tz: float = at[2]
+	var top := lerpf(_raster_f[i], _raster_f[i + 1], tx)
+	var bottom := lerpf(_raster_f[i + _raster_cols], _raster_f[i + _raster_cols + 1], tx)
+	return lerpf(top, bottom, tz)
 
 
 ## Stand-in for the biome noise so tile dressing (trees, rocks) follows the ground classes.
