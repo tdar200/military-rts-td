@@ -119,3 +119,38 @@ func test_clear_around_remembers_what_it_hid(t) -> void:
 	t.eq(props.clear_around(wood, 1.0), 0, "a second clear finds nothing left")
 	t.ok(props.clear_around(Vector3(2.1 + 30.0 * 0.68, 0, 1.0 + 2.0 * 0.70), 1.0) > 0, "the ridge is untouched by the wood clear")
 	parent.free()
+
+
+func test_clear_around_takes_each_cleared_card_shadow_with_it(t) -> void:
+	var parent := Node3D.new()
+	var props = WorldProps.new()
+	var items := _plan()
+	props.build(parent, items, func(_x, _z): return 0.0)
+	var wood := Vector2(2.1 + 8.0 * 0.68, 1.0 + 19.0 * 0.70)
+	var cards := 0
+	for item in items:
+		if not String(item.sprite) in WorldProps.DECAL_SPRITES and item.pos.distance_to(wood) < 1.0:
+			cards += 1
+	t.ok(cards > 0, "Hollow Wood has cards to clear")
+	t.eq(props.clear_around(Vector3(wood.x, 0, wood.y), 1.0), 2 * cards, "every cleared card takes its own drop shadow, and no other")
+	parent.free()
+
+
+func test_cards_keep_their_billboard_inside_the_cull_box(t) -> void:
+	var parent := Node3D.new()
+	var props = WorldProps.new()
+	var items := _plan()
+	props.build(parent, items, func(_x, _z): return 0.0)
+	var tallest := 0.0
+	for item in items:
+		tallest = maxf(tallest, float(item.size))
+	t.ok(props.cards.extra_cull_margin >= tallest, "a camera-facing card turned off its quad still sits inside the culling box (%s)" % tallest)
+	t.eq(props.cards.visibility_range_end, 0.0, "no visibility range: one node spans the map, a range would pop every prop at once")
+	parent.free()
+
+
+func test_decals_rest_on_the_highest_ground_they_cover(t) -> void:
+	var bowl := func(x: float, z: float) -> float: return 0.3 * (x * x + z * z)  # a crater: rim higher than the centre
+	var y: float = WorldProps.decal_height(bowl, Vector2.ZERO, 1.0)
+	t.ok(y >= 0.3 * 0.25 + 0.03, "the decal clears the rim instead of sinking under it (%s)" % y)
+	t.near(WorldProps.decal_height(func(_x, _z): return 0.5, Vector2(3, 4), 1.0), 0.535, 0.0001, "flat ground: a hair above it")

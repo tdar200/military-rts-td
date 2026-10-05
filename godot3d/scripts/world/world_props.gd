@@ -21,6 +21,11 @@ const BANK_GLYPHS := ["g", "m"]  # the grass bank only: the boards keep the dry 
 const CRYSTALS := [[1.25, Vector2(0.0, 0.0)], [0.85, Vector2(0.25, 0.15)]]
 const DECAL_SPRITES := ["crater", "pebbles", "shadow"]
 const HIDDEN := Vector3(1e9, 0.0, 1e9)
+const SHADOW_OFFSET := Vector2(0.16, 0.10)  # times the card width, toward the lower right (the NW sun)
+const SHADOW_SCALE := 0.9
+## The card shader turns each quad to the camera, so its pixels can leave the quad's own box by up to a card size
+## (2.6 tiles at most). One node spans the whole map, so there is no visibility range (it would pop every prop at once).
+const CARD_CULL_MARGIN := 2.0
 
 var cards: MultiMeshInstance3D
 var decals: MultiMeshInstance3D
@@ -29,6 +34,7 @@ var _decal_base := 0
 var _free_pads: Array[int] = []
 ## CPU copies of every planned instance's ground point, so `clear_around` never reads the MultiMesh buffers back from
 ## the renderer (the dummy renderer keeps no transforms, and a GL buffer read stalls). Cleared slots move to HIDDEN.
+## A drop shadow is keyed by the foot of its card.
 var _card_at := PackedVector3Array()
 var _decal_at := PackedVector3Array()
 
@@ -92,7 +98,7 @@ static func plan(model, deposits: Array, origin: Vector2, hex: Vector2, margin: 
 	var shadows: Array = []
 	for item in out:
 		if not String(item.sprite) in DECAL_SPRITES:
-			shadows.append({"sprite": "shadow", "pos": item.pos + Vector2(0.16, 0.10) * item.size, "size": item.size * 0.9, "flip": false, "tile": item.tile})
+			shadows.append({"sprite": "shadow", "pos": item.pos + SHADOW_OFFSET * item.size, "size": item.size * SHADOW_SCALE, "flip": false, "tile": item.tile})
 	out.append_array(shadows)
 	return out
 
@@ -113,6 +119,7 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 	var card_items := items.filter(func(i): return not String(i.sprite) in DECAL_SPRITES)
 	var decal_items := items.filter(func(i): return String(i.sprite) in DECAL_SPRITES)
 	cards = _multimesh(parent, "WorldPropCards", _card_material(atlas), _card_mesh(), card_items.size())
+	cards.extra_cull_margin = CARD_CULL_MARGIN
 	decals = _multimesh(parent, "WorldPropDecals", _decal_material(atlas), _decal_mesh(), decal_items.size() + PAD_SLOTS)
 	_card_at.resize(card_items.size())
 	_decal_at.resize(decal_items.size())
@@ -129,8 +136,11 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		var it: Dictionary = decal_items[i]
 		var s: Dictionary = _meta.sprites[it.sprite]
 		var basis := Basis.from_scale(Vector3(it.size, 1.0, it.size * float(s.aspect)))
-		_decal_at[i] = Vector3(it.pos.x, height_at.call(it.pos.x, it.pos.y) + 0.035, it.pos.y)
-		decals.multimesh.set_instance_transform(i, Transform3D(basis, _decal_at[i]))
+		var at := Vector3(it.pos.x, decal_height(height_at, it.pos, float(it.size)), it.pos.y)
+		decals.multimesh.set_instance_transform(i, Transform3D(basis, at))
+		# a drop shadow is cleared with its card, so it is keyed by the card's foot, not its own offset centre
+		var foot: Vector2 = it.pos - SHADOW_OFFSET * float(it.size) / SHADOW_SCALE if String(it.sprite) == "shadow" else it.pos
+		_decal_at[i] = Vector3(foot.x, at.y, foot.y)
 		decals.multimesh.set_instance_custom_data(i, _rect(it.sprite, it.flip))
 	_decal_base = decal_items.size()
 	_free_pads.clear()
@@ -138,6 +148,16 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		_free_pads.append(_decal_base + k)
 		decals.multimesh.set_instance_transform(_decal_base + k, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 		decals.multimesh.set_instance_custom_data(_decal_base + k, _rect("shadow", false))
+
+
+## A flat decal rests a hair above the highest ground under its centre and its four half-width points, so a crater
+## decal clears the crater's own rim and a drop shadow on a slope never cuts into the hill.
+static func decal_height(height_at: Callable, pos: Vector2, size: float) -> float:
+	var h: float = height_at.call(pos.x, pos.y)
+	var r := size * 0.5
+	for d in [Vector2(r, 0), Vector2(-r, 0), Vector2(0, r), Vector2(0, -r)]:
+		h = maxf(h, float(height_at.call(pos.x + d.x, pos.y + d.y)))
+	return h + 0.035
 
 
 func clear_around(world: Vector3, radius: float) -> int:
@@ -151,7 +171,7 @@ func _clear(mm: MultiMesh, at: PackedVector3Array, world: Vector3, radius: float
 	var centre := Vector2(world.x, world.z)
 	for i in at.size():
 		if Vector2(at[i].x, at[i].z).distance_to(centre) < radius:
-			mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), at[i]))
+			mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 			at[i] = HIDDEN
 			hidden += 1
 	return hidden
