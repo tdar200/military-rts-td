@@ -1530,11 +1530,12 @@ func _select_at(screen_position: Vector2, additive := false, similar := false) -
 
 
 ## The human entity a click at `screen_position` lands on, or null. `to_screen(node, offset)` projects the node's root
-## moved by the world offset `offset`. Survival: the root lifted 0.15, within 32 px, nearest wins (unchanged). Kestrel
-## (spec addendum W6): a fitted model is wider and taller than that, so a click inside the screen rectangle of any of its
-## fitted mesh boxes (`pick_parts`; a unit has one, its whole box) picks it; when several models hold the click the
-## narrowest wins (a unit beside the CC still takes its own click although the CC's hull covers it), then the nearest
-## root. A click on no model falls back to the Survival rule, so a small unit keeps its 32 px reach.
+## moved by the world offset `offset`. Survival: the root lifted 0.15, within 32 px, nearest wins (unchanged). Kestrel:
+## an entity holds a click on its painted sprite (_parts_hold: inside the screen rectangle of its pick box, the painting's
+## opaque rect, and on paint by the sprite's mask, so a see-through gap holds nothing); a fitted model (a kind without a
+## sprite) holds one inside any of its mesh boxes. Among the entities that hold it a unit wins (it stands in front of the
+## buildings), then the narrowest, then the nearest root. A click on nothing falls back to the Survival rule, so a small
+## unit keeps its 32 px reach.
 func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
 	var nearest: Node3D
 	if world_art_on:
@@ -1565,16 +1566,32 @@ func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
 	return nearest
 
 
-## Whether `point` falls inside the screen rectangle of one of `node`'s fitted part boxes (its eight corners projected).
+## Whether `point` falls inside the screen rectangle of one of `node`'s part boxes (its eight corners projected) and, on a
+## sprite card, on the painting's paint there (WorldSprites.box_hit: the box spans the opaque rect, mirrored with the card).
 func _parts_hold(node: Node3D, point: Vector2, to_screen: Callable) -> bool:
+	var card := _sprite_card(node)
 	for box in node.get_meta("pick_parts", []):
 		var rect := Rect2()
 		for corner in 8:
 			var at: Vector2 = to_screen.call(node, node.basis * (box as AABB).get_endpoint(corner))
 			rect = Rect2(at, Vector2.ZERO) if corner == 0 else rect.expand(at)
-		if rect.has_point(point):
+		if not rect.has_point(point):
+			continue
+		if card == null or rect.size.x <= 0.0 or rect.size.y <= 0.0:
+			return true
+		var tex := WorldSprites.drawn_texture(card)
+		if tex == null or WorldSprites.box_hit(tex, (point - rect.position) / rect.size, bool(card.get_meta("mirrored", false))):
 			return true
 	return false
+
+
+## The entity's Kestrel sprite card (a building's Visual, a unit's UnitVisual), or null for a model.
+func _sprite_card(node: Node) -> MeshInstance3D:
+	for part in ["Visual", "UnitVisual"]:
+		var card := node.get_node_or_null(part) as MeshInstance3D
+		if card != null and card.has_meta("sprite_kind"):
+			return card
+	return null
 
 
 ## Selects control group `group` (the number keys and the control group list both end here).

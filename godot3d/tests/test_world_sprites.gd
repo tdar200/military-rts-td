@@ -199,8 +199,7 @@ func test_kestrel_building_is_a_sprite_card(t) -> void:
 		var parts: Array = root.get_meta("pick_parts", [])
 		t.eq(parts.size(), 1, "%s picks by one box, its opaque rect" % kind)
 		if parts.size() == 1:
-			var want := WorldSprites.pick_box(WorldSprites.texture_for(kind, 0), visual.scale.x, visual.position.y)
-			t.ok((parts[0] as AABB).is_equal_approx(want), "%s pick box from the opaque bounds" % kind)
+			t.ok((parts[0] as AABB).is_equal_approx(_expected_pick_box(visual)), "%s pick box from the opaque bounds" % kind)
 		t.eq(root.find_children("*", "Label3D", true, false).size(), 0, "%s has no banner" % kind)
 		root.free()
 	var alien: Node3D = scene._create_bridge_building(1, "CommandCenter", Vector3(12, 0, 10), 931)
@@ -266,7 +265,45 @@ func test_kestrel_card_casts_no_shadow_and_takes_a_contact_pad(t) -> void:
 	scene.free()
 
 
-func test_click_on_a_transparent_corner_misses_and_the_body_hits(t) -> void:
+## alpha > 128 boxes measured with PIL (pixels, end exclusive)
+const CC_BODY_PX := Rect2(16, 26, 227, 212)  # command_center_v2.png
+const TANK_BODY_PX := Rect2(13, 35, 227, 193)  # tank_v2.png
+const TURRET_BODY_PX := Rect2(13, 37, 229, 193)  # gun_turret_v2.png
+
+
+func _in_body_box(px: Rect2, uv: Vector2) -> bool:
+	return Rect2(px.position / 256.0, px.size / 256.0).has_point(uv)
+
+
+## Whether `point` falls in the screen rectangle of `node`'s pick box (its eight corners projected), alpha ignored.
+func _box_holds(node: Node3D, point: Vector2, to_screen: Callable) -> bool:
+	for box in node.get_meta("pick_parts", []):
+		var rect := Rect2()
+		for corner in 8:
+			var at: Vector2 = to_screen.call(node, (box as AABB).get_endpoint(corner))
+			rect = Rect2(at, Vector2.ZERO) if corner == 0 else rect.expand(at)
+		if rect.has_point(point):
+			return true
+	return false
+
+
+## Moves `node` (keeping its height) so its root-space offset `own` lands on screen where `anchor`'s offset `at` does.
+func _overlay(anchor: Node3D, at: Vector3, node: Node3D, own: Vector3) -> void:
+	node.position.x = anchor.position.x + at.x - own.x
+	node.position.z = anchor.position.z + at.z - own.z + ((node.position.y + own.y) - (anchor.position.y + at.y)) * _cos_pitch() / WorldArt.PITCH_SIN
+
+
+## The pick box a card must have, from its opaque rect through this file's own projection (_card_point): its corners land
+## on the rect's corners on screen (mirrored: the rect read right to left).
+func _expected_pick_box(card: Node3D, mirrored := false) -> AABB:
+	var r := WorldSprites.opaque_bounds(_card_texture(card))
+	var u0 := 1.0 - r.end.x if mirrored else r.position.x
+	var lo := _card_point(card, u0, r.end.y)
+	var hi := _card_point(card, u0 + r.size.x, r.position.y)
+	return AABB(lo, hi - lo)
+
+
+func test_click_on_a_see_through_pixel_inside_the_box_misses_and_the_body_hits(t) -> void:
 	var scene := _kestrel_scene()
 	var to_screen := _ortho(108.0)
 	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 950)
@@ -274,29 +311,78 @@ func test_click_on_a_transparent_corner_misses_and_the_body_hits(t) -> void:
 	var card := cc.get_node("Visual") as Node3D
 	var body: Vector2 = to_screen.call(cc, _card_point(card, 0.5, 0.55))
 	t.eq(scene._pick_entity(body, to_screen), cc, "a click on the painted body selects the CC")
-	var roof: Vector2 = to_screen.call(cc, _card_point(card, 0.5, 0.16))
+	var roof: Vector2 = to_screen.call(cc, _card_point(card, 0.566, 0.2))  # solid paint 4 px around (PIL)
 	t.eq(scene._pick_entity(roof, to_screen), cc, "a click on the painted roof selects it too")
 	t.ok(to_screen.call(cc, Vector3.UP * 0.15).distance_to(roof) > 32.0, "and that click is past the legacy 32 px reach")
 	for corner in [Vector2(0.03, 0.03), Vector2(0.97, 0.04), Vector2(0.03, 0.97), Vector2(0.97, 0.97)]:
 		var at: Vector2 = to_screen.call(cc, _card_point(card, corner.x, corner.y))
 		t.eq(scene._pick_entity(at, to_screen), null, "the transparent corner %s selects nothing" % corner)
+	# inside the painted body's box, between the roof towers: alpha <= 128 over a 4 px cell and all its neighbours (PIL)
+	for uv in [Vector2(0.305, 0.164), Vector2(0.273, 0.242), Vector2(0.227, 0.352)]:
+		var at: Vector2 = to_screen.call(cc, _card_point(card, uv.x, uv.y))
+		t.ok(_in_body_box(CC_BODY_PX, uv) and _box_holds(cc, at, to_screen), "%s lies inside the CC's opaque box" % uv)
+		t.eq(scene._pick_entity(at, to_screen), null, "the see-through pixel %s inside the box selects nothing" % uv)
 	scene.free()
 
 
-func test_a_transparent_corner_does_not_steal_a_neighbours_click(t) -> void:
+func test_a_see_through_pixel_does_not_steal_a_neighbours_click(t) -> void:
 	var scene := _kestrel_scene()
 	var to_screen := _ortho(108.0)
 	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 951)
 	scene.bridge_nodes[951] = cc
-	# a turret on the north-east neighbour: the narrower card wins any click both hold, so only its opaque rect may count
+	# a turret north-east of it, placed so a gap in its painting (inside its opaque box) shows the CC's painted body:
+	# the narrower card wins any click both hold, so only its painted pixels may count
 	var turret: Node3D = scene._create_bridge_building(0, "GunTurret", scene._hex_world(11, 9), 952)
 	scene.bridge_nodes[952] = turret
 	var card := turret.get_node("Visual") as Node3D
-	var corner: Vector2 = to_screen.call(turret, _card_point(card, 0.03, 0.97))
-	t.ok(scene._parts_hold(cc, corner, to_screen), "the turret card's bottom-left corner lies on the CC's painted body")
-	t.eq(scene._pick_entity(corner, to_screen), cc, "the turret's transparent corner leaves the click to the CC")
+	var gap := Vector2(0.352, 0.43)
+	_overlay(cc, _card_point(cc.get_node("Visual"), 0.5, 0.55), turret, _card_point(card, gap.x, gap.y))
+	var click: Vector2 = to_screen.call(turret, _card_point(card, gap.x, gap.y))
+	t.ok(click.distance_to(to_screen.call(cc, _card_point(cc.get_node("Visual"), 0.5, 0.55))) < 0.01, "the gap lies on the CC's body")
+	t.ok(_in_body_box(TURRET_BODY_PX, gap) and _box_holds(turret, click, to_screen), "inside the turret's opaque box")
+	t.eq(scene._pick_entity(click, to_screen), cc, "the turret's see-through gap leaves the click to the CC")
 	var body: Vector2 = to_screen.call(turret, _card_point(card, 0.5, 0.6))
 	t.eq(scene._pick_entity(body, to_screen), turret, "the turret's own body still takes its click")
+	scene.free()
+
+
+func test_a_building_seen_through_a_units_gap_takes_the_click(t) -> void:
+	var scene := _kestrel_scene()
+	var to_screen := _ortho(108.0)
+	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(10, 10), 953)
+	scene.bridge_nodes[953] = cc
+	scene._create_unit(0, scene._hex_world(10, 12), 1)
+	var tank: Node3D = scene.units.back()
+	scene.bridge_nodes[954] = tank
+	var card := tank.get_node("UnitVisual") as Node3D
+	var gap := Vector2(0.414, 0.195)  # over the tank's hull, under its barrel: no paint (PIL)
+	var cc_body := _card_point(cc.get_node("Visual"), 0.5, 0.55)
+	_overlay(cc, cc_body, tank, _card_point(card, gap.x, gap.y))
+	t.ok(tank.position.z > cc.position.z, "the tank stands in front of (south of) the CC")
+	var click: Vector2 = to_screen.call(tank, _card_point(card, gap.x, gap.y))
+	t.ok(click.distance_to(to_screen.call(cc, cc_body)) < 0.01, "the gap shows the CC's painted body")
+	t.ok(_in_body_box(TANK_BODY_PX, gap) and _box_holds(tank, click, to_screen), "inside the tank's opaque box")
+	t.eq(scene._pick_entity(click, to_screen), cc, "a unit ranks first, but its see-through gap leaves the click to the CC")
+	t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, 0.5, 0.45)), to_screen), tank, "the tank's painted hull is still the tank")
+	scene.free()
+
+
+func test_a_mirrored_unit_is_picked_by_its_mirrored_painting(t) -> void:
+	var scene := _kestrel_scene()
+	var to_screen := _ortho(108.0)
+	scene._create_unit(0, scene._hex_world(14, 12), 1)
+	var tank: Node3D = scene.units.back()
+	scene.bridge_nodes[955] = tank
+	var card := tank.get_node("UnitVisual") as MeshInstance3D
+	var clear := Vector2(0.2422, 0.3828)  # tank_v2.png: no paint here, solid paint at its mirror (0.7578) (PIL)
+	var solid := Vector2(1.0 - clear.x, clear.y)
+	var pick := func(uv: Vector2) -> Node3D: return scene._pick_entity(to_screen.call(tank, _card_point(card, uv.x, uv.y)), to_screen)
+	t.eq(pick.call(clear), null, "as painted: the gap selects nothing")
+	t.eq(pick.call(solid), tank, "as painted: the paint selects the tank")
+	t.ok(WorldSprites.face(card, 1.0), "moving toward +x mirrors the left-facing tank")
+	scene._refresh_unit_pick(tank, card)
+	t.eq(pick.call(solid), null, "mirrored: that screen pixel now shows the painting's gap")
+	t.eq(pick.call(clear), tank, "mirrored: and the mirrored paint takes the click")
 	scene.free()
 
 
@@ -420,8 +506,7 @@ func test_kestrel_units_are_sprite_cards(t) -> void:
 			var parts: Array = unit.get_meta("pick_parts", [])
 			t.eq(parts.size(), 1, "%s: one pick box" % label)
 			if parts.size() == 1:
-				var want := WorldSprites.pick_box(_card_texture(visual), visual.scale.x, visual.position.y, false)
-				t.ok((parts[0] as AABB).is_equal_approx(want), "%s: the opaque rect" % label)
+				t.ok((parts[0] as AABB).is_equal_approx(_expected_pick_box(visual)), "%s: the opaque rect" % label)
 	scene.free()
 
 
@@ -500,7 +585,7 @@ func test_unit_faces_its_horizontal_screen_motion(t) -> void:
 	sync.call(west, west)
 	t.ok(bool(card.get_meta("mirrored", false)), "stopped: keeps its last facing")
 	var parts: Array = squad.get_meta("pick_parts", [])
-	t.ok(parts.size() == 1 and (parts[0] as AABB).is_equal_approx(WorldSprites.pick_box(_card_texture(card), card.scale.x, float(card.get_meta("base_y")), true)), "the pick box mirrors with it")
+	t.ok(parts.size() == 1 and (parts[0] as AABB).is_equal_approx(_expected_pick_box(card, true)), "the pick box mirrors with it")
 	sync.call(east, east)
 	t.ok(not bool(card.get_meta("mirrored", true)), "moving toward +x: as painted again")
 	t.ok(bool(tank_card.get_meta("mirrored", false)), "the tank mirrors moving toward +x")
@@ -543,8 +628,7 @@ func test_gunship_hovers_over_its_ground_shadow(t) -> void:
 			var y := card.position.y + shade.position.y * card.scale.y
 			t.near(y, base, 1e-5, "%d: the %s stays on the ground" % [id, part])
 		var box: AABB = (unit.get_meta("pick_parts") as Array)[0]
-		var want := WorldSprites.pick_box(_card_texture(card), card.scale.x, base + lifted, false)
-		t.ok(box.is_equal_approx(want), "%d: the pick box follows the painted body up" % id)
+		t.ok(box.is_equal_approx(_expected_pick_box(card)), "%d: the pick box follows the painted body up" % id)
 		var top := _card_point(card, 0.5, WorldSprites.opaque_bounds(_card_texture(card)).position.y).y
 		t.ok((unit.get_node("HealthBack") as Node3D).position.y > top, "%d: bars over the lifted painting" % id)
 	scene.free()
@@ -581,7 +665,7 @@ func test_click_on_a_unit_takes_its_painted_body_only(t) -> void:
 	scene.bridge_nodes[983] = tank
 	var card := tank.get_node("UnitVisual") as Node3D
 	t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, 0.5, 0.45)), to_screen), tank, "the painted hull")
-	t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, 0.25, 0.3)), to_screen), tank, "the painted turret, past the old reach")
+	t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, 0.41, 0.375)), to_screen), tank, "the painted turret (solid paint, PIL), past the old reach")
 	for corner in [Vector2(0.02, 0.03), Vector2(0.98, 0.03)]:
 		t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, corner.x, corner.y)), to_screen), null, "transparent corner %s" % corner)
 	scene.free()
@@ -594,14 +678,21 @@ func test_click_between_two_touching_units_picks_the_nearer_root(t) -> void:
 	scene._create_unit(0, at, 1)
 	var tank: Node3D = scene.units.back()
 	scene.bridge_nodes[984] = tank
-	scene._create_unit(0, at + Vector3(0.5, 0, 0), 0)
+	scene._create_unit(0, at + Vector3(0.3, 0, 0), 0)
 	var squad: Node3D = scene.units.back()
 	scene.bridge_nodes[985] = squad
-	squad.position.y = tank.position.y  # the same ground height: only the horizontal distance differs
-	for x in [0.235, 0.30]:
-		var click: Vector2 = to_screen.call(tank, Vector3(x, 0.12, 0.0))
+	# the same ground height and card lift: only the horizontal distance differs
+	squad.position.y = tank.position.y
+	var lift: float = tank.get_node("UnitVisual").position.y
+	var squad_card := squad.get_node("UnitVisual") as Node3D
+	squad_card.position.y = lift
+	squad_card.set_meta("base_y", lift)
+	scene._refresh_unit_pick(squad, squad_card)
+	# where the squad's rifles cross the tank's hull: paint in both sprites 3 px around (PIL), either side of the midpoint
+	for x in [0.1, 0.275]:
+		var click: Vector2 = to_screen.call(tank, Vector3(x, lift + 0.37, 0.0))
 		t.ok(scene._parts_hold(tank, click, to_screen) and scene._parts_hold(squad, click, to_screen), "x %.2f: both painted bodies hold it" % x)
-		var want: Node3D = tank if x < 0.25 else squad
+		var want: Node3D = tank if x < 0.15 else squad
 		t.eq(scene._pick_entity(click, to_screen), want, "x %.2f: the nearer root" % x)
 	scene.free()
 

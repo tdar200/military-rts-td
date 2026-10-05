@@ -20,6 +20,7 @@ const FOOT := 0.85
 const ASPECT := 1.0  # every mock sprite is 256 x 256
 const CARD_LIFT := 0.03  # the card's ground strip rides this far over the terrain under the root
 const OPAQUE_ALPHA := 128  # a pixel above this alpha is painted body (picking, bars, pad); softer pixels are edge glow
+const MASK_CELLS := 64  # the paint mask's grid (a 256 px sprite: 4 px cells)
 const FOOTPRINT := 0.65  # the painted footprint's centre line, as a fraction of the card height from its top
 const FOUNDATION := "foundation_v1"
 ## The boards' cast shadow (hud.css `.shd`, drawn at the sprite's `sh` opacity): the sprite's silhouette, black, flipped
@@ -101,6 +102,7 @@ const NO_SPRITE: Array[String] = []
 
 static var _materials := {}  # texture path -> StandardMaterial3D
 static var _bounds := {}  # texture path -> Rect2
+static var _masks := {}  # texture path -> PackedByteArray, MASK_CELLS x MASK_CELLS (painted_at)
 static var _meshes: Array[ArrayMesh] = [null, null]  # as painted, mirrored
 static var _shadow_meshes: Array[ArrayMesh] = [null, null]
 static var _contact_meshes: Array[ArrayMesh] = [null, null]
@@ -167,31 +169,101 @@ static func graded(tex: Texture2D) -> Texture2D:
 
 
 ## The painted body's box in card UV (0..1, v down from the top): the bounding box of the pixels whose alpha passes
-## OPAQUE_ALPHA. Scanned once per texture.
+## OPAQUE_ALPHA. Scanned once per texture (with its paint mask, painted_at).
 static func opaque_bounds(tex: Texture2D) -> Rect2:
-	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	var key := _key(tex)
 	if not _bounds.has(key):
-		var img := tex.get_image()
-		var out := Rect2(0, 0, 1, 1)
-		if img != null and not img.is_empty():
-			if img.is_compressed():
-				img.decompress()
-			if img.get_format() != Image.FORMAT_RGBA8:
-				img.convert(Image.FORMAT_RGBA8)
-			var size := img.get_size()
-			var data := img.get_data()  # level 0 comes first; the mipmaps follow it
-			var lo := Vector2i(size.x, size.y)
-			var hi := Vector2i(-1, -1)
-			for y in size.y:
-				var row := y * size.x * 4
-				for x in size.x:
-					if data[row + x * 4 + 3] > OPAQUE_ALPHA:
-						lo = Vector2i(mini(lo.x, x), mini(lo.y, y))
-						hi = Vector2i(maxi(hi.x, x), maxi(hi.y, y))
-			if hi.x >= 0:
-				out = Rect2(float(lo.x) / size.x, float(lo.y) / size.y, float(hi.x - lo.x + 1) / size.x, float(hi.y - lo.y + 1) / size.y)
-		_bounds[key] = out
+		_scan(tex, key)
 	return _bounds[key]
+
+
+## Whether the sprite has paint at texture UV `uv` (0..1, v down): on a MASK_CELLS x MASK_CELLS grid, a cell that holds a
+## pixel over OPAQUE_ALPHA or touches one (dilated by a cell, so a click on a painted edge still lands). Picking reads it
+## after the box test: about 40 % of a painting's opaque box is see-through (between towers, under a barrel).
+static func painted_at(tex: Texture2D, uv: Vector2) -> bool:
+	if uv.x < 0.0 or uv.y < 0.0 or uv.x > 1.0 or uv.y > 1.0:
+		return false
+	var key := _key(tex)
+	if not _bounds.has(key):
+		_scan(tex, key)
+	var mask: PackedByteArray = _masks[key]
+	if mask.is_empty():
+		return true  # an unreadable image: the box alone decides
+	var cx := clampi(int(uv.x * MASK_CELLS), 0, MASK_CELLS - 1)
+	var cy := clampi(int(uv.y * MASK_CELLS), 0, MASK_CELLS - 1)
+	return mask[cy * MASK_CELLS + cx] != 0
+
+
+## A click at `frac` of a pick box's screen rectangle (0..1, left to right and top to bottom) lands on paint: the box spans
+## the opaque rect, read right to left on a `mirrored` card.
+static func box_hit(tex: Texture2D, frac: Vector2, mirrored := false) -> bool:
+	var r := opaque_bounds(tex)
+	var u := r.position.x + frac.x * r.size.x
+	if mirrored:
+		u = r.end.x - frac.x * r.size.x
+	return painted_at(tex, Vector2(u, r.position.y + frac.y * r.size.y))
+
+
+## The sprite a card draws now (the foundation while its building is under construction).
+static func drawn_texture(card: Node) -> Texture2D:
+	var m := (card as GeometryInstance3D).material_override if card is GeometryInstance3D else null
+	if m != null and m.has_meta("source_texture"):
+		return m.get_meta("source_texture")
+	return card.get_meta("sprite_texture", null)
+
+
+static func _key(tex: Texture2D) -> String:
+	return tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+
+
+## One pass over the sprite's alpha: the opaque box and the dilated paint mask.
+static func _scan(tex: Texture2D, key: String) -> void:
+	var img := tex.get_image()
+	var out := Rect2(0, 0, 1, 1)
+	var mask := PackedByteArray()
+	if img != null and not img.is_empty():
+		img = img.duplicate() as Image  # a headless texture hands out its own image
+		if img.is_compressed():
+			img.decompress()
+		img.clear_mipmaps()
+		if img.get_format() != Image.FORMAT_RGBA8:
+			img.convert(Image.FORMAT_RGBA8)
+		var size := img.get_size()
+		var data := img.get_data()
+		var cells := PackedByteArray()
+		cells.resize(MASK_CELLS * MASK_CELLS)
+		var col_cell := PackedInt32Array()
+		col_cell.resize(size.x)
+		for x in size.x:
+			col_cell[x] = x * MASK_CELLS / size.x
+		var lo := Vector2i(size.x, size.y)
+		var hi := Vector2i(-1, -1)
+		for y in size.y:
+			var row := y * size.x * 4
+			var row_cell := (y * MASK_CELLS / size.y) * MASK_CELLS
+			var first := -1
+			var last := -1
+			for x in size.x:
+				if data[row + x * 4 + 3] > OPAQUE_ALPHA:
+					if first < 0:
+						first = x
+					last = x
+					cells[row_cell + col_cell[x]] = 1
+			if first >= 0:
+				lo = Vector2i(mini(lo.x, first), mini(lo.y, y))
+				hi = Vector2i(maxi(hi.x, last), maxi(hi.y, y))
+		if hi.x >= 0:
+			out = Rect2(float(lo.x) / size.x, float(lo.y) / size.y, float(hi.x - lo.x + 1) / size.x, float(hi.y - lo.y + 1) / size.y)
+		mask.resize(MASK_CELLS * MASK_CELLS)
+		for cy in MASK_CELLS:
+			for cx in MASK_CELLS:
+				if cells[cy * MASK_CELLS + cx] == 0:
+					continue
+				for ny in range(maxi(0, cy - 1), mini(MASK_CELLS, cy + 2)):
+					for nx in range(maxi(0, cx - 1), mini(MASK_CELLS, cx + 2)):
+						mask[ny * MASK_CELLS + nx] = 1
+	_bounds[key] = out
+	_masks[key] = mask
 
 
 ## The unit card (1 wide, ASPECT tall on screen) shared by every sprite entity; the node's uniform scale sets the width.
