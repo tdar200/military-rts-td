@@ -99,6 +99,11 @@ struct Entity {
     last_combat_tick: u32,
     cooldown: u32,
     move_target: Option<Vec2>,
+    /// The point the last order was GIVEN, before earthfront substituted a passable tile
+    /// for an impassable goal (`move_target` then holds the substitute). Harvesters compare
+    /// against this so a returning truck is not re-pathed every tick. Derived from the
+    /// order, never read by combat or hashing.
+    order_goal: Option<Vec2>,
     /// Remaining tile waypoints toward `move_target` (from A*), nearest first.
     path: Vec<(u16, u16)>,
     tile: Option<(u16, u16)>,
@@ -713,6 +718,9 @@ pub enum GamePhase {
 /// The deterministic RTS world.
 #[derive(Clone, Debug)]
 pub struct Sim {
+    /// Test-only count of `order_unit_to` calls (pins that harvesters do not re-path every tick).
+    #[cfg(test)]
+    order_calls: u64,
     tick: u64,
     rng: Rng,
     map: Map,
@@ -957,6 +965,8 @@ impl Sim {
             .map(|_| default_civ(starting_credits))
             .collect();
         Self {
+            #[cfg(test)]
+            order_calls: 0,
             tick: 0,
             rng: Rng::from_seed(seed),
             map,
@@ -2335,6 +2345,7 @@ impl Sim {
             last_combat_tick: 0,
             cooldown: 0,
             move_target: None,
+            order_goal: None,
             path: Vec::new(),
             tile: Some((x, y)),
             build_queue: Vec::new(),
@@ -2377,6 +2388,7 @@ impl Sim {
             last_combat_tick: 0,
             cooldown: 0,
             move_target: None,
+            order_goal: None,
             path: Vec::new(),
             tile: None,
             build_queue: Vec::new(),
@@ -2540,10 +2552,16 @@ impl Sim {
     /// passable tile beside it and then closes the last step directly — so
     /// "attack the base" actually routes there.
     fn order_unit_to(&mut self, idx: usize, target: Vec2, attack_move: bool) {
+        #[cfg(test)]
+        {
+            self.order_calls += 1;
+        }
         let owner = self.entities[idx].owner;
+        let given = target;
         if is_air_of(&self.balance, self.entities[idx].kind) || self.player_has_antigrav(owner) {
             // Air units and anti-grav units fly straight to the target, ignoring terrain.
             let e = &mut self.entities[idx];
+            e.order_goal = Some(given);
             e.move_target = Some(target);
             e.attack_move = attack_move;
             e.path = Vec::new();
@@ -2570,6 +2588,7 @@ impl Sim {
         };
         if let Some(path) = find_path(&self.map, start, goal) {
             let e = &mut self.entities[idx];
+            e.order_goal = Some(given);
             e.move_target = Some(target);
             e.attack_move = attack_move;
             e.path = path;
@@ -4015,7 +4034,7 @@ impl Sim {
                     e.move_target = None;
                     e.path.clear();
                 } else if !moving
-                    || (self.earthfront && self.entities[idx].move_target != Some(target))
+                    || (self.earthfront && self.entities[idx].order_goal != Some(target))
                 {
                     self.order_unit_to(idx, target, false);
                 }
@@ -9428,3 +9447,9 @@ mod tests {
 #[cfg(test)]
 #[path = "qa_adversarial.rs"]
 mod qa_adversarial;
+#[cfg(test)]
+impl Sim {
+    pub(crate) fn order_calls_for_test(&self) -> u64 {
+        self.order_calls
+    }
+}

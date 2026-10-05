@@ -1585,15 +1585,30 @@ mod tests {
     }
 
     #[test]
-    fn kestrel_east_bank_unit_ordered_to_west_bank_river_does_not_cross_off_the_ford() {
-        // (13,2) is west of the river band at row 2; the unit starts on the east bank.
-        let (sim, (x, y), visited_ford) = kestrel_walk((26, 10), (13, 2));
-        assert!(sim.map().ground_at(x.into(), y.into()).props().passable);
-        let west_bank = x < 16;
-        assert!(
-            !west_bank || visited_ford,
-            "unit reached the west bank at ({x},{y}) without using the ford"
-        );
+    fn kestrel_east_bank_unit_ordered_onto_river_never_stands_in_it_or_skips_the_ford() {
+        use crate::game::map::Ground;
+        // From the east bank, order the unit onto river tiles. Without the fix the final
+        // straight leg walks it into the water. Whichever bank the substitute goal lands on,
+        // it must be passable ground, and the west bank is reachable only through the ford.
+        for to in [(16, 2), (17, 2), (22, 9)] {
+            let (sim, (x, y), visited_ford) = kestrel_walk((26, 10), to);
+            assert_eq!(
+                sim.map().ground_at(i32::from(to.0), i32::from(to.1)),
+                Ground::River
+            );
+            assert!(
+                sim.map().ground_at(x.into(), y.into()).props().passable,
+                "ordered onto river {to:?}, unit ended in the water at ({x},{y})"
+            );
+            let band = crate::game::kestrel::ROWS[usize::from(y)]
+                .find(['r', 'w'])
+                .expect("every row has a river band");
+            let west_bank = usize::from(x) < band;
+            assert!(
+                !west_bank || visited_ford,
+                "ordered onto {to:?}: reached the west bank at ({x},{y}) without using the ford"
+            );
+        }
     }
 
     #[test]
@@ -1646,6 +1661,33 @@ mod tests {
                 "rally for {water:?} landed on impassable ({x},{y})"
             );
         }
+    }
+
+    /// A returning harvester is ordered to a Refinery, which is a building (impassable), so
+    /// `order_unit_to` stores the adjacent passable tile as the move target. The harvester
+    /// loop must compare against the order it GAVE, or it re-paths every truck every tick.
+    #[test]
+    fn survival_returning_harvesters_do_not_repath_every_tick() {
+        let mut s = survival(3);
+        for _ in 0..8000u64 {
+            let mut cmds = s.ai_commands(PlayerId(0));
+            if s.waves_survived() > 0 {
+                cmds.extend(s.ai_commands(PlayerId(1)));
+            }
+            s.step(&cmds);
+        }
+        // Measured 4122 order_unit_to calls (and P0 money 2597) at tick 8000 on the fixed
+        // code and on 10ab36a; the every-tick re-path bug made it 11644 (money 4365).
+        assert!(
+            s.order_calls_for_test() < 6000,
+            "order_unit_to called {} times in 8000 ticks: harvesters are re-pathing every tick",
+            s.order_calls_for_test()
+        );
+        assert_eq!(
+            s.money(PlayerId(0)).to_bits() / 65536,
+            2597,
+            "survival(3) P0 money at tick 8000"
+        );
     }
 
     #[test]
