@@ -40,21 +40,34 @@ static func _clamp_axis(value: float, half: float, lo: float, hi: float) -> floa
 	return clampf(value, lo + half, hi - half)
 
 
-## A flat hex ring on y = 0: outer corners (+-rx, 0), (+-rx/2, +-hz); the inner ring is `width` thinner.
-static func hex_outline_mesh(radius_x: float, half_z: float, width: float) -> ArrayMesh:
-	var outer: Array[Vector3] = []
-	var inner: Array[Vector3] = []
-	var shrink := (radius_x - width) / radius_x
-	for p in [Vector2(radius_x, 0), Vector2(radius_x * 0.5, half_z), Vector2(-radius_x * 0.5, half_z), Vector2(-radius_x, 0), Vector2(-radius_x * 0.5, -half_z), Vector2(radius_x * 0.5, -half_z)]:
-		outer.append(Vector3(p.x, 0, p.y))
-		inner.append(Vector3(p.x * shrink, 0, p.y * shrink))
+const HOVER_DARK := Color8(5, 18, 30, 158)
+const HOVER_BRIGHT := Color8(158, 242, 255, 242)  # pale cyan (8-bit values, so vertex colours round-trip exactly)
+
+
+## A hex outline made of three bands so it reads on grass, shallows and flats alike: a dark outer edge, a bright line, a
+## dark inner edge. The outer corners are (+-rx, 0), (+-rx/2, +-hz); `line` and `edge` are the bright and dark band widths
+## (world units, measured along x). Each side is cut into `subdiv` pieces and every vertex takes its height from
+## `height_fn(Vector2(x, z)) -> float` (local offsets, Callable() = flat), so the ring drapes over a heightfield.
+## One surface, vertex colours, so one draw call.
+static func hex_outline_mesh(radius_x: float, half_z: float, line: float, edge: float, height_fn: Callable = Callable(), subdiv: int = 3) -> ArrayMesh:
+	var corners: Array[Vector2] = [Vector2(radius_x, 0), Vector2(radius_x * 0.5, half_z), Vector2(-radius_x * 0.5, half_z), Vector2(-radius_x, 0), Vector2(-radius_x * 0.5, -half_z), Vector2(radius_x * 0.5, -half_z)]
+	var scales := [1.0, (radius_x - edge) / radius_x, (radius_x - edge - line) / radius_x, (radius_x - 2.0 * edge - line) / radius_x]
+	var colours := [HOVER_DARK, HOVER_BRIGHT, HOVER_DARK]
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_normal(Vector3.UP)
-	for i in 6:
-		var j := (i + 1) % 6
-		for v in [outer[i], outer[j], inner[j], outer[i], inner[j], inner[i]]:
-			st.add_vertex(v)
+	for band in 3:
+		st.set_color(colours[band])
+		for i in 6:
+			for k in subdiv:
+				var p0: Vector2 = corners[i].lerp(corners[(i + 1) % 6], float(k) / float(subdiv))
+				var p1: Vector2 = corners[i].lerp(corners[(i + 1) % 6], float(k + 1) / float(subdiv))
+				var o0 := p0 * float(scales[band])
+				var o1 := p1 * float(scales[band])
+				var i0 := p0 * float(scales[band + 1])
+				var i1 := p1 * float(scales[band + 1])
+				for q in [o0, o1, i1, o0, i1, i0]:
+					st.add_vertex(Vector3(q.x, float(height_fn.call(q)) if height_fn.is_valid() else 0.0, q.y))
 	return st.commit()
 
 
@@ -63,7 +76,9 @@ static func hover_material() -> StandardMaterial3D:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.albedo_color = Color(0.435, 0.839, 0.910, 0.55)  # 6fd6e8
+	m.vertex_color_use_as_albedo = true
+	m.albedo_color = Color.WHITE
+	m.no_depth_test = false
 	return m
 
 

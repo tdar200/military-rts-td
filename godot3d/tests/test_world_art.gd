@@ -200,11 +200,20 @@ func test_sea_backdrop_covers_the_minimap_rect(t) -> void:
 	scene.free()
 
 
-func test_kestrel_hover_is_a_thin_cyan_hex_outline(t) -> void:
+## A terrain-like height field with a step across x = 0: the right half is 0.5 higher.
+func _step_height(p: Vector2) -> float:
+	return 0.5 if p.x > 0.0 else 0.0
+
+
+func _surface_colours(mesh: ArrayMesh) -> PackedColorArray:
+	return mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+
+
+func test_kestrel_hover_is_a_hex_outline_not_the_amber_torus(t) -> void:
 	var scene := _kestrel_scene()
 	var mesh: Mesh = scene.hover_tile.mesh
 	t.ok(not (mesh is TorusMesh), "no amber torus under the profile")
-	t.ok(mesh is ArrayMesh and mesh.get_surface_count() == 1, "one outline surface")
+	t.ok(mesh is ArrayMesh and mesh.get_surface_count() == 1, "one outline surface, so one draw call")
 	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 	var widest := 0.0
 	for v in verts:
@@ -212,15 +221,113 @@ func test_kestrel_hover_is_a_thin_cyan_hex_outline(t) -> void:
 	t.ok(widest <= scene.HEX_X / 1.5 + 0.001, "never wider than one hex (%s)" % widest)
 	var mat := scene.hover_tile.material_override as StandardMaterial3D
 	t.ok(mat != null and mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED, "unshaded")
-	t.ok(mat.albedo_color.b > mat.albedo_color.r and mat.albedo_color.a <= 0.6, "cyan and see-through")
+	t.ok(mat.vertex_color_use_as_albedo and mat.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED, "vertex colours, see-through")
 	t.ok(not mat.emission_enabled, "no glow")
+	t.eq(scene.hover_tile.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "no shadow")
 	scene.free()
 
 
-func test_hex_outline_is_a_closed_six_sided_ring(t) -> void:
-	var mesh := WorldArt.hex_outline_mesh(0.44, 0.34, 0.035)
+func test_hex_outline_has_three_bands_dark_bright_dark(t) -> void:
+	var mesh := WorldArt.hex_outline_mesh(0.44, 0.34, 0.03, 0.02, Callable(), 1)
 	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
-	t.eq(verts.size(), 6 * 6, "six quads, two triangles each")
+	t.eq(verts.size(), 3 * 6 * 6, "three bands, six sides, two triangles each")
+	var cols := _surface_colours(mesh)
+	t.eq(cols.size(), verts.size(), "a colour per vertex")
+	var per_band := 6 * 6
+	t.eq(cols[0], WorldArt.HOVER_DARK, "outer edge is dark")
+	t.eq(cols[per_band], WorldArt.HOVER_BRIGHT, "then the bright line")
+	t.eq(cols[2 * per_band], WorldArt.HOVER_DARK, "then the dark inner edge")
+	t.ok(WorldArt.HOVER_BRIGHT.b > WorldArt.HOVER_BRIGHT.r and WorldArt.HOVER_BRIGHT.a > 0.9, "the line is a strong pale cyan")
+	t.ok(WorldArt.HOVER_BRIGHT.get_luminance() - WorldArt.HOVER_DARK.get_luminance() > 0.6, "bright against dark by luminance")
+	for v in verts:
+		t.near(v.y, 0.0, 0.0001, "flat without a height function")
+
+
+func test_hex_outline_drapes_over_a_height_step(t) -> void:
+	var mesh := WorldArt.hex_outline_mesh(0.44, 0.34, 0.03, 0.02, _step_height, 3)
+	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var low := 1000.0
+	var high := -1000.0
+	for v in verts:
+		var ground := _step_height(Vector2(v.x, v.z))
+		t.ok(v.y >= ground - 0.0001, "vertex (%s, %s) is not buried" % [v.x, v.z])
+		low = minf(low, v.y)
+		high = maxf(high, v.y)
+	t.near(high - low, 0.5, 0.0001, "the corners follow the step instead of staying level")
+
+
+func test_kestrel_hover_outline_follows_real_terrain(t) -> void:
+	var scene := _kestrel_scene()
+	var best := Vector2i(-1, -1)
+	var best_range := 0.0
+	for x in range(2, scene.MAP_W - 2):
+		for y in range(2, scene.MAP_H - 2):
+			var w: Vector3 = scene._hex_world(x, y)
+			var lo := 1000.0
+			var hi := -1000.0
+			for d in [Vector2(0.4, 0), Vector2(-0.4, 0), Vector2(0.2, 0.3), Vector2(-0.2, -0.3)]:
+				var h: float = scene._height_world(w.x + d.x, w.z + d.y)
+				lo = minf(lo, h)
+				hi = maxf(hi, h)
+			if hi - lo > best_range:
+				best_range = hi - lo
+				best = Vector2i(x, y)
+	t.ok(best_range > 0.1, "the fixture has a sloped tile (%s)" % best_range)
+	var world: Vector3 = scene._hex_world(best.x, best.y)
+	var mesh: ArrayMesh = scene._hover_outline_mesh(world)
+	var base: float = scene._height_world(world.x, world.z)
+	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var low := 1000.0
+	var high := -1000.0
+	for v in verts:
+		var ground: float = scene._height_world(world.x + v.x, world.z + v.z)
+		t.ok(base + v.y >= ground - 0.0001, "outline vertex sits on or above the terrain")
+		low = minf(low, v.y)
+		high = maxf(high, v.y)
+	t.ok(high - low > 0.05, "the outline is not level on a sloped tile")
+	scene.free()
+
+
+func test_hover_outline_width_follows_zoom(t) -> void:
+	var scene := _kestrel_scene()
+	var world: Vector3 = scene._hex_world(10, 10)
+	scene.camera_zoom = 10.0
+	var near_widest := _band_width(scene._hover_outline_mesh(world))
+	scene.camera_zoom = 18.0
+	var far_widest := _band_width(scene._hover_outline_mesh(world))
+	t.ok(far_widest > near_widest * 1.5, "farther out the world width grows so the line keeps its pixel size (%s vs %s)" % [near_widest, far_widest])
+	t.near(near_widest, 7.0 / (1080.0 / 10.0), 0.002, "about 7 px across at zoom 10 (3 bright, 2 + 2 dark)")
+	scene.free()
+
+
+## Outer edge to inner edge, measured along +x on the first corner.
+func _band_width(mesh: ArrayMesh) -> float:
+	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var outer := -1000.0
+	var inner := 1000.0
+	for v in verts:
+		if absf(v.z) < 0.0001 and v.x > 0.0:
+			outer = maxf(outer, v.x)
+			inner = minf(inner, v.x)
+	return outer - inner
+
+
+func test_hover_lift_and_visibility_on_kestrel(t) -> void:
+	var scene := _kestrel_scene()
+	var tile := Vector2i(10, 10)
+	var world: Vector3 = scene._hex_world(tile.x, tile.y)
+	scene._show_hover_at(world)
+	t.ok(scene.hover_tile.visible, "shown on a map tile")
+	t.near(scene.hover_tile.position.y, scene._height_world(world.x, world.z) + 0.07, 0.0001, "Kestrel lift 0.07")
+	t.eq(scene.hover_cell, tile, "the hovered hex is recorded")
+	scene.build_mode = "reactor"
+	scene._show_hover_at(world)
+	t.ok(not scene.hover_tile.visible, "hidden while a build is armed")
+	scene.build_mode = ""
+	scene._show_hover_at(Vector3(scene.MAP_ORIGIN_X - 2.0, 0.0, 5.0))
+	t.ok(not scene.hover_tile.visible, "hidden off the map")
+	t.eq(scene.hover_cell, scene.NO_HOVER, "and no hex is hovered there")
+	scene.free()
 
 
 func _env(scene) -> Environment:
@@ -234,6 +341,9 @@ func test_kestrel_grade_is_calmer_and_never_shows_sky(t) -> void:
 	t.ok(env.adjustment_saturation < 0.85, "less saturated than the legacy grade")
 	t.eq(env.background_mode, Environment.BG_COLOR, "a colour background, so no sky can show")
 	t.eq(env.background_color.to_html(false), String(WorldArt.ENVIRONMENT.background), "deep sea background")
+	t.near(env.tonemap_exposure, float(WorldArt.ENVIRONMENT.exposure), 0.0001, "exposure applied")
+	t.near(env.adjustment_contrast, float(WorldArt.ENVIRONMENT.contrast), 0.0001, "contrast applied")
+	t.near(env.ambient_light_energy, float(WorldArt.ENVIRONMENT.ambient_energy), 0.0001, "ambient energy applied")
 	scene.free()
 
 
@@ -241,8 +351,17 @@ func test_atmosphere_layer_sits_under_the_hud_and_takes_no_clicks(t) -> void:
 	var scene := _kestrel_scene()
 	var layer: CanvasLayer = scene.world_atmosphere
 	t.ok(layer != null and layer.get_meta("world_art", false), "atmosphere exists and survives world shots")
-	t.ok(layer.layer < 1, "below the HUD CanvasLayer (layer 1)")
+	var hud_layer := CanvasLayer.new()  # GameUI.setup makes its HUD layer exactly like this, with the default layer number
+	t.ok(layer.layer < hud_layer.layer, "below the HUD CanvasLayer (layer %d)" % hud_layer.layer)
+	hud_layer.free()
 	var rect := layer.get_child(0) as ColorRect
 	t.eq(rect.mouse_filter, Control.MOUSE_FILTER_IGNORE, "never eats a click")
 	t.ok(rect.material is ShaderMaterial, "gradient and vignette shader")
+	var shader: Shader = (rect.material as ShaderMaterial).shader
+	t.ok(shader.code.contains("void fragment()"), "the shader has a fragment function")
+	t.eq(shader.get_mode(), Shader.MODE_CANVAS_ITEM, "it compiles as a canvas_item shader")
+	var uniforms: Array = []
+	for u in shader.get_shader_uniform_list():
+		uniforms.append(String(u.name))
+	t.ok(uniforms.has("warm") and uniforms.has("dark") and uniforms.has("vignette"), "its uniforms parsed, so it compiled")
 	scene.free()

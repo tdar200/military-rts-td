@@ -136,6 +136,8 @@ var blocked_tiles: Dictionary = {}
 var construction_zone: Dictionary = {}
 var deposit_tiles: Dictionary = {}
 var hover_tile: MeshInstance3D
+var hover_outline_key := Vector3i(-1, -1, -1)  # hex and zoom the Kestrel hover outline was last built for
+const HOVER_LIFT_KESTREL := 0.07
 var range_ring: MeshInstance3D
 var camera_focus_target := Vector3(16.7, 0.0, 10.0)
 var camera_focus_zoom := 12.2
@@ -482,7 +484,7 @@ func _apply_world_art(_snapshot: Dictionary) -> void:
 		sea_backdrop.name = "SeaBackdrop"
 		sea_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if is_instance_valid(hover_tile):
-		hover_tile.mesh = WorldArt.hex_outline_mesh(HEX_X / 1.5 * 0.96, HEX_Z * 0.5 * 0.96, 0.035)
+		hover_tile.mesh = _hover_outline_mesh(Vector3.ZERO)
 		hover_tile.material_override = WorldArt.hover_material()
 
 
@@ -2449,11 +2451,41 @@ func _update_hover_tile() -> void:
 		hover_tile.visible = false
 		_set_hover_cell(NO_HOVER)
 		return
+	_show_hover_at(ground)
+
+
+## Puts the hover marker on the hex under `ground` (the Kestrel outline drapes over the terrain and is rebuilt only when the
+## hex or the zoom changes). Hidden off the map and while a build is armed.
+func _show_hover_at(ground: Vector3) -> void:
+	if _off_map(ground):
+		hover_tile.visible = false
+		_set_hover_cell(NO_HOVER)
+		return
 	var tile := _world_to_tile(ground)
 	_set_hover_cell(tile)
 	var world := _hex_world(tile.x, tile.y)
-	hover_tile.position = Vector3(world.x, _height_world(world.x, world.z) + (0.07 if world_art_on else 0.055), world.z)
+	hover_tile.position = Vector3(world.x, _height_world(world.x, world.z) + (HOVER_LIFT_KESTREL if world_art_on else 0.055), world.z)
+	if world_art_on:
+		var key := Vector3i(tile.x, tile.y, roundi(camera_zoom * 20.0))
+		if key != hover_outline_key:
+			hover_outline_key = key
+			hover_tile.mesh = _hover_outline_mesh(world)
 	hover_tile.visible = build_mode == ""
+
+
+## Pixels per world unit along x: the orthographic camera shows `camera_zoom` units over the viewport height.
+func _pixels_per_world() -> float:
+	var h := get_viewport().get_visible_rect().size.y if is_inside_tree() else 1080.0
+	return h / maxf(camera_zoom, 1.0)
+
+
+## The Kestrel hover outline for the hex centred on `world`: a 3 px bright line with 2 px dark edges at the current zoom,
+## every vertex lifted to the terrain under it (heights are offsets from the hex centre; the node sits at the centre height).
+func _hover_outline_mesh(world: Vector3) -> ArrayMesh:
+	var ppu := _pixels_per_world()
+	var base := _height_world(world.x, world.z)
+	var drape := func(p: Vector2) -> float: return _height_world(world.x + p.x, world.z + p.y) - base
+	return WorldArt.hex_outline_mesh(HEX_X / 1.5 * 0.96, HEX_Z * 0.5 * 0.96, 3.0 / ppu, 2.0 / ppu, drape, 3)
 
 
 ## The HUD hashes its slices, so the hex is only reassigned when it really changes.
