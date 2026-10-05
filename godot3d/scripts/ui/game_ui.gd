@@ -190,6 +190,8 @@ func process(delta: float) -> void:
 	_since_vm += delta
 	if _since_vm < VM_INTERVAL:
 		return
+	if g.bridge_poll_elapsed == 0.0 and _since_vm < VM_INTERVAL * 2.0:
+		return  # the game parsed a snapshot this frame: rebuild on the next one, so the two costs never share a frame
 	if research.visible and not _left_down:  # the modal blocks everywhere: no rebuild between a press and its release
 		_since_vm = 0.0
 		research.apply(live_research.vm(g))

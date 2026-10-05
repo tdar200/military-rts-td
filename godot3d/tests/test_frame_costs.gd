@@ -37,6 +37,26 @@ func test_the_minimap_renders_five_times_a_second_not_every_frame(t) -> void:
 	p[1].free()
 
 
+func test_the_hud_does_not_rebuild_on_a_snapshot_poll_frame(t) -> void:
+	var p := _make(t)
+	var g = p[0]
+	var ui = p[1]
+	ui.process(0.2)
+	var before: int = ui.hud.get_node("build_top").get_child(0).get_instance_id()
+	g.bridge_money = 5
+	g.bridge_poll_elapsed = 0.0  # the game parsed a snapshot this frame
+	ui.process(0.15)
+	t.eq(ui.hud.get_node("build_top").get_child(0).get_instance_id(), before, "the rebuild waits for the next frame")
+	g.bridge_poll_elapsed = 0.007
+	ui.process(0.007)
+	t.ok(ui.hud.get_node("build_top").get_child(0).get_instance_id() != before, "and happens on it")
+	g.bridge_money = 6
+	g.bridge_poll_elapsed = 0.0
+	ui.process(0.25)
+	t.ok(ui.hud.get_node("build_top").get_child(0).get_instance_id() != before, "a long-overdue rebuild is not held back")
+	p[1].free()
+
+
 func test_a_dash_off_screen_adds_nothing_to_the_stroke(t) -> void:
 	var marks := WorldMarks.new()
 	var view := Rect2(0, 0, 1920, 1080)

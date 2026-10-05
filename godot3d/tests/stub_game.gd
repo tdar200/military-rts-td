@@ -20,6 +20,7 @@ var bridge_incoming_doctrine := "Siege expedition"
 var bridge_next_wave_ticks := 1350
 var bridge_waves := 1
 var bridge_tick := 0
+var bridge_poll_elapsed := 0.05  # seconds since the last snapshot poll; 0.0 on a poll frame
 var bridge_research_count := 0
 var bridge_technology_total := 12
 var bridge_winner := -1
