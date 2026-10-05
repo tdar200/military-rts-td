@@ -13,7 +13,75 @@ use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
 
 fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
-    snapshot_json_with(sim, &supply_links_json(sim))
+    snapshot_json_with(sim, &supply_links_json(sim), &ShotWindow::new())
+}
+
+/// How many ticks of shots the snapshot carries (0.6 s at 30 Hz). The sim steps at
+/// 30 Hz but the Godot client polls about every 0.12 s, so the latest tick alone would
+/// miss most shots; the client dedups the overlapping windows by (tick, attacker, target).
+const SHOT_WINDOW_TICKS: u64 = 18;
+
+/// One shot: the tick it was fired on and the attacker and target positions.
+type Shot = (u64, Vec2, Vec2);
+
+/// Rolling window of the most recent shots, oldest first. Cosmetic only: it is never
+/// part of the sim state and never read back by it.
+struct ShotWindow {
+    shots: Vec<Shot>,
+}
+
+impl ShotWindow {
+    const fn new() -> Self {
+        Self { shots: Vec::new() }
+    }
+
+    /// Adds the shots the sim fired on `tick` (its tick counter right after the step),
+    /// then drops everything `SHOT_WINDOW_TICKS` or more ticks old.
+    fn record(&mut self, tick: u64, attacks: &[(Vec2, Vec2)]) {
+        self.shots.extend(
+            attacks
+                .iter()
+                .map(|&(attacker, target)| (tick, attacker, target)),
+        );
+        self.shots
+            .retain(|&(fired, _, _)| tick.saturating_sub(fired) < SHOT_WINDOW_TICKS);
+    }
+
+    /// Forgets every shot (scenario restart).
+    fn clear(&mut self) {
+        self.shots.clear();
+    }
+
+    #[cfg(test)]
+    const fn len(&self) -> usize {
+        self.shots.len()
+    }
+
+    #[cfg(test)]
+    const fn is_empty(&self) -> bool {
+        self.shots.is_empty()
+    }
+
+    /// `[[tick,ax_bits,az_bits,tx_bits,tz_bits],...]`, oldest first.
+    fn json_array(&self) -> String {
+        let mut out = String::from("[");
+        for (i, (tick, attacker, target)) in self.shots.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            write!(
+                out,
+                "[{tick},{},{},{},{}]",
+                attacker.x.to_bits(),
+                attacker.y.to_bits(),
+                target.x.to_bits(),
+                target.y.to_bits()
+            )
+            .expect("string write");
+        }
+        out.push(']');
+        out
+    }
 }
 
 /// The human's depot-to-building supply links as a JSON array (see `SupplyLinkCache`).
@@ -79,7 +147,11 @@ impl SupplyLinkCache {
     clippy::too_many_lines,
     reason = "one explicit JSON frame keeps the dependency-free bridge schema easy to audit"
 )]
-fn snapshot_json_with(sim: &rts_core::game::sim::Sim, supply_links: &str) -> String {
+fn snapshot_json_with(
+    sim: &rts_core::game::sim::Sim,
+    supply_links: &str,
+    shots: &ShotWindow,
+) -> String {
     let views = sim.views();
     let mut out = String::with_capacity(512 + views.len() * 240);
     let human = PlayerId(0);
@@ -338,6 +410,11 @@ fn snapshot_json_with(sim: &rts_core::game::sim::Sim, supply_links: &str) -> Str
     write_additive_fields(&mut out, sim);
     out.push_str(",\"supply_links\":");
     out.push_str(supply_links);
+    // Kestrel only (the ground-layer scenario): Survival keeps its exact shape.
+    if is_kestrel_map(sim) {
+        out.push_str(",\"shots\":");
+        out.push_str(&shots.json_array());
+    }
     out.push('}');
     out
 }
@@ -691,6 +768,7 @@ fn main() -> std::io::Result<()> {
     clear_command_packets(&command_path)?;
     let mut mission_started = false;
     let mut supply_cache = SupplyLinkCache::new();
+    let mut shots = ShotWindow::new();
 
     for _ in 0..frame_limit {
         if restart_path.exists() {
@@ -704,20 +782,27 @@ fn main() -> std::io::Result<()> {
             sim.set_balance(rts_data::load_default());
             mission_started = false;
             supply_cache = SupplyLinkCache::new();
+            shots.clear();
         }
         if !mission_started {
             if start_path.exists() {
                 let _ = std::fs::remove_file(&start_path);
                 mission_started = true;
             } else {
-                write_atomic(&output, &snapshot_json_with(&sim, supply_cache.get(&sim)))?;
+                write_atomic(
+                    &output,
+                    &snapshot_json_with(&sim, supply_cache.get(&sim), &shots),
+                )?;
                 std::thread::sleep(frame_time);
                 continue;
             }
         }
         if pause_path.exists() {
             // Paused: no step, no commands taken (they wait for the resume), the same snapshot stays current.
-            write_atomic(&output, &snapshot_json_with(&sim, supply_cache.get(&sim)))?;
+            write_atomic(
+                &output,
+                &snapshot_json_with(&sim, supply_cache.get(&sim), &shots),
+            )?;
             std::thread::sleep(frame_time);
             continue;
         }
@@ -738,7 +823,11 @@ fn main() -> std::io::Result<()> {
         }
         commands.extend(player_commands);
         sim.step(&commands);
-        write_atomic(&output, &snapshot_json_with(&sim, supply_cache.get(&sim)))?;
+        shots.record(sim.tick(), sim.recent_attacks());
+        write_atomic(
+            &output,
+            &snapshot_json_with(&sim, supply_cache.get(&sim), &shots),
+        )?;
         std::thread::sleep(frame_time.saturating_sub(started.elapsed()));
     }
     Ok(())
@@ -747,8 +836,9 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_args, snapshot_json, supply_links_json, take_commands, BuildingKind, Command,
-        EntityId, PlayerId, SupplyLinkCache, UnitKind,
+        parse_args, snapshot_json, snapshot_json_with, supply_links_json, take_commands,
+        BuildingKind, Command, EntityId, PlayerId, ShotWindow, SupplyLinkCache, UnitKind,
+        SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
 
@@ -885,7 +975,7 @@ mod tests {
         assert_eq!(g.len(), 44 * 26);
         assert!(g.contains('r') && g.contains('w') && g.contains('h'));
         // Additive and last: the lone Command Center has nothing to serve at the start.
-        assert!(json.ends_with("\"core_node\":[37,8],\"supply_links\":[]}"));
+        assert!(json.ends_with("\"core_node\":[37,8],\"supply_links\":[],\"shots\":[]}"));
         assert!(json.starts_with("{\"schema\":5,"));
     }
 
@@ -907,8 +997,8 @@ mod tests {
         let link = format!("{{\"depot\":0,\"target\":{},\"state\":\"ok\"}}", turret.0);
         assert!(json.contains(&link), "{link} missing");
         assert!(
-            json.ends_with(&format!("\"supply_links\":[{link}]}}")),
-            "last key"
+            json.ends_with(&format!("\"supply_links\":[{link}],\"shots\":[]}}")),
+            "supply_links precedes the trailing shots key"
         );
         // Pure and deterministic for a given sim state.
         assert_eq!(supply_links_json(&sim), supply_links_json(&sim));
@@ -946,6 +1036,167 @@ mod tests {
         let survival = snapshot_json(&Scenario::Survival.build(1));
         assert_eq!(survival.matches('{').count(), survival.matches('}').count());
         assert!(!survival.contains(",]") && !survival.contains(",}"));
+    }
+
+    /// A Kestrel sim with two opposing infantry squads in rifle range, in open ground.
+    fn kestrel_firefight() -> (rts_core::game::sim::Sim, EntityId, EntityId) {
+        use rts_core::fixed::Fixed;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let at = |x: i32, y: i32| Vec2::new(Fixed::from_int(x), Fixed::from_int(y));
+        let ours = sim.add_unit(PlayerId(0), UnitKind::Infantry, at(20, 12));
+        let theirs = sim.add_unit(PlayerId(1), UnitKind::Infantry, at(21, 12));
+        (sim, ours, theirs)
+    }
+
+    /// Steps once and feeds the window the way the main loop does.
+    fn step_into(sim: &mut rts_core::game::sim::Sim, window: &mut ShotWindow) {
+        sim.step(&[]);
+        window.record(sim.tick(), sim.recent_attacks());
+    }
+
+    /// Parses the `"shots":[[...],...]` value into rows of five integers.
+    fn parse_shots(json: &str) -> Vec<[i64; 5]> {
+        let start = json.find("\"shots\":[").expect("shots key") + "\"shots\":[".len();
+        let body = &json[start..json.len() - 2];
+        if body.is_empty() {
+            return Vec::new();
+        }
+        body.trim_start_matches('[')
+            .split("],[")
+            .map(|row| {
+                let nums: Vec<i64> = row
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(|n| n.parse().expect("integer"))
+                    .collect();
+                <[i64; 5]>::try_from(nums).expect("five integers per shot")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn kestrel_snapshot_carries_the_recent_shots_of_the_real_shooters() {
+        let (mut sim, ours, theirs) = kestrel_firefight();
+        let mut window = ShotWindow::new();
+        let mut guard = 0;
+        while sim.recent_attacks().is_empty() {
+            step_into(&mut sim, &mut window);
+            guard += 1;
+            assert!(guard < 200, "the two squads never fired");
+        }
+        let pos = |id: EntityId| {
+            sim.views()
+                .into_iter()
+                .find(|v| v.id == id)
+                .expect("unit")
+                .pos
+        };
+        let (a, t) = (pos(ours), pos(theirs));
+        let json = snapshot_json_with(&sim, "[]", &window);
+        assert!(json.ends_with("]]}"), "shots is the final key: {json}");
+        let shots = parse_shots(&json);
+        assert!(!shots.is_empty());
+        let tick = i64::try_from(sim.tick()).unwrap();
+        let last = shots.last().unwrap();
+        assert_eq!(last[0], tick, "tagged with the tick it was fired on");
+        let pair = |p: rts_core::vec::Vec2| (p.x.to_bits(), p.y.to_bits());
+        let shot_pair = |s: &[i64; 5]| ((s[1], s[2]), (s[3], s[4]));
+        assert!(
+            shots
+                .iter()
+                .any(|s| shot_pair(s) == (pair(a), pair(t)) || shot_pair(s) == (pair(t), pair(a))),
+            "an entry must run from one real unit to the other: {shots:?}"
+        );
+    }
+
+    #[test]
+    fn shots_older_than_the_window_are_pruned_oldest_first() {
+        use rts_core::fixed::Fixed;
+        use rts_core::vec::Vec2;
+        let p = |n: i32| Vec2::new(Fixed::from_int(n), Fixed::from_int(n));
+        let mut window = ShotWindow::new();
+        window.record(10, &[(p(1), p(2))]);
+        window.record(11, &[(p(3), p(4)), (p(5), p(6))]);
+        assert_eq!(window.len(), 3);
+        // Still inside: age 17 at tick 27.
+        window.record(10 + SHOT_WINDOW_TICKS - 1, &[]);
+        assert_eq!(window.len(), 3);
+        // Tick 10 falls out at age 18, tick 11 one tick later.
+        window.record(10 + SHOT_WINDOW_TICKS, &[]);
+        assert_eq!(window.len(), 2);
+        window.record(11 + SHOT_WINDOW_TICKS, &[]);
+        assert_eq!(window.len(), 0);
+        // Order is oldest first.
+        window.record(100, &[(p(1), p(2))]);
+        window.record(101, &[(p(3), p(4))]);
+        let json = window.json_array();
+        assert!(
+            json.starts_with("[[100,") && json.contains("],[101,"),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn the_snapshot_drops_a_shot_once_it_is_older_than_the_window() {
+        let (mut sim, _, _) = kestrel_firefight();
+        let mut window = ShotWindow::new();
+        while sim.recent_attacks().is_empty() {
+            step_into(&mut sim, &mut window);
+        }
+        let fired = sim.tick();
+        assert!(!parse_shots(&snapshot_json_with(&sim, "[]", &window)).is_empty());
+        // The firefight ends (no further attacks fed in); the window runs out.
+        window.record(fired + SHOT_WINDOW_TICKS - 1, &[]);
+        assert!(!window.is_empty());
+        window.record(fired + SHOT_WINDOW_TICKS, &[]);
+        assert!(parse_shots(&snapshot_json_with(&sim, "[]", &window)).is_empty());
+    }
+
+    #[test]
+    fn survival_snapshot_has_no_shots_key_even_with_a_full_window() {
+        use rts_core::fixed::Fixed;
+        use rts_core::vec::Vec2;
+        let sim = Scenario::Survival.build(2026);
+        let mut window = ShotWindow::new();
+        let p = Vec2::new(Fixed::from_int(1), Fixed::from_int(1));
+        window.record(sim.tick(), &[(p, p)]);
+        let with_window = snapshot_json_with(&sim, "[]", &window);
+        assert!(!with_window.contains("\"shots\""));
+        assert_eq!(
+            with_window,
+            snapshot_json_with(&sim, "[]", &ShotWindow::new())
+        );
+        assert!(with_window.ends_with("\"supply_links\":[]}"));
+    }
+
+    #[test]
+    fn clearing_the_window_on_restart_drops_every_shot() {
+        let (mut sim, _, _) = kestrel_firefight();
+        let mut window = ShotWindow::new();
+        while sim.recent_attacks().is_empty() {
+            step_into(&mut sim, &mut window);
+        }
+        assert!(!window.is_empty());
+        window.clear();
+        assert!(window.is_empty());
+        let json = snapshot_json_with(&sim, "[]", &window);
+        assert!(json.ends_with("\"shots\":[]}"));
+    }
+
+    #[test]
+    fn kestrel_snapshot_with_shots_is_valid_json_shape() {
+        let (mut sim, _, _) = kestrel_firefight();
+        let mut window = ShotWindow::new();
+        while sim.recent_attacks().is_empty() {
+            step_into(&mut sim, &mut window);
+        }
+        let json = snapshot_json_with(&sim, "[]", &window);
+        assert_eq!(json.matches('{').count(), json.matches('}').count());
+        assert_eq!(json.matches('[').count(), json.matches(']').count());
+        assert!(!json.contains(",]") && !json.contains(",}"));
+        assert!(json.contains("\"shots\":[["));
     }
 
     #[test]
