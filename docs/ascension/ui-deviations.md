@@ -510,12 +510,17 @@ every legacy path. What still differs from the boards, and why:
   sprites. A building under construction shows the foundation sprite. Each card casts the boards' sheared silhouette
   shadow and keeps a soft contact pad under its painted footprint. The lab is `capital_v1`, the sprite the boards' build
   deck uses for it; the airfield and the depot have no board sprite and share the barracks and refinery sprites.
-  Units are still 3D authored models fitted to `WorldArt.UNIT_TILES` (tank 1.6, harvester 1.5, infantry 1.0) until
-  plan Task 2 makes them sprites too.
+  Units are sprite cards too, one per unit (`WorldArt.UNIT_TILES`: infantry 0.98, tank 1.71, anti-armour 1.10, gunship
+  2.32, capital 4.02, harvester 1.34): the infantry sprite is itself the boards' three-figure squad, so a squad is one
+  card, as the boards draw it. A card never turns; it shows its painting mirrored while it moves against the way it is
+  painted facing and keeps its last facing when it stops (the boards draw every unit unmirrored). Units carry the boards'
+  silhouette shadow and `.ao` contact band instead of a pad, keep their team ring at the feet, and float their badge and
+  bars over the painted top. The human capital unit uses `capital_v1`, the same painting as the lab.
 - Placement stays one hex per building, so a big sprite overhangs its neighbours (mostly to the north, where the
   painting rises) and two big neighbours can overlap on screen. Picking follows the painted body, not the hex: a click
   inside the screen rectangle of the sprite's opaque pixels selects it, a click on a transparent corner of the card does
-  not, a unit beside a CC still takes its own click (the narrowest entity holding the click wins), and a click on none
+  not, a unit beside a CC still takes its own click (a unit holding the click beats any building, then the narrowest
+  building wins; between two touching units the nearer root wins), and a click on none
   keeps the legacy 32 px reach around a root (`_pick_entity`). The hover outline draws without a depth test, so it is
   hidden on a hex a building stands on and on a hex whose centre the painted body covers on screen: for a CC the hexes
   north, north-east, north-west and two north of it; the hexes beside and south of its base still show the outline.
