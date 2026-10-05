@@ -27,7 +27,9 @@ def main():
     qa = pathlib.Path(sys.argv[1]).resolve()
     if "--gpu" in sys.argv:
         if "--allow-user-display" not in sys.argv:
-            raise SystemExit("--gpu opens a window on your own display; pass --allow-user-display to accept that")
+            raise SystemExit("--gpu opens a game window on your own display; it can take focus, and your real cursor over it "
+                             "scrolls and hovers the capture (the driver never warps the cursor off Xvfb); pass "
+                             "--allow-user-display to accept that")
         if "--display" in sys.argv:
             raise SystemExit("--display only applies to software capture (omit --gpu)")
     scenario = arg("--scenario", "kestrel")

@@ -7,6 +7,9 @@ var busy := false
 var last_id := -1
 var elapsed := 0.0
 var frame_ms: Array[float] = []
+## launch_ui.py passes --qa-xvfb only for its private Xvfb display. On a real display warp_mouse would move the user's cursor,
+## so there clicks and motion reach the game through push_input alone.
+var _on_xvfb := OS.get_cmdline_user_args().has("--qa-xvfb")
 
 func _initialize() -> void:
 	for arg in OS.get_cmdline_user_args():
@@ -56,7 +59,8 @@ func _execute(action: Dictionary) -> void:
 					await process_frame
 			"click", "motion", "press", "release":
 				var point := Vector2(float(item.get("x", 0)), float(item.get("y", 0)))
-				root.warp_mouse(point)
+				if _on_xvfb:
+					root.warp_mouse(point)
 				var motion := InputEventMouseMotion.new()
 				motion.position = point
 				motion.global_position = point

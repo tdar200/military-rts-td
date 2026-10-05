@@ -293,6 +293,17 @@ class RunTests(unittest.TestCase):
         better.write_text(json.dumps(data))
         self.assertNotEqual(self.go("--check", str(better)), 0)
 
+    def test_structure_regression_beyond_tolerance_fails(self):
+        data = json.loads(self.scores.read_text())
+        data["gp01"]["structure"] += 10  # the total holds, the grade-proof structure drops
+        better = self.t / "better_structure.json"
+        better.write_text(json.dumps(data))
+        self.assertNotEqual(self.go("--check", str(better)), 0)
+        data["gp01"]["structure"] -= 10 - 1.5  # inside the tolerance: passes
+        near = self.t / "near_structure.json"
+        near.write_text(json.dumps(data))
+        self.assertEqual(self.go("--check", str(near)), 0)
+
 
 class BlobTests(unittest.TestCase):
     def test_ground_regions_are_not_blobs(self):

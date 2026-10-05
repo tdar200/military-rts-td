@@ -16,3 +16,7 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Python bytecode from the QA and UI tools
+tools/qa/__pycache__/
+tools/ui/__pycache__/

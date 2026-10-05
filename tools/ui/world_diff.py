@@ -4,6 +4,8 @@
   world_diff.py run --mocks DIR --live DIR --out DIR [--boards gp01,gp05] [--check tools/ui/world_scores.json]
                     [--require gp05:+5,gp07:+5] [--require-structure gp05:+3] [--write PATH] [--frames PATH]
     --require-structure gates the grade-proof subscore (rank detail/clutter + layout): a colour grade cannot raise it.
+    With --check, a board whose total or structure falls more than the tolerance (max(2, noise)) below the check file
+    fails, unless that score is the one a --require / --require-structure option gates for the board.
   world_diff.py blobs <png> [--crop x0,y0,x1,y1]
 Score: 100 minus penalties (palette <= 12, saturation <= 6, warmth <= 7, detail <= 28, clutter <= 17, layout <= 30).
 Capture timing: live frames are taken a fixed wall time after deploy, so moving units and the wave clock differ a little
@@ -252,7 +254,7 @@ def _parse_required(text):
     return out
 
 
-def _gate(args, flag, key, boards, cfg_boards, prev, results, failures, tol):
+def _gate(args, flag, key, boards, cfg_boards, prev, results, failures):
     """Check one --require / --require-structure option against the check file. Every misuse is a failure."""
     text = getattr(args, flag)
     if not text:
@@ -304,6 +306,7 @@ def run(args):
     tol = max(2.0, float(cfg.get("noise", 0.0)))
     result = {}
     req_total = _parse_required(args.require) if args.require else {}
+    req_structure = _parse_required(args.require_structure) if args.require_structure else {}
     for board in boards:
         b = cfg["boards"][board]
         mock = np.asarray(Image.open(pathlib.Path(args.mocks) / f"{board}.png").convert("RGB"))
@@ -325,8 +328,11 @@ def run(args):
         print("      raw", json.dumps(s["raw"]))
         if delta is not None and board not in req_total and delta < -tol:
             failures.append(f"{board} dropped {delta:+.2f} (tolerance {tol})")
-    _gate(args, "require", "total", boards, cfg["boards"], prev, result, failures, tol)
-    _gate(args, "require_structure", "structure", boards, cfg["boards"], prev, result, failures, tol)
+        before_st = prev.get(board, {}).get("structure")  # an old check file without it has nothing to compare
+        if before_st is not None and board not in req_structure and s["structure"] - before_st < -tol:
+            failures.append(f"{board} structure dropped {s['structure'] - before_st:+.2f} (tolerance {tol})")
+    _gate(args, "require", "total", boards, cfg["boards"], prev, result, failures)
+    _gate(args, "require_structure", "structure", boards, cfg["boards"], prev, result, failures)
     if args.write:
         pathlib.Path(args.write).write_text(json.dumps(result, indent=1, default=float) + "\n")
     for f in failures:

@@ -3,7 +3,7 @@ Usage: launch_ui.py <dir> [--software] [--scenario kestrel|survival] [--display 
 --display needs --software (it names the private Xvfb display); without --display a free number from :93 up is chosen, and a
 named display that is already in use is an error, never shared. pids.json is written as each process starts, so a failed
 launch leaves the PIDs for the caller to kill."""
-import subprocess,pathlib,json,os,sys,time,shutil
+import subprocess,pathlib,json,os,sys,time,shutil,socket
 root=pathlib.Path(__file__).resolve().parents[2]
 q=pathlib.Path(sys.argv[1]);q.mkdir(parents=True,exist_ok=True)
 for name in ['action.json','observation.json','pids.json']:
@@ -21,6 +21,14 @@ def in_use(n):
  try:os.kill(int(lock.read_text().strip()),0);return True
  except (ValueError,ProcessLookupError):return False
  except PermissionError:return True
+def ours_ready(x,n):
+ """True once the Xvfb we started owns display n: its lock names our PID and its socket accepts a connection."""
+ try:
+  if int(pathlib.Path(f'/tmp/.X{n}-lock').read_text().strip())!=x.pid:return False
+  with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as c:
+   c.settimeout(1);c.connect(f'/tmp/.X11-unix/X{n}')
+  return True
+ except (OSError,ValueError):return False
 def die(msg):
  for pid in children:
   try:os.kill(pid,15)
@@ -38,10 +46,10 @@ if '--software' in sys.argv:
  x=subprocess.Popen(['Xvfb',display,'-screen','0','3840x2160x24','-nolisten','tcp'],stdout=(q/'xvfb.log').open('w'),stderr=subprocess.STDOUT,start_new_session=True)
  children.append(x.pid);save()
  end=time.monotonic()+10
- while not pathlib.Path(f'/tmp/.X11-unix/X{display.lstrip(":")}').exists():
+ while not ours_ready(x,display.lstrip(':')):  # a stale socket or lock left by a dead server is never taken as ready
   if x.poll() is not None or time.monotonic()>end:die(f'Xvfb {display} did not start, see {q/"xvfb.log"}')
   time.sleep(.1)
- env.update(DISPLAY=display,LIBGL_ALWAYS_SOFTWARE='1');extra=['--qa-xvfb']  # the world driver warps the pointer only on Xvfb
+ env.update(DISPLAY=display,LIBGL_ALWAYS_SOFTWARE='1');extra=['--qa-xvfb']  # the drivers warp the pointer only on Xvfb
 try:
  a=subprocess.Popen([str(root/'target/release/godot-bridge'),*(['--scenario',scenario] if scenario else []),str(q/'snapshot.json')],stdout=(q/'bridge.log').open('w'),stderr=subprocess.STDOUT,start_new_session=True)
  children.append(a.pid);save()

@@ -4,8 +4,7 @@ extends "ui_driver.gd"
 ## Events must be sent in their own action: {"events": [{"type": "world_shot", ...}]}.
 
 const WORLD_EVENTS := ["world_shot", "probe"]
-## launch_ui.py passes --qa-xvfb only for its private Xvfb display. On a real display warp_mouse would move the user's cursor.
-var _on_xvfb := OS.get_cmdline_user_args().has("--qa-xvfb")
+## `_on_xvfb` (ui_driver.gd): the pointer is warped only on launch_ui.py's private Xvfb display.
 
 
 func _execute(action: Dictionary) -> void:
