@@ -78,7 +78,8 @@ static func hover_material() -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.vertex_color_use_as_albedo = true
 	m.albedo_color = Color.WHITE
-	m.no_depth_test = false
+	m.no_depth_test = true  # draped on the terrain already; props in front must not hide the outline
+	m.render_priority = 1  # after the prop decals (-1) and the grid and territory overlays (0)
 	return m
 
 

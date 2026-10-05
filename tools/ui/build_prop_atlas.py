@@ -1,11 +1,12 @@
 """Bake the Kestrel prop atlas from the game's own painted sprites (spec addendum W5).
 Usage: python3 tools/ui/build_prop_atlas.py  (writes godot3d/assets/world/props_atlas.png and .json)"""
-import colorsys, json, pathlib, sys
+import colorsys, json, pathlib, random
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 REPO = pathlib.Path(__file__).absolute().parents[2]
 SIZE = 1024
-PAD = 4
+GUTTER = 4  # each sprite's edge pixels repeat this far out, so sampling across a sprite edge reads its own colour
+PAD = 2 * GUTTER  # between sprites: both gutters, so neighbours never bleed into each other down to the 1/8 mip
 # name: (source, target width, kind, sink as a fraction of the card height)
 SPRITES = {
     "forest": (REPO / "godot3d/assets/terrain/painterly/forest_cluster_v5.png", 500, "card", 0.10),
@@ -56,7 +57,6 @@ def hue_rotate(im, degrees):
 def pebbles(w):
     im = Image.new("RGBA", (w, w // 2), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    import random
     rng = random.Random(11)
     for _ in range(26):
         x, y = rng.randint(6, w - 6), rng.randint(4, w // 2 - 4)
@@ -71,9 +71,23 @@ def shadow(w):
     return im.filter(ImageFilter.GaussianBlur(5))
 
 
+def extrude(im, k):
+    """`im` with its edge pixels repeated `k` px outward on every side (corners take the corner pixel)."""
+    w, h = im.size
+    out = Image.new("RGBA", (w + 2 * k, h + 2 * k), (0, 0, 0, 0))
+    out.paste(im, (k, k))
+    out.paste(im.crop((0, 0, 1, h)).resize((k, h), Image.NEAREST), (0, k))
+    out.paste(im.crop((w - 1, 0, w, h)).resize((k, h), Image.NEAREST), (w + k, k))
+    out.paste(im.crop((0, 0, w, 1)).resize((w, k), Image.NEAREST), (k, 0))
+    out.paste(im.crop((0, h - 1, w, h)).resize((w, k), Image.NEAREST), (k, h + k))
+    for cx, cy, ox, oy in ((0, 0, 0, 0), (w - 1, 0, w + k, 0), (0, h - 1, 0, h + k), (w - 1, h - 1, w + k, h + k)):
+        out.paste(im.getpixel((cx, cy)), (ox, oy, ox + k, oy + k))
+    return out
+
+
 def build(png_out, json_out):
     images = {}
-    for name, (src, width, kind, sink) in SPRITES.items():
+    for name, (src, width, _kind, _sink) in SPRITES.items():
         if name == "forest_dry":
             images[name] = dry(images["forest"])
         elif name == "alloy":
@@ -86,14 +100,15 @@ def build(png_out, json_out):
             images[name] = fit(Image.open(src), width)
     atlas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     meta = {"size": [SIZE, SIZE], "sprites": {}}
-    x = y = row_h = 0
+    x = y = GUTTER
+    row_h = 0
     for name in SPRITES:
         im = images[name]
-        if x + im.width + PAD > SIZE:
-            x, y, row_h = 0, y + row_h + PAD, 0
-        if y + im.height > SIZE:
+        if x + im.width + GUTTER > SIZE:
+            x, y, row_h = GUTTER, y + row_h + PAD, 0
+        if y + im.height + GUTTER > SIZE:
             raise SystemExit("atlas overflow at " + name)
-        atlas.paste(im, (x, y))
+        atlas.paste(extrude(im, GUTTER), (x - GUTTER, y - GUTTER))
         _, _, kind, sink = SPRITES[name]
         meta["sprites"][name] = {"rect": [x, y, im.width, im.height], "uv": [x / SIZE, y / SIZE, im.width / SIZE, im.height / SIZE],
                                  "aspect": im.height / im.width, "sink": sink, "kind": kind}

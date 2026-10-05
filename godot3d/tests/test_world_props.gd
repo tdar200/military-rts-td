@@ -2,6 +2,7 @@ extends RefCounted
 ## Prop scatter for Kestrel (spec addendum W5): deterministic, data-driven, two MultiMeshes no matter how many props.
 const WorldProps := preload("res://scripts/world/world_props.gd")
 const GroundModel := preload("res://scripts/terrain/ground_model.gd")
+const WorldArt := preload("res://scripts/world/world_art.gd")
 
 
 func _snap() -> Dictionary:
@@ -243,3 +244,53 @@ func test_the_game_scatters_with_the_route_keep_out(t) -> void:
 	t.ok(scene.world_props != null, "Kestrel builds props")
 	t.eq(scene.world_props.cards.multimesh.instance_count, cards.size(), "the game plans with the same route and ford keep-out")
 	scene.free()
+
+
+func _corr(a: Array, b: Array) -> float:
+	var ma := 0.0
+	var mb := 0.0
+	for i in a.size():
+		ma += a[i]
+		mb += b[i]
+	ma /= a.size()
+	mb /= b.size()
+	var sab := 0.0
+	var saa := 0.0
+	var sbb := 0.0
+	for i in a.size():
+		sab += (a[i] - ma) * (b[i] - mb)
+		saa += (a[i] - ma) * (a[i] - ma)
+		sbb += (b[i] - mb) * (b[i] - mb)
+	return sab / sqrt(saa * sbb)
+
+
+func test_jitter_axes_and_size_are_independent(t) -> void:
+	var jx := []
+	var jz := []
+	var size := []
+	var flip := []
+	for item in _plan():
+		if String(item.sprite) != "forest" and String(item.sprite) != "scrub" and String(item.sprite) != "rock":
+			continue
+		var tile: Vector2i = item.tile
+		var centre := Vector2(2.1 + float(tile.x) * 0.68, 1.0 + float(tile.y) * 0.70 + (0.35 if posmod(tile.x, 2) == 1 else 0.0))
+		jx.append(item.pos.x - centre.x)
+		jz.append(item.pos.y - centre.y)
+		size.append(float(item.size))
+		flip.append(1.0 if item.flip else 0.0)
+	t.ok(absf(_corr(jx, jz)) < 0.1, "x and z jitter independent (%s)" % _corr(jx, jz))
+	t.ok(absf(_corr(jz, size)) < 0.1, "z jitter independent of size (%s)" % _corr(jz, size))
+	t.ok(absf(_corr(jx, size)) < 0.1, "x jitter independent of size (%s)" % _corr(jx, size))
+	t.ok(absf(_corr(jx, flip)) < 0.1, "flip independent of x jitter (%s)" % _corr(jx, flip))
+
+
+func test_hover_draws_over_props_and_decals_under_overlays(t) -> void:
+	var hover := WorldArt.hover_material()
+	t.ok(hover.no_depth_test, "the hover outline is not hidden by a tree card in front of it")
+	var parent := Node3D.new()
+	var props = WorldProps.new()
+	props.build(parent, _plan(), func(_x, _z): return 0.0)
+	var decal_priority: int = (props.decals.material_override as Material).render_priority
+	t.ok(decal_priority < 0, "decals blend before the other transparent overlays (%s)" % decal_priority)
+	t.ok(hover.render_priority > decal_priority, "hover sorts after the decals")
+	parent.free()

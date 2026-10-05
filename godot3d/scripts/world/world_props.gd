@@ -48,6 +48,18 @@ static func _hash(x: int, y: int, salt: int) -> int:
 	return absi(((x * 73856093) ^ (y * 19349663) ^ (salt * 83492791)) & 0x7fffffff)
 
 
+## An integer finaliser (two multiply-xorshift rounds): turns one tile hash into independent draws per property.
+static func _mix(v: int) -> int:
+	v = ((v >> 16) ^ v) * 0x45d9f3b & 0xffffffff
+	v = ((v >> 16) ^ v) * 0x45d9f3b & 0xffffffff
+	return (v >> 16) ^ v
+
+
+## A uniform draw in [0, 1] for one property (`axis`) of a rule that fired with hash `h`.
+static func _draw(h: int, axis: int) -> float:
+	return float(_mix(h + axis * 0x9e3779b) % 1000) / 999.0
+
+
 static func _neighbours(x: int, y: int) -> Array[Vector2i]:
 	var odd := posmod(x, 2) == 1
 	var out: Array[Vector2i] = [Vector2i(x, y - 1), Vector2i(x, y + 1)]
@@ -65,13 +77,13 @@ static func _place(out: Array, rule: Array, x: int, y: int, salt: int, origin: V
 	var h := _hash(x, y, salt)
 	if h % int(rule[1]) != 0:
 		return
-	var t := float((h >> 8) % 1000) / 999.0
+	var t := _draw(h, 1)
 	var jitter := float(rule[4]) * TILE
-	var jx := (float((h >> 12) % 1000) / 999.0 - 0.5) * 2.0 * jitter
-	var jz := (float((h >> 20) % 1000) / 999.0 - 0.5) * 2.0 * jitter
+	var jx := (_draw(h, 2) - 0.5) * 2.0 * jitter
+	var jz := (_draw(h, 3) - 0.5) * 2.0 * jitter
 	var centre := Vector2(origin.x + float(x) * hex.x, origin.y + float(y) * hex.y + (hex.y * 0.5 if posmod(x, 2) == 1 else 0.0))
 	out.append({"sprite": String(rule[0]), "pos": centre + Vector2(jx, jz), "size": lerpf(float(rule[2]), float(rule[3]), t) * TILE,
-		"flip": (h >> 3) & 1 == 1, "tile": Vector2i(x, y)})
+		"flip": _draw(h, 4) >= 0.5, "tile": Vector2i(x, y)})
 
 
 ## Tiles where no card may stand: the wave route, every ford tile and the ford's approach (its neighbours). Opaque cards
@@ -312,4 +324,5 @@ void fragment() {
 	var m := ShaderMaterial.new()
 	m.shader = shader
 	m.set_shader_parameter("atlas", atlas)
+	m.render_priority = -1  # one sort key spans the map: blend under the grid, territory and hover overlays
 	return m

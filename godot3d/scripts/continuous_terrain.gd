@@ -336,7 +336,10 @@ void fragment() {
     float bank = smoothstep(0.10, 0.28, share) * (1.0 - smoothstep(0.30, 0.44, share));
     land = mix(land, bank_sand * (0.82 + d_a * 0.36), bank * (1.0 - sea) * bank_strength);
     float water = smoothstep(0.40, 0.56, share);
-    float streak = smoothstep(0.62, 0.80, ground_noise(vec2(world_position.x * 1.1, world_position.z * 5.5) + vec2(TIME * 0.04, 0.0)));
+    float streak = 0.0;
+    if (water > 0.0 || sea > 0.0) {  // the noise only shows on water: dry land skips it
+        streak = smoothstep(0.62, 0.80, ground_noise(vec2(world_position.x * 1.1, world_position.z * 5.5) + vec2(TIME * 0.04, 0.0)));
+    }
     vec3 river = mix(river_edge, river_mid, smoothstep(0.50, 0.75, share));
     river = mix(river, river_centre, smoothstep(0.80, 0.98, share));
     river = mix(river, COLOR.rgb, smoothstep(0.25, 0.75, ford_share));  // the ford keeps its lighter class colour
@@ -345,7 +348,9 @@ void fragment() {
     ocean += vec3(0.03) * streak * (1.0 - smoothstep(1.0, 3.0, sea_dist));
     vec3 wet = mix(river, ocean, smoothstep(0.3, 0.7, sea));
     float surf = (1.0 - smoothstep(0.0, 0.06, abs(share - 0.47))) * smoothstep(0.4, 0.6, sea);
-    surf *= 0.55 + 0.45 * ground_noise(world_position.xz * 6.0 + vec2(TIME * 0.1));
+    if (surf > 0.0) {
+        surf *= 0.55 + 0.45 * ground_noise(world_position.xz * 6.0 + vec2(TIME * 0.1));
+    }
     ALBEDO = mix(mix(land, wet, water), surf_colour, surf * surf_strength);
     ROUGHNESS = mix(0.95, 0.35, water);
     SPECULAR = mix(0.06, 0.25, water);
@@ -444,6 +449,7 @@ func _bake_sea_distance() -> void:
 		var i := queue[head]
 		head += 1
 		var x := i % map_width
+		@warning_ignore("integer_division")
 		var y := i / map_width
 		var shift := 0 if x % 2 == 0 else 1  # even columns reach rows y-1 and y on their sides, odd ones y and y+1
 		var next := _cell_sea_dist[i] + 1.0

@@ -44,6 +44,25 @@ class AtlasTests(unittest.TestCase):
             alpha = self.img.crop((x, y, x + w, y + h)).getchannel("A")
             self.assertGreater(max(alpha.crop((0, h - 2, w, h)).getdata()), 0, name + " touches its bottom edge")
 
+    def test_gutters_are_wide_and_extruded(self):
+        """Each sprite's edge pixels repeat into a gutter of at least 4 px, and sprites sit at least 8 px apart, so the
+        zoomed-out mips (down to 1/8) sample the sprite's own colours instead of a neighbour's."""
+        rects = [s["rect"] for s in self.meta["sprites"].values()]
+        for i, a in enumerate(rects):
+            for b in rects[i + 1:]:
+                gap = max(b[0] - (a[0] + a[2]), a[0] - (b[0] + b[2]), b[1] - (a[1] + a[3]), a[1] - (b[1] + b[3]))
+                self.assertGreaterEqual(gap, 8)
+        px = self.img.load()
+        for name, (x, y, w, h) in ((n, s["rect"]) for n, s in self.meta["sprites"].items()):
+            self.assertTrue(x >= 4 and y >= 4 and x + w + 4 <= 1024 and y + h + 4 <= 1024, name)
+            for k in range(1, 5):
+                for yy in range(y, y + h, 7):
+                    self.assertEqual(px[x - k, yy], px[x, yy], name + " left gutter")
+                    self.assertEqual(px[x + w - 1 + k, yy], px[x + w - 1, yy], name + " right gutter")
+                for xx in range(x, x + w, 7):
+                    self.assertEqual(px[xx, y - k], px[xx, y], name + " top gutter")
+                    self.assertEqual(px[xx, y + h - 1 + k], px[xx, y + h - 1], name + " bottom gutter")
+
     def test_alloy_is_a_hue_rotated_ore(self):
         def mean_rgb(name):
             x, y, w, h = self.meta["sprites"][name]["rect"]
