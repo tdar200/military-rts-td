@@ -3178,7 +3178,9 @@ func _arm_build(kind_name: String) -> void:
 ## per armed kind, no cast shadow), elsewhere (or for a kind without a painting) the legacy hex cylinder, one for all.
 func _ensure_build_ghost(kind_name: String) -> void:
 	var tex: Texture2D = WorldSprites.texture_for(kind_name, HUMAN) if world_art_on else null
-	if is_instance_valid(build_ghost) and build_ghost.get_meta("sprite_texture", null) != tex:
+	# has_meta first: get_meta with a null default still logs an error when the key is missing (the cylinder has none)
+	var had: Texture2D = build_ghost.get_meta("sprite_texture") if is_instance_valid(build_ghost) and build_ghost.has_meta("sprite_texture") else null
+	if is_instance_valid(build_ghost) and had != tex:
 		build_ghost.free()  # another painting, a card where the cylinder stands, or the cylinder where a card stands
 	if tex != null:
 		if is_instance_valid(build_ghost):
