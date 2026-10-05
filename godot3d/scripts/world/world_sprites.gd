@@ -37,28 +37,30 @@ const SHADOW_LOD := 2.0
 
 ## Board pixel widths (Main.dc.html, BuildDeck, StructureSelected, OrdersArmed, WaveInbound, CoreAssault). Battery is the
 ## board's second, smaller power plant; SupplyDepot is drawn at the board's depot size (the foundation, 170); the
-## AntimatterPlant has no board and takes the power plant's. Units (WorldArt.UNIT_TILES): infantry 80 (every board but
+## AntimatterPlant has no board: 190, so its painting (the power plant's base at 0.86 under a taller core) stands a
+## little over the power plant's 170. Units (WorldArt.UNIT_TILES): infantry 80 (every board but
 ## CoreAssault's 90), tank 140, anti-armour 90 (CoreAssault 100), gunship 190 (CoreAssault, WaveInbound), capital 330
 ## (CoreAssault's alien capital; the human one takes the same), harvester 110 (Main's second one 105).
 const MOCK_PX := {
 	"CommandCenter": 250, "PowerPlant": 170, "Battery": 160, "Refinery": 200, "Barracks": 200, "VehicleFactory": 200,
 	"Airfield": 200, "ResearchLab": 150, "GunTurret": 115, "AaTurret": 85, "Wall": 100, "SupplyDepot": 170,
-	"AntimatterPlant": 170,
+	"AntimatterPlant": 190,
 	"Infantry": 80, "Tank": 140, "AntiArmor": 90, "Helicopter": 190, "Capital": 330, "Harvester": 110,
 }
-## kind -> [human sprite, enemy sprite]. The boards' build deck shows the factory as the barracks sprite and the lab as
-## capital_v1; the airfield has no board sprite and shares the barracks (as its legacy model did), the depot the refinery's.
+## kind -> [human sprite, enemy sprite]. The boards paint eight buildings per side; the other five kinds (and the lab, which
+## the boards' build deck draws as the capital tank) take the painted variants tools/ui/build_building_variants.py
+## composites from crops of those eight: no two kinds, and no two sides, share a painting.
 const SPRITES := {
 	"CommandCenter": ["command_center_v2", "alien_command_center_v1"],
 	"PowerPlant": ["power_plant_v2", "alien_power_plant_v1"],
-	"Battery": ["power_plant_v2", "alien_power_plant_v1"],
-	"AntimatterPlant": ["power_plant_v2", "alien_power_plant_v1"],
+	"Battery": ["battery_v1", "alien_battery_v1"],
+	"AntimatterPlant": ["antimatter_plant_v1", "alien_antimatter_plant_v1"],
 	"Refinery": ["refinery_v2", "alien_refinery_v1"],
-	"SupplyDepot": ["refinery_v2", "alien_refinery_v1"],
+	"SupplyDepot": ["supply_depot_v1", "alien_supply_depot_v1"],
 	"Barracks": ["barracks_v2", "alien_barracks_v1"],
-	"VehicleFactory": ["barracks_v2", "alien_barracks_v1"],
-	"Airfield": ["barracks_v2", "alien_barracks_v1"],
-	"ResearchLab": ["capital_v1", "alien_capital_v1"],
+	"VehicleFactory": ["vehicle_factory_v1", "alien_vehicle_factory_v1"],
+	"Airfield": ["airfield_v1", "alien_airfield_v1"],
+	"ResearchLab": ["research_lab_v1", "alien_research_lab_v1"],
 	"GunTurret": ["gun_turret_v2", "alien_gun_turret_v1"],
 	"AaTurret": ["aa_turret_v2", "alien_aa_turret_v1"],
 	"Wall": ["wall_v2", "alien_wall_v1"],

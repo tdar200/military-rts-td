@@ -81,7 +81,52 @@ func test_enemy_owner_takes_the_alien_sprite(t) -> void:
 	t.ok(WorldSprites.texture_for("CommandCenter", 0).resource_path.ends_with("/command_center_v2.png"), "human CC")
 	t.ok(WorldSprites.texture_for("CommandCenter", 1).resource_path.ends_with("/alien_command_center_v1.png"), "alien CC")
 	t.ok(WorldSprites.texture_for("GunTurret", 1).resource_path.ends_with("/alien_gun_turret_v1.png"), "alien turret")
-	t.ok(WorldSprites.texture_for("ResearchLab", 0).resource_path.ends_with("/capital_v1.png"), "the boards' lab sprite")
+	t.ok(WorldSprites.texture_for("ResearchLab", 0).resource_path.ends_with("/research_lab_v1.png"), "the lab's own painting, not the tank")
+	t.ok(WorldSprites.texture_for("ResearchLab", 1).resource_path.ends_with("/alien_research_lab_v1.png"), "the alien lab's, not the walker")
+
+
+func test_every_building_kind_draws_its_own_painting(t) -> void:
+	# the user: "fix the buildings there is only one visual". Thirteen kinds, thirteen paintings per side, none shared
+	# between kinds or between the sides
+	var seen := {}
+	for owner in [0, 1]:
+		var paths := {}
+		for kind in PROFILE_KINDS:
+			var tex := WorldSprites.texture_for(kind, owner)
+			t.ok(tex != null, "%s/%d loads" % [kind, owner])
+			if tex == null:
+				continue
+			t.ok(not paths.has(tex.resource_path), "%s/%d shares %s with %s" % [kind, owner, tex.resource_path.get_file(), paths.get(tex.resource_path, "")])
+			paths[tex.resource_path] = kind
+			t.ok(not seen.has(tex.resource_path), "%s: the sides draw different paintings" % kind)
+		for p in paths:
+			seen[p] = true
+	for kind in PROFILE_KINDS:
+		var names: Array = WorldSprites.SPRITES[kind]
+		t.ok(not String(names[0]).begins_with("alien_") and String(names[1]).begins_with("alien_"), "%s: [human, alien]" % kind)
+	t.ok(not WorldSprites.texture_for("ResearchLab", 0).resource_path.ends_with("/capital_v1.png"), "no tank for a lab")
+
+
+func test_the_kinds_paintings_genuinely_differ(t) -> void:
+	# loaded pixels, not just paths: every pair of kinds on a side differs by more than 5 % mean per channel (sampled on
+	# a 4 px grid), and the painted body (alpha > 128) covers a different area or place
+	for owner in [0, 1]:
+		var data := {}
+		for kind in PROFILE_KINDS:
+			data[kind] = _rgba8(WorldSprites.texture_for(kind, owner).get_image().duplicate() as Image).get_data()
+		for i in PROFILE_KINDS.size():
+			for j in range(i + 1, PROFILE_KINDS.size()):
+				var a: PackedByteArray = data[PROFILE_KINDS[i]]
+				var b: PackedByteArray = data[PROFILE_KINDS[j]]
+				var diff := 0
+				var n := 0
+				for y in range(0, 256, 4):
+					for x in range(0, 256, 4):
+						var o := (y * 256 + x) * 4
+						for c in 4:
+							diff += absi(a[o + c] - b[o + c])
+						n += 4
+				t.ok(float(diff) / float(n) > 0.05 * 255.0, "%s vs %s (owner %d) differ: %.1f" % [PROFILE_KINDS[i], PROFILE_KINDS[j], owner, float(diff) / float(n)])
 
 
 func test_building_widths_follow_the_boards(t) -> void:
@@ -93,6 +138,7 @@ func test_building_widths_follow_the_boards(t) -> void:
 	t.near(float(WorldSprites.MOCK_PX.CommandCenter), 250.0, 0.0, "CC 250 px on the boards")
 	t.ok(float(WorldArt.BUILDING_TILES.CommandCenter) > float(WorldArt.BUILDING_TILES.Barracks), "CC reads bigger than barracks")
 	t.ok(float(WorldArt.BUILDING_TILES.Barracks) > float(WorldArt.BUILDING_TILES.GunTurret), "barracks bigger than a turret")
+	t.ok(float(WorldArt.BUILDING_TILES.AntimatterPlant) > float(WorldArt.BUILDING_TILES.PowerPlant), "the antimatter plant over the power plant")
 
 
 func test_one_material_per_texture(t) -> void:
