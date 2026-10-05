@@ -503,16 +503,22 @@ The Kestrel 3D world was re-arted to read like boards gp01 and gp03 to gp08 (spe
 `docs/superpowers/specs/2026-10-05-kestrel-world-art-design.md`, rulings W1 to W9). Survival and every other scenario keep
 every legacy path. What still differs from the boards, and why:
 
-- Buildings and units are 3D authored models, not the boards' painted sprites. Each model is fitted to a width table in
-  tiles (`WorldArt.BUILDING_TILES`, `WorldArt.UNIT_TILES`: CC 2.8, production 2.1, power and depot 1.7, turrets 1.3, wall
-  1.0; tank 1.6, harvester 1.5, infantry 1.0) and gets a soft contact pad and a selection ring sized to that width.
-- Placement stays one hex per building, so a big model overhangs its neighbours and two big neighbours can overlap on
-  screen. Picking follows the fitted model, not the hex: a click on any part of a model (its roof, its hull, a mast)
-  selects it, a unit beside a CC still takes its own click (the narrowest model holding the click wins), and a click on
-  no model keeps the legacy 32 px reach around a root (`_pick_entity`). The hover outline draws without a depth test, so
-  it is hidden on a hex a model stands on and on a hex whose centre a fitted model covers: all six neighbours of a CC
-  (half width 0.95), and the north and south neighbours of a 2.1-tile building (half width 0.714, past the 0.70 row
-  pitch). Its four diagonal neighbours sit 0.77 away, so the outline still shows there over the edge of the model.
+- Buildings are the boards' own painted sprites (2026-10-05, reversing W6 on the user's call; `WorldSprites`): one card
+  per building, square to the fixed camera above the painted contact line (85 % of the card height, the boards' sort
+  line) and lying on the ground below it, at the boards' pixel size (82 px per tile: CC 3.05 tiles, barracks, factory and
+  refinery 2.44, power plant 2.07, lab 1.83, gun turret 1.40, wall 1.22, AA 1.04). The enemy draws the `alien_*`
+  sprites. A building under construction shows the foundation sprite. Each card casts the boards' sheared silhouette
+  shadow and keeps a soft contact pad under its painted footprint. The lab is `capital_v1`, the sprite the boards' build
+  deck uses for it; the airfield and the depot have no board sprite and share the barracks and refinery sprites.
+  Units are still 3D authored models fitted to `WorldArt.UNIT_TILES` (tank 1.6, harvester 1.5, infantry 1.0) until
+  plan Task 2 makes them sprites too.
+- Placement stays one hex per building, so a big sprite overhangs its neighbours (mostly to the north, where the
+  painting rises) and two big neighbours can overlap on screen. Picking follows the painted body, not the hex: a click
+  inside the screen rectangle of the sprite's opaque pixels selects it, a click on a transparent corner of the card does
+  not, a unit beside a CC still takes its own click (the narrowest entity holding the click wins), and a click on none
+  keeps the legacy 32 px reach around a root (`_pick_entity`). The hover outline draws without a depth test, so it is
+  hidden on a hex a building stands on and on a hex whose centre the painted body covers on screen: for a CC the hexes
+  north, north-east, north-west and two north of it; the hexes beside and south of its base still show the outline.
 - The camera keeps its 57 degree pitch. The boards are painted at a steeper three-quarter view, so roofs read smaller
   and fronts taller in the live frame. The camera is north-up with a default zoom of 10.
 - Home and the deploy shot look 4.1 world units (about 6 columns) east of your Command Center

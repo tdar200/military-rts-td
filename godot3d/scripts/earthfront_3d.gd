@@ -2267,8 +2267,9 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 		root.set_meta("label_y", top + 0.45)
 		root.set_meta("crown_y", top + 0.06)
 		if world_props != null:
-			world_props.clear_around(destination, tiles * WorldArt.TILE * 0.5)
-			var slot: int = world_props.add_pad(destination + WorldSprites.pad_spot(tex, width), WorldSprites.pad_width(tex, width))
+			var spot := destination + WorldSprites.pad_spot(tex, width)  # the painted footprint stands north of the root
+			world_props.clear_around(spot, tiles * WorldArt.TILE * 0.5)
+			var slot: int = world_props.add_pad(spot, WorldSprites.pad_width(tex, width))
 			if slot >= 0:
 				var props: RefCounted = world_props
 				root.tree_exiting.connect(func(): props.release_pad(slot))

@@ -261,3 +261,55 @@ func test_survival_buildings_keep_the_legacy_model(t) -> void:
 	t.ok(not visual.has_meta("sprite_kind"), "no sprite card")
 	t.ok(not root.has_meta("pick_parts") and not root.has_meta("visual_tiles"), "no profile metas")
 	scene.free()
+
+
+func test_card_casts_the_boards_silhouette_shadow(t) -> void:
+	# hud.css .shd: the silhouette, black, flipped below the contact line, squashed to 0.34 and sheared right by
+	# skewX(60deg), at opacity .40 * .52; one shared shadow material per texture, on the ground before the root
+	var card := WorldSprites.make_card("CommandCenter", 0, 3.05)
+	var shadow := card.get_node_or_null("SpriteShadow") as MeshInstance3D
+	t.ok(shadow != null, "the card carries its cast shadow")
+	if shadow == null:
+		card.free()
+		return
+	var other := WorldSprites.make_card("CommandCenter", 0, 2.0)
+	t.ok(shadow.material_override == (other.get_node("SpriteShadow") as MeshInstance3D).material_override, "shared per texture")
+	t.eq(shadow.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "it casts no real shadow either")
+	var box := shadow.mesh.get_aabb()
+	t.near(box.size.y, 0.0, 1e-5, "flat on the ground")
+	t.ok(box.position.z >= -1e-5, "before the root (south)")
+	var d := WorldSprites.FOOT * WorldSprites.ASPECT
+	t.near(box.end.z * WorldArt.PITCH_SIN, 0.34 * d, 1e-4, "0.34 of the height above the line, on screen")
+	t.near(box.end.x - 0.5, tan(deg_to_rad(60.0)) * 0.34 * d, 1e-3, "sheared toward the lower right")
+	var m := shadow.material_override as ShaderMaterial
+	t.near(float(m.get_shader_parameter("strength")), 0.40 * 0.52, 0.001, "the boards' opacity")
+	t.ok(m.get_shader_parameter("sprite") == WorldSprites.texture_for("CommandCenter", 0), "the sprite's own silhouette")
+	WorldSprites.show_built(card, false)
+	t.ok((shadow.material_override as ShaderMaterial).get_shader_parameter("sprite") == WorldSprites.foundation(), "a site's shadow is the foundation's")
+	card.free()
+	other.free()
+
+
+func test_props_clear_under_the_painted_footprint(t) -> void:
+	var scene := _kestrel_scene()
+	var props = scene.world_props
+	var tex := WorldSprites.texture_for("CommandCenter", 0)
+	var w := float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE
+	var at := Vector3.INF
+	var prop := Vector3.INF
+	for i in props._card_at.size():  # a real prop card 0.8 north of the footprint centre: under the painted body, outside the root's radius
+		if props._card_pinned[i] == 0 and props._card_at[i] != WorldProps.HIDDEN:
+			prop = Vector3(props._card_at[i].x, 0.0, props._card_at[i].z)
+			at = prop - WorldSprites.pad_spot(tex, w) + Vector3(0, 0, 0.8)
+			break
+	var spot := at + WorldSprites.pad_spot(tex, w)
+	t.ok(spot.z < at.z, "the footprint centre is north of the root")
+	t.ok(Vector2(prop.x, prop.z).distance_to(Vector2(at.x, at.z)) > w * 0.5, "the prop is outside the root's own radius")
+	scene._create_bridge_building(0, "CommandCenter", at, 970)
+	var left := 0
+	for i in props._card_at.size():
+		var p: Vector3 = props._card_at[i]
+		if props._card_pinned[i] == 0 and Vector2(p.x, p.z).distance_to(Vector2(spot.x, spot.z)) < w * 0.5:
+			left += 1
+	t.eq(left, 0, "no prop card left under the painted footprint")
+	scene.free()

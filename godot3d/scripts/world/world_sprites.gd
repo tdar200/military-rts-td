@@ -22,6 +22,13 @@ const CARD_LIFT := 0.03  # the card's ground strip rides this far over the terra
 const OPAQUE_ALPHA := 128  # a pixel above this alpha is painted body (picking, bars, pad); softer pixels are edge glow
 const FOOTPRINT := 0.65  # the painted footprint's centre line, as a fraction of the card height from its top
 const FOUNDATION := "foundation_v1"
+## The boards' cast shadow (hud.css `.shd`, drawn at the sprite's `sh` opacity): the sprite's silhouette, black, flipped
+## below its contact line, squashed to SHADOW_SCALE of its height and sheared by SHADOW_SHEAR toward the lower right
+## (skewX(60deg) scaleY(-.34)), at opacity .40 * .52, blurred (a coarser mip level stands in for the 4 px blur).
+const SHADOW_SCALE := 0.34
+const SHADOW_SHEAR := 0.589  # tan(60 degrees) * SHADOW_SCALE: screen x per unit of height above the contact line
+const SHADOW_ALPHA := 0.208
+const SHADOW_LOD := 2.0
 
 ## Board pixel widths (Main.dc.html, BuildDeck, StructureSelected, OrdersArmed, WaveInbound, CoreAssault). Battery is the
 ## board's second, smaller power plant; SupplyDepot is drawn at the board's depot size (the foundation, 170); the
@@ -56,6 +63,9 @@ const NO_SPRITE: Array[String] = []
 static var _materials := {}  # texture path -> StandardMaterial3D
 static var _bounds := {}  # texture path -> Rect2
 static var _mesh: ArrayMesh
+static var _shadow_mesh: ArrayMesh
+static var _shadow_shader: Shader
+static var _shadow_materials := {}  # texture path -> ShaderMaterial
 
 
 static func cos_pitch() -> float:
@@ -148,6 +158,49 @@ static func card_mesh() -> ArrayMesh:
 	return _mesh
 
 
+## The cast shadow's ground quad for the unit card: the part above the contact line (v 0 .. FOOT) laid on the ground in
+## front of the root, flattened and sheared as the boards draw it (screen down 0.34 d, right 0.589 d for a pixel d above
+## the line; a screen-down distance s is s / PITCH_SIN on the ground).
+static func shadow_mesh() -> ArrayMesh:
+	if _shadow_mesh == null:
+		var d := FOOT * ASPECT
+		var far := Vector3(SHADOW_SHEAR * d, 0.0, SHADOW_SCALE * d / WorldArt.PITCH_SIN)
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_normal(Vector3.UP)
+		var b0 := Vector3(-0.5, 0, 0)
+		var b1 := Vector3(0.5, 0, 0)
+		_quad(st, [b0 + far, b1 + far, b1, b0], [Vector2(0, 0), Vector2(1, 0), Vector2(1, FOOT), Vector2(0, FOOT)])
+		_shadow_mesh = st.commit()
+	return _shadow_mesh
+
+
+static func shadow_material_for(tex: Texture2D) -> Material:
+	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if not _shadow_materials.has(key):
+		if _shadow_shader == null:
+			_shadow_shader = Shader.new()
+			_shadow_shader.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
+uniform sampler2D sprite : source_color, filter_linear_mipmap, repeat_disable;
+uniform float strength = 0.208;
+uniform float lod = 2.0;
+void fragment() {
+    ALBEDO = vec3(0.0);
+    ALPHA = textureLod(sprite, UV, lod).a * strength;
+}
+"""
+		var m := ShaderMaterial.new()
+		m.shader = _shadow_shader
+		m.set_shader_parameter("sprite", tex)
+		m.set_shader_parameter("strength", SHADOW_ALPHA)
+		m.set_shader_parameter("lod", SHADOW_LOD)
+		m.render_priority = -1  # with the prop decals: under the grid, territory and hover overlays
+		_shadow_materials[key] = m
+	return _shadow_materials[key]
+
+
 static func _quad(st: SurfaceTool, p: Array, uv: Array) -> void:
 	for i in [0, 1, 2, 0, 2, 3]:
 		st.set_uv(uv[i])
@@ -168,6 +221,12 @@ static func make_card(kind: String, owner: int, tiles: float) -> MeshInstance3D:
 	card.position = Vector3(0.0, CARD_LIFT, 0.0)
 	card.set_meta("sprite_kind", kind)
 	card.set_meta("sprite_texture", tex)
+	var shadow := MeshInstance3D.new()
+	shadow.name = "SpriteShadow"
+	shadow.mesh = shadow_mesh()
+	shadow.material_override = shadow_material_for(tex)
+	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	card.add_child(shadow)
 	return card
 
 
@@ -177,6 +236,9 @@ static func show_built(card: MeshInstance3D, built: bool) -> void:
 	var m := material_for(tex)
 	if card.material_override != m:
 		card.material_override = m
+		var shadow := card.get_node_or_null("SpriteShadow") as MeshInstance3D
+		if shadow != null:
+			shadow.material_override = shadow_material_for(tex)
 
 
 ## The painted body's height over the root, as a vertical offset in the root's space whose screen point is the body's top
