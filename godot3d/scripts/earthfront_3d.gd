@@ -473,6 +473,9 @@ func _apply_world_art(_snapshot: Dictionary) -> void:
 		sea_backdrop = _mesh(plane, sea, Vector3(16.7, -0.95, 10.0))
 		sea_backdrop.name = "SeaBackdrop"
 		sea_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if is_instance_valid(hover_tile):
+		hover_tile.mesh = WorldArt.hex_outline_mesh(HEX_X / 1.5 * 0.96, HEX_Z * 0.5 * 0.96, 0.035)
+		hover_tile.material_override = WorldArt.hover_material()
 
 
 func _zoom_limits() -> Vector2:
@@ -2441,7 +2444,7 @@ func _update_hover_tile() -> void:
 	var tile := _world_to_tile(ground)
 	_set_hover_cell(tile)
 	var world := _hex_world(tile.x, tile.y)
-	hover_tile.position = Vector3(world.x, _height_world(world.x, world.z) + 0.055, world.z)
+	hover_tile.position = Vector3(world.x, _height_world(world.x, world.z) + (0.07 if world_art_on else 0.055), world.z)
 	hover_tile.visible = build_mode == ""
 
 

@@ -198,3 +198,26 @@ func test_sea_backdrop_covers_the_minimap_rect(t) -> void:
 	t.ok(cz - span * 0.5 >= centre.y - half.y and cz + span * 0.5 <= centre.y + half.y, "covers the minimap depth")
 	t.ok(scene.sea_backdrop.position.y < -0.85, "below the terrain sea level, so the terrain still draws the sea")
 	scene.free()
+
+
+func test_kestrel_hover_is_a_thin_cyan_hex_outline(t) -> void:
+	var scene := _kestrel_scene()
+	var mesh: Mesh = scene.hover_tile.mesh
+	t.ok(not (mesh is TorusMesh), "no amber torus under the profile")
+	t.ok(mesh is ArrayMesh and mesh.get_surface_count() == 1, "one outline surface")
+	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var widest := 0.0
+	for v in verts:
+		widest = maxf(widest, absf(v.x))
+	t.ok(widest <= scene.HEX_X / 1.5 + 0.001, "never wider than one hex (%s)" % widest)
+	var mat := scene.hover_tile.material_override as StandardMaterial3D
+	t.ok(mat != null and mat.shading_mode == BaseMaterial3D.SHADING_MODE_UNSHADED, "unshaded")
+	t.ok(mat.albedo_color.b > mat.albedo_color.r and mat.albedo_color.a <= 0.6, "cyan and see-through")
+	t.ok(not mat.emission_enabled, "no glow")
+	scene.free()
+
+
+func test_hex_outline_is_a_closed_six_sided_ring(t) -> void:
+	var mesh := WorldArt.hex_outline_mesh(0.44, 0.34, 0.035)
+	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	t.eq(verts.size(), 6 * 6, "six quads, two triangles each")

@@ -39,3 +39,13 @@ func test_survival_keeps_rotation_focus_zoom_and_placement(t) -> void:
 	t.ok(not scene._off_map(Vector3(-50, 0, -50)), "off-map points are not special in Survival")
 	t.ok(scene.sea_backdrop == null, "no sea backdrop")
 	scene.free()
+
+
+func test_survival_keeps_the_amber_hover_torus(t) -> void:
+	var scene := _survival_scene()
+	var torus := scene.hover_tile.mesh as TorusMesh
+	t.ok(torus != null, "legacy torus")
+	t.near(torus.inner_radius, 0.42, 0.0001, "inner")
+	t.near(torus.outer_radius, 0.47, 0.0001, "outer")
+	t.ok(scene.hover_tile.material_override == scene.materials.hover, "legacy amber material")
+	scene.free()

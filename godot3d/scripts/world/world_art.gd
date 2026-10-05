@@ -37,3 +37,30 @@ static func _clamp_axis(value: float, half: float, lo: float, hi: float) -> floa
 	if hi - lo <= 2.0 * half:
 		return (lo + hi) * 0.5
 	return clampf(value, lo + half, hi - half)
+
+
+## A flat hex ring on y = 0: outer corners (+-rx, 0), (+-rx/2, +-hz); the inner ring is `width` thinner.
+static func hex_outline_mesh(radius_x: float, half_z: float, width: float) -> ArrayMesh:
+	var outer: Array[Vector3] = []
+	var inner: Array[Vector3] = []
+	var shrink := (radius_x - width) / radius_x
+	for p in [Vector2(radius_x, 0), Vector2(radius_x * 0.5, half_z), Vector2(-radius_x * 0.5, half_z), Vector2(-radius_x, 0), Vector2(-radius_x * 0.5, -half_z), Vector2(radius_x * 0.5, -half_z)]:
+		outer.append(Vector3(p.x, 0, p.y))
+		inner.append(Vector3(p.x * shrink, 0, p.y * shrink))
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_normal(Vector3.UP)
+	for i in 6:
+		var j := (i + 1) % 6
+		for v in [outer[i], outer[j], inner[j], outer[i], inner[j], inner[i]]:
+			st.add_vertex(v)
+	return st.commit()
+
+
+static func hover_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_color = Color(0.435, 0.839, 0.910, 0.55)  # 6fd6e8
+	return m
