@@ -152,19 +152,66 @@ func test_kestrel_buildings_clear_by_width_and_take_a_pad(t) -> void:
 	scene.free()
 
 
-func test_kestrel_selection_ring_wraps_the_model(t) -> void:
+func test_kestrel_selection_ring_wraps_the_painted_base_like_the_boards(t) -> void:
+	# StructureSelected: a 200 px barracks drawn at top 570 takes the ellipse rx 132, ry 46 centred at y 725 (x on the
+	# sprite's centre). CoreAssault: each 140 px tank takes rx 58, ry 22 centred 19 px over its contact line (top + 119).
 	var scene := _kestrel_scene()
 	var ui_stub := GDScript.new()
 	ui_stub.source_code = "extends Node\nfunc set_tab(_tab: String) -> void:\n\tpass\n"
 	ui_stub.reload()
 	scene.ui = Node.new()
 	scene.ui.set_script(ui_stub)
-	var root: Node3D = scene._create_bridge_building(0, "CommandCenter", Vector3(10, 0, 10), 904)
-	scene._set_selection([root])
-	t.near(scene.selection_ring.scale.x, float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to the CC width")
-	scene._create_unit(0, Vector3(6, 0, 6), 0)
-	scene._set_selection([scene.units.back()])
-	t.near(scene.selection_ring.scale.x, float(WorldArt.UNIT_TILES[0]) * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to a squad")
+	var barracks: Node3D = scene._create_bridge_building(0, "Barracks", scene._hex_world(10, 10), 904)
+	scene._create_unit(0, scene._hex_world(14, 12), 1)
+	var tank: Node3D = scene.units.back()
+	for case in [[barracks, "Visual", 200.0, 725.0 - 570.0, 132.0, 46.0], [tank, "UnitVisual", 140.0, 119.0 - 19.0, 58.0, 22.0]]:
+		var node: Node3D = case[0]
+		var card := node.get_node(String(case[1])) as Node3D
+		var px: float = card.scale.x / float(case[2])  # world units per board pixel
+		scene._set_selection([node])
+		var ring: MeshInstance3D = scene.selection_ring
+		var shape: Dictionary = scene._ring_shape(node)
+		var centre: Vector3 = shape.centre
+		var label := String(node.name)
+		t.near((centre.x - node.position.x) / px, 0.0, 3.0, "%s: centred under the painting (board px)" % label)
+		var below_top := WorldSprites.FOOT * float(case[2]) + (centre.z - node.position.z) * WorldArt.PITCH_SIN / px
+		t.near(below_top, float(case[3]), 3.0, "%s: centre %.1f board px below the sprite's top" % [label, below_top])
+		t.near(float(shape.rx) / px, float(case[4]), 3.0, "%s: rx in board px" % label)
+		t.near(float(shape.rz) * WorldArt.PITCH_SIN / px, float(case[5]), 2.0, "%s: ry on screen in board px" % label)
+		t.near(centre.y, scene._height_world(centre.x, centre.z), 1e-4, "%s: on the ground" % label)
+		t.ok(ring.position.is_equal_approx(centre), "%s: the ring stands on that centre" % label)
+		t.ok(ring.scale.is_equal_approx(Vector3.ONE) and is_zero_approx(ring.rotation.y), "%s: an ellipse, never scaled or spun" % label)
+		var box := ring.mesh.get_aabb()
+		t.near(box.size.x, 2.0 * (float(shape.rx) + scene.RING_LINE), 0.01, "%s: the drawn ellipse is rx wide" % label)
+		t.near(box.size.z, 2.0 * (float(shape.rz) + scene.RING_LINE / WorldArt.PITCH_SIN), 0.01, "%s: and rz deep" % label)
+		var body := WorldSprites.opaque_bounds(WorldSprites.drawn_texture(card))
+		var front := (below_top + float(shape.rz) * WorldArt.PITCH_SIN / px) / float(case[2])
+		var over := (ring.material_override as BaseMaterial3D).no_depth_test
+		if node == barracks:
+			# StructureSelected draws it under the sprites: the back arc hides behind the painting, the front wraps the base
+			t.ok(not over, "a building's ellipse is depth tested (under the painting)")
+			t.ok(front > body.end.y, "%s: the front arc passes under the painted base (v %.3f > %.3f)" % [label, front, body.end.y])
+			t.ok(float(shape.rx) > body.size.x * card.scale.x * 0.5, "%s: and its sides stand out past the painted body" % label)
+		else:
+			# CoreAssault draws the unit ellipses over the sprites (z-index 1400), round the lower hull
+			t.ok(over, "a unit's ellipse draws over its painting")
+			t.ok(front < body.end.y and front > WorldSprites.FOOT, "%s: its front arc crosses the painted tracks (v %.3f)" % [label, front])
+	# a mirrored unit's ellipse mirrors with its painting; a hovering gunship's stays on the ground
+	var before: float = (scene._ring_shape(tank).centre as Vector3).x - tank.position.x
+	WorldSprites.face(tank.get_node("UnitVisual"), 1.0)
+	t.near((scene._ring_shape(tank).centre as Vector3).x - tank.position.x, -before, 1e-5, "mirrored with the card")
+	scene._create_unit(0, scene._hex_world(16, 12), 3)
+	var gunship: Node3D = scene.units.back()
+	var g: Vector3 = scene._ring_shape(gunship).centre
+	t.near(g.y, scene._height_world(g.x, g.z), 1e-4, "a gunship's ellipse is on the ground under it")
+	# the CC: the same board shape from its own painted width
+	var cc: Node3D = scene._create_bridge_building(0, "CommandCenter", scene._hex_world(20, 10), 905)
+	scene._set_selection([cc])
+	var cc_card := cc.get_node("Visual") as Node3D
+	var cc_body := WorldSprites.opaque_bounds(WorldSprites.drawn_texture(cc_card))
+	var cc_shape: Dictionary = scene._ring_shape(cc)
+	t.near(float(cc_shape.rx), 132.0 / 177.0 * cc_body.size.x * cc_card.scale.x, 0.02, "CC: rx is the board's 132 px for a 177 px painted body, scaled")
+	t.ok(scene.selection_ring.position.is_equal_approx(cc_shape.centre), "the ring moved to the CC")
 	scene.ui.free()
 	scene.free()
 

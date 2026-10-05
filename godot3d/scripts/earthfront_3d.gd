@@ -1242,8 +1242,11 @@ func _process(delta: float) -> void:
 			if status_bar:
 				status_bar.visible = selected_max_shield > 0.0
 	if is_instance_valid(selection_ring) and is_instance_valid(selected):
-		selection_ring.global_position = selected.global_position + Vector3.UP * 0.035
-		selection_ring.rotation_degrees.y += delta * 24.0
+		if world_art_on:
+			_place_selection_ring()
+		else:
+			selection_ring.global_position = selected.global_position + Vector3.UP * 0.035
+			selection_ring.rotation_degrees.y += delta * 24.0
 	if is_instance_valid(range_ring) and is_instance_valid(selected) and range_ring.visible:
 		range_ring.global_position = selected.global_position + Vector3.UP * 0.045
 	if mission_deployed and not battle_started and time_alive > 1.5:
@@ -1594,6 +1597,94 @@ func _sprite_card(node: Node) -> MeshInstance3D:
 	return null
 
 
+## Kestrel: the selection ellipse's line, half its width (world units: about 3 px across at the default zoom).
+const RING_LINE := 0.014
+const RING_LIFT := 0.035  # over the ground under each of its vertices
+var _ring_materials: Array[StandardMaterial3D] = []  # depth tested (buildings), drawn over (unit cards)
+
+
+## Kestrel: the selection ellipse under `node`: {centre: its ground point (scene space), rx, rz: its radii along x and z}.
+## A sprite card takes the boards' ellipse round its painted base (WorldSprites.ring: the drawn sprite, the foundation on
+## a site, mirrored with a unit's card, on the ground under a gunship); a fitted model a circle 0.55 of its width.
+func _ring_shape(node: Node3D) -> Dictionary:
+	var card := _sprite_card(node)
+	var shape := {}
+	if card != null:
+		shape = WorldSprites.ring(WorldSprites.drawn_texture(card), card.scale.x, card.name == "UnitVisual", bool(card.get_meta("mirrored", false)))
+	else:
+		var radius := float(node.get_meta("visual_tiles", 1.0 / WorldArt.TILE)) * WorldArt.TILE * 0.55
+		shape = {"centre": Vector3.ZERO, "rx": radius, "rz": radius}
+	var at: Vector3 = node.position + (shape.centre as Vector3)
+	at.y = _height_world(at.x, at.z)
+	shape.centre = at
+	return shape
+
+
+## Kestrel: puts the selection ellipse under `selected`, rebuilding its draped mesh when the shape changes or the centre
+## has moved a little way (a gliding unit), otherwise only moving it.
+func _place_selection_ring(force := false) -> void:
+	var shape := _ring_shape(selected)
+	var centre: Vector3 = shape.centre
+	var size := Vector2(float(shape.rx), float(shape.rz))
+	var built_at: Vector3 = selection_ring.get_meta("ring_at", Vector3.INF)
+	if force or size != selection_ring.get_meta("ring_size", Vector2.ZERO) or built_at.distance_to(centre) > 0.05:
+		var building := String(selected.get_meta("category", "unit")) == "building"
+		var over := not building and _sprite_card(selected) != null
+		selection_ring.mesh = _ellipse_mesh(centre, size, building, not over)
+		selection_ring.set_meta("ring_at", centre)
+		selection_ring.set_meta("ring_size", size)
+		if _ring_materials.is_empty():
+			for on_top in [false, true]:
+				var m := StandardMaterial3D.new()
+				m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				m.vertex_color_use_as_albedo = true
+				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				m.cull_mode = BaseMaterial3D.CULL_DISABLED
+				m.no_depth_test = on_top
+				_ring_materials.append(m)
+		# StructureSelected draws a building's ellipse under the sprites; CoreAssault draws the units' over them
+		selection_ring.material_override = _ring_materials[1 if over else 0]
+		selection_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	selection_ring.scale = Vector3.ONE
+	selection_ring.rotation = Vector3.ZERO
+	selection_ring.position = centre
+
+
+## The boards' selection ellipse (stroke #40dceb; a building's filled at 8 %) as one mesh about `centre`: radii `size`
+## (x, z), a line RING_LINE either side of them on screen, RING_LIFT over the ground. A depth-tested one is `draped` (every
+## vertex over the ground under it, so no slope buries it); one drawn over the painting stays flat, a clean ellipse.
+func _ellipse_mesh(centre: Vector3, size: Vector2, fill: bool, draped := true) -> ArrayMesh:
+	var segments := 72
+	var stroke := Color8(64, 220, 235)
+	var tint := Color8(64, 220, 235, 20)
+	var drape := func(x: float, z: float) -> Vector3:
+		if not draped:
+			return Vector3(x, RING_LIFT, z)
+		return Vector3(x, _height_world(centre.x + x, centre.z + z) - centre.y + RING_LIFT, z)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_normal(Vector3.UP)
+	var dz := RING_LINE / WorldArt.PITCH_SIN  # the same width on screen across and along
+	for i in segments:
+		var a0 := TAU * float(i) / segments
+		var a1 := TAU * float(i + 1) / segments
+		var c0 := Vector2(cos(a0), sin(a0))
+		var c1 := Vector2(cos(a1), sin(a1))
+		var in0: Vector3 = drape.call(c0.x * (size.x - RING_LINE), c0.y * (size.y - dz))
+		var in1: Vector3 = drape.call(c1.x * (size.x - RING_LINE), c1.y * (size.y - dz))
+		var out0: Vector3 = drape.call(c0.x * (size.x + RING_LINE), c0.y * (size.y + dz))
+		var out1: Vector3 = drape.call(c1.x * (size.x + RING_LINE), c1.y * (size.y + dz))
+		if fill:
+			var mid: Vector3 = drape.call(0.0, 0.0)
+			for p in [mid, in0, in1]:
+				st.set_color(tint)
+				st.add_vertex(p)
+		for p in [in0, out0, out1, in0, out1, in1]:
+			st.set_color(stroke)
+			st.add_vertex(p)
+	return st.commit()
+
+
 ## Selects control group `group` (the number keys and the control group list both end here).
 func recall_control_group(group: int) -> void:
 	if control_groups.has(group):
@@ -1634,11 +1725,8 @@ func _set_selection(selection: Array) -> void:
 		torus.ring_segments = 8
 		selection_ring = _mesh(torus, materials.glass, selected.position + Vector3.UP * 0.04)
 	selection_ring.visible = true
-	if world_art_on:  # spec addendum W6: the ring wraps the fitted model (the torus is 0.46 across its tube centre)
-		var ring_scale := 1.0
-		if selected.has_meta("visual_tiles"):
-			ring_scale = float(selected.get_meta("visual_tiles")) * WorldArt.TILE * 0.55 / 0.46
-		selection_ring.scale = Vector3(ring_scale, 1.0, ring_scale)
+	if world_art_on:  # the boards' selection ellipse round the painted base (_place_selection_ring)
+		_place_selection_ring(true)
 	var category := String(selected.get_meta("category", "unit"))
 	if not is_instance_valid(range_ring):
 		var range_mesh := TorusMesh.new()

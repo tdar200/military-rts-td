@@ -512,3 +512,24 @@ static func pad_spot(tex: Texture2D, width: float) -> Vector3:
 
 static func pad_width(tex: Texture2D, width: float) -> float:
 	return opaque_bounds(tex).size.x * width
+
+
+## The selection ellipse under a card, in card terms: the card v of its centre, rx as a share of the painted body's width,
+## and ry / rx on screen. StructureSelected: a 200 px barracks drawn at top 570 (painted body 177 px wide) takes rx 132,
+## ry 46 centred at 725. CoreAssault: each 140 px tank (body 124 px) takes rx 58, ry 22 centred 19 px over its contact
+## line. Its back arc passes behind the painting there as here.
+const RING_BUILDING := Vector3(0.775, 0.745, 0.35)
+const RING_UNIT := Vector3(0.714, 0.467, 0.38)
+
+
+## The selection ellipse under a card `width` wide: {centre: its ground point as an offset (x, 0, z) from the root,
+## rx: its radius along x, rz: along z (world units)}. Centred under the painted body, mirrored with the card.
+static func ring(tex: Texture2D, width: float, unit := false, mirrored := false) -> Dictionary:
+	var shape := RING_UNIT if unit else RING_BUILDING
+	var r := opaque_bounds(tex)
+	var x := (r.get_center().x - 0.5) * width
+	if mirrored:
+		x = -x
+	var rx := shape.y * r.size.x * width
+	var z := (shape.x - FOOT) * width * ASPECT / WorldArt.PITCH_SIN
+	return {"centre": Vector3(x, 0.0, z), "rx": rx, "rz": rx * shape.z / WorldArt.PITCH_SIN}
