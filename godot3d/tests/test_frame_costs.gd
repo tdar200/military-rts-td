@@ -50,6 +50,14 @@ func test_a_dash_off_screen_adds_nothing_to_the_stroke(t) -> void:
 	marks.free()
 
 
+func test_the_game_reads_the_pointer_from_mouse_events(t) -> void:
+	var src: String = (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
+	# Viewport.get_mouse_position is a window-system round trip per call (0.15 to 0.65 ms measured); once a frame is too many.
+	t.eq(src.count("get_mouse_position()"), 1, "only mouse_position() itself may ask the window system")
+	t.ok(src.contains("pointer_position = (event as InputEventMouse).position"), "mouse events keep the pointer")
+	t.ok(src.contains("mouse_exited.connect"), "and leaving the window falls back to asking")
+
+
 func test_bridge_units_glide_at_the_same_speed_at_any_frame_rate(t) -> void:
 	var game = (load("res://scripts/earthfront_3d.gd") as GDScript).new()
 	var fast := Node3D.new()

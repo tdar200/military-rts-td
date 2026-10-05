@@ -50,6 +50,10 @@ const BRIDGE_POLL := 0.12
 const GLIDE_RATE := 3.98  # = -ln(1 - 0.38) / BRIDGE_POLL, per second
 const TURN_RATE := 3.46  # = -ln(1 - 0.34) / BRIDGE_POLL, per second
 var hover_cell := NO_HOVER  # hex under the cursor, NO_HOVER when none; only reassigned when the hex changes
+## The pointer as the last mouse event placed it (see mouse_position). Unknown until one arrives, and again once the
+## pointer leaves the window, when mouse_position falls back to asking the window system.
+var pointer_position := Vector2.ZERO
+var pointer_known := false
 var terrain_dressing: Array = []  # nodes built on top of the terrain surface (trees, rocks, lattice, river)
 var materials: Dictionary = {}
 var tactical_models = preload("res://scripts/tactical_models.gd").new()
@@ -139,6 +143,8 @@ func _ready() -> void:
 	# A pause.flag left by a crash or a force-quit while paused would hold the bridge still on the next launch; a fresh scene
 	# is never paused. Same path logic as set_sim_paused.
 	set_sim_paused(false)
+	# Outside the window there are no mouse events, so mouse_position asks the window system again (edge panning).
+	get_window().mouse_exited.connect(func() -> void: pointer_known = false)
 	_create_materials()
 	_setup_environment()
 	_setup_audio()
@@ -1197,7 +1203,7 @@ func _update_camera_controls(delta: float) -> void:
 	motion += right * Input.get_axis("camera_left", "camera_right")
 	motion += forward * Input.get_axis("camera_up", "camera_down")
 	if mission_deployed:
-		var pointer := get_viewport().get_mouse_position()
+		var pointer := mouse_position()
 		var viewport_size := get_viewport().get_visible_rect().size
 		if pointer.x < 10.0:
 			motion -= right
@@ -1482,9 +1488,18 @@ func _dust_puff(position: Vector3) -> void:
 	tween.tween_callback(puff.queue_free)
 
 
-## Pointer position in viewport pixels (the HUD adapter reads this instead of the window).
+## Pointer position in viewport pixels (the HUD adapter reads this instead of the window). Viewport.get_mouse_position
+## asks the window system on every call (a synchronous X server round trip, measured at 0.15 to 0.65 ms on a busy desktop),
+## and the hover hex, edge panning and the HUD each wanted it every frame, so the position comes from the mouse events
+## instead, which carry it in the same viewport coordinates.
 func mouse_position() -> Vector2:
-	return get_viewport().get_mouse_position()
+	return pointer_position if pointer_known else get_viewport().get_mouse_position()
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouse:
+		pointer_position = (event as InputEventMouse).position
+		pointer_known = true
 
 
 ## World rectangle (x, z) shown by the minimap.
@@ -1782,7 +1797,7 @@ func _write_bridge_ability() -> void:
 	if int(selected.get_meta("ability_cd", 0)) > 0:
 		objective_label.text = "TACTICAL ABILITY RECHARGING"
 		return
-	var ground := _screen_to_ground(get_viewport().get_mouse_position())
+	var ground := _screen_to_ground(mouse_position())
 	if ground == Vector3.INF:
 		return
 	var simulation_bits := _world_to_sim_bits(ground)
@@ -2351,7 +2366,7 @@ func _update_hover_tile() -> void:
 		hover_tile.visible = false
 		_set_hover_cell(NO_HOVER)
 		return
-	var pointer := get_viewport().get_mouse_position()
+	var pointer := mouse_position()
 	if ui.blocks_point(pointer):
 		# Over the HUD the last hovered hex stays, so the inspector does not vanish as the cursor reaches for its panel.
 		hover_tile.visible = false
@@ -2381,7 +2396,7 @@ func _update_build_ghost() -> void:
 	if build_mode == "":
 		build_ghost.visible = false
 		return
-	var pointer := get_viewport().get_mouse_position()
+	var pointer := mouse_position()
 	var ground := _screen_to_ground(pointer)
 	if ground == Vector3.INF or ui.blocks_point(pointer):
 		build_ghost.visible = false
