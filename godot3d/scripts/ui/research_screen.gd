@@ -63,8 +63,11 @@ func _init() -> void:
 	_build_backdrop()
 
 
-func _exit_tree() -> void:
-	_meter.free()
+## The measuring box is never in the tree, so it is freed with the screen itself (not on _exit_tree, which a screen that is
+## freed outside the tree, or only re-parented, would get wrong).
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and is_instance_valid(_meter):
+		_meter.free()
 
 
 ## True when `point` (in this control's space) is over the screen. The screen is a modal overlay.

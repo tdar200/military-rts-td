@@ -155,7 +155,7 @@ const NOTES := {
 	"w": "Ground units can wade through here, at a cost.",
 	"s": "Soft sand along the water's edge.",
 	"o": "Open water. Ground units cannot enter.",
-	"c": "Left by earlier landings. Good cover, awkward to build on.",
+	"c": "Some shelter from fire, but slow going. Nothing can be built here.",
 }
 const NOTE_ORE := "A refinery beside a deposit raises its haul. Claim it early."
 const NOTE_ALLOY := "Scenery only in this operation: nothing you can build extracts it."

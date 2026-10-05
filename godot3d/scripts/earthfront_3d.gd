@@ -40,6 +40,7 @@ var camera_zoom := 12.2
 var terrain_height: Dictionary = {}
 var terrain_renderer: Node3D
 var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null = cosmetic noise terrain
+var ground_warnings := 0  # times a malformed ground layer was reported: once, not on every poll
 var bridge_snapshot: Dictionary = {}  # the latest parsed bridge snapshot; live_adapter.gd derives the gameplay HUD slices from it
 const NO_HOVER := Vector2i(-1, -1)
 var hover_cell := NO_HOVER  # hex under the cursor, NO_HOVER when none; only reassigned when the hex changes
@@ -419,12 +420,17 @@ func _build_terrain_dressing() -> void:
 
 ## First snapshot with a ground layer: the terrain, its dressing and the map size follow the snapshot. Later snapshots
 ## carry the same layer and are ignored, so the mesh is rebuilt once, not per poll.
+## First ground layer wins for the life of the process: the terrain and its dressing are built once, so a different ground
+## sent after a bridge restart in the same process is ignored (a new map needs a new launch). A malformed layer is reported
+## once and the cosmetic noise terrain stays.
 func _sync_ground(snapshot: Dictionary) -> void:
 	if ground_model != null or not snapshot.has("ground"):
 		return
 	var model: RefCounted = GroundModel.from_snapshot(snapshot)
 	if model == null:
-		push_warning("Bridge ground layer does not match its map dimensions")
+		if ground_warnings == 0:
+			ground_warnings += 1
+			push_warning("Bridge ground layer does not match its map dimensions")
 		return
 	ground_model = model
 	MAP_W = int(model.width)

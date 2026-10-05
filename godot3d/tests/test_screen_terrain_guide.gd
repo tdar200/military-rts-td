@@ -157,3 +157,11 @@ func test_swatches_stay_inside_their_card(t) -> void:
 			t.ok(n.clip_contents, "a swatch clips its hex crop to its own rectangle")
 	t.ok(seen >= 12, "a swatch per card")
 	p[0].free()
+
+
+func test_notes_are_plain_words_with_no_numbers_or_invented_lore(t) -> void:
+	var digits := RegEx.create_from_string("[0-9]")
+	for glyph in Maps.NOTES:
+		var note := str(Maps.NOTES[glyph])
+		t.ok(digits.search(note) == null, "the %s note carries no number (numbers come from the table)" % glyph)
+	t.ok(not str(Maps.NOTES["c"]).to_lower().contains("landing"), "the crater note invents no backstory")

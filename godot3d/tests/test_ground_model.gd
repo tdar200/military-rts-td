@@ -129,3 +129,40 @@ func test_stub_kestrel_flag_loads_the_fixture(t) -> void:
 	g.use_kestrel()
 	t.ok(g.kestrel and g.ground_model != null, "use_kestrel loads snapshot and ground model")
 	t.eq(String(g.bridge_snapshot.get("map_name", "")), "Kestrel Reach", "fixture map name")
+
+
+func test_ground_look_pins_height_colour_and_wetness_per_glyph(t) -> void:
+	var look: Dictionary = Terrain.GROUND_LOOK
+	t.near(float(look["w"][0]), -0.15, 0.001, "the ford sits at -0.15, between the river bed and the flats")
+	t.eq(String(look["w"][2]), "6fb0c4", "the ford has its own shallow-water colour")
+	t.eq(float(look["w"][3]), 1.0, "the ford reads as wet")
+	t.near(float(look["r"][0]), -0.50, 0.001, "the river bed is deeper than the ford")
+	t.near(float(look["h"][0]), 1.60, 0.001, "highland is the tall ground")
+	t.eq(float(look["h"][3]), 0.0, "highland is dry")
+	var m = GroundModel.from_snapshot(_snap())
+	var terrain := _terrain(m)
+	var ford := _first_cell(m, "w")
+	var river := _first_cell(m, "r")
+	t.ok(ford.x >= 0 and river.x >= 0, "the fixture has a ford and a river")
+	var i: int = ford.y * 44 + ford.x
+	t.near(float(terrain._cell_h[i]), -0.15, 0.001, "the baked ford cell is at -0.15")
+	t.eq(terrain._cell_color[i], Color("6fb0c4").srgb_to_linear(), "the baked ford cell has the wet colour")
+	t.eq(float(terrain._cell_wet[i]), 1.0, "the baked ford cell is wet")
+	var h_ford := _height_at_cell(terrain, ford.x, ford.y)
+	var h_river := _height_at_cell(terrain, river.x, river.y)
+	t.ok(h_ford > h_river, "the ford is shallower than the river (%s > %s)" % [h_ford, h_river])
+	t.ok(h_ford < 0.05, "the ford stays below the banks (%s)" % h_ford)
+	terrain.free()
+
+
+func test_a_malformed_ground_layer_is_reported_once_and_keeps_the_noise_terrain(t) -> void:
+	var game: Node3D = (load("res://scripts/earthfront_3d.gd") as GDScript).new()
+	var bad := _snap()
+	bad["ground"] = "ggg"
+	game._sync_ground({"map_width": 4, "map_height": 4})
+	t.eq(game.ground_warnings, 0, "a snapshot without a ground field is not an error")
+	for poll in range(5):
+		game._sync_ground(bad)
+	t.eq(game.ground_warnings, 1, "five polls of the same bad layer warn once")
+	t.ok(game.ground_model == null, "no model is built from it, the noise terrain stays")
+	game.free()

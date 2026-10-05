@@ -184,6 +184,35 @@ func test_pause_menu_has_no_guide_entry_without_a_table(t) -> void:
 	_drop(p)
 
 
+func test_can_guide_is_a_cheap_table_check_that_agrees_with_the_guide(t) -> void:
+	var p := _make(t)
+	var g = p[0]
+	var ui = p[1]
+	t.ok(ui._can_guide() and not ui._guide_vm().is_empty(), "a named ground_table row: the guide can open")
+	t.ok(ui._pause_vm()["can_guide"], "and the pause menu offers it")
+	g.bridge_snapshot["ground_table"] = [{"glyph": "g"}]
+	t.ok(not ui._can_guide() and ui._guide_vm().is_empty(), "rows without names build nothing, so no entry")
+	g.bridge_snapshot["ground_table"] = []
+	t.ok(not ui._can_guide() and ui._guide_vm().is_empty(), "an empty table: no entry")
+	g.bridge_snapshot.erase("ground_table")
+	t.ok(not ui._can_guide() and not ui._pause_vm()["can_guide"], "no table: no entry")
+	var src: String = (load("res://scripts/ui/game_ui.gd") as GDScript).source_code
+	t.ok(src.contains('vm["can_guide"] = _can_guide()'), "the 0.1 s pause refresh never builds the guide")
+	_drop(p)
+
+
+func test_the_debrief_closes_an_open_map_so_esc_cannot_reach_it(t) -> void:
+	var p := _make(t)
+	var ui = p[1]
+	ui.route_key(_key(KEY_M))
+	t.ok(ui.region_open, "the map is open")
+	ui.show_debrief()
+	t.ok(not ui.region_open, "the debrief closes it")
+	t.eq(ui.region_layer.get_child_count(), 0, "and its nodes are freed")
+	t.ok(ui.escape_route(false) != "close_region", "Esc under the scrim no longer targets the map")
+	_drop(p)
+
+
 # ------------------------------------------------------------------ briefing
 
 func test_the_briefing_shows_in_the_first_stages_and_hides_for_good(t) -> void:

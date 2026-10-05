@@ -141,3 +141,4 @@ func test_ground_colours_come_from_the_3d_palette(t) -> void:
 	var look: Dictionary = preload("res://scripts/continuous_terrain.gd").GROUND_LOOK
 	for glyph in look:
 		t.eq(Hex.ground_color(glyph), Color(str(look[glyph][2])), "glyph %s uses the 3D ground colour" % glyph)
+	Hex.clear_caches()  # the static mesh caches outlive the tests; drop them so the exit leak check stays quiet

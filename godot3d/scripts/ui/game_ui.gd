@@ -285,6 +285,7 @@ func _on_title_action(name: String, _arg: Variant) -> void:
 func show_debrief() -> void:
 	if scrim != null:
 		return
+	close_region()  # the debrief owns the screen; Esc under its scrim must not reach a map left open behind it
 	scrim = ColorRect.new()
 	(scrim as ColorRect).color = T.SCRIM
 	scrim.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -473,6 +474,21 @@ func _snapshot_and_ground() -> Array:
 	return [snap, ground]
 
 
+## Cheap: true when the snapshot carries a named ground_table row, i.e. exactly when _guide_vm has anything to build (the pause view
+## model asks every 0.1 s, so it must not build the whole guide).
+func _can_guide() -> bool:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary):
+		return false
+	var table = snap.get("ground_table", [])
+	if not (table is Array):
+		return false
+	for row in table:  # a handful of rows; the guide itself skips unnamed ones
+		if row is Dictionary and str(row.get("name", "")) != "":
+			return true
+	return false
+
+
 func _guide_vm() -> Dictionary:
 	var sg := _snapshot_and_ground()
 	return VmMaps.terrain_guide(sg[0], sg[1]) if sg[1] != null else {}
@@ -493,7 +509,7 @@ func _pause_vm() -> Dictionary:
 		vm = {"stopped": stopped, "keys": VmGameplay.pause_keys()}
 	vm["confirm"] = confirm
 	vm["can_restart"] = g.has_method("_restart_mission")
-	vm["can_guide"] = not _guide_vm().is_empty()
+	vm["can_guide"] = _can_guide()
 	return vm
 
 

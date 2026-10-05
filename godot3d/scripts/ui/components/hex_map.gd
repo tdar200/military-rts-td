@@ -53,7 +53,6 @@ static func shared_side(l: Dictionary, a: Array, b: Array) -> Array:
 	return out if out.size() == 2 else []
 
 
-## The colour the 3D terrain gives a ground glyph (continuous_terrain.gd GROUND_LOOK): the one palette of the whole client.
 ## Drops every cached mesh and line list (tests, and a map whose ground changed).
 static func clear_caches() -> void:
 	_mesh_cache.clear()
@@ -61,6 +60,7 @@ static func clear_caches() -> void:
 	cache_hits = 0
 
 
+## The colour the 3D terrain gives a ground glyph (continuous_terrain.gd GROUND_LOOK): the one palette of the whole client.
 static func ground_color(glyph: String) -> Color:
 	var look: Array = Look.GROUND_LOOK.get(glyph, Look.GROUND_LOOK["g"])
 	return Color(str(look[2]))

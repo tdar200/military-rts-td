@@ -117,7 +117,7 @@ static func _bonus_text(snap: Dictionary, x: int, y: int) -> String:
 			return "River +%d kW" % int(e["river_kw"])
 		# ore_bonus is a bool on refineries. The haul claim is made only when an Ore deposit (never Alloy) is really there.
 		if bool(e.get("ore_bonus", false)) and _ore_deposit_near(snap, x, y):
-			return "Ore haul +20%"
+			return "Ore haul +%d%%" % ORE_BONUS_PCT
 	return ""
 
 
