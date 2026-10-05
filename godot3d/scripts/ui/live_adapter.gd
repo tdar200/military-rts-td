@@ -1068,6 +1068,8 @@ func _order(verb: String) -> void:
 			_focus_hq()
 
 
+## Centres the CC. On Kestrel the Home key frames the base east of it (`home_focus`); this jump answers an HQ alert, so the
+## fight around the CC stays mid-frame instead of at the left edge.
 func _focus_hq() -> void:
 	var hq: Node3D = assault.hq_node()
 	if hq != null:

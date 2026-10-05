@@ -518,7 +518,9 @@ every legacy path. What still differs from the boards, and why:
 - Home and the deploy shot look 4.1 world units (about 6 columns) east of your Command Center
   (`WorldArt.CAMERA.home_offset`), so the base sits in the left third and the Calder River shows top right. The boards put
   the river mid-frame because their base is about 7 columns from it; on the live map the river is 15 columns east of the
-  CC on its row, so base and river cannot both sit where the boards have them at zoom 10.
+  CC on its row, so base and river cannot both sit where the boards have them at zoom 10. The HUD's HQ jump (the
+  `jump_hq` and `hq` actions, `live_adapter._focus_hq`) still centres the CC: it answers an HQ alert, so the fight around
+  the CC belongs mid-frame, not at the left edge.
 - At deploy the live colony is one CC and four infantry squads; the home-frame boards (gp01, gp04, gp06, gp08) show a
   built-up base with tanks, a refinery and turrets. That gap is content, not art.
 - Props are camera-facing billboard cards drawn from a baked atlas of the game's own painted sprites, with flat soft

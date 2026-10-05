@@ -431,10 +431,8 @@ func _build_terrain_dressing() -> void:
 			var elevation: float = terrain_renderer.height_at_world(world.x, world.z)
 			var biome_signal: float = terrain_renderer.biome_at_world(world.x, world.z)
 			terrain_height[Vector2i(x, z)] = elevation
-			if ground_model == null:
+			if ground_model == null:  # a ground layer always brings the profile (WorldArt.active), which dresses with props
 				_dress_tile(x, z, world, elevation, biome_signal)
-			elif not world_art_on:
-				_dress_ground_tile(x, z, world, elevation)
 	if ground_model == null:
 		_build_shoreline_details()
 		_build_river()
@@ -508,17 +506,6 @@ func _zoom_limits() -> Vector2:
 
 func _zoom_default() -> float:
 	return float(WorldArt.CAMERA.default_zoom) if world_art_on else 8.8
-
-
-func _dress_ground_tile(x: int, z: int, world: Vector3, elevation: float) -> void:
-	var signature := absi((x * 73856093) ^ (z * 19349663))
-	match String(ground_model.glyph_at(x, z)):
-		"t":
-			if signature % 2 == 0:
-				_create_tree(world + Vector3(0, elevation, 0), 0.34 + float(signature % 3) * 0.04)
-		"h":
-			if signature % 13 == 0:
-				_create_rocks(world + Vector3(0, elevation, 0), 0.24)
 
 
 func _build_shoreline_details() -> void:
