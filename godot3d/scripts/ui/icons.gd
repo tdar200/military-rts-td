@@ -4,6 +4,7 @@ extends RefCounted
 ## a draw pass renders as a solid square. Create it in a setter or _ready() and read it back with cached().
 
 const SHAPES := {
+	"map": '<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/>',
 	"chevron_left": '<path d="M15 5l-7 7 7 7"/>',
 	"material": '<path d="M12 2l9 5v10l-9 5-9-5V7l9-5zM3 7l9 5 9-5M12 12v10"/>',
 	"ore": '<path d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/>',
