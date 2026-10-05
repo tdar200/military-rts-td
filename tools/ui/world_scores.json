@@ -69,7 +69,7 @@
   "total": 54.66,
   "structure": 60.25,
   "raw": {
-   "palette_w": 12.65,
+   "palette_w": 12.64,
    "sat_gap": 104.5,
    "sat_p50": [
     111.5,
@@ -183,11 +183,11 @@
   "palette": 3.46,
   "saturation": 3.07,
   "warmth": 2.71,
-  "detail": 12.55,
-  "clutter": 8.26,
-  "layout": 15.48,
-  "total": 54.46,
-  "structure": 64.42,
+  "detail": 12.57,
+  "clutter": 8.27,
+  "layout": 15.49,
+  "total": 54.43,
+  "structure": 64.37,
   "raw": {
    "palette_w": 14.42,
    "sat_gap": 102.3,
@@ -205,24 +205,24 @@
    ],
    "detail_ratio": [
     0.24,
-    0.236,
-    0.426
+    0.235,
+    0.425
    ],
    "detail_rank_ratio": [
-    0.622,
-    0.367,
-    0.698
+    0.621,
+    0.366,
+    0.697
    ],
    "clutter_ratio": [
     0.095,
     0.184
    ],
    "clutter_rank_ratio": [
-    0.256,
-    0.337
+    0.255,
+    0.335
    ],
    "layout_corr": [
-    0.1,
+    0.099,
     -0.164
    ]
   },
@@ -238,9 +238,9 @@
     "de": 31.29
    },
    "r": {
-    "live": "2a5b8a",
+    "live": "2b5c8b",
     "mock": "3a6c81",
-    "de": 18.29
+    "de": 18.1
    }
   }
  },
@@ -249,7 +249,7 @@
   "saturation": 2.96,
   "warmth": 3.86,
   "detail": 15.63,
-  "clutter": 9.17,
+  "clutter": 9.16,
   "layout": 13.78,
   "total": 49.37,
   "structure": 74.96,
@@ -308,11 +308,11 @@
   "palette": 3.47,
   "saturation": 3.3,
   "warmth": 1.39,
-  "detail": 10.84,
-  "clutter": 6.91,
+  "detail": 10.86,
+  "clutter": 6.92,
   "layout": 13.45,
-  "total": 60.63,
-  "structure": 66.3,
+  "total": 60.62,
+  "structure": 66.26,
   "raw": {
    "palette_w": 14.44,
    "sat_gap": 110.0,
@@ -330,21 +330,21 @@
    ],
    "detail_ratio": [
     0.291,
-    0.306,
-    0.449
+    0.305,
+    0.448
    ],
    "detail_rank_ratio": [
-    0.6,
-    0.426,
+    0.599,
+    0.425,
     0.64
    ],
    "clutter_ratio": [
-    0.134,
+    0.133,
     0.254
    ],
    "clutter_rank_ratio": [
     0.198,
-    0.305
+    0.303
    ],
    "layout_corr": [
     0.29,
@@ -363,9 +363,9 @@
     "de": 31.29
    },
    "r": {
-    "live": "2a5b8a",
+    "live": "2b5c8b",
     "mock": "3a6c81",
-    "de": 18.29
+    "de": 18.1
    }
   }
  },

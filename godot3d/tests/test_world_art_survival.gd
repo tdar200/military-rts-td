@@ -24,3 +24,18 @@ func test_survival_keeps_the_legacy_camera(t) -> void:
 	t.ok(scene.ocean_box.visible, "legacy ocean box")
 	t.near(scene.terrain_renderer.edge_margin_cells, 4.0, 0.001, "legacy noise mesh margin")
 	scene.free()
+
+
+func test_survival_keeps_rotation_focus_zoom_and_placement(t) -> void:
+	var scene := _survival_scene()
+	scene._camera_step(1.0, Vector3.ZERO, 16.0 / 9.0, 1.0)
+	t.near(scene.camera_yaw, -0.68 + 0.72, 0.0001, "Z/E still rotate Survival")
+	scene.focus_camera(Vector3(10, 0, 8), 8.2)
+	t.near(scene.camera_focus_zoom, 8.2, 0.0001, "focus jumps keep their own zoom")
+	scene.camera_focus_target = Vector3(-30, 0, -30)
+	scene._camera_step(0.016, Vector3.ZERO, 16.0 / 9.0, 0.0)
+	t.near(scene.camera_focus_target.x, scene.MAP_ORIGIN_X, 0.001, "legacy clamp to the map")
+	t.eq(scene.camera_view_target(), scene.camera_target, "the shown view is the plain target")
+	t.ok(not scene._off_map(Vector3(-50, 0, -50)), "off-map points are not special in Survival")
+	t.ok(scene.sea_backdrop == null, "no sea backdrop")
+	scene.free()

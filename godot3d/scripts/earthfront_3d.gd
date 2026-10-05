@@ -43,6 +43,8 @@ var terrain_renderer: Node3D
 var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null = cosmetic noise terrain
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var ocean_box: MeshInstance3D
+var sea_backdrop: MeshInstance3D  # Kestrel: flat sea far below the terrain, so the minimap and any frame past the mesh never show the clear colour
+var camera_aspect := 16.0 / 9.0
 var ground_warnings := 0  # times a malformed ground layer was reported: once, not on every poll
 var bridge_snapshot: Dictionary = {}  # the latest parsed bridge snapshot; live_adapter.gd derives the gameplay HUD slices from it
 const NO_HOVER := Vector2i(-1, -1)
@@ -462,6 +464,15 @@ func _apply_world_art(_snapshot: Dictionary) -> void:
 	camera_yaw = float(WorldArt.CAMERA.yaw)
 	if is_instance_valid(ocean_box):
 		ocean_box.visible = false
+	if not is_instance_valid(sea_backdrop):
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(240.0, 240.0)
+		var sea := StandardMaterial3D.new()
+		sea.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED  # the colour of the terrain's open sea in the minimap, unlit
+		sea.albedo_color = Color8(31, 68, 119)
+		sea_backdrop = _mesh(plane, sea, Vector3(16.7, -0.95, 10.0))
+		sea_backdrop.name = "SeaBackdrop"
+		sea_backdrop.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 func _zoom_limits() -> Vector2:
@@ -1234,28 +1245,48 @@ func _update_camera_controls(delta: float) -> void:
 			motion -= forward
 		elif pointer.y > viewport_size.y - 10.0:
 			motion += forward
+	_camera_step(delta, motion, get_viewport().get_visible_rect().size.aspect(), Input.get_axis("camera_rotate_left", "camera_rotate_right"))
+	_update_camera()
+
+
+## One frame of camera state (no scene access beyond fields, so tests can drive it). Kestrel keeps the focus target clamped
+## only for the tightest zoom, so zooming out never drags it inward; the shown view is clamped per frame for the zoom the
+## camera really has (camera_view_target). Yaw is locked north-up on Kestrel (the mock is north-up, shadows assume it).
+func _camera_step(delta: float, motion: Vector3, aspect: float, rotate_axis: float) -> void:
+	camera_aspect = aspect
 	if motion.length() > 0.0:
 		camera_focus_target += motion.normalized() * delta * camera_focus_zoom * 0.48
 	camera_target = camera_target.lerp(camera_focus_target, 1.0 - exp(-delta * 7.5))
 	camera_zoom = lerpf(camera_zoom, camera_focus_zoom, 1.0 - exp(-delta * 8.5))
 	camera_cinematic = maxf(0.0, camera_cinematic - delta)
-	camera_yaw += Input.get_axis("camera_rotate_left", "camera_rotate_right") * delta * 0.72
 	if world_art_on:
-		var aspect := get_viewport().get_visible_rect().size.aspect()
-		var bounds := WorldArt.world_bounds(MAP_W, MAP_H, MAP_ORIGIN_X, MAP_ORIGIN_Z, HEX_X, HEX_Z, int(WorldArt.CAMERA.edge_cells))
-		camera_focus_target = WorldArt.clamp_focus(camera_focus_target, maxf(camera_zoom, camera_focus_zoom), aspect, camera_yaw, bounds)
+		camera_yaw = float(WorldArt.CAMERA.yaw)
+		camera_focus_target = WorldArt.clamp_focus(camera_focus_target, _zoom_limits().x, aspect, camera_yaw, _art_bounds())
 	else:
+		camera_yaw += rotate_axis * delta * 0.72
 		camera_focus_target.x = clampf(camera_focus_target.x, MAP_ORIGIN_X, MAP_ORIGIN_X + float(MAP_W - 1) * HEX_X)
 		camera_focus_target.z = clampf(camera_focus_target.z, MAP_ORIGIN_Z, MAP_ORIGIN_Z + float(MAP_H - 1) * HEX_Z)
-	_update_camera()
+
+
+func _art_bounds() -> Rect2:
+	return WorldArt.world_bounds(MAP_W, MAP_H, MAP_ORIGIN_X, MAP_ORIGIN_Z, HEX_X, HEX_Z, int(WorldArt.CAMERA.edge_cells))
+
+
+## The point the camera looks at. Kestrel clamps a copy for the current zoom, so the view never leaves the ground while the
+## zoom changes and the stored target is never displaced.
+func camera_view_target() -> Vector3:
+	if not world_art_on:
+		return camera_target
+	return WorldArt.clamp_focus(camera_target, camera_zoom, camera_aspect, camera_yaw, _art_bounds())
 
 
 func _update_camera() -> void:
 	camera.size = camera_zoom
 	var horizontal := Vector3(sin(camera_yaw), 0, cos(camera_yaw)) * camera_zoom * 0.68
 	var shake := Vector3(sin(time_alive * 73.0), 0.0, cos(time_alive * 61.0)) * camera_shake * 0.12
-	camera.position = camera_target + horizontal + Vector3.UP * camera_zoom * 1.05 + shake
-	camera.look_at(camera_target + shake * 0.25, Vector3.UP)
+	var view_target := camera_view_target()
+	camera.position = view_target + horizontal + Vector3.UP * camera_zoom * 1.05 + shake
+	camera.look_at(view_target + shake * 0.25, Vector3.UP)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1287,14 +1318,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						_write_bridge_rally(selected, rally_ground)
 					return
 				if build_mode != "":
-					var build_ground := _screen_to_ground(event.position)
-					if build_ground != Vector3.INF:
-						var build_tile := _world_to_tile(build_ground)
-						if _is_build_valid(build_tile):
-							_write_bridge_build(build_mode, build_ground)
-							build_mode = ""
-						else:
-							objective_label.text = "INVALID FOUNDATION — CHOOSE OPEN TERRAIN"
+					_try_place_build(_screen_to_ground(event.position))
 					return
 				selection_double_click = event.double_click
 				drag_start = event.position
@@ -1365,11 +1389,23 @@ func _unhandled_input(event: InputEvent) -> void:
 			_toggle_science_panel()
 		elif event.keycode == Keybinds.FOCUS and is_instance_valid(selected):
 			camera_focus_target = selected.global_position
-			camera_focus_zoom = _zoom_default() - 0.6
+			camera_focus_zoom = float(WorldArt.CAMERA.focus_zoom) if world_art_on else 8.2
 			camera_cinematic = 0.8
 		elif event.keycode == Keybinds.HOME:
 			camera_focus_target = home_focus()
 			camera_focus_zoom = _zoom_default()
+
+
+## A left click in build mode. A point past the map edge (Kestrel) is ignored: no order, build mode stays armed.
+func _try_place_build(build_ground: Vector3) -> void:
+	if build_ground == Vector3.INF or _off_map(build_ground):
+		return
+	var build_tile := _world_to_tile(build_ground)
+	if _is_build_valid(build_tile):
+		_write_bridge_build(build_mode, build_ground)
+		build_mode = ""
+	else:
+		objective_label.text = "INVALID FOUNDATION — CHOOSE OPEN TERRAIN"
 
 
 func _update_selection_box(current: Vector2) -> void:
@@ -1563,7 +1599,7 @@ func home_focus() -> Vector3:
 
 func focus_camera(position: Vector3, zoom: float) -> void:
 	camera_focus_target = position
-	camera_focus_zoom = zoom
+	camera_focus_zoom = float(WorldArt.CAMERA.focus_zoom) if world_art_on else zoom  # one focus-jump zoom on Kestrel
 	camera_cinematic = 0.8
 
 
@@ -2398,7 +2434,7 @@ func _update_hover_tile() -> void:
 		hover_tile.visible = false
 		return
 	var ground := _screen_to_ground(pointer)
-	if ground == Vector3.INF:
+	if ground == Vector3.INF or _off_map(ground):
 		hover_tile.visible = false
 		_set_hover_cell(NO_HOVER)
 		return
@@ -2424,7 +2460,7 @@ func _update_build_ghost() -> void:
 		return
 	var pointer := mouse_position()
 	var ground := _screen_to_ground(pointer)
-	if ground == Vector3.INF or ui.blocks_point(pointer):
+	if ground == Vector3.INF or _off_map(ground) or ui.blocks_point(pointer):
 		build_ghost.visible = false
 		return
 	var tile := _world_to_tile(ground)
@@ -2682,17 +2718,21 @@ func _arm_build(kind_name: String) -> void:
 	objective_label.text = "PLACE %s — GREEN IS VALID • ESC CANCELS" % kind_name.to_upper()
 
 
+func _deploy_camera() -> void:
+	camera_target = Vector3(12.4, 0.0, 9.4)
+	camera_zoom = WorldArt.CAMERA.deploy_from if world_art_on else 15.5
+	camera_focus_target = home_focus()
+	camera_focus_zoom = _zoom_default()
+	camera_cinematic = 1.4
+
+
 func _deploy_mission() -> void:
 	var start_file := FileAccess.open(runtime_directory.path_join("start.flag"), FileAccess.WRITE)
 	if start_file:
 		start_file.store_line("deploy")
 	mission_deployed = true
 	tutorial_stage = 0
-	camera_target = Vector3(12.4, 0.0, 9.4)
-	camera_zoom = WorldArt.CAMERA.deploy_from if world_art_on else 15.5
-	camera_focus_target = home_focus()
-	camera_focus_zoom = _zoom_default()
-	camera_cinematic = 1.4
+	_deploy_camera()
 	_play_deploy_sound()
 	_play_tone(520.0, 0.13, 0.16, 180.0)
 	objective_label.text = "COMMAND LINK ESTABLISHED"
@@ -2713,6 +2753,18 @@ func _sim_bits_to_world(x_bits: int, z_bits: int) -> Vector3:
 		0.0,
 		MAP_ORIGIN_Z + (simulation_z - SIM_CELL_CENTER) * HEX_Z
 	)
+
+
+## Kestrel only: true when a ground point lies past the map edge (the mesh continues there, but nothing can be placed or hovered).
+func _off_map(world: Vector3) -> bool:
+	if not world_art_on:
+		return false
+	var column := roundi((world.x - MAP_ORIGIN_X) / HEX_X)
+	if column < 0 or column > MAP_W - 1:
+		return true
+	var parity_offset := HEX_Z * 0.5 if column % 2 else 0.0
+	var row := roundi((world.z - MAP_ORIGIN_Z - parity_offset) / HEX_Z)
+	return row < 0 or row > MAP_H - 1
 
 
 func _world_to_tile(world: Vector3) -> Vector2i:

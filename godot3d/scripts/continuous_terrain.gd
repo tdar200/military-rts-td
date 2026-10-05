@@ -1,6 +1,8 @@
 extends Node3D
 class_name ContinuousTerrain
 
+const WorldArt := preload("res://scripts/world/world_art.gd")
+
 var map_width := 0
 var map_height := 0
 var origin_x := 0.0
@@ -11,7 +13,7 @@ var height_noise := FastNoiseLite.new()
 var biome_noise := FastNoiseLite.new()
 var coast_noise := FastNoiseLite.new()
 var ground: RefCounted = null  # GroundModel; null keeps the cosmetic noise terrain
-var edge_margin_cells := 4.0  # mesh reach past the map; 9.0 once a ground model is applied
+var edge_margin_cells := 4.0  # mesh reach past the map; WorldArt.TERRAIN_MARGIN_CELLS once a ground model is applied
 var _detail_texture: Texture2D
 
 ## Per-glyph look of the snapshot ground layer: base height, noise amplitude, sRGB colour, water flag.
@@ -28,7 +30,7 @@ const GROUND_LOOK := {
 	"c": [-0.30, 0.0, "5b5346", 0.0],
 }
 const RASTER_STEP := 0.25
-const RASTER_MARGIN := 10.0
+const RASTER_MARGIN := 11.0
 const BLEND_RADIUS := 1.3
 var _cell_h := PackedFloat32Array()
 var _cell_amp := PackedFloat32Array()
@@ -72,7 +74,7 @@ func apply_ground(model: RefCounted) -> void:
 	ground = model
 	map_width = int(model.width)
 	map_height = int(model.height)
-	edge_margin_cells = 9.0
+	edge_margin_cells = float(WorldArt.TERRAIN_MARGIN_CELLS)
 	_bake_ground()
 	var old := get_node_or_null("ContinuousPainterlyTerrain")
 	if old != null:

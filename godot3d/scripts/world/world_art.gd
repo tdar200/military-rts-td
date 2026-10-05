@@ -4,8 +4,8 @@ extends RefCounted
 
 const TILE := 0.68  # one hex column in world units; land.jpg maps one column to 82 px
 const PITCH_SIN := 0.839  # 1.05 / sqrt(1.05^2 + 0.68^2): the camera rig in earthfront_3d._update_camera
-const TERRAIN_MARGIN_CELLS := 9
-const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoom": 7.5, "max_zoom": 18.0, "edge_cells": 8}
+const TERRAIN_MARGIN_CELLS := 10
+const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoom": 7.5, "max_zoom": 18.0, "edge_cells": 8, "focus_zoom": 10.0}
 
 
 static func active(model) -> bool:
