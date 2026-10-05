@@ -42,6 +42,8 @@ var _marks: Array = []
 var _callouts: Array = []
 var _callout_nodes: Array = []
 var _callout_sig := -1
+var _segs := PackedVector2Array()  # the dashed stroke being built by _dashed
+var _caps := PackedVector2Array()
 
 
 func _init() -> void:
@@ -262,7 +264,13 @@ static func bezier(p0: Vector2, c1: Vector2, c2: Vector2, p1: Vector2, steps := 
 
 
 ## SVG stroke-dasharray along a polyline. Round caps add a half-width disc at each end of every dash.
+## One stroke is one draw call: every dash goes into a single antialiased multiline (the per-dash polylines this replaced
+## cost about three draw calls each, and a wave route across the map is over a hundred dashes, redrawn every frame), and a
+## dash wholly outside the viewport is not drawn at all.
 func _dashed(points: PackedVector2Array, on: float, off: float, width: float, color: Color, round_caps := false) -> void:
+	var view := _viewport().grow(width + 2.0)
+	_segs = PackedVector2Array()
+	_caps = PackedVector2Array()
 	var drawing := true
 	var left := on
 	var current := PackedVector2Array([points[0]])
@@ -276,7 +284,7 @@ func _dashed(points: PackedVector2Array, on: float, off: float, width: float, co
 			var p := a.lerp(b, pos / seg)
 			if drawing:
 				current.append(p)
-				_dash(current, width, color, round_caps)
+				_dash(current, view, round_caps)
 				current = PackedVector2Array()
 			else:
 				current = PackedVector2Array([p])
@@ -286,14 +294,27 @@ func _dashed(points: PackedVector2Array, on: float, off: float, width: float, co
 		if drawing:
 			current.append(b)
 	if drawing and current.size() > 1:
-		_dash(current, width, color, round_caps)
+		_dash(current, view, round_caps)
+	if not _segs.is_empty():
+		draw_multiline(_segs, color, width, true)
+	for c in _caps:
+		draw_circle(c, width * 0.5, color)
 
 
-func _dash(pts: PackedVector2Array, width: float, color: Color, round_caps: bool) -> void:
-	draw_polyline(pts, color, width, true)
+## Adds one dash to the stroke being built (_segs, _caps): its pieces as multiline pairs and, with caps, its two ends.
+## Packed arrays are values in GDScript, so the stroke lives on the node rather than being passed in. Skipped off screen.
+func _dash(pts: PackedVector2Array, view: Rect2, round_caps: bool) -> void:
+	var box := Rect2(pts[0], Vector2.ZERO)
+	for i in range(1, pts.size()):
+		box = box.expand(pts[i])
+	if not view.intersects(box, true):
+		return
+	for i in range(1, pts.size()):
+		_segs.append(pts[i - 1])
+		_segs.append(pts[i])
 	if round_caps:
-		draw_circle(pts[0], width * 0.5, color)
-		draw_circle(pts[pts.size() - 1], width * 0.5, color)
+		_caps.append(pts[0])
+		_caps.append(pts[pts.size() - 1])
 
 
 func _head(tip: Vector2, tangent: Vector2, stroke: float, color: Color) -> void:
