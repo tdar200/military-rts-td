@@ -206,18 +206,90 @@ func test_a_single_cell_has_six_edges(t) -> void:
 	t.eq((Feed.marks(snap, "borders")[0]["edges"] as Array).size(), 2, "the map edge is not a border: a corner cell keeps only its in-map sides")
 
 
-# ---- supply and unknown lenses
+# ---- supply lens (bridge supply_links) and unknown lenses
 
-func test_supply_and_unknown_lenses_have_no_data(t) -> void:
+func _links(list: Array) -> Array:
+	return list.map(func(l): return {"depot": l[0], "target": l[1], "state": l[2]})
+
+
+func _supply_snap(links := []) -> Dictionary:
+	var snap := _snap([_ent(1, "SupplyDepot", 5, 5), _ent(2, "Barracks", 7, 5), _ent(3, "GunTurret", 5, 8), _ent(4, "SupplyDepot", 12, 5)])
+	snap["supply_links"] = _links(links)
+	return snap
+
+
+func test_supply_lens_draws_one_link_per_supply_links_entry(t) -> void:
+	var snap := _supply_snap([[1, 2, "ok"], [1, 3, "severed"]])
+	var marks: Array = Feed.marks(snap, "supply")
+	t.eq(marks.size(), 2, "one link per entry")
+	t.eq(marks[0]["kind"], "link", "link mark")
+	t.eq([marks[0]["from_id"], marks[0]["to_id"]], [1, 2], "depot to target")
+	t.eq(marks[0]["cell"], [5, 5], "from the depot cell")
+	t.eq(marks[0]["to_cell"], [7, 5], "to the building cell")
+	t.eq([marks[0]["tone"], marks[0]["broken"]], ["ok", false], "supplied is cyan and unbroken")
+	t.eq([marks[1]["tone"], marks[1]["broken"]], ["bad", true], "severed is red dotted")
+	t.near(float(marks[0]["width"]), Feed.SUPPLY_WIDTH, 0.001, "supply lines have their own weight")
+
+
+func test_supply_lens_is_driven_only_by_the_key(t) -> void:
+	t.ok(Feed.marks(_supply_snap([]), "supply").is_empty(), "an empty array draws nothing")
+	t.ok(Feed.marks(_snap([_ent(1, "SupplyDepot", 5, 5), _ent(2, "Barracks", 7, 5)], [_svc(1, 1000), _svc(2, 1000)]), "supply").is_empty(), "no key, no routes invented from depots and buildings")
+	t.ok(Feed.marks(_kestrel(), "supply").is_empty(), "the Kestrel start has no link")
+	var snap := _supply_snap([[1, 2, "ok"], [1, 99, "ok"], [98, 2, "ok"], [1, 3, "maybe"], [1, 3, "severed"]])
+	t.eq(Feed.marks(snap, "supply").size(), 2, "unknown ids and unknown states are skipped, never guessed")
+	snap["entities"][0]["owner"] = 1
+	t.ok(Feed.marks(snap, "supply").is_empty(), "an enemy depot is not the player's route")
+
+
+func test_supply_button_needs_real_links(t) -> void:
+	t.ok(not Feed.available(_supply_snap([])).has("supply"), "empty key: no button")
+	t.ok(not Feed.available(_kestrel()).has("supply"), "Kestrel start: no button")
+	t.ok(not Feed.available({"entities": []}).has("supply"), "absent key: no button")
+	var snap := _supply_snap([[1, 2, "ok"]])
+	snap["services"] = []
+	var avail: Array = Feed.available(snap)
+	t.ok(avail.has("supply"), "a real link: the button shows")
+	t.ok(avail.find("supply") == avail.find("power") + 1 or not avail.has("power"), "button order follows LENSES")
+	var kestrel := _kestrel()
+	var avail_k: Array = Feed.available(kestrel)
+	for want in ["power", "borders", "coverage", "yield"]:
+		t.ok(avail_k.has(want), "lens available on the Kestrel snapshot: " + want)
+	t.eq(Feed.available({}), [], "an empty snapshot backs no lens")
+
+
+func test_unknown_lenses_have_no_data(t) -> void:
 	var snap := _kestrel()
-	t.eq(Feed.marks(snap, "supply"), [], "the bridge exposes no supply route, so none is drawn")
 	t.eq(Feed.marks(snap, ""), [], "off")
 	t.eq(Feed.marks(snap, "nonsense"), [], "unknown lens")
-	t.ok(not Feed.available(snap).has("supply"), "no supply button")
-	var avail: Array = Feed.available(snap)
-	for want in ["power", "borders", "coverage", "yield"]:
-		t.ok(avail.has(want), "lens available on the Kestrel snapshot: " + want)
-	t.eq(Feed.available({}), [], "an empty snapshot backs no lens")
+
+
+func test_supply_summary_legend_and_routes(t) -> void:
+	var snap := _supply_snap([[1, 2, "ok"], [1, 3, "severed"], [4, 2, "ok"]])
+	var drawn: Array = Feed.marks(snap, "supply")
+	t.eq(Feed.summary(snap, "supply", drawn), "2 supplied, 1 severed", "counts from the marks")
+	t.eq(Feed.summary(snap, "supply", []), "", "nothing drawn, no summary")
+	var rows: Array = Feed.legend(snap, "supply")
+	t.eq(rows.size(), 2, "supplied and severed")
+	t.ok(str(rows[0]["text"]).contains("5 tiles") and str(rows[0]["text"]).contains("7"), "the sim's two radii")
+	t.eq(rows[1]["style"], "dotted", "severed reads dotted like the line")
+	var routes: Array = Feed.routes(snap)
+	t.eq(routes.size(), 2, "one row per depot with links")
+	t.eq(routes[0]["id"], 1, "the cut depot first")
+	t.eq(routes[0]["name"], "Supply depot at 5, 5", "kind and cell, no invented route name")
+	t.eq([routes[0]["detail"], routes[0]["tag"], routes[0]["tone"]], ["1 supplied, 1 severed", "Cut", "bad"], "counts and tag")
+	t.eq([routes[1]["id"], routes[1]["detail"], routes[1]["tag"], routes[1]["tone"]], [4, "1 supplied", "OK", "good"], "a clean depot")
+	t.eq(Feed.routes(_supply_snap([])), [], "no links, no rows")
+
+
+func test_supply_radii_match_the_sim_source(t) -> void:
+	var f := FileAccess.open(ProjectSettings.globalize_path("res://").path_join("../crates/core/src/game/earthfront.rs"), FileAccess.READ)
+	t.ok(f != null, "earthfront.rs is reachable")
+	if f == null:
+		return
+	var src := f.get_as_text()
+	t.ok(src.contains("Depot supply radius increases from 5 to 7 tiles"), "the tech text still says 5 to 7")
+	t.ok(src.contains("researched_techs.get(5) {\n            7\n        } else {\n            5"), "supply_radius is 7 with tech 5, otherwise 5")
+	t.eq([Feed.SUPPLY_RADIUS, Feed.SUPPLY_RADIUS_TECH], [5, 7], "mirrored")
 
 
 func test_logistics_tab_needs_the_ground_layer(t) -> void:
@@ -304,7 +376,8 @@ func test_legend_rows_carry_real_numbers(t) -> void:
 	var snap := _kestrel()
 	var rows: Array = Feed.legend(snap, "power")
 	t.eq(rows.size(), 3, "ok, throttled, broken")
-	t.ok(str(rows[2]["text"]).contains("500"), "broken threshold from the sim")
+	t.ok(str(rows[2]["text"]).contains("500") and str(rows[2]["text"]).contains("1000"), "threshold of 500 out of 1000, from the sim")
+	t.ok(not str(rows[2]["text"]).to_lower().contains("link broken"), "a low delivery is not a cut cable: the lines are display only")
 	var cov: Array = Feed.legend(snap, "coverage")
 	var joined := ""
 	for r in cov:
@@ -312,3 +385,40 @@ func test_legend_rows_carry_real_numbers(t) -> void:
 	t.ok(joined.contains("Highland") and joined.contains("25"), "Highland range bonus read from ground_table")
 	t.ok(str(Feed.legend(snap, "yield")[0]["text"]).length() > 0, "yield legend")
 	t.eq(Feed.legend(snap, ""), [], "off has no legend")
+
+
+# ---- power sources and the display-only note
+
+func test_power_note_says_the_lines_are_display_only(t) -> void:
+	var note := Feed.note("power")
+	t.ok(note.contains("display only"), "the lines are for display only")
+	t.ok(note.contains("shared") and note.contains("defence first"), "the grid is shared and served defence first")
+	t.ok(not note.contains("hangs off"), "no claim that a building hangs off a source")
+
+
+func test_command_center_is_a_power_source(t) -> void:
+	# generation_for gives a finished Command Center 10 kW, so it is a source like a plant.
+	var snap := _snap([_ent(1, "CommandCenter", 5, 5), _ent(2, "Barracks", 7, 5)], [_svc(1, 1000), _svc(2, 1000)])
+	var marks: Array = Feed.marks(snap, "power")
+	t.eq(marks.size(), 1, "a lone Command Center feeds the barracks")
+	t.eq([marks[0]["from_id"], marks[0]["to_id"]], [1, 2], "Command Center to barracks")
+	var near := _snap([_ent(1, "CommandCenter", 5, 5), _ent(3, "PowerPlant", 20, 5), _ent(2, "Barracks", 7, 5)], [_svc(2, 1000)])
+	t.eq(Feed.marks(near, "power")[0]["from_id"], 1, "the nearer source wins, whatever its kind")
+	var far := _snap([_ent(1, "CommandCenter", 30, 5), _ent(3, "PowerPlant", 8, 5), _ent(2, "Barracks", 7, 5)], [_svc(2, 1000)])
+	t.eq(Feed.marks(far, "power")[0]["from_id"], 3, "and a nearer plant beats a farther Command Center")
+	var unfinished := _snap([_ent(1, "CommandCenter", 5, 5, {"construction": 30}), _ent(2, "Barracks", 7, 5)], [_svc(2, 1000)])
+	t.ok(Feed.marks(unfinished, "power").is_empty(), "an unfinished Command Center generates nothing")
+	var enemy := _snap([_ent(1, "CommandCenter", 5, 5, {"owner": 1}), _ent(2, "Barracks", 7, 5)], [_svc(2, 1000)])
+	t.ok(Feed.marks(enemy, "power").is_empty(), "an enemy Command Center is not the player's grid")
+
+
+func test_power_sources_match_generation_for(t) -> void:
+	var f := FileAccess.open(ProjectSettings.globalize_path("res://").path_join("../crates/core/src/game/earthfront.rs"), FileAccess.READ)
+	t.ok(f != null, "earthfront.rs is reachable")
+	if f == null:
+		return
+	var src := f.get_as_text()
+	t.ok(src.contains("Kind::Building(BuildingKind::CommandCenter) => 10"), "the sim still gives the Command Center 10 kW")
+	t.ok(src.contains("Kind::Building(BuildingKind::PowerPlant) => {"), "and a power plant its own output")
+	for kind in ["PowerPlant", "Battery", "CommandCenter"]:
+		t.ok(Feed.SOURCES.has(kind), "source: " + kind)

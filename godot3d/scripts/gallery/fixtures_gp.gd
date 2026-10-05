@@ -183,15 +183,16 @@ static func wave_board() -> Dictionary:
 	}
 
 
-## Board 8 (MapOverlays): the Logistics tab on the Power lens. The data is the committed Kestrel snapshot with the player's
-## base laid out where the board draws it; legend, summary and marks come from overlay_feed.gd, the same code the live game
-## runs. Not built (no data): the supply list, supply routes, the grid ledger, node pins, tile-yield numbers, alert rows.
+## Board 8 (MapOverlays): the Logistics tab on the Supply lens, whose list the board shows in the deck. The data is the
+## committed Kestrel snapshot with the player's base laid out where the board draws it plus a supply_links array in the
+## bridge's shape; legend, summary, rows and marks come from overlay_feed.gd, the same code the live game runs. Not built
+## (no data): the board's route names and ETAs, the grid ledger, node pins, tile-yield numbers, alert rows.
 static func logistics_snapshot() -> Dictionary:
 	var snap: Dictionary = JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
 	var base := [
 		[1, "PowerPlant", 4, 6, 1000, {"river_kw": 0}], [2, "PowerPlant", 3, 9, 1000, {"river_kw": 12}], [3, "ResearchLab", 15, 4, 750, {}],
 		[4, "Refinery", 14, 9, 1000, {"ore_bonus": true}], [5, "Barracks", 10, 11, 300, {}], [6, "GunTurret", 17, 6, 1000, {}],
-		[7, "GunTurret", 21, 10, 1000, {}], [8, "SupplyDepot", 8, 2, 1000, {}],
+		[7, "GunTurret", 21, 10, 1000, {}], [8, "SupplyDepot", 8, 2, 1000, {}], [9, "SupplyDepot", 12, 10, 1000, {}],
 	]
 	var entities: Array = []
 	var services: Array = []
@@ -205,16 +206,20 @@ static func logistics_snapshot() -> Dictionary:
 		services.append({"id": row[0], "power": row[4], "ammo": 90, "stock": 0, "ore": 0, "ore_capacity": 300, "prototype": false, "alien_relay": false})
 	snap["entities"] = entities + (snap["entities"] as Array).filter(func(e): return int(e["owner"]) != 0)
 	snap["services"] = services
+	snap["supply_links"] = [
+		{"depot": 9, "target": 4, "state": "ok"}, {"depot": 9, "target": 5, "state": "severed"},
+		{"depot": 8, "target": 1, "state": "ok"}, {"depot": 8, "target": 3, "state": "ok"},
+	]
 	return snap
 
 
 static func logistics_board() -> Dictionary:
 	var feed = load("res://scripts/world/overlay_feed.gd")
 	var snap := logistics_snapshot()
-	var drawn: Array = feed.marks(snap, "power")
+	var drawn: Array = feed.marks(snap, "supply")
 	var lenses: Array = []
 	for id in feed.available(snap):
-		lenses.append({"id": id, "label": feed.LABELS[id], "on": id == "power"})
+		lenses.append({"id": id, "label": feed.LABELS[id], "on": id == "supply"})
 	return {
 		"minimap": {"keys": [], "name": "Kestrel Reach"},
 		"lens": {"on": "land"},
@@ -222,8 +227,8 @@ static func logistics_board() -> Dictionary:
 			"tabs": [{"id": "build", "label": "Build", "icon": "build"}, {"id": "units", "label": "Units", "icon": "units"},
 				{"id": "orders", "label": "Orders", "icon": "orders"}, {"id": "science", "label": "Science", "icon": "flask"},
 				{"id": "logistics", "label": "Logistics", "icon": "logistics", "on": true}],
-			"body": {"kind": "logistics", "lenses": lenses, "lens": "power", "legend": feed.legend(snap, "power"),
-				"summary": feed.summary(snap, "power", drawn), "note": feed.note("power")},
+			"body": {"kind": "logistics", "lenses": lenses, "lens": "supply", "legend": feed.legend(snap, "supply"),
+				"summary": feed.summary(snap, "supply", drawn), "note": feed.note("supply"), "routes": feed.routes(snap)},
 		},
 	}
 
@@ -233,7 +238,7 @@ static func logistics_marks() -> Array:
 	var feed = load("res://scripts/world/overlay_feed.gd")
 	var project := func(x: int, y: int) -> Vector2: return Vector2(60.0 + x * 42.0, 80.0 + y * 52.0 + (26.0 if x % 2 != 0 else 0.0))
 	var snap := logistics_snapshot()
-	var hex: Array = feed.marks(snap, "power") + feed.marks(snap, "borders") + feed.marks(snap, "coverage") + feed.marks(snap, "yield")
+	var hex: Array = feed.marks(snap, "power") + feed.marks(snap, "supply") + feed.marks(snap, "borders") + feed.marks(snap, "coverage") + feed.marks(snap, "yield")
 	return feed.project(hex, project)
 
 

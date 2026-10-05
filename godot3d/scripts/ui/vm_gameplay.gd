@@ -411,6 +411,11 @@ static func _kind_label(kind: String) -> String:
 	return str(load("res://scripts/ui/live_adapter.gd").KIND_NAMES.get(kind, kind))
 
 
+## The display name of a building or unit kind (Supply Depot, not SupplyDepot).
+static func kind_label(kind: String) -> String:
+	return _kind_label(kind)
+
+
 static func _thousands(n: int) -> String:
 	return load("res://scripts/ui/live_screens.gd").thousands(n)
 

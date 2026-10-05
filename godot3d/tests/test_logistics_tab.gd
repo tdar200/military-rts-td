@@ -13,7 +13,7 @@ func _body(lens := "power") -> Dictionary:
 		body["legend"] = [
 			{"tone": "ok", "style": "solid", "text": "Powered, full delivery"},
 			{"tone": "warn", "style": "solid", "text": "Throttled, under 1000 of 1000"},
-			{"tone": "bad", "style": "dotted", "text": "Link broken, under 500 of 500"},
+			{"tone": "bad", "style": "dotted", "text": "Not running, under 500 of 1000"},
 		]
 		body["summary"] = "9 links, 1 broken"
 		body["note"] = "Defence is served first."
@@ -26,7 +26,7 @@ func test_shows_caption_active_lens_legend_and_what_is_drawn(t) -> void:
 	t.ok(U.has_text(root, "Map lenses"), "caption")
 	t.ok(U.has_text(root, "Powered, full delivery"), "legend row 1")
 	t.ok(U.has_text(root, "Throttled, under 1000 of 1000"), "legend row 2")
-	t.ok(U.has_text(root, "Link broken"), "legend row 3")
+	t.ok(U.has_text(root, "Not running, under 500 of 1000"), "legend row 3, out of the same 1000 as the other rows")
 	t.ok(U.has_text(root, "9 links, 1 broken"), "the real count the lens draws")
 	t.ok(U.has_text(root, "Defence is served first."), "the note")
 	root.free()
@@ -39,6 +39,8 @@ func test_lens_buttons_are_buttons_with_human_text_and_emit_the_lens(t) -> void:
 	for label in ["Power", "Borders", "Coverage", "Yield"]:
 		t.ok(U.button_with(root, label) != null, "a Button reads " + label)
 	t.ok(U.button_with(root, "Supply") == null, "a lens with no data has no button")
+	for l in _body("power")["lenses"]:
+		t.ok(l["id"] != "supply", "the body offered no Supply lens")
 	U.button_with(root, "Coverage").pressed.emit()
 	U.button_with(root, "Yield").pressed.emit()
 	t.eq(calls, [["world_lens", "coverage"], ["world_lens", "yield"]], "a click picks that lens")
@@ -86,3 +88,54 @@ func test_absent_or_empty_slice_builds_nothing(t) -> void:
 	Section.build(root, {"kind": "logistics", "lenses": []})
 	t.eq(root.get_child_count(), 0, "no lens has data: no panel")
 	root.free()
+
+
+func _supply_body(routes: Array) -> Dictionary:
+	var lenses := [{"id": "power", "label": "Power", "on": false}, {"id": "supply", "label": "Supply", "on": true}]
+	return {"kind": "logistics", "lenses": lenses, "lens": "supply", "summary": "3 supplied, 1 severed", "routes": routes,
+		"legend": [{"tone": "ok", "style": "solid", "text": "Supplied, within 5 tiles"}, {"tone": "bad", "style": "dotted", "text": "Severed, a wall cuts the route"}],
+		"note": "Each line joins a depot to a building."}
+
+
+func _route(name: String, detail: String, tag: String, tone: String) -> Dictionary:
+	return {"name": name, "detail": detail, "tag": tag, "tone": tone}
+
+
+func test_supply_lens_lists_one_row_per_depot_from_real_data(t) -> void:
+	var root := Control.new()
+	Section.build(root, _supply_body([_route("Supply depot at 12, 10", "1 supplied, 1 severed", "Cut", "bad"), _route("Command centre at 7, 10", "2 supplied", "OK", "good")]))
+	t.ok(U.has_text(root, "Supply depots / 2"), "header counts the depots")
+	t.ok(U.has_text(root, "3 supplied, 1 severed"), "summary beside the header")
+	t.ok(U.has_text(root, "Supply depot at 12, 10"), "row name is the kind and cell")
+	t.ok(U.has_text(root, "1 supplied, 1 severed"), "row detail")
+	t.ok(U.has_text(root, "Cut") and U.has_text(root, "OK"), "row tags")
+	t.ok(U.has_text(root, "Supplied, within 5 tiles"), "the legend stays above the list")
+	t.ok(not U.has_text(root, "Each line joins"), "the note makes way for the rows")
+	root.free()
+
+
+func test_supply_rows_stay_inside_the_panel_and_cap_with_a_more_line(t) -> void:
+	var rows: Array = []
+	for i in 6:
+		rows.append(_route("Supply depot at %d, 4" % (i + 3), "1 supplied", "OK", "good"))
+	var root := Control.new()
+	Section.build(root, _supply_body(rows))
+	t.ok(U.has_text(root, "Supply depots / 6"), "the header counts every depot")
+	t.ok(U.has_text(root, "+4 more depots"), "the rest are counted, not listed")
+	t.ok(U.has_text(root, "Supply depot at 3, 4") and U.has_text(root, "Supply depot at 4, 4"), "first two rows")
+	t.ok(not U.has_text(root, "Supply depot at 5, 4"), "no third row beside the more line")
+	var bottom := 0.0
+	for c in root.get_children():
+		if c is Control:
+			bottom = maxf(bottom, c.position.y + c.size.y)
+	t.ok(bottom <= Section.Y + Section.H, "everything ends inside the panel: %s" % bottom)
+	root.free()
+	var three := Control.new()
+	Section.build(three, _supply_body(rows.slice(0, 3)))
+	t.ok(U.has_text(three, "Supply depot at 5, 4") and not U.has_text(three, "more depots"), "three depots all fit")
+	var bottom3 := 0.0
+	for c in three.get_children():
+		if c is Control:
+			bottom3 = maxf(bottom3, c.position.y + c.size.y)
+	t.ok(bottom3 <= Section.Y + Section.H, "three rows end inside the panel: %s" % bottom3)
+	three.free()

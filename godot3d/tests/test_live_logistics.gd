@@ -67,7 +67,7 @@ func test_logistics_body_offers_only_lenses_with_data(t) -> void:
 	var body: Dictionary = vm["deck"]["body"]
 	t.eq(body["kind"], "logistics", "body kind")
 	var ids: Array = body["lenses"].map(func(l): return l["id"])
-	t.eq(ids, ["power", "borders", "coverage", "yield"], "no Supply button: the bridge has no supply route")
+	t.eq(ids, ["power", "borders", "coverage", "yield"], "no Supply button: the snapshot holds no supply link")
 	t.eq(body["lens"], "", "no lens until one is clicked")
 	t.ok(not body.has("legend"), "so no legend")
 	t.eq(p[1].board_marks(_project), [], "and the map draws no overlay")
@@ -90,13 +90,59 @@ func test_a_lens_click_sets_the_lens_client_side(t) -> void:
 	t.eq(p[1].world_lens, "", "an unknown lens is ignored")
 
 
-func test_supply_cannot_be_activated(t) -> void:
+func test_supply_cannot_be_activated_without_links(t) -> void:
 	var p := _make()
 	p[1].tab = "logistics"
 	p[1].on_action("world_lens", "supply")
 	var body: Dictionary = p[1].hud_vm(0.0)["deck"]["body"]
 	t.eq(body["lens"], "", "no data behind it, so it never goes active")
 	t.eq(p[1].board_marks(_project), [], "and draws nothing")
+	p[0].bridge_snapshot["supply_links"] = []
+	t.eq(p[1].hud_vm(0.0)["deck"]["body"]["lens"], "", "an empty supply_links array is still no data")
+
+
+func _with_links(p: Array) -> void:
+	# A depot (id 53) feeds the refinery (52) and is cut off from the barracks (51).
+	p[0].bridge_snapshot["entities"].append(_entity(53, "SupplyDepot", 10, 9))
+	p[0].bridge_snapshot["supply_links"] = [{"depot": 53, "target": 52, "state": "ok"}, {"depot": 53, "target": 51, "state": "severed"}]
+
+
+func test_supply_lens_appears_with_real_links_and_draws_them(t) -> void:
+	var p := _make()
+	_with_links(p)
+	p[1].tab = "logistics"
+	var body: Dictionary = p[1].hud_vm(0.0)["deck"]["body"]
+	t.eq(body["lenses"].map(func(l): return l["id"]), ["power", "supply", "borders", "coverage", "yield"], "Supply button between Power and Borders")
+	p[1].on_action("world_lens", "supply")
+	body = p[1].hud_vm(0.0)["deck"]["body"]
+	t.eq(body["lens"], "supply", "active")
+	t.eq(body["summary"], "1 supplied, 1 severed", "counts from the links")
+	t.eq(body["routes"].size(), 1, "one depot row")
+	t.eq(body["routes"][0]["name"], "Supply depot at 10, 9", "named by kind and cell")
+	t.eq(body["routes"][0]["tag"], "Cut", "the depot has a severed link")
+	var marks: Array = p[1].board_marks(_project)
+	t.eq(marks.size(), 2, "one line per link")
+	t.eq(marks.filter(func(m): return m["broken"]).size(), 1, "the severed one is dotted")
+
+
+func test_lens_text_is_built_once_per_snapshot(t) -> void:
+	var p := _make()
+	p[1].tab = "logistics"
+	p[1].on_action("world_lens", "borders")
+	var first: Dictionary = p[1].hud_vm(0.0)["deck"]["body"]
+	var second: Dictionary = p[1].hud_vm(0.0)["deck"]["body"]
+	t.ok(first.has("legend") and first.has("note"), "legend and note present")
+	t.ok(is_same(first["legend"], second["legend"]), "the legend is not rebuilt per frame")
+	t.ok(is_same(p[1]._overlay_text, p[1]._overlay_text), "one held text dictionary")
+	var held = p[1]._overlay_text
+	p[1].hud_vm(0.0)
+	t.ok(is_same(held, p[1]._overlay_text), "same snapshot, same text")
+	p[0].bridge_snapshot = p[0].bridge_snapshot.duplicate(true)
+	p[1].hud_vm(0.0)
+	t.ok(not is_same(held, p[1]._overlay_text), "a new snapshot rebuilds it")
+	p[1].on_action("world_lens", "power")
+	p[1].hud_vm(0.0)
+	t.eq(p[1]._overlay_text["summary"] if p[1]._overlay_text.has("summary") else "", p[1].hud_vm(0.0)["deck"]["body"].get("summary", ""), "and a lens change rebuilds it for the new lens")
 
 
 func test_overlay_draws_only_on_the_logistics_tab_and_computes_nothing_otherwise(t) -> void:

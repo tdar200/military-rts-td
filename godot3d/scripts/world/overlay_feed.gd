@@ -15,13 +15,14 @@ extends RefCounted
 ##   borders   construction_zone (player) and vm_gameplay.enemy_border (alien structures, or the core node).
 ##   coverage  human turret entities, stats.rs ranges (vm_gameplay), and ground_table range_pct under the turret.
 ##   yield     Refinery ore_bonus flag, PowerPlant river_kw.
-##   supply    NO DATA: the snapshot carries no supply route (the sim's supply_route is internal), so it is never offered.
+##   supply    supply_links [{depot, target, state ok|severed}] (bridge, additive): the sim's own supply_route verdict per
+##             depot-to-building pair, refreshed on the sim's 30-tick supply beat. Absent or empty: no lens, never faked.
 const VM = preload("res://scripts/ui/vm_gameplay.gd")
 const GroundModel = preload("res://scripts/terrain/ground_model.gd")
 const WorldMarks = preload("res://scripts/ui/world_marks.gd")
 
 const HUMAN := 0
-## Every lens the Logistics tab knows, in button order. `supply` stays here so the deviation is visible in one place.
+## Every lens the Logistics tab knows, in button order. The buttons shown are `available(snap)`.
 const LENSES := ["power", "supply", "borders", "coverage", "yield"]
 const LABELS := {"power": "Power", "supply": "Supply", "borders": "Borders", "coverage": "Coverage", "yield": "Yield"}
 const FULL := 1000
@@ -30,7 +31,13 @@ const BROKEN_BELOW := 500
 ## Power allocation tiers (earthfront.rs run_earthfront_services): defence 0, extraction 1, industry 2, science 3. Only the
 ## kinds that draw power are listed (operating_demand). test_overlay_feed.gd checks these against the source.
 const TIER := {"GunTurret": 0, "AaTurret": 0, "SupplyDepot": 0, "Refinery": 1, "Barracks": 2, "VehicleFactory": 2, "Airfield": 2, "ResearchLab": 3}
-const SOURCES := ["PowerPlant", "Battery"]
+## Kinds that put power on the grid (generation_for: PowerPlant 80/96 kW, CommandCenter 10 kW; a Battery discharges).
+const SOURCES := ["PowerPlant", "Battery", "CommandCenter"]
+## Depot supply reach in tiles without and with Field Supply Networks (earthfront.rs supply_radius; test_overlay_feed checks it).
+const SUPPLY_RADIUS := 5
+const SUPPLY_RADIUS_TECH := 7
+## Supply lines are thinner than power lines (px).
+const SUPPLY_WIDTH := 3.0
 ## Line weight (px) at 0 and 1000 delivered: the mock's "weight = load".
 const WIDTH_MIN := 2.0
 const WIDTH_SPAN := 4.0
@@ -45,11 +52,14 @@ static func tab_available(snap: Dictionary) -> bool:
 	return str(snap.get("ground", "")) != ""
 
 
-## The lenses this snapshot can really back, in button order. `supply` is never among them.
+## The lenses this snapshot can really back, in button order. `supply` needs at least one real link in supply_links.
 static func available(snap: Dictionary) -> Array:
 	var out: Array = []
 	if snap.get("services") is Array:
 		out.append("power")
+	var links = snap.get("supply_links")
+	if links is Array and not links.is_empty():
+		out.append("supply")
 	var zone = snap.get("construction_zone")
 	if zone is Array and not zone.is_empty():
 		out.append("borders")
@@ -66,6 +76,7 @@ static func available(snap: Dictionary) -> Array:
 static func marks(snap: Dictionary, lens: String) -> Array:
 	match lens:
 		"power": return _power(snap)
+		"supply": return _supply(snap)
 		"borders": return _borders(snap)
 		"coverage": return _coverage(snap)
 		"yield": return _yield(snap)
@@ -120,6 +131,68 @@ static func _power(snap: Dictionary) -> Array:
 			"tone": "bad" if broken else ("warn" if power < FULL else "ok"), "broken": broken, "load": power,
 		})
 	return out
+
+
+## One link per supply_links entry, depot to building: cyan when the sim's route holds, red dotted when a wall or terrain
+## cuts it. Entries naming an entity the snapshot does not hold, or a state other than ok or severed, are skipped (no guessing).
+static func _supply(snap: Dictionary) -> Array:
+	var links = snap.get("supply_links")
+	if not (links is Array) or links.is_empty():
+		return []
+	var by_id := _own_buildings_by_id(snap)
+	var out: Array = []
+	for l in links:
+		if not (l is Dictionary):
+			continue
+		var state := str(l.get("state", ""))
+		if state != "ok" and state != "severed":
+			continue
+		var depot = by_id.get(int(l.get("depot", -1)))
+		var target = by_id.get(int(l.get("target", -1)))
+		if depot == null or target == null:
+			continue
+		var severed := state == "severed"
+		out.append({
+			"kind": "link", "cell": VM.entity_cell(depot), "to_cell": VM.entity_cell(target), "from_id": int(depot["id"]), "to_id": int(target["id"]),
+			"tone": "bad" if severed else "ok", "broken": severed, "load": FULL, "width": SUPPLY_WIDTH,
+		})
+	return out
+
+
+static func _own_buildings_by_id(snap: Dictionary) -> Dictionary:
+	var by_id := {}
+	for e in _entities(snap):
+		if _own_building(e):
+			by_id[int(e.get("id", -1))] = e
+	return by_id
+
+
+## The deck's supply list, one row per depot that has links, from the same supply_links as the map lines: {name, detail,
+## tone good|bad, tag, supplied, severed}. Cut depots first, then by id. The board's route names and ETAs are not data.
+static func routes(snap: Dictionary) -> Array:
+	var counts := {}
+	var order: Array = []
+	for m in _supply(snap):
+		var id := int(m["from_id"])
+		if not counts.has(id):
+			counts[id] = {"supplied": 0, "severed": 0, "cell": m["cell"]}
+			order.append(id)
+		counts[id]["severed" if bool(m["broken"]) else "supplied"] += 1
+	var by_id := _own_buildings_by_id(snap)
+	var rows: Array = []
+	for id in order:
+		var c: Dictionary = counts[id]
+		var cut := int(c["severed"]) > 0
+		var detail := "%d supplied" % int(c["supplied"])
+		if cut:
+			detail += ", %d severed" % int(c["severed"])
+		rows.append({
+			"id": id, "name": "%s at %d, %d" % [VM.kind_label(str(by_id[id].get("kind", ""))), int(c["cell"][0]), int(c["cell"][1])],
+			"detail": detail, "tone": "bad" if cut else "good", "tag": "Cut" if cut else "OK",
+			"supplied": int(c["supplied"]), "severed": int(c["severed"]),
+		})
+	rows.sort_custom(func(a, b): return (int(a["severed"]) > 0) > (int(b["severed"]) > 0) or ((int(a["severed"]) > 0) == (int(b["severed"]) > 0) and int(a["id"]) < int(b["id"])))
+	return rows
 
 
 static func _coverage(snap: Dictionary) -> Array:
@@ -240,7 +313,7 @@ static func project(hex_marks: Array, project: Callable) -> Array:
 					continue
 				var load_ratio := clampf(float(m.get("load", FULL)) / float(FULL), 0.0, 1.0)
 				out.append({"kind": "link", "x": a.x, "y": a.y, "c1": a.lerp(b, 1.0 / 3.0), "c2": a.lerp(b, 2.0 / 3.0), "to": b,
-					"tone": m.get("tone", "ok"), "broken": bool(m.get("broken", false)), "width": WIDTH_MIN + WIDTH_SPAN * load_ratio})
+					"tone": m.get("tone", "ok"), "broken": bool(m.get("broken", false)), "width": float(m.get("width", WIDTH_MIN + WIDTH_SPAN * load_ratio))})
 			"ring":
 				var cell: Array = m["cell"]
 				var c: Vector2 = at.call(cell)
@@ -302,6 +375,11 @@ static func summary(snap: Dictionary, lens: String, drawn: Array) -> String:
 					links += 1
 					broken += 1 if bool(m.get("broken", false)) else 0
 			return "%d links, %d broken" % [links, broken]
+		"supply":
+			var cut := 0
+			for m in drawn:
+				cut += 1 if m["kind"] == "link" and bool(m.get("broken", false)) else 0
+			return "%d supplied, %d severed" % [drawn.size() - cut, cut]
 		"coverage":
 			var rings := drawn.filter(func(m): return m["kind"] == "ring").size()
 			return "%d turret field%s" % [rings, "" if rings == 1 else "s"]
@@ -335,7 +413,12 @@ static func legend(snap: Dictionary, lens: String) -> Array:
 			return [
 				{"tone": "ok", "style": "solid", "text": "Powered, full delivery"},
 				{"tone": "warn", "style": "solid", "text": "Throttled, under %d of %d" % [FULL, FULL]},
-				{"tone": "bad", "style": "dotted", "text": "Link broken, under %d of %d" % [BROKEN_BELOW, FULL]},
+				{"tone": "bad", "style": "dotted", "text": "Not running, under %d of %d" % [BROKEN_BELOW, FULL]},
+			]
+		"supply":
+			return [
+				{"tone": "ok", "style": "solid", "text": "Supplied, within %d tiles (%d with Field Supply Networks)" % [SUPPLY_RADIUS, SUPPLY_RADIUS_TECH]},
+				{"tone": "bad", "style": "dotted", "text": "Severed, in reach but a wall or terrain cuts the route"},
 			]
 		"borders":
 			return [
@@ -364,7 +447,9 @@ static func legend(snap: Dictionary, lens: String) -> Array:
 static func note(lens: String) -> String:
 	match lens:
 		"power":
-			return "Each building hangs off the nearest reactor or battery. The grid serves defence first, then refineries, factories and the lab."
+			return "Lines run to the nearest reactor, battery or Command Center for display only; the grid is shared and served defence first, then refineries, factories and the lab."
+		"supply":
+			return "Each line joins a powered, stocked depot to a building it feeds. Lines show reach, not ammunition in flight."
 		"borders":
 			return "Cyan marks where you may build; red is where alien structures hold ground."
 		"coverage":
@@ -379,6 +464,8 @@ static func empty_text(lens: String) -> String:
 	match lens:
 		"power":
 			return "Nothing to link yet: needs a finished reactor or battery and a building that draws power."
+		"supply":
+			return "No powered depot with stock has a building in reach yet."
 		"borders":
 			return "No territory to outline."
 		"coverage":

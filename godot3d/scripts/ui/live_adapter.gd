@@ -79,11 +79,13 @@ const OverlayFeed = preload("res://scripts/world/overlay_feed.gd")
 var tab := "build"
 ## The active minimap lens (vm_gameplay.LENSES); lives here so the HUD stays a pure view.
 var lens := "land"
-## The Logistics tab's map overlay (overlay_feed.gd): "" off, otherwise power, borders, coverage or yield. Client-side only.
+## The Logistics tab's map overlay (overlay_feed.gd): "" off, otherwise power, supply, borders, coverage or yield. Client-side only.
 var world_lens := ""
 var _overlay_snap: Variant = null
 var _overlay_lens := ""
 var _overlay_hex: Array = []
+## Legend, note, summary and supply rows of the active lens, built once per snapshot beside _overlay_hex.
+var _overlay_text: Dictionary = {}
 var assault
 var _alerts: Array = []
 var _ticker := ""
@@ -753,11 +755,26 @@ func _overlay_marks(snap: Dictionary, lens: String) -> Array:
 		_overlay_snap = snap
 		_overlay_lens = lens
 		_overlay_hex = OverlayFeed.marks(snap, lens)
+		_overlay_text = _lens_text(snap, lens, _overlay_hex)
 	return _overlay_hex
 
 
-## Lens buttons for the lenses the snapshot backs (Supply is never one: the bridge exposes no supply route), plus the
-## active lens's legend and what it draws. {} without a snapshot.
+## What the Logistics tab says about the lens: the legend, note, summary (or the empty line) and, for Supply, the depot rows.
+## Held per snapshot with the marks: the borders summary walks the enemy border, which must not run every frame.
+func _lens_text(snap: Dictionary, lens: String, drawn: Array) -> Dictionary:
+	var text := {"legend": OverlayFeed.legend(snap, lens), "note": OverlayFeed.note(lens)}
+	var summary := OverlayFeed.summary(snap, lens, drawn)
+	if summary != "":
+		text["summary"] = summary
+	else:
+		text["empty"] = OverlayFeed.empty_text(lens)
+	if lens == "supply":
+		text["routes"] = OverlayFeed.routes(snap)
+	return text
+
+
+## Lens buttons for the lenses the snapshot backs (Supply only when the bridge sent real supply_links), plus the active
+## lens's legend and what it draws, held per snapshot. {} without a snapshot.
 func _logistics_body() -> Dictionary:
 	var snap = g.get("bridge_snapshot")
 	if not (snap is Dictionary) or snap.is_empty():
@@ -768,14 +785,8 @@ func _logistics_body() -> Dictionary:
 		lenses.append({"id": id, "label": OverlayFeed.LABELS[id], "on": id == active})
 	var body := {"kind": "logistics", "lenses": lenses, "lens": active}
 	if active != "":
-		var drawn := _overlay_marks(snap, active)
-		body["legend"] = OverlayFeed.legend(snap, active)
-		body["note"] = OverlayFeed.note(active)
-		var summary := OverlayFeed.summary(snap, active, drawn)
-		if summary != "":
-			body["summary"] = summary
-		else:
-			body["empty"] = OverlayFeed.empty_text(active)
+		_overlay_marks(snap, active)
+		body.merge(_overlay_text, true)
 	return body
 
 

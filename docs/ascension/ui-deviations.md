@@ -207,15 +207,28 @@ lens's legend, one line of what it draws and a note; and four world overlays thr
 (`live_adapter.board_marks`), computed once per snapshot by `scripts/world/overlay_feed.gd` and projected every frame.
 A lens is a client-side choice (`world_lens` in the adapter, no bridge command, no key binding added). The overlay shows
 only while the Logistics tab is open; clicking the lit lens again turns it off.
-- Supply lens: NOT BUILT. The bridge snapshot has no supply route (the sim's `supply_route` is internal; only per-building
-  `ammo` and `stock` are exposed), so there is no button, no mark and the feed answers []. The mock's "Supply routes / 3
-  active" card list, "Refinery to Barracks 04, Broken, no path" row, "no supply link" alerts and the green dashed supply
-  paths are therefore absent. The mock's "A depot feeds everything within 9 tiles" is also not claimed (the sim radius is 5
-  or 7 by research and is not in the snapshot).
+- Supply lens (Task 13b, built): the bridge now sends an additive top-level `supply_links` array
+  (`{"depot", "target", "state": "ok"|"severed"}`, schema stays 5) from the sim's own `supply_route`, via the read-only,
+  non-hashed `Sim::earthfront_supply_links`. The sim shares its depot filter (finished, power at least 500, stock above 0)
+  and its radius rule (5 tiles, 7 with Field Supply Networks) with that export. Per finished human building (walls and
+  mobile units excluded) the link names the first ready depot that feeds it, `ok` when `supply_route` holds and `severed`
+  when a depot is in reach but a wall or terrain cuts the route. The bridge recomputes it on the 30-tick supply beat (the
+  path searches are not run every snapshot) and holds it between beats, so a new depot or a new wall shows up to one second
+  late. `overlay_feed` draws one `link` per entry (cyan solid, 3 px, when `ok`; red dotted with a cross when `severed`) and
+  the Supply button exists only while the array has at least one entry: absent or empty means no button, no marks (the
+  Kestrel start has no link, since the lone Command Center has nothing else to serve). The deck shows "Supply depots / N"
+  with one glass row per depot that has links (name is the kind and cell, detail "N supplied, M severed", tag OK or Cut;
+  cut depots first, at most three rows or two and a "+N more depots" line). Not built: the mock's route names ("Refinery to
+  ore harvesters", "Command to gun line"), connection times ("Connected, 14 s"), the "Fix" action (the bridge has no repair
+  or relink command, so the tag reads Cut), the "Barracks 04 has no supply link" alert, the green dashed "carrying ammo"
+  paths (the sim does not report flow) and "A depot feeds everything within 9 tiles" (the real radius is 5, or 7 with
+  research, and the legend says so). Links name buildings only, so a unit out of supply is not drawn.
 - Power lens: tier order IS derivable (the sim allocates by building kind: defence, refinery, factories, laboratory; mirrored
   in `overlay_feed.TIER` and checked against `earthfront.rs` by a test) but WHICH plant feeds WHICH building is not (one
-  shared grid). So each consumer gets one `link` to its nearest finished PowerPlant or Battery (hex distance, ties to the
-  lower id), links emitted in tier order then id. Colour and weight follow the real delivered power, `services[].power`
+  shared grid). So each consumer gets one `link` to its nearest finished PowerPlant, Battery or CommandCenter (the Command
+  Center generates 10 kW, `generation_for`; hex distance, ties to the lower id), links emitted in tier order then id. The
+  lines are for display only: the grid is shared and served defence first, and the legend and note say so ("Not running,
+  under 500 of 1000", not "Link broken"). Colour and weight follow the real delivered power, `services[].power`
   (0 to 1000): 1000 cyan, 500 to 999 amber, under 500 a red dotted line with a cross (the sim stops a building under 500).
   A consumer without a `services` row draws nothing. Line weight 2 to 6 px scales with the fraction, replacing the mock's kW
   weights (no per-line kW exists). No new cable mechanic; the mock's "Reactor A +100 kW" node pins, "Lab 30 kW, throttled"
@@ -242,9 +255,15 @@ only while the Logistics tab is open; clicking the lit lens again turns it off.
   (O(entities); the nearest-source search is plants times consumers, a handful of plants) and projection is O(marks) with a
   per-frame cell cache. On Kestrel the player border is 95 short segments.
 - Harness limits are achieved percent plus 3 (floor 3.0). gp08: deck_frame_top 0.02 (3.0), deck_frame_bottom 0.06 (3.1),
-  minimap 11.28 (14.3). The battlefield (marks included) is masked and the deck panel interior, whose mock content is the
-  supply route list, is not compared. The gallery renders Power, Borders, Coverage and Yield marks together for a visual
-  check; the live game draws one lens at a time.
+  minimap 11.28 (14.3), unchanged by Task 13b. The battlefield (marks included) is masked. No supply-list rect was added:
+  the mock draws its route rows at the top of the deck panel (rows 36 px tall, 8 px apart, route names in the text) with
+  the lens picker in a separate card, while ours puts the lens Buttons and a two-line legend above shorter rows, so the
+  row boxes land at different heights and widths with different text. A rect over them would measure layout and wording,
+  not fidelity, and could only pass by loosening its limit. The gallery (gp08) now shows the Supply lens and its list,
+  and renders Power, Supply, Borders, Coverage and Yield marks together for a visual check; the live game draws one lens
+  at a time.
+- The lens text (legend, note, summary, supply rows) is built once per snapshot beside the hex marks, not every frame (the
+  borders summary walks the enemy border).
 
 ## 5. Known cosmetic items
 

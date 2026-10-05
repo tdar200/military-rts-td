@@ -1,7 +1,7 @@
 extends RefCounted
 ## The Logistics deck tab (board 8, bottom right): the map lens buttons, the active lens's legend and a line of what it
 ## currently draws on the map. Driven by the deck body vm {kind: "logistics", lenses: [{id, label, on}], lens, legend, summary,
-## note, empty}; builds nothing without a lens. A lens button emits ("world_lens", id); the active one emits ("world_lens", "")
+## note, empty, routes}; builds nothing without a lens. A lens button emits ("world_lens", id); the active one emits ("world_lens", "")
 ## to turn the overlay off. Lenses the snapshot cannot back are simply absent from `lenses` (see overlay_feed.gd).
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
@@ -16,6 +16,11 @@ const BUTTON_GAP := 8.0
 const LEGEND_Y := 896.0
 const ROW_H := 24.0
 const SWATCH_W := 36.0
+## The Supply lens list (board 8's "Supply routes" rows, built from supply_links only): rows of ROUTE_H at ROUTE_PITCH,
+## three at most; with more depots than that two rows and a "+N more" line, so it always ends inside the panel.
+const ROUTE_H := 26.0
+const ROUTE_PITCH := 30.0
+const ROUTE_MAX := 3
 
 
 ## Swatch and tone words used by the lens legends (overlay_feed.gd legend rows).
@@ -63,6 +68,10 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 		_legend_row(parent, cx, y, row)
 		y += ROW_H
 	y += 4.0
+	var routes = vm.get("routes", [])
+	if routes is Array and not routes.is_empty():
+		_routes(parent, cx, y, routes, str(vm.get("summary", "")))
+		return
 	var summary := str(vm.get("summary", ""))
 	if summary != "":
 		K.text(parent, summary, {"x": cx, "y": y, "f": "mono", "px": 13, "col": T.CYAN_HI})
@@ -90,3 +99,26 @@ static func _legend_row(parent: Control, x: float, y: float, row: Dictionary) ->
 		_:
 			K.rule(parent, x, mid - 2.0, SWATCH_W, 4, color)
 	K.text(parent, str(row.get("text", "")), {"x": x + SWATCH_W + 12.0, "y": y + 2.0, "px": 14, "col": T.TEXT})
+
+
+## Header ("Supply depots / N" and the summary on the right) then a glass row per depot: name, what it feeds, OK or Cut.
+static func _routes(parent: Control, x: float, y: float, routes: Array, summary: String) -> void:
+	K.text(parent, "Supply depots / %d" % routes.size(), {"x": x, "y": y, "f": "mono", "px": 12, "sp": 0.12, "col": T.CYAN_HI, "up": true})
+	if summary != "":
+		var right := K.text(parent, summary, {"x": 0, "y": y, "f": "mono", "px": 12, "col": T.DIM})
+		right.position.x = roundf(X + W - PAD_X - right.size.x)
+	y += 24.0
+	var shown := routes.size() if routes.size() <= ROUTE_MAX else ROUTE_MAX - 1
+	var width := W - 2.0 * PAD_X
+	for i in shown:
+		var row: Dictionary = routes[i]
+		var color := T.BAD if str(row.get("tone", "")) == "bad" else T.GOOD
+		K.panel(parent, x, y, width, ROUTE_H, "glass", {"border": T.BAD if color == T.BAD else T.LINE})
+		K.text(parent, str(row.get("name", "")), {"x": x + 10.0, "y": y + 4.0, "px": 14, "col": T.TEXT})
+		var tag := K.tag(parent, str(row.get("tag", "")), 0.0, y + 2.0, color)
+		tag.position.x = roundf(x + width - 10.0 - tag.size.x)
+		var detail := K.text(parent, str(row.get("detail", "")), {"x": 0, "y": y + 5.0, "f": "mono", "px": 13, "col": color})
+		detail.position.x = roundf(tag.position.x - 12.0 - detail.size.x)
+		y += ROUTE_PITCH
+	if shown < routes.size():
+		K.text(parent, "+%d more depots" % (routes.size() - shown), {"x": x, "y": y + 2.0, "f": "mono", "px": 12, "col": T.DIM})
