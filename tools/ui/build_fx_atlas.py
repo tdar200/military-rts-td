@@ -2,10 +2,13 @@
 pooled effect cards of godot3d/scripts/world/world_fx.gd. Deterministic: hashed value noise and fixed seeds only.
 Usage: python3 tools/ui/build_fx_atlas.py  (writes godot3d/assets/world/fx/fx_atlas.png)
 
-Layout: 128 px cells, 8 columns, two bands of three rows (band 0 human amber fire, band 1 alien teal and magenta plasma):
+Layout: 128 px cells, 8 columns, two bands of four rows (band 0 human amber fire, band 1 alien teal and magenta plasma):
   row 0  fireball, 8 frames (a turbulent hot core cooling through orange to a dark smoke edge)
   row 1  smoke puff, 8 frames (a soft billow that grows and thins; the cards tint it per use: smoke, dust)
   row 2  flash (muzzle star), sparks, debris, ember, glow, ring (dust), rubble (a burning decal two cells wide)
+  row 3  shot sprites (Task 3), each a vertical streak with its head at the top of the cell (a card stretches it and
+         turns it along the shot): tracer (a thin bright streak), shell (a hot slug with a short glowing trail), bolt (a
+         fat plasma lozenge with a wispy tail); the rest of the row is empty
 
 Every texel is premultiplied: colour = smoke colour x alpha + emission. The effect shader blends ONE, ONE_MINUS_SRC_ALPHA,
 so a texel with alpha 0 adds light (fire, flash, sparks) and a texel with alpha 1 covers (smoke, debris). The import keeps
@@ -18,10 +21,11 @@ REPO = pathlib.Path(__file__).absolute().parents[2]
 OUT = REPO / "godot3d/assets/world/fx/fx_atlas.png"
 CELL = 128
 COLS = 8
-BAND_ROWS = 3
+BAND_ROWS = 4
 FIREBALL_FRAMES = 8
 SMOKE_FRAMES = 8
 SINGLES = {"flash": (0, 1), "sparks": (1, 1), "debris": (2, 1), "ember": (3, 1), "glow": (4, 1), "ring": (5, 1), "rubble": (6, 2)}
+SHOTS = {"tracer": 0, "shell": 1, "bolt": 2}  # row 3 columns
 BORDER = 3  # outer pixels of every cell left empty
 
 # heat (0..1) -> emission colour, per band
@@ -273,6 +277,60 @@ def rubble(band):
     return pack(cover, alpha, emission, w, h)
 
 
+def _streak(x, y, head, tail, core_w, halo_w, taper=1.0):
+    """A vertical streak from `head` (top, image y) down to `tail`: along it the brightness rises toward the head, across it
+    a hot core of half-width core_w inside a soft halo of halo_w; `taper` narrows it toward the tail."""
+    s = np.clip((y - head) / (tail - head), 0.0, 1.0)  # 0 at the head, 1 at the tail
+    inside = (y >= head - 0.12) & (y <= tail + 0.12)
+    narrow = 1.0 - taper * 0.65 * s
+    d = np.abs(x) / narrow
+    along = (1.0 - s) ** 1.1 * smoothstep(head - 0.12, head + 0.02, y) * smoothstep(tail + 0.12, tail - 0.05, y)
+    core = np.exp(-(d / core_w) ** 2)
+    halo = np.exp(-(d / halo_w) ** 2) * 0.45
+    return np.where(inside, (core + halo) * along, 0.0), core * along
+
+
+def tracer(band):
+    """A thin bright streak: a white-hot core in a band-coloured halo."""
+    x, y = grid()
+    i, core = _streak(x, y, -0.86, 0.86, 0.10, 0.30, 0.5)
+    i = np.clip(i, 0, 1)
+    heat = np.clip(0.42 + 0.58 * core, 0, 1)
+    emission = ramp(heat, band) * i[..., None]
+    return pack(np.zeros(x.shape + (3,)), np.zeros(x.shape), emission)
+
+
+def shell(band):
+    """A hot round slug near the top with a short trail cooling down the cell."""
+    x, y = grid()
+    hy = -0.64
+    r = np.sqrt(x * x + ((y - hy) * 0.9) ** 2)
+    head = np.exp(-(r / 0.15) ** 2) * 1.3 + 0.3 * np.exp(-(r / 0.30) ** 2)
+    trail, tcore = _streak(x, y, hy, 0.86, 0.13, 0.30, 0.75)
+    n = fbm(x * 5.0, y * 3.0, SEEDS[band] + 73, 3)
+    trail = trail * (0.75 + 0.6 * n)
+    i = np.clip(np.maximum(head, trail), 0, 1)
+    heat = np.clip(0.30 + 0.70 * np.clip(head, 0, 1) + 0.25 * tcore, 0, 1)
+    emission = ramp(heat, band) * i[..., None]
+    return pack(np.zeros(x.shape + (3,)), np.zeros(x.shape), emission)
+
+
+def bolt(band):
+    """A fat plasma lozenge (white core, coloured rim) trailing wisps down the cell."""
+    x, y = grid()
+    cy = -0.42
+    e = np.sqrt((x / 0.20) ** 2 + ((y - cy) / 0.42) ** 2)
+    n = warped(x * 3.0, y * 2.0, SEEDS[band] + 79, 0.8)
+    body = np.exp(-(e / 0.75) ** 2) * 1.3
+    rim = np.exp(-((e - 0.95 + (n - 0.5) * 0.4) / 0.28) ** 2) * 0.55
+    tail, _ = _streak(x + (n - 0.5) * 0.18, y, cy + 0.2, 0.88, 0.10, 0.26, 0.6)
+    tail = tail * (0.45 + 0.7 * n)
+    i = np.clip(body + rim + tail * 0.7, 0, 1)
+    heat = np.clip(0.36 + 0.64 * np.clip(body, 0, 1) - 0.05 * rim, 0, 1)
+    emission = ramp(heat, band) * i[..., None]
+    return pack(np.zeros(x.shape + (3,)), np.zeros(x.shape), emission)
+
+
 def build(png_out):
     atlas = np.zeros((2 * BAND_ROWS * CELL, COLS * CELL, 4), np.uint8)
 
@@ -287,6 +345,8 @@ def build(png_out):
             put(band, 1, i, smoke(i / (SMOKE_FRAMES - 1), band))
         for name, fn in (("flash", flash), ("sparks", sparks), ("debris", debris), ("ember", ember), ("glow", glow), ("ring", ring), ("rubble", rubble)):
             put(band, 2, SINGLES[name][0], fn(band))
+        for name, fn in (("tracer", tracer), ("shell", shell), ("bolt", bolt)):
+            put(band, 3, SHOTS[name], fn(band))
     pathlib.Path(png_out).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(atlas, "RGBA").save(png_out, optimize=False)
 

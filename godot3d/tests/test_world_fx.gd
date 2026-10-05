@@ -22,7 +22,7 @@ func test_atlas_is_the_documented_grid(t) -> void:
 	var tex := load(WorldFx.ATLAS) as Texture2D
 	t.ok(tex != null, "the effect atlas loads")
 	if tex != null:
-		t.eq(Vector2i(tex.get_width(), tex.get_height()), Vector2i(WorldFx.COLS * WorldFx.CELL_PX, 2 * WorldFx.BAND_ROWS * WorldFx.CELL_PX), "8 x 6 cells of 128 px")
+		t.eq(Vector2i(tex.get_width(), tex.get_height()), Vector2i(WorldFx.COLS * WorldFx.CELL_PX, 2 * WorldFx.BAND_ROWS * WorldFx.CELL_PX), "8 x 8 cells of 128 px")
 
 
 func test_every_recipe_spawns_at_most_its_documented_cards(t) -> void:

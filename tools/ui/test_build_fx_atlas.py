@@ -26,16 +26,43 @@ class FxAtlasTests(unittest.TestCase):
         cls.dir.cleanup()
 
     def test_frame_grid(self):
-        """Eight 128 px columns; two bands (human, alien) of three rows: fireball frames, smoke frames, single sprites."""
+        """Eight 128 px columns; two bands (human, alien) of four rows: fireball frames, smoke frames, single sprites,
+        shot sprites (tracer, shell, bolt; Task 3)."""
         self.assertEqual(bfa.CELL, 128)
         self.assertEqual(bfa.COLS, 8)
-        self.assertEqual(bfa.BAND_ROWS, 3)
-        self.assertEqual(self.img.size, (1024, 768))
+        self.assertEqual(bfa.BAND_ROWS, 4)
+        self.assertEqual(self.img.size, (1024, 1024))
         self.assertEqual(self.img.mode, "RGBA")
         self.assertEqual(bfa.FIREBALL_FRAMES, 8)
         self.assertEqual(bfa.SMOKE_FRAMES, 8)
         self.assertEqual(list(bfa.SINGLES), ["flash", "sparks", "debris", "ember", "glow", "ring", "rubble"])
         self.assertEqual(bfa.SINGLES["rubble"], (6, 2), "the rubble decal spans the last two cells")
+        self.assertEqual(bfa.SHOTS, {"tracer": 0, "shell": 1, "bolt": 2}, "row 3: the shot sprites")
+
+    def test_shot_sprites_point_up_and_add_light(self):
+        """Tracer, shell and bolt are vertical streaks (a card stretches and turns them along the shot), brightest at the
+        head (the top of the cell), emissive only (alpha 0: they add light), in both bands."""
+        for band in range(2):
+            for name, col in bfa.SHOTS.items():
+                px = cell(self.arr, band, 3, col)
+                lum = px[..., :3].max(axis=2)
+                self.assertGreater(int(lum.max()), 220, "%s band %d is bright" % (name, band))
+                self.assertLessEqual(int(px[..., 3].max()), 2, "%s band %d adds light (alpha 0)" % (name, band))
+                ys, xs = np.nonzero(lum > 40)
+                tall, wide = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
+                self.assertGreater(tall, 2.0 * wide, "%s band %d is a vertical streak (%d x %d)" % (name, band, wide, tall))
+                top, bottom = lum[:64].astype(float).sum(), lum[64:].astype(float).sum()
+                self.assertGreater(top, bottom, "%s band %d: the head is at the top" % (name, band))
+        tracer = cell(self.arr, 0, 3, 0)
+        self.assertLess((cell(self.arr, 0, 3, 0)[..., :3].max(axis=2) > 40).mean(), (cell(self.arr, 0, 3, 1)[..., :3].max(axis=2) > 40).mean() + 1e-9,
+                        "the tracer is thinner than the shell")
+        lit = tracer[..., :3].reshape(-1, 3)
+        lit = lit[lit.max(axis=1) > 80].mean(axis=0)
+        self.assertGreater(lit[0], lit[2] + 60, "the human tracer is amber %s" % lit)
+        bolt = cell(self.arr, 1, 3, 2)[..., :3].reshape(-1, 3)
+        bolt = bolt[bolt.max(axis=1) > 80].mean(axis=0)
+        self.assertGreater(bolt[2], bolt[0] * 0.9, "the alien bolt carries blue %s" % bolt)
+        self.assertGreater(bolt[1] + bolt[2], 2 * bolt[0] * 0.8, "the alien bolt is teal and magenta, not orange %s" % bolt)
 
     def test_two_runs_are_identical(self):
         self.assertEqual(self.a_path.read_bytes(), self.b_path.read_bytes())
@@ -53,7 +80,7 @@ class FxAtlasTests(unittest.TestCase):
         """Every cell's outer 3 px are empty (no colour, no alpha), so a frame never bleeds into its neighbour."""
         c = bfa.CELL
         for band in range(2):
-            for row in range(3):
+            for row in range(bfa.BAND_ROWS):
                 for col in range(8):
                     if row == 2 and col == 7:
                         continue  # the second half of the rubble decal: checked as one wide cell below
