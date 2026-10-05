@@ -2080,6 +2080,8 @@ func _sync_bridge_map(snapshot: Dictionary) -> void:
 		var world := _hex_world(x, z)
 		var elevation := _height_world(world.x, world.z)
 		blocked_tiles[Vector2i(x, z)] = true
+		if world_art_on:
+			continue  # the painted props dress blocked ground; legacy slabs and rocks would float in the river and sea
 		if (x * 3 + z) % 37 == 0:
 			_create_ruin(Vector3(world.x, elevation, world.z))
 		elif (x + z) % 9 == 0:
@@ -2536,7 +2538,16 @@ func _show_hover_at(ground: Vector3) -> void:
 		if key != hover_outline_key:
 			hover_outline_key = key
 			hover_tile.mesh = _hover_outline_mesh(world)
-	hover_tile.visible = build_mode == ""
+	hover_tile.visible = build_mode == "" and not (world_art_on and _hex_occupied(tile))
+
+
+## Kestrel only: a bridge building or unit stands on `tile`. The outline draws without a depth test (so a tree card in
+## front cannot hide it), so on an occupied hex it would paint over the model; the hex stays hovered for the inspector.
+func _hex_occupied(tile: Vector2i) -> bool:
+	for node in bridge_nodes.values():
+		if is_instance_valid(node) and _world_to_tile((node as Node3D).position) == tile:
+			return true
+	return false
 
 
 ## Pixels per world unit along x: the orthographic camera shows `camera_zoom` units over the viewport height.

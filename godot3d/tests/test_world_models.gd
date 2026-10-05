@@ -127,3 +127,33 @@ func test_kestrel_selection_ring_wraps_the_model(t) -> void:
 	t.near(scene.selection_ring.scale.x, 1.0 * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to a squad")
 	scene.ui.free()
 	scene.free()
+
+
+func test_kestrel_blocked_tiles_get_no_legacy_ruins_or_rocks(t) -> void:
+	var scene := _kestrel_scene()
+	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+	var snap: Dictionary = JSON.parse_string(f.get_as_text())
+	var before: int = scene.get_child_count()
+	scene._sync_bridge_map(snap)
+	t.ok(scene.blocked_tiles.size() > 100, "blocked tiles still recorded for the rules")
+	t.eq(scene.get_child_count() - before, snap.deposits.size(), "only the deposit roots are added (the painted props dress blocked ground)")
+	scene.free()
+
+
+func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
+	# the outline draws without a depth test (Task 7), so on a building or unit hex it would paint over the model
+	var scene := _kestrel_scene()
+	var tile := Vector2i(10, 10)
+	var world: Vector3 = scene._hex_world(tile.x, tile.y)
+	scene.bridge_nodes[905] = scene._create_bridge_building(0, "Barracks", world, 905)
+	scene._show_hover_at(world)
+	t.ok(not scene.hover_tile.visible, "hidden on the building's own hex")
+	t.eq(scene.hover_cell, tile, "the hex is still hovered (the inspector reads it)")
+	var east: Vector3 = scene._hex_world(tile.x + 1, tile.y)
+	scene._show_hover_at(east)
+	t.ok(scene.hover_tile.visible, "shown on the neighbour hex under the model's overhang")
+	scene._create_unit(0, east, 1)
+	scene.bridge_nodes[906] = scene.units.back()
+	scene._show_hover_at(east)
+	t.ok(not scene.hover_tile.visible, "hidden under a unit")
+	scene.free()

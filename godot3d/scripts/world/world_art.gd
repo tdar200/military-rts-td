@@ -15,7 +15,7 @@ const BUILDING_TILES := {"CommandCenter": 2.8, "Barracks": 2.1, "VehicleFactory"
 	"AaTurret": 1.3, "Wall": 1.0}
 const UNIT_TILES := [1.0, 1.6, 1.0, 1.5, 1.8, 1.5]  # by _create_unit kind: infantry, tank, anti-armour, gunship, capital, harvester
 ## Authored material name (lower case contains) -> albedo for the boards' warm concrete, olive and gunmetal.
-const MODEL_PALETTE := {"concrete": "b3a893", "olive": "6f7448", "gunmetal": "474d52", "energy": "3f8f9c"}
+const MODEL_PALETTE := {"concrete": "75684f", "olive": "727848", "gunmetal": "3d4040", "energy": "3f8f9c"}
 
 
 ## Union of every MeshInstance3D AABB under `root`, in `root`'s local space (works outside the scene tree).

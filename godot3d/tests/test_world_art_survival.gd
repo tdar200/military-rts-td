@@ -139,3 +139,13 @@ func test_survival_units_keep_the_legacy_size(t) -> void:
 	t.near((tank.get_node("HealthBack") as Node3D).position.y, 0.88, 1e-6, "legacy health bar height")
 	t.near((tank.get_node("ShieldFill") as Node3D).position.y, 0.958, 1e-6, "legacy shield bar height")
 	scene.free()
+
+
+func test_survival_blocked_tiles_keep_their_ruins_and_rocks(t) -> void:
+	var scene := _survival_scene()
+	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+	var snap: Dictionary = JSON.parse_string(f.get_as_text())
+	var before: int = scene.get_child_count()
+	scene._sync_bridge_map(snap)
+	t.eq(scene.get_child_count() - before, snap.deposits.size() + 25, "the legacy ruins and rocks on blocked tiles (25 in the fixture)")
+	scene.free()
