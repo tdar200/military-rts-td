@@ -49,6 +49,19 @@ var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
 var world_fx: RefCounted  # Kestrel only: WorldFx, pooled fire, smoke and spark cards (null in Survival: spheres)
+## Kestrel shots (plan 2026-10-05-kestrel-combat-motion-fx, Task 3): the bridge's `shots` window, drawn once each. Purely
+## cosmetic: nothing here touches gameplay state, selection or the HUD.
+const SHOT_WINDOW := 18  # ticks the bridge keeps a shot in its window
+const SHOTS_PER_POLL := 24  # at most this many new shots drawn per poll; the rest are dropped (never drawn late)
+const SHOT_KIND_RADIUS := 0.6 * WorldArt.TILE  # the attacker is the nearest entity this close to the shot's start
+const SHOT_HIT_WINDOW := 0.2  # s: an HP drop under a shot's impact this close in time draws no second flash
+const SHOT_MAX_DELAY := 0.6  # s: a poll's shots replay at their own ticks' rhythm, behind the newest by at most this
+var shot_seen: Dictionary = {}  # "tick,ax,az,tx,tz#n" -> tick, the shots already handled (n: same row twice in a tick)
+var shot_tick := -1  # the tick of the last shots window read (a lower one means the sim restarted)
+var shots_drawn_total := 0
+var shot_impacts: Array = []  # {at: Vector3 ground point, t: effects time it lands, kind: attacker kind, drew: bool}
+var recoiling: Dictionary = {}  # instance id -> a unit card kicking back from its shot
+var sim_paused := false  # set_sim_paused: the bridge holds the sim still, the effects hold their time
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
 var _fit_parts: Dictionary = {}  # Kestrel only: model key -> each fitted mesh box in its root's space (picking)
 var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
@@ -1239,7 +1252,7 @@ func _process(delta: float) -> void:
 	_animate_world(delta)
 	if world_fx != null:
 		world_fx.set_view(camera_view_target(), WorldArt.view_half_extent(camera_zoom, camera_aspect, camera_yaw))
-		world_fx.advance(delta)
+		_advance_fx(delta)
 	for unit in units:
 		if not is_instance_valid(unit):
 			continue
@@ -2267,6 +2280,8 @@ func _poll_bridge(delta: float) -> void:
 	_sync_ground(parsed)
 	_sync_bridge_map(parsed)
 	_sync_spent_deposits(parsed)
+	if world_art_on and world_fx != null:
+		_dispatch_shots(parsed)  # before the entity sync: a shooter killed this tick is still in bridge_nodes
 	_sync_bridge_entities(parsed.get("entities", []))
 	_apply_era_visuals()
 	if was_bridge_active and bridge_research_count > previous_research_count:
@@ -3087,14 +3102,193 @@ func _impact_effect(position: Vector3, human_hit: bool) -> void:
 
 ## Kestrel hit (Survival keeps _impact_effect): a flash, sparks, a fireball and smoke by the struck entity's weight class,
 ## in the firing side's colours (the other side's), with _impact_effect's human-hit shake and tone.
+## A shot's own impact already marks a hit there (SHOT_HIT_WINDOW): no second flash. A hit whose shooter the shots
+## window named is sized by the shooter's kind, otherwise by the struck kind's.
 func _kestrel_impact(position: Vector3, entity_data: Dictionary) -> void:
 	var owner := int(entity_data.get("owner", 0))
-	world_fx.hit(position, WorldFx.weight_for(String(entity_data.get("kind", ""))), ALIEN if owner == HUMAN else HUMAN)
+	var record := _shot_record_near(position)
+	if not bool(record.get("drew", false)):
+		var kind := String(record.get("kind", ""))
+		if kind == "":
+			kind = String(entity_data.get("kind", ""))
+		world_fx.hit(position, WorldFx.weight_for(kind), ALIEN if owner == HUMAN else HUMAN)
 	if owner == HUMAN and alert_cooldown <= 0.0:
 		alert_cooldown = 1.3
 		camera_shake = maxf(camera_shake, 0.42)
 		if is_inside_tree():
 			_play_tone(92.0, 0.09, 0.12, -25.0)
+
+
+## Draws the new shots of a snapshot's `shots` window ([tick, ax, az, tx, tz] rows, positions as Fixed bits like
+## x_bits), each exactly once: a dedup set keyed by the row (and its repeat count within the poll, for two shooters on
+## one spot) and pruned to the window, so a paused game re-sending the same window draws nothing. A fresh scene's first
+## poll only seeds the set (that window is history, maybe of a sim about to restart); a tick going back (a restart) clears
+## it. Rows that are short, non-numeric or out of the window are skipped. A shot with neither end in view is skipped;
+## past SHOTS_PER_POLL the oldest new shots are dropped. The attacker is the nearest entity within SHOT_KIND_RADIUS of the
+## shot's start among this snapshot's entities, then bridge_nodes (the last poll's, so a shooter killed this tick); none
+## gives the infantry look on the target's enemy side. A unit attacker's card kicks back. Returns the shots drawn.
+func _dispatch_shots(snapshot: Dictionary) -> int:
+	if world_fx == null:
+		return 0
+	var tick := int(snapshot.get("tick", 0))
+	if tick < shot_tick:
+		shot_seen.clear()
+		shot_impacts.clear()
+	shot_tick = tick
+	for key in shot_seen.keys():
+		if int(shot_seen[key]) < tick - SHOT_WINDOW:
+			shot_seen.erase(key)
+	var rows = snapshot.get("shots")
+	if not rows is Array:
+		return 0
+	var fresh: Array = []
+	var repeats := {}
+	for row in rows:
+		if not _shot_row_ok(row) or int(row[0]) < tick - SHOT_WINDOW or int(row[0]) > tick:
+			continue
+		var key := "%d,%d,%d,%d,%d" % [int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4])]
+		var n := int(repeats.get(key, 0))
+		repeats[key] = n + 1
+		key += "#%d" % n
+		if shot_seen.has(key):
+			continue
+		shot_seen[key] = int(row[0])
+		fresh.append(row)
+	if fresh.is_empty() or not bridge_initialized:
+		return 0
+	var shots: Array = []
+	for row in fresh:
+		var a := _sim_bits_to_world(int(row[1]), int(row[2]))
+		var b := _sim_bits_to_world(int(row[3]), int(row[4]))
+		if world_fx.in_view(a) or world_fx.in_view(b):
+			shots.append([int(row[0]), a, b])
+	if shots.is_empty():
+		return 0
+	shots.sort_custom(func(p: Array, q: Array) -> bool: return int(p[0]) < int(q[0]))
+	var index := _shot_entity_index(snapshot.get("entities", []))
+	var first_drawn := maxi(0, shots.size() - SHOTS_PER_POLL)
+	var base_tick := int(shots[first_drawn][0])
+	var drawn := 0
+	for i in shots.size():
+		var a: Vector3 = shots[i][1]
+		var b: Vector3 = shots[i][2]
+		var shooter := _shot_entity_near(index, a)
+		var struck := _shot_entity_near(index, b)
+		var kind := String(shooter.get("kind", ""))
+		var owner := int(shooter.get("owner", ALIEN if int(struck.get("owner", ALIEN)) == HUMAN else HUMAN))
+		var flight := WorldFx.flight_time(a, b, kind, owner)
+		var record := {"at": b, "t": world_fx.time + flight, "kind": kind, "drew": false}
+		shot_impacts.append(record)
+		if i < first_drawn:
+			continue  # over the cap: dropped, though an HP drop under it still learns the shooter's kind
+		var delay := clampf(float(int(shots[i][0]) - base_tick) / TICKS_PER_SECOND, 0.0, SHOT_MAX_DELAY)
+		a.y = _height_world(a.x, a.z)
+		b.y = _height_world(b.x, b.z)
+		var lift := WorldFx.IMPACT_LIFT
+		if not struck.is_empty():
+			lift = WorldFx.muzzle_lift(String(struck.get("kind", ""))) * 0.9
+		if world_fx.shot(a, b, kind, owner, delay, lift) <= 0:
+			continue
+		record.t = world_fx.time + delay + flight
+		record.drew = true
+		drawn += 1
+		shots_drawn_total += 1
+		if String(shooter.get("category", "")) == "unit":
+			var node := bridge_nodes.get(int(shooter.get("id", -1))) as Node3D
+			var card: Node3D = node.get_node_or_null("UnitVisual") if is_instance_valid(node) else null
+			if card != null and card.has_meta("sprite_kind"):
+				WorldSprites.kick(card, b - a, world_fx.time + delay)
+				recoiling[card.get_instance_id()] = card
+	return drawn
+
+
+static func _shot_row_ok(row: Variant) -> bool:
+	if not row is Array or (row as Array).size() < 5:
+		return false
+	for k in 5:
+		if typeof(row[k]) != TYPE_INT and typeof(row[k]) != TYPE_FLOAT:
+			return false
+	return true
+
+
+## The snapshot's units and buildings, then the bridge_nodes it no longer lists (the last poll's: a shooter killed since),
+## bucketed by SHOT_KIND_RADIUS cells.
+func _shot_entity_index(current: Variant) -> Dictionary:
+	var index := {}
+	var ids := {}
+	if current is Array:
+		for e in current:
+			if not e is Dictionary or String(e.get("category", "")) not in ["unit", "building"]:
+				continue
+			var id := int(e.get("id", -1))
+			ids[id] = true
+			_shot_index_add(index, _sim_bits_to_world(int(e.get("x_bits", 0)), int(e.get("z_bits", 0))), id, String(e.get("kind", "")),
+				int(e.get("owner", 0)), String(e.get("category", "")))
+	for id in bridge_nodes:
+		var node := bridge_nodes[id] as Node3D
+		if ids.has(id) or not is_instance_valid(node):
+			continue
+		_shot_index_add(index, node.get_meta("glide_to", node.position), int(id), String(node.get_meta("kind_name", "")),
+			int(node.get_meta("team", 0)), String(node.get_meta("category", "")))
+	return index
+
+
+static func _shot_index_add(index: Dictionary, at: Vector3, id: int, kind: String, owner: int, category: String) -> void:
+	var cell := Vector2i(floori(at.x / SHOT_KIND_RADIUS), floori(at.z / SHOT_KIND_RADIUS))
+	if not index.has(cell):
+		index[cell] = []
+	index[cell].append({"at": at, "id": id, "kind": kind, "owner": owner, "category": category})
+
+
+## The nearest indexed entity within SHOT_KIND_RADIUS of `at` (ground x and z), or {}.
+func _shot_entity_near(index: Dictionary, at: Vector3) -> Dictionary:
+	var best := {}
+	var best_d := SHOT_KIND_RADIUS * SHOT_KIND_RADIUS
+	var cx := floori(at.x / SHOT_KIND_RADIUS)
+	var cz := floori(at.z / SHOT_KIND_RADIUS)
+	for dx in [-1, 0, 1]:
+		for dz in [-1, 0, 1]:
+			for e in index.get(Vector2i(cx + dx, cz + dz), []):
+				var p: Vector3 = e.at
+				var d := (p.x - at.x) * (p.x - at.x) + (p.z - at.z) * (p.z - at.z)
+				if d <= best_d:
+					best_d = d
+					best = e
+	return best
+
+
+## The shot landing nearest `position` (within SHOT_KIND_RADIUS) that lands no earlier than SHOT_HIT_WINDOW ago, or {};
+## older records are dropped.
+func _shot_record_near(position: Vector3) -> Dictionary:
+	if world_fx == null:
+		return {}
+	var now: float = world_fx.time
+	var keep: Array = []
+	var best := {}
+	var best_d := SHOT_KIND_RADIUS * SHOT_KIND_RADIUS
+	for r in shot_impacts:
+		if float(r.t) < now - SHOT_HIT_WINDOW:
+			continue
+		keep.append(r)
+		var at: Vector3 = r.at
+		var d := (at.x - position.x) * (at.x - position.x) + (at.z - position.z) * (at.z - position.z)
+		if d <= best_d:
+			best_d = d
+			best = r
+	shot_impacts = keep
+	return best
+
+
+## Steps the effects (frozen while the game is paused, so nothing burns out or flies on behind the pause menu) and the
+## recoiling unit cards on the effects clock.
+func _advance_fx(delta: float) -> void:
+	if world_fx == null:
+		return
+	world_fx.advance(0.0 if sim_paused else delta)
+	for id in recoiling.keys():
+		var card = recoiling[id]
+		if not is_instance_valid(card) or not WorldSprites.recoil_step(card, world_fx.time):
+			recoiling.erase(id)
 
 
 ## Kestrel death (Survival keeps _death_effect): a unit explodes where it stood, a building's painting goes at once and a
@@ -3195,6 +3389,7 @@ func _orders_armed() -> bool:
 ## The pause menu's real effect. The bridge stops stepping the simulation while `pause.flag` exists in the runtime
 ## directory (godot-bridge.rs), the same file-flag channel as start.flag and restart.flag; removing it resumes the run.
 func set_sim_paused(on: bool) -> void:
+	sim_paused = on
 	var path := runtime_directory.path_join("pause.flag")
 	if on:
 		var flag := FileAccess.open(path, FileAccess.WRITE)

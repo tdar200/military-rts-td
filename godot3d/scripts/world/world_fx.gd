@@ -19,17 +19,20 @@ extends RefCounted
 ## life ends; the layers hide when no card is live (idle frames draw nothing). An effect whose anchor is outside the view
 ## (set_view) plus VIEW_MARGIN spawns nothing.
 ##
-## Task 3 adds `shot(from, to, attacker_kind, owner)` on the same cards: `_card` takes any sprite, offset, motion, size,
-## rotation and stretch (`aspect`), so a tracer is one SPARKS-row card stretched along the screen direction.
+## Shots (Task 3): `shot(from, to, attacker_kind, owner)` draws one round of the bridge's shots window on the same cards:
+## a muzzle flash, a tracer, shell or plasma bolt (row 3 of the band: a vertical streak, head up) stretched along the
+## shot's screen direction and flying muzzle to target, and an impact flash when it lands. Everything is screen space:
+## the view is orthographic, so a card offset along the camera's right and up lands where the world point projects.
 
 const WorldArt := preload("res://scripts/world/world_art.gd")
+const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 
 const ATLAS := "res://assets/world/fx/fx_atlas.png"
 const CELL_PX := 128
 const COLS := 8
 const BAND_ROWS := 4  # per band: fireball frames, smoke frames, single sprites, shot sprites
 const FRAMES := 8
-const POOL := 64
+const POOL := 128  # Task 3 doubled it: a firefight's shots (up to 6 cards each) must not recycle a collapse's rubble
 const STRIDE := 20  # floats per instance in a MultiMesh buffer: a 3x4 transform, a colour, the custom data
 const NUDGE := 1.2  # world units toward the camera for smoke and glow cards
 const GROUND_LIFT := 0.06  # decals lie flat on the ground this far over the anchor (the ground height at their centre)
@@ -39,17 +42,21 @@ const FLASH_MAX_CARDS := 1
 const HIT_MAX_CARDS := 4
 const EXPLODE_MAX_CARDS := 9
 const COLLAPSE_MAX_CARDS := 15
+const SHOT_MAX_CARDS := 6
 ## Hit size by weight class (world units): 0 infantry, 1 anti-armour or gun, 2 tank, 3 gunship, capital or building.
 const HIT_SIZE := [0.32, 0.46, 0.66, 0.86]
 const FLASH_SIZE := [0.28, 0.36, 0.50, 0.62]
 
-## Sprites. FIREBALL and SMOKE are 8-frame flipbooks; the rest are single cells of row 2 (RUBBLE spans two).
-enum {FIREBALL, SMOKE, FLASH, SPARKS, DEBRIS, EMBER, GLOW, RING, RUBBLE}
+## Sprites. FIREBALL and SMOKE are 8-frame flipbooks; the rest are single cells of row 2 (RUBBLE spans two) and, for
+## the shot sprites, of row 3.
+enum {FIREBALL, SMOKE, FLASH, SPARKS, DEBRIS, EMBER, GLOW, RING, RUBBLE, TRACER, SHELL, BOLT}
 const SINGLE_COL := {FLASH: 0, SPARKS: 1, DEBRIS: 2, EMBER: 3, GLOW: 4, RING: 5, RUBBLE: 6}
+const SHOT_COL := {TRACER: 0, SHELL: 1, BOLT: 2}
 ## Card layers: one MultiMesh and one material each.
 enum {LAYER_GROUND, LAYER_SMOKE, LAYER_GLOW}
 const LAYER_OF := {FIREBALL: LAYER_GLOW, FLASH: LAYER_GLOW, SPARKS: LAYER_GLOW, EMBER: LAYER_GLOW, SMOKE: LAYER_SMOKE,
-	DEBRIS: LAYER_SMOKE, GLOW: LAYER_GROUND, RING: LAYER_GROUND, RUBBLE: LAYER_GROUND}
+	DEBRIS: LAYER_SMOKE, GLOW: LAYER_GROUND, RING: LAYER_GROUND, RUBBLE: LAYER_GROUND, TRACER: LAYER_GLOW, SHELL: LAYER_GLOW,
+	BOLT: LAYER_GLOW}
 const LAYER_NAMES := ["WorldFxGround", "WorldFxSmoke", "WorldFxGlow"]
 ## Render priority per layer: decals with the prop decals (under every card and overlay), smoke over the sprite cards and
 ## the placement ghost (1), fire over smoke.
@@ -61,6 +68,22 @@ const FIRE_TINT := Color(1.0, 1.0, 1.0)
 ## The Kestrel post chain halves saturation (WorldArt.ENVIRONMENT) and its filmic shoulder whitens bright fire, so the cards
 ## pre-grade their colour about its luminance, as WorldSprites.GRADE does for the sprite cards.
 const SATURATION := 1.9
+## Shots. A style per attacker kind: rifle (infantry, guns, anything unknown: a short bright streak), shell (tanks,
+## anti-armour, capitals: a slower glowing slug with a trail and a muzzle puff), burst (gunships: two short streaks side
+## by side). Aliens fire plasma bolts in every style. Per style: [speed (world units per s), shortest and longest flight
+## (s), card width, longest streak (world units)], human then alien.
+enum {STYLE_RIFLE, STYLE_SHELL, STYLE_BURST}
+const SHOT_LOOK := [
+	[[26.0, 0.05, 0.15, 0.085, 0.62], [16.0, 0.07, 0.22, 0.16, 0.5]],
+	[[10.0, 0.12, 0.38, 0.17, 0.46], [9.0, 0.13, 0.4, 0.24, 0.56]],
+	[[28.0, 0.04, 0.13, 0.07, 0.46], [18.0, 0.06, 0.18, 0.13, 0.4]],
+]
+const BURST_GAP := 0.06  # screen units between a gunship's paired streaks
+const BURST_STAGGER := 0.05  # s between them
+## Where a round leaves and lands, as a screen-up offset over the ground point: MUZZLE of the attacker's card width (plus
+## the card's hover), and IMPACT_LIFT over the target's ground point (the dispatcher passes its own for tall targets).
+const MUZZLE := 0.3
+const IMPACT_LIFT := 0.22
 
 const SHADER := """
 shader_type spatial;
@@ -226,6 +249,11 @@ func slot_rect(slot: int) -> Color:
 	return Color(b[o], b[o + 1], b[o + 2], b[o + 3])
 
 
+## Whether a ground point is on screen (plus VIEW_MARGIN): the shot dispatcher skips a shot with neither end in view.
+func in_view(pos: Vector3) -> bool:
+	return _in_view(pos)
+
+
 func _in_view(pos: Vector3) -> bool:
 	return absf(pos.x - _view_focus.x) <= _view_half.x + VIEW_MARGIN and absf(pos.z - _view_focus.z) <= _view_half.y + VIEW_MARGIN
 
@@ -324,6 +352,90 @@ func collapse(pos: Vector3, tiles: float, owner: int) -> int:
 	return 15
 
 
+static func shot_style(kind: String) -> int:
+	match kind:
+		"Tank", "AntiArmor", "Capital":
+			return STYLE_SHELL
+		"Helicopter":
+			return STYLE_BURST
+	return STYLE_RIFLE
+
+
+static func _look(kind: String, owner: int) -> Array:
+	return SHOT_LOOK[shot_style(kind)][0 if owner == 0 else 1]
+
+
+## Seconds a round of `kind` fired by `owner` takes from `from` to `to` (ground points).
+static func flight_time(from: Vector3, to: Vector3, kind: String, owner: int) -> float:
+	var look := _look(kind, owner)
+	var d := Vector2(to.x - from.x, to.z - from.z).length()
+	return clampf(d / float(look[0]), float(look[1]), float(look[2]))
+
+
+## Screen-up height of a kind's muzzle over its ground point: a share of its card width, plus a gunship's hover.
+static func muzzle_lift(kind: String) -> float:
+	var width := WorldSprites.tiles_for(kind) * WorldArt.TILE
+	if width <= 0.0:
+		width = 0.66  # an unknown kind: an infantry card
+	return clampf(width * MUZZLE, 0.12, 0.7) + float(WorldSprites.HOVER.get(kind, 0.0)) * WorldSprites.cos_pitch()
+
+
+## One round from `from` to `to` (ground points), fired by a `attacker_kind` of `owner` after `delay` seconds: a muzzle
+## flash (and a puff of smoke for a shell), a tracer, shell or bolt card stretched along the shot's screen direction that
+## flies muzzle to target, and an impact flash and sparks (and a small fireball for a shell) when it lands, sized by the
+## attacker's weight. Nothing when neither end is in view. Returns the cards spawned (SHOT_MAX_CARDS at most).
+func shot(from: Vector3, to: Vector3, attacker_kind: String, owner: int, delay := 0.0, target_lift := IMPACT_LIFT) -> int:
+	if _layers.is_empty() or not (_in_view(from) or _in_view(to)):
+		return 0
+	var b := _band(owner)
+	var style := shot_style(attacker_kind)
+	var look := _look(attacker_kind, owner)
+	var w := weight_for(attacker_kind) if WorldSprites.MOCK_PX.has(attacker_kind) else 0  # unknown: the infantry look
+	var flight := flight_time(from, to, attacker_kind, owner)
+	var basis := _view_basis()
+	var muzzle := Vector2(0.0, muzzle_lift(attacker_kind))
+	var delta := to - from
+	var land := Vector2(delta.dot(basis.x), delta.dot(basis.y) + target_lift)  # the target in the muzzle anchor's screen frame
+	var path := land - muzzle
+	var dist := path.length()
+	var dir := path / dist if dist > 1e-4 else Vector2.UP
+	var angle := atan2(-dir.x, dir.y)  # turns the card's up (the streak's head) along the shot
+	var n := 0
+	var fw := 1 if style == STYLE_BURST else clampi(w, 0, 3)  # a gunship's rounds are light, however heavy the gunship
+	var fs := float(FLASH_SIZE[fw]) * (0.85 if style == STYLE_RIFLE else 1.0)
+	_card(FLASH, b, from, {"delay": delay, "life": 0.07 + 0.02 * fw, "size": [fs, fs * 1.15], "off": muzzle + dir * fs * 0.2,
+		"rot": _spin_of(_serial) * 0.8, "tint": FIRE_TINT, "fade_out": 0.45})
+	n += 1
+	if style == STYLE_SHELL:
+		_card(SMOKE, b, from, {"delay": delay + 0.03, "life": 0.7, "size": [fs * 0.6, fs * 1.4], "off": muzzle, "vel": Vector2(-dir.x * 0.25, 0.35),
+			"tint": SMOKE_TINT[b], "alpha": 0.55, "fade_in": 0.1, "fade_out": 0.35})
+		n += 1
+	var sprite := BOLT if b == 1 else (SHELL if style == STYLE_SHELL else TRACER)
+	var width := float(look[3]) * (1.25 if w == 3 and style == STYLE_SHELL else 1.0)
+	var length := maxf(width * 1.2, minf(float(look[4]), dist * 0.6))
+	var travel := maxf(0.0, dist - length)
+	var streaks := 2 if style == STYLE_BURST else 1
+	for k in streaks:
+		var side := Vector2(-dir.y, dir.x) * (BURST_GAP * (k - 0.5) if streaks == 2 else 0.0)
+		_card(sprite, b, from, {"delay": delay + BURST_STAGGER * k, "life": flight, "size": [width, width],
+			"aspect": length / width, "off": muzzle + side + dir * (length * 0.5), "vel": dir * (travel / flight), "rot": angle,
+			"tint": FIRE_TINT, "fade_in": 0.08, "fade_out": 0.8})
+		n += 1
+	var hs := float(HIT_SIZE[fw]) * (0.8 if style == STYLE_SHELL else 0.62)
+	var hit_at := Vector2(0.0, target_lift)
+	var lands := delay + flight + (BURST_STAGGER if streaks == 2 else 0.0)
+	_card(FLASH, b, to, {"delay": lands, "life": 0.11, "size": [hs, hs * 1.3], "off": hit_at, "rot": _spin_of(_serial), "tint": FIRE_TINT,
+		"fade_out": 0.4})
+	_card(SPARKS, b, to, {"delay": lands, "life": 0.2, "size": [hs * 0.6, hs * 1.4], "off": hit_at, "rot": _spin_of(_serial),
+		"tint": FIRE_TINT, "fade_out": 0.35})
+	n += 2
+	if style == STYLE_SHELL:
+		_card(FIREBALL, b, to, {"delay": lands, "life": 0.45, "size": [hs * 0.7, hs * 1.3], "off": hit_at, "vel": Vector2(0, 0.3),
+			"tint": FIRE_TINT, "fade_out": 0.7})
+		n += 1
+	return n
+
+
 ## A deterministic angle for a card from its serial (no randomness: replays look the same).
 static func _spin_of(serial: int) -> float:
 	return fposmod(float(serial) * 2.39996, TAU)
@@ -394,6 +506,8 @@ func _rect(c: Dictionary, f: float) -> Color:
 		FIREBALL, SMOKE:
 			var frame := mini(FRAMES - 1, int(f * FRAMES))
 			r = Color(frame * cw, (band_row + (0 if int(c.sprite) == FIREBALL else 1)) * ch, cw, ch)
+		TRACER, SHELL, BOLT:
+			r = Color(int(SHOT_COL[int(c.sprite)]) * cw, (band_row + 3) * ch, cw, ch)
 		_:
 			var col := int(SINGLE_COL[int(c.sprite)])
 			r = Color(col * cw, (band_row + 2) * ch, cw * (2 if int(c.sprite) == RUBBLE else 1), ch)

@@ -744,3 +744,49 @@ static func ring(tex: Texture2D, width: float, unit := false, mirrored := false)
 	var rx := shape.y * r.size.x * width
 	var z := (shape.x - FOOT) * width * ASPECT / WorldArt.PITCH_SIN
 	return {"centre": Vector3(x, 0.0, z), "rx": rx, "rz": rx * shape.z / WorldArt.PITCH_SIN}
+
+
+## Recoil (plan 2026-10-05-kestrel-combat-motion-fx, Task 3): a unit card that fires kicks back along the ground, away
+## from its target, over RECOIL_S and comes home exactly. It moves the card alone (x and z: the gunship bob owns y), never
+## the root, so the pick box, the bars and the selection ellipse stay where they are. Buildings never recoil.
+const RECOIL_S := 0.1
+const RECOIL_OUT := 0.3  # the share of RECOIL_S spent kicking out; the rest eases home
+## The kick (world units) per unit kind; a kind not listed kicks RECOIL_DEFAULT.
+const RECOIL := {"Infantry": 0.02, "AntiArmor": 0.04, "Tank": 0.055, "Helicopter": 0.03, "Capital": 0.05}
+const RECOIL_DEFAULT := 0.025
+
+
+## Starts a kick on `card` away from `toward` (the shot's world direction; only its ground part counts) at time `start`
+## (the effects clock: a delayed shot kicks when its muzzle flashes). A kick on a kick keeps the first rest position.
+static func kick(card: Node3D, toward: Vector3, start: float) -> void:
+	var away := Vector3(-toward.x, 0.0, -toward.z)
+	if away.length_squared() < 1e-10:
+		return
+	if not card.has_meta("recoil_rest"):
+		card.set_meta("recoil_rest", Vector2(card.position.x, card.position.z))
+	var amount := float(RECOIL.get(String(card.get_meta("sprite_kind", "")), RECOIL_DEFAULT))
+	card.set_meta("recoil_dir", away.normalized() * amount)
+	card.set_meta("recoil_t0", start)
+
+
+## Places a kicking card for time `now`; true while the kick runs (or waits on its start), false once the card is home
+## (exactly at its rest position, the recoil state cleared).
+static func recoil_step(card: Node3D, now: float) -> bool:
+	if not card.has_meta("recoil_t0"):
+		return false
+	var rest: Vector2 = card.get_meta("recoil_rest")
+	var f := (now - float(card.get_meta("recoil_t0"))) / RECOIL_S
+	if f >= 1.0:
+		card.position.x = rest.x
+		card.position.z = rest.y
+		card.remove_meta("recoil_t0")
+		card.remove_meta("recoil_dir")
+		card.remove_meta("recoil_rest")
+		return false
+	var p := 0.0
+	if f > 0.0:
+		p = smoothstep(0.0, 1.0, f / RECOIL_OUT) if f < RECOIL_OUT else pow(1.0 - (f - RECOIL_OUT) / (1.0 - RECOIL_OUT), 2.0)
+	var d: Vector3 = card.get_meta("recoil_dir")
+	card.position.x = rest.x + d.x * p
+	card.position.z = rest.y + d.z * p
+	return true
