@@ -507,16 +507,32 @@ every legacy path. What still differs from the boards, and why:
   per building, square to the fixed camera above the painted contact line (85 % of the card height, the boards' sort
   line) and lying on the ground below it, at the boards' pixel size (82 px per tile: CC 3.05 tiles, barracks, factory and
   refinery 2.44, power plant 2.07, lab 1.83, gun turret 1.40, wall 1.22, AA 1.04). The enemy draws the `alien_*`
-  sprites. A building under construction shows the foundation sprite at the boards' site size (170 px, 2.07 tiles; never
-  wider than the building it becomes, so a wall or turret site keeps the building's width), and its bars, pick box and
-  crown follow the smaller painting until it completes. The boards paint no alien foundation, so an enemy site shows the
-  same one. Each card casts the boards' sheared silhouette shadow and keeps a soft contact pad on the ground under its
-  painted footprint. A sprite that fails to load never breaks a building or a unit: a site without its foundation keeps
-  the finished sprite, and an entity without its sprite keeps its fitted model at the model width table
+  sprites. A building under construction no longer shows the boards' foundation slab (`foundation_v1`): live, the user
+  read it as a ruin. A site draws its own building's painting (the alien one for the enemy) at the building's own width,
+  revealed from the painted base up by the build progress (`WorldSprites.show_progress`), the built part under a faint
+  scaffold tint (18 %) with a lit weld seam at the build line, the rest a scaffold lattice and faint sheeting clipped to
+  the painting's silhouette. Its cast shadow is cut at the same line. The bars, crown, label, pick box, paint-mask hit and
+  hover cover follow the built part (a fresh site picks by at least its bottom 15 %), and the card refits as the progress
+  moves. Each site card carries its own copy of the site material (its own build line); finished buildings share one
+  material per texture. No board draws a site part built, so the reveal and the lattice are ours. Each card casts the
+  boards' sheared silhouette shadow and keeps a soft contact pad on the ground under its painted footprint. A sprite that
+  fails to load never breaks a building or a unit: an entity without its sprite keeps its fitted model at the model width table
   (`WorldArt.MODEL_BUILDING_TILES`, `MODEL_UNIT_TILES`; the card widths include a painting's transparent margin). Every
   sprite's alpha scan, paint mask and graded copy are built once as the Kestrel ground loads (`WorldSprites.prewarm`,
-  about 160 ms headless), not on the frame a kind first appears. The lab is `capital_v1`, the sprite the boards' build
-  deck uses for it; the airfield and the depot have no board sprite and share the barracks and refinery sprites.
+  about 160 ms headless), not on the frame a kind first appears. Every one of the 13 building kinds draws its own painting
+  for each side. Seven come from the boards (CC, power plant, refinery, barracks, gun turret, AA turret, wall). The other
+  six, which no board paints (vehicle factory, airfield, battery, antimatter plant, supply depot, research lab), are
+  composites built by `tools/ui/build_building_variants.py` from crops of the boards' own sprites, recoloured and
+  relit, with procedural slabs, pads, tanks, crates and a glass dome (`*_v1.png` and `alien_*_v1.png`; its unit test pins
+  the output, the contact line, distinct silhouettes and the accent hues). They are ours, not the boards': the human
+  factory is the barracks hall with a crane arm and a stack, the alien factory the alien barracks flanked by refinery
+  pods; the airfield is a landing pad with a hangar; the battery a bank of lime cells on a plinth; the antimatter plant
+  the power plant recoloured violet with a taller column (2.32 tiles); the depot an apron of tanks and crates; the lab a
+  low block under a glass dome. The dome reads a little CG next to the painted sprites, and the alien depot and battery
+  decks are flatter than the boards' alien buildings.
+- Placement ghost: on Kestrel the ghost is a translucent card of the armed kind's painting for your side on the hovered
+  hex (60 % opacity), tinted 62 % toward the legacy validity colours (green valid, red invalid; the post chain mutes the
+  red toward terracotta), with no cast shadow; it hides on cancel. Survival keeps the hex cylinder.
   Units are sprite cards too, one per unit (`WorldArt.UNIT_TILES`: infantry 0.98, tank 1.71, anti-armour 1.10, gunship
   2.32, capital 4.02, harvester 1.34): the infantry sprite is itself the boards' three-figure squad, so a squad is one
   card, as the boards draw it. A card never turns; it shows its painting mirrored while it moves against the way it is
@@ -525,7 +541,7 @@ every legacy path. What still differs from the boards, and why:
   just over the painted top. The strategic badge (a coloured plate with I, AR, AT, AIR, CAP or HAR) is not built for a
   Kestrel unit card: the boards draw none, and over a column of squads one hex apart it covered the squad above. The gunship card hovers 0.30
   world units over the ground (`WorldSprites.HOVER`) with its bob; its shadow, contact band and team ring stay on the
-  ground under it. The human capital unit uses `capital_v1`, the same painting as the lab.
+  ground under it. The human capital unit uses `capital_v1` (the lab now draws its own `research_lab_v1`).
 - Colour: the Kestrel post chain (filmic, exposure 0.95, saturation 0.50, the `gSun` overlay) drew the sprites lighter and
   greyer than the boards (CC body Lab L 45.8 and chroma 5.3 live against 36.5 and 7.3 on gp01). The cards, and only the
   cards, sample a copy of each sprite pre-graded by `WorldSprites.GRADE` (brightness 0.80, contrast 1.02, saturation
@@ -534,8 +550,7 @@ every legacy path. What still differs from the boards, and why:
   opacity (`WorldSprites.SHADOW_GAIN`) because the same chain lifts dark ground.
 - What still differs from the boards' sprites: each painting has one fixed facing, and a unit moving the other way shows
   it mirrored, so a mirrored sprite's light falls from the wrong side; the cards are flat billboards, so nothing turns
-  or shows a side the painting does not have; the lab and the human capital unit share `capital_v1`; the airfield and
-  the supply depot borrow the barracks and refinery sprites (no board draws them).
+  or shows a side the painting does not have; six building kinds use our composites, not board paintings (see above).
 - Placement stays one hex per building, so a big sprite overhangs its neighbours (mostly to the north, where the
   painting rises) and two big neighbours can overlap on screen. Picking follows the painted pixels, not the hex: a click
   must fall inside the screen rectangle of the sprite's opaque pixels and on paint by the sprite's 64 x 64 paint mask
@@ -545,7 +560,7 @@ every legacy path. What still differs from the boards, and why:
   between two touching units the nearer root wins, and a click on none keeps the legacy 32 px reach around a root
   (`_pick_entity`). The hover outline draws without a depth test, so it is hidden on a hex a building or unit stands on
   and on a hex whose centre a painted body's box covers on screen (as drawn: lifted for the gunship, mirrored, a site's
-  foundation): for a CC the hexes north, north-east, north-west and two north of it; the hexes beside and south of its
+  built part): for a CC the hexes north, north-east, north-west and two north of it; the hexes beside and south of its
   base still show the outline.
 - Selection draws the boards' ellipse, not the legacy spinning ring. A building takes StructureSelected's (rx 132 and
   ry 46 for a 200 px barracks, centred 155 px below the sprite's top, filled at 8 %), scaled by its painted width and
@@ -605,3 +620,7 @@ Every board is at least 20 points above `tools/ui/world_baseline.json`. Notes on
 - The review fixes (paint-mask picking, the selection ellipse, the foundation sizing) were captured again the same way:
   every board is within 0.02 of the table (gp01 80.88, gp03 82.62, gp04 77.85, gp05 80.68, gp06 80.56, gp07 80.29, gp08
   74.38), so `tools/ui/world_scores.json` was left as it is. The Survival home frame pairs at 99.77 against its last capture.
+- The building variants, the construction reveal and the placement ghost were captured the same way: every board is
+  within 0.05 of the table (gp01 80.83, gp03 82.62, gp04 77.84, gp05 80.64, gp06 80.54, gp07 80.26, gp08 74.38; the
+  deploy frames hold no variant kind and no site), so `tools/ui/world_scores.json` was left as it is. Draw calls and
+  primitives are unchanged (home 25 / 156,776, max 78 / 209,766). Survival pairs at 99.38.
