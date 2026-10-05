@@ -32,8 +32,9 @@ const SHADOW_LOD := 2.0
 
 ## Board pixel widths (Main.dc.html, BuildDeck, StructureSelected, OrdersArmed, WaveInbound, CoreAssault). Battery is the
 ## board's second, smaller power plant; SupplyDepot is drawn at the board's depot size (the foundation, 170); the
-## AntimatterPlant has no board and takes the power plant's. Units are Task 2's (WorldArt.UNIT_TILES still sizes the
-## 3D unit models by their own width until units become cards).
+## AntimatterPlant has no board and takes the power plant's. Units (WorldArt.UNIT_TILES): infantry 80 (every board but
+## CoreAssault's 90), tank 140, anti-armour 90 (CoreAssault 100), gunship 190 (CoreAssault, WaveInbound), capital 330
+## (CoreAssault's alien capital; the human one takes the same), harvester 110 (Main's second one 105).
 const MOCK_PX := {
 	"CommandCenter": 250, "PowerPlant": 170, "Battery": 160, "Refinery": 200, "Barracks": 200, "VehicleFactory": 200,
 	"Airfield": 200, "ResearchLab": 150, "GunTurret": 115, "AaTurret": 85, "Wall": 100, "SupplyDepot": 170,
@@ -56,16 +57,46 @@ const SPRITES := {
 	"GunTurret": ["gun_turret_v2", "alien_gun_turret_v1"],
 	"AaTurret": ["aa_turret_v2", "alien_aa_turret_v1"],
 	"Wall": ["wall_v2", "alien_wall_v1"],
+	# units: one sprite per entity (the infantry sprite is itself the boards' three-figure squad)
+	"Infantry": ["infantry_v2", "alien_infantry_v1"],
+	"Tank": ["tank_v2", "alien_tank_v1"],
+	"AntiArmor": ["anti_armor_v2", "alien_anti_armor_v1"],
+	"Helicopter": ["helicopter_v2", "alien_helicopter_v1"],
+	"Capital": ["capital_v1", "alien_capital_v1"],
+	"Harvester": ["harvester_v2", "alien_harvester_v1"],
 }
+## earthfront_3d._create_unit's kind index -> the catalogue's unit kind (the bridge's own kind names).
+const UNIT_KINDS := ["Infantry", "Tank", "AntiArmor", "Helicopter", "Capital", "Harvester"]
+## The way each unit painting faces on screen: -1 left, 1 right, 0 head-on (never mirrored). A unit moving the other way
+## shows the painting mirrored; a stopped one keeps its last facing. The boards draw every unit as painted (no mirror).
+const FACING := {
+	"infantry_v2": -1, "tank_v2": -1, "anti_armor_v2": -1, "helicopter_v2": -1, "capital_v1": -1, "harvester_v2": -1,
+	"alien_infantry_v1": 1, "alien_tank_v1": -1, "alien_anti_armor_v1": 1, "alien_helicopter_v1": 0,
+	"alien_capital_v1": 0, "alien_harvester_v1": -1,
+}
+const FACING_DEADBAND := 0.02  # world units of horizontal motion below which a unit keeps its facing (a move straight north)
+## The boards' contact band under every sprite (hud.css `.ao`): the silhouette, black, squashed to AO_SCALE of its height
+## about the contact line, AO_DROP lower (3 px on a board unit about 120 px wide), blurred 6 px, at opacity AO_ALPHA. The
+## blur is a coarse mip level across and a 7-tap Gaussian along the squashed axis (6 px there is AO_SIGMA of the
+## painting's height); the band reaches AO_MARGIN past the painting on each side so the blur has room.
+const AO_SCALE := 0.13
+const AO_DROP := 0.025
+const AO_ALPHA := 0.6
+const AO_SIGMA := 0.38
+const AO_LOD := 4.5
+const AO_MARGIN := Vector2(0.15, 0.76)  # in card u and v: about two blur sigmas
 ## Profile kinds that keep their fitted 3D model (none today); any kind outside SPRITES falls back the same way.
 const NO_SPRITE: Array[String] = []
 
 static var _materials := {}  # texture path -> StandardMaterial3D
 static var _bounds := {}  # texture path -> Rect2
-static var _mesh: ArrayMesh
-static var _shadow_mesh: ArrayMesh
+static var _meshes: Array[ArrayMesh] = [null, null]  # as painted, mirrored
+static var _shadow_meshes: Array[ArrayMesh] = [null, null]
+static var _contact_meshes: Array[ArrayMesh] = [null, null]
 static var _shadow_shader: Shader
 static var _shadow_materials := {}  # texture path -> ShaderMaterial
+static var _contact_shader: Shader
+static var _contact_materials := {}  # texture path -> ShaderMaterial
 
 
 static func cos_pitch() -> float:
@@ -135,8 +166,10 @@ static func opaque_bounds(tex: Texture2D) -> Rect2:
 
 
 ## The unit card (1 wide, ASPECT tall on screen) shared by every sprite entity; the node's uniform scale sets the width.
-static func card_mesh() -> ArrayMesh:
-	if _mesh == null:
+## `mirrored` reads the painting right to left (u flipped); the geometry is the same.
+static func card_mesh(mirrored := false) -> ArrayMesh:
+	var i := 1 if mirrored else 0
+	if _meshes[i] == null:
 		var c := cos_pitch()
 		var s := WorldArt.PITCH_SIN
 		var up := Vector3(0.0, c, -s) * ASPECT  # the camera's up vector: square to the view, one depth
@@ -152,17 +185,18 @@ static func card_mesh() -> ArrayMesh:
 		# ground strip: v FOOT .. 1, lying before the root
 		var g0 := b0 + fwd * (1.0 - FOOT)
 		var g1 := b1 + fwd * (1.0 - FOOT)
-		_quad(st, [a0, a1, b1, b0], [Vector2(0, 0), Vector2(1, 0), Vector2(1, FOOT), Vector2(0, FOOT)])
-		_quad(st, [b0, b1, g1, g0], [Vector2(0, FOOT), Vector2(1, FOOT), Vector2(1, 1), Vector2(0, 1)])
-		_mesh = st.commit()
-	return _mesh
+		_quad(st, [a0, a1, b1, b0], _uvs([Vector2(0, 0), Vector2(1, 0), Vector2(1, FOOT), Vector2(0, FOOT)], mirrored))
+		_quad(st, [b0, b1, g1, g0], _uvs([Vector2(0, FOOT), Vector2(1, FOOT), Vector2(1, 1), Vector2(0, 1)], mirrored))
+		_meshes[i] = st.commit()
+	return _meshes[i]
 
 
 ## The cast shadow's ground quad for the unit card: the part above the contact line (v 0 .. FOOT) laid on the ground in
 ## front of the root, flattened and sheared as the boards draw it (screen down 0.34 d, right 0.589 d for a pixel d above
 ## the line; a screen-down distance s is s / PITCH_SIN on the ground).
-static func shadow_mesh() -> ArrayMesh:
-	if _shadow_mesh == null:
+static func shadow_mesh(mirrored := false) -> ArrayMesh:
+	var i := 1 if mirrored else 0
+	if _shadow_meshes[i] == null:
 		var d := FOOT * ASPECT
 		var far := Vector3(SHADOW_SHEAR * d, 0.0, SHADOW_SCALE * d / WorldArt.PITCH_SIN)
 		var st := SurfaceTool.new()
@@ -170,9 +204,73 @@ static func shadow_mesh() -> ArrayMesh:
 		st.set_normal(Vector3.UP)
 		var b0 := Vector3(-0.5, 0, 0)
 		var b1 := Vector3(0.5, 0, 0)
-		_quad(st, [b0 + far, b1 + far, b1, b0], [Vector2(0, 0), Vector2(1, 0), Vector2(1, FOOT), Vector2(0, FOOT)])
-		_shadow_mesh = st.commit()
-	return _shadow_mesh
+		_quad(st, [b0 + far, b1 + far, b1, b0], _uvs([Vector2(0, 0), Vector2(1, 0), Vector2(1, FOOT), Vector2(0, FOOT)], mirrored))
+		_shadow_meshes[i] = st.commit()
+	return _shadow_meshes[i]
+
+
+## The contact band's ground quad for the unit card: card pixel (u, v) lands AO_SCALE * (v - FOOT) + AO_DROP below the
+## root on screen (s / PITCH_SIN on the ground), with AO_MARGIN of blur room around the painting (UVs past 0..1 read
+## the clamped, transparent edge).
+static func contact_mesh(mirrored := false) -> ArrayMesh:
+	var i := 1 if mirrored else 0
+	if _contact_meshes[i] == null:
+		var u0 := -AO_MARGIN.x
+		var u1 := 1.0 + AO_MARGIN.x
+		var v0 := -AO_MARGIN.y
+		var v1 := 1.0 + AO_MARGIN.y
+		var z := func(v: float) -> float: return (AO_SCALE * (v - FOOT) + AO_DROP) * ASPECT / WorldArt.PITCH_SIN
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.set_normal(Vector3.UP)
+		var p := [Vector3(u0 - 0.5, 0, z.call(v0)), Vector3(u1 - 0.5, 0, z.call(v0)), Vector3(u1 - 0.5, 0, z.call(v1)), Vector3(u0 - 0.5, 0, z.call(v1))]
+		_quad(st, p, _uvs([Vector2(u0, v0), Vector2(u1, v0), Vector2(u1, v1), Vector2(u0, v1)], mirrored))
+		_contact_meshes[i] = st.commit()
+	return _contact_meshes[i]
+
+
+static func contact_material_for(tex: Texture2D) -> Material:
+	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
+	if not _contact_materials.has(key):
+		if _contact_shader == null:
+			_contact_shader = Shader.new()
+			_contact_shader.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
+uniform sampler2D sprite : source_color, filter_linear_mipmap, repeat_disable;
+uniform float strength = 0.6;
+uniform float lod = 4.5;
+uniform float sigma = 0.38;
+void fragment() {
+    float a = 0.0;
+    float norm = 0.0;
+    for (int i = -3; i <= 3; i++) {
+        float w = exp(-float(i * i) / 4.5);
+        a += w * textureLod(sprite, vec2(UV.x, UV.y + float(i) * sigma / 1.5), lod).a;
+        norm += w;
+    }
+    ALBEDO = vec3(0.0);
+    ALPHA = a / norm * strength;
+}
+"""
+		var m := ShaderMaterial.new()
+		m.shader = _contact_shader
+		m.set_shader_parameter("sprite", tex)
+		m.set_shader_parameter("strength", AO_ALPHA)
+		m.set_shader_parameter("lod", AO_LOD)
+		m.set_shader_parameter("sigma", AO_SIGMA)
+		m.render_priority = -1  # with the silhouette shadow and the prop decals
+		_contact_materials[key] = m
+	return _contact_materials[key]
+
+
+static func _uvs(uv: Array, mirrored: bool) -> Array:
+	if not mirrored:
+		return uv
+	var out := []
+	for p in uv:
+		out.append(Vector2(1.0 - (p as Vector2).x, (p as Vector2).y))
+	return out
 
 
 static func shadow_material_for(tex: Texture2D) -> Material:
@@ -208,8 +306,9 @@ static func _quad(st: SurfaceTool, p: Array, uv: Array) -> void:
 
 
 ## A sprite card for `kind` and `owner`, `tiles` tiles wide, its contact line on the parent's origin (null without a
-## sprite). It casts no shadow; the caller adds the contact pad.
-static func make_card(kind: String, owner: int, tiles: float) -> MeshInstance3D:
+## sprite). It casts no real shadow; it carries the boards' silhouette shadow, and with `contact` (units: they move, so
+## they take no ground pad) the boards' contact band too.
+static func make_card(kind: String, owner: int, tiles: float, contact := false) -> MeshInstance3D:
 	var tex := texture_for(kind, owner)
 	if tex == null:
 		return null
@@ -221,13 +320,43 @@ static func make_card(kind: String, owner: int, tiles: float) -> MeshInstance3D:
 	card.position = Vector3(0.0, CARD_LIFT, 0.0)
 	card.set_meta("sprite_kind", kind)
 	card.set_meta("sprite_texture", tex)
+	card.set_meta("native_facing", int(FACING.get(tex.resource_path.get_file().get_basename(), 0)))
+	card.set_meta("mirrored", false)
 	var shadow := MeshInstance3D.new()
 	shadow.name = "SpriteShadow"
 	shadow.mesh = shadow_mesh()
 	shadow.material_override = shadow_material_for(tex)
 	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	card.add_child(shadow)
+	if contact:
+		var band := MeshInstance3D.new()
+		band.name = "SpriteContact"
+		band.mesh = contact_mesh()
+		band.material_override = contact_material_for(tex)
+		band.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		card.add_child(band)
 	return card
+
+
+## Turns the card toward its horizontal screen motion `dx` (world x: the Kestrel camera is north up): the painting shows
+## mirrored when it moves against the way it is painted facing. A move under FACING_DEADBAND, or a head-on painting, keeps
+## the facing. Returns whether the card flipped.
+static func face(card: MeshInstance3D, dx: float) -> bool:
+	var native := int(card.get_meta("native_facing", 0))
+	if native == 0 or absf(dx) < FACING_DEADBAND:
+		return false
+	var mirrored := signf(dx) != float(native)
+	if mirrored == bool(card.get_meta("mirrored", false)):
+		return false
+	card.set_meta("mirrored", mirrored)
+	card.mesh = card_mesh(mirrored)
+	var shadow := card.get_node_or_null("SpriteShadow") as MeshInstance3D
+	if shadow != null:
+		shadow.mesh = shadow_mesh(mirrored)
+	var band := card.get_node_or_null("SpriteContact") as MeshInstance3D
+	if band != null:
+		band.mesh = contact_mesh(mirrored)
+	return true
 
 
 ## Shows the foundation while the building is under construction, its own sprite once it is done (same card size).
@@ -249,8 +378,10 @@ static func body_top_y(tex: Texture2D, width: float, lift: float = CARD_LIFT) ->
 
 ## The pick box: a flat box in the root's space whose eight corners project onto the painted body's screen rectangle
 ## (earthfront_3d._parts_hold), so a click on a transparent corner of the card is not a click on the building.
-static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT) -> AABB:
+static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirrored := false) -> AABB:
 	var r := opaque_bounds(tex)
+	if mirrored:
+		r.position.x = 1.0 - r.end.x
 	var h := width * ASPECT
 	var y_top := lift + (FOOT - r.position.y) * h / cos_pitch()
 	var y_bottom := lift + (FOOT - r.end.y) * h / cos_pitch()

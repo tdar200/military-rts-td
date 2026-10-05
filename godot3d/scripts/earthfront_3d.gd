@@ -145,6 +145,10 @@ var deposit_tiles: Dictionary = {}
 var hover_tile: MeshInstance3D
 var hover_outline_key := Vector3i(-1, -1, -1)  # hex and zoom the Kestrel hover outline was last built for
 const HOVER_LIFT_KESTREL := 0.07
+## Kestrel unit cards: the badge (a 0.13-tall billboard) and the bars ride this far over the painted top, so on screen the
+## badge clears the painting and the bars clear the badge (a vertical offset y shows as y * cos(pitch) on screen).
+const UNIT_BADGE_OVER := 0.14
+const UNIT_BARS_OVER := 0.30
 var range_ring: MeshInstance3D
 var camera_focus_target := Vector3(16.7, 0.0, 10.0)
 var camera_focus_zoom := 12.2
@@ -1037,13 +1041,28 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 	root.set_meta("last_dust", 0.0)
 	var formation_angle := TAU * float(units.size() % 7) / 7.0
 	root.set_meta("formation_offset", Vector3(cos(formation_angle), 0, sin(formation_angle)) * (0.34 + float(units.size() % 3) * 0.12))
-	if team == HUMAN:
+	var card: MeshInstance3D = null
+	if world_art_on:  # the boards' painted sprite on a camera-facing card (one per squad, as the boards draw it)
+		var sprite_kind := String(WorldSprites.UNIT_KINDS[clampi(kind, 0, WorldSprites.UNIT_KINDS.size() - 1)])
+		card = WorldSprites.make_card(sprite_kind, team, float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)]), true)
+	if card != null:
+		card.name = "UnitVisual"
+		root.add_child(card)
+	elif team == HUMAN:
 		_create_human_unit_model(root, kind)
 	else:
 		_create_alien_unit_model(root, kind)
 	var bar_y: Array = [0.88, 0.885, 0.955, 0.958]  # health back, fill, shield back, fill
 	var badge_y := 0.48
-	if world_art_on:
+	if card != null:
+		# bars and badge ride the painted top; picking takes the painted body only; the card never turns, it mirrors
+		var tiles := float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)])
+		root.set_meta("visual_tiles", tiles)
+		_lift_unit_card(root, card, root.position)
+		var top := WorldSprites.body_top_y(card.get_meta("sprite_texture"), card.scale.x, card.position.y)
+		badge_y = top + UNIT_BADGE_OVER
+		bar_y = [top + UNIT_BARS_OVER, top + UNIT_BARS_OVER + 0.005, top + UNIT_BARS_OVER + 0.075, top + UNIT_BARS_OVER + 0.078]
+	elif world_art_on:
 		# spec addendum W6: every unit model (the box-built squads included, they build UnitVisual too) fits its width
 		var tiles := float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)])
 		var visual := root.get_node_or_null("UnitVisual") as Node3D
@@ -1082,6 +1101,28 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 	shield_fill.name = "ShieldFill"
 	shield_fill.visible = false
 	units.append(root)
+
+
+## Kestrel: puts a unit's sprite card on the ground under `goal` (the root's resting position, 0.08 over the ground): the
+## lift keeps the card's ground strip over the terrain before it. Bars and badge move with it, the pick box follows.
+func _lift_unit_card(root: Node3D, card: MeshInstance3D, goal: Vector3) -> void:
+	var ground := _height_world(goal.x, goal.z)
+	var lift := _card_lift(Vector3(goal.x, ground, goal.z), card.scale.x) - (goal.y - ground)
+	var delta := lift - float(card.get_meta("base_y", card.position.y))
+	card.position.y = lift + (card.position.y - float(card.get_meta("base_y", card.position.y)))  # keeps a gunship's bob
+	card.set_meta("base_y", lift)
+	card.set_meta("lift_at", goal)
+	if absf(delta) > 0.0:
+		for name in ["StrategicBadge", "HealthBack", "HealthFill", "ShieldBack", "ShieldFill"]:
+			var part := root.get_node_or_null(name) as Node3D
+			if part != null:
+				part.position.y += delta
+	_refresh_unit_pick(root, card)
+
+
+func _refresh_unit_pick(root: Node3D, card: MeshInstance3D) -> void:
+	var box := WorldSprites.pick_box(card.get_meta("sprite_texture"), card.scale.x, float(card.get_meta("base_y")), bool(card.get_meta("mirrored", false)))
+	root.set_meta("pick_parts", [box])
 
 
 func _add_unit_badge(root: Node3D, team: int, kind: int, y: float = 0.48) -> void:
@@ -1221,20 +1262,26 @@ func _glide_bridge_nodes(delta: float) -> void:
 			node.rotation.y = lerp_angle(node.rotation.y, float(node.get_meta("glide_yaw")), turn)
 
 
-func _animate_world(delta: float) -> void:
-	for tree in get_tree().get_nodes_in_group("wind"):
-		if is_instance_valid(tree):
-			tree.rotation.z = sin(time_alive * 0.72 + float(tree.get_instance_id() % 17)) * 0.018
+## The gunship's hover bob, over its rest height (`base_y`: a Kestrel card's lift, 0 for a model).
+func _bob_units() -> void:
 	for unit in units:
 		if not is_instance_valid(unit):
 			continue
 		var visual := unit.get_node_or_null("UnitVisual") as Node3D
 		if visual:
-			visual.position.y = sin(time_alive * 2.0) * 0.018 if int(unit.get_meta("kind", 0)) == 3 else 0.0
+			var rest := float(visual.get_meta("base_y", 0.0))
+			visual.position.y = rest + (sin(time_alive * 2.0) * 0.018 if int(unit.get_meta("kind", 0)) == 3 else 0.0)
 			visual.rotation.z = 0.0
 			var turret := visual.find_child("Turret", true, false) as Node3D
 			if turret:
 				turret.rotation.y = 0.0
+
+
+func _animate_world(delta: float) -> void:
+	for tree in get_tree().get_nodes_in_group("wind"):
+		if is_instance_valid(tree):
+			tree.rotation.z = sin(time_alive * 0.72 + float(tree.get_instance_id() % 17)) * 0.018
+	_bob_units()
 	for standard in get_tree().get_nodes_in_group("standards"):
 		if is_instance_valid(standard):
 			standard.rotation.y = sin(time_alive * 1.35 + float(standard.get_instance_id() % 7)) * 0.055
@@ -1494,7 +1541,10 @@ func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
 			if not _parts_hold(candidate, screen_position, to_screen):
 				continue
 			var root_at: Vector2 = to_screen.call(candidate, Vector3.ZERO)
-			var key := Vector2(float(candidate.get_meta("visual_tiles", 0.0)), root_at.distance_to(screen_position))
+			var rank := float(candidate.get_meta("visual_tiles", 0.0))
+			if String(candidate.get_meta("category", "unit")) == "unit":
+				rank = 0.0  # a unit stands in front of the buildings; between touching units the nearer root wins
+			var key := Vector2(rank, root_at.distance_to(screen_position))
 			if key.x < best.x or (key.x == best.x and key.y < best.y):
 				nearest = candidate
 				best = key
@@ -2366,9 +2416,18 @@ func _sync_bridge_entities(entities: Array) -> void:
 					_play_tone(620.0, 0.1, 0.1, 90.0)
 		var bridge_motion := destination - entity_node.position
 		bridge_motion.y = 0.0
+		var unit_card: MeshInstance3D = (entity_node.get_node_or_null("UnitVisual") as MeshInstance3D) if category == "unit" else null
+		if unit_card != null and not unit_card.has_meta("sprite_kind"):
+			unit_card = null
+		if unit_card != null:  # Kestrel: a card never turns; it mirrors toward its screen motion and rides the ground
+			if WorldSprites.face(unit_card, bridge_motion.x):
+				_refresh_unit_pick(entity_node, unit_card)
+			if unit_card.get_meta("lift_at", Vector3.INF) != destination:
+				_lift_unit_card(entity_node, unit_card, destination)
 		if category == "unit" and bridge_motion.length_squared() > 0.001:
 			var direction := bridge_motion.normalized()
-			entity_node.set_meta("glide_yaw", atan2(-direction.x, -direction.z))
+			if unit_card == null:
+				entity_node.set_meta("glide_yaw", atan2(-direction.x, -direction.z))
 			if time_alive - float(entity_node.get_meta("last_dust", 0.0)) > 0.38 and int(entity_node.get_meta("kind", 0)) > 0:
 				entity_node.set_meta("last_dust", time_alive)
 				_dust_puff(entity_node.position - direction * 0.26)

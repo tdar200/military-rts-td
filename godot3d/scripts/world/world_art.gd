@@ -18,11 +18,10 @@ const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoo
 const BUILDING_TILES := {"CommandCenter": 3.05, "Barracks": 2.44, "VehicleFactory": 2.44, "Airfield": 2.44, "ResearchLab": 1.83,
 	"Refinery": 2.44, "AntimatterPlant": 2.07, "PowerPlant": 2.07, "Battery": 1.95, "SupplyDepot": 2.07, "GunTurret": 1.40,
 	"AaTurret": 1.04, "Wall": 1.22}
-## Visual width of every unit's 3D model in tiles (spec addendum W6). The boards' unit sprites are infantry 80 px (0.98
-## tiles), tank 140 (1.71), anti-armour 90 (1.10), gunship 190 (2.32), capital 330 (4.02), harvester 110 (1.34)
-## (WorldSprites.MOCK_PX); those are card widths with the transparent margin, so they replace these values when units
-## become sprite cards (plan Task 2), not before.
-const UNIT_TILES := [1.0, 1.6, 1.0, 1.5, 1.8, 1.5]  # by _create_unit kind: infantry, tank, anti-armour, gunship, capital, harvester
+## Width of every unit's sprite card in tiles, from the boards (WorldSprites.MOCK_PX / 82): infantry 80 px (0.98),
+## tank 140 (1.71), anti-armour 90 (1.10), gunship 190 (2.32), capital 330 (4.02), harvester 110 (1.34). Card widths
+## include the painting's transparent margin. A unit kind without a sprite would fit its 3D model to the same width.
+const UNIT_TILES := [0.98, 1.71, 1.10, 2.32, 4.02, 1.34]  # by _create_unit kind: infantry, tank, anti-armour, gunship, capital, harvester
 ## Authored material name (lower case contains) -> albedo for the boards' warm concrete, olive and gunmetal.
 const MODEL_PALETTE := {"concrete": "75684f", "olive": "727848", "gunmetal": "3d4040", "energy": "3f8f9c"}
 

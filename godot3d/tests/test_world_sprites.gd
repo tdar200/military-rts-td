@@ -313,3 +313,232 @@ func test_props_clear_under_the_painted_footprint(t) -> void:
 			left += 1
 	t.eq(left, 0, "no prop card left under the painted footprint")
 	scene.free()
+
+
+# --- Task 2: units --------------------------------------------------------------------------------------------------
+
+const UNIT_SPRITE_FILES := [["infantry_v2", "alien_infantry_v1"], ["tank_v2", "alien_tank_v1"],
+	["anti_armor_v2", "alien_anti_armor_v1"], ["helicopter_v2", "alien_helicopter_v1"], ["capital_v1", "alien_capital_v1"],
+	["harvester_v2", "alien_harvester_v1"]]
+
+
+## A bridge unit entity at hex `tile` (the sim's own coordinates, as the snapshot sends them).
+func _unit_entity(scene, id: int, kind: String, owner: int, at: Vector3) -> Dictionary:
+	var bits: Vector2i = scene._world_to_sim_bits(at)
+	return {"id": id, "category": "unit", "kind": kind, "owner": owner, "x_bits": bits.x, "z_bits": bits.y,
+		"hp_bits": 65536 * 100, "max_hp_bits": 65536 * 100}
+
+
+func test_unit_widths_follow_the_boards(t) -> void:
+	t.eq(WorldSprites.UNIT_KINDS, ["Infantry", "Tank", "AntiArmor", "Helicopter", "Capital", "Harvester"], "by _create_unit kind")
+	for i in WorldSprites.UNIT_KINDS.size():
+		var kind: String = WorldSprites.UNIT_KINDS[i]
+		t.near(float(WorldArt.UNIT_TILES[i]), float(WorldSprites.MOCK_PX[kind]) / 82.0, 0.006, "%s card width in tiles" % kind)
+	t.near(float(WorldArt.UNIT_TILES[3]), 2.32, 0.006, "gunship 190 px (CoreAssault, WaveInbound)")
+	t.near(float(WorldArt.UNIT_TILES[4]), 4.02, 0.006, "capital 330 px (CoreAssault)")
+	t.ok(float(WorldArt.UNIT_TILES[1]) > float(WorldArt.UNIT_TILES[0]), "a tank reads bigger than a squad")
+
+
+func test_every_unit_kind_has_a_human_and_an_alien_sprite(t) -> void:
+	for i in WorldSprites.UNIT_KINDS.size():
+		var kind: String = WorldSprites.UNIT_KINDS[i]
+		for owner in [0, 1]:
+			var tex := WorldSprites.texture_for(kind, owner)
+			t.ok(tex != null and tex.resource_path.ends_with("/%s.png" % UNIT_SPRITE_FILES[i][owner]), "%s owner %d: %s" % [kind, owner, tex])
+
+
+func test_kestrel_units_are_sprite_cards(t) -> void:
+	var scene := _kestrel_scene()
+	for owner in [0, 1]:
+		for kind in 6:
+			scene._create_unit(owner, Vector3(10, 0, 10), kind)
+			var unit: Node3D = scene.units.back()
+			var visual := unit.get_node_or_null("UnitVisual") as Node3D
+			var label := "owner %d kind %d" % [owner, kind]
+			t.ok(visual is MeshInstance3D and visual.has_meta("sprite_kind"), "%s: the UnitVisual is a sprite card" % label)
+			if not (visual is MeshInstance3D):
+				continue
+			t.ok(_card_texture(visual).resource_path.ends_with("/%s.png" % UNIT_SPRITE_FILES[kind][owner]), "%s: its sprite" % label)
+			for n in unit.find_children("*", "Node3D", true, false):
+				t.ok(not String(n.scene_file_path).ends_with(".glb"), "%s: no authored model" % label)
+			t.eq(visual.get_child_count(), 2, "%s: only the card's two shadows under it (no box-built figures)" % label)
+			var tiles := float(WorldArt.UNIT_TILES[kind])
+			t.near(visual.scale.x, tiles * WorldArt.TILE, 0.001, "%s: card width" % label)
+			t.near(float(unit.get_meta("visual_tiles", 0.0)), tiles, 0.001, "%s: visual_tiles" % label)
+			t.eq(visual.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "%s: no real cast shadow" % label)
+			var parts: Array = unit.get_meta("pick_parts", [])
+			t.eq(parts.size(), 1, "%s: one pick box" % label)
+			if parts.size() == 1:
+				var want := WorldSprites.pick_box(_card_texture(visual), visual.scale.x, visual.position.y, false)
+				t.ok((parts[0] as AABB).is_equal_approx(want), "%s: the opaque rect" % label)
+	scene.free()
+
+
+func test_unit_card_stands_on_the_units_ground_point(t) -> void:
+	var scene := _kestrel_scene()
+	var at: Vector3 = scene._hex_world(12, 12)
+	scene._sync_bridge_entities([_unit_entity(scene, 980, "Tank", 0, at)])
+	var unit: Node3D = scene.bridge_nodes[980]
+	var card := unit.get_node("UnitVisual") as Node3D
+	var goal: Vector3 = unit.get_meta("glide_to")
+	var ground: float = scene._height_world(goal.x, goal.z)
+	var contact: float = goal.y + card.position.y  # where the card's contact line (the painted ground) ends up
+	t.ok(contact >= ground + WorldSprites.CARD_LIFT - 1e-4, "not buried (%.3f over the ground)" % (contact - ground))
+	t.ok(contact <= ground + WorldSprites.CARD_LIFT + 0.08, "and not floating (%.3f over the ground)" % (contact - ground))
+	t.near(card.position.x, 0.0, 1e-6, "centred on the root")
+	t.near(float(card.get_meta("base_y", -1.0)), card.position.y, 1e-6, "the bob's rest height is the lift")
+	scene.free()
+
+
+func test_unit_shadows_the_boards_way(t) -> void:
+	# hud.css .shd (the cast silhouette) and .ao (the dark contact band: silhouette squashed to 0.13 at the 84 % line,
+	# 3 px down, blur 6, opacity .6), one shared material per texture
+	var card := WorldSprites.make_card("Tank", 0, 1.71, true)
+	var other := WorldSprites.make_card("Tank", 0, 1.71, true)
+	t.ok(card.get_node_or_null("SpriteShadow") != null, "the cast silhouette")
+	var ao := card.get_node_or_null("SpriteContact") as MeshInstance3D
+	t.ok(ao != null, "the contact band")
+	if ao != null:
+		t.ok(ao.material_override == (other.get_node("SpriteContact") as MeshInstance3D).material_override, "shared per texture")
+		t.ok(ao.mesh == (other.get_node("SpriteContact") as MeshInstance3D).mesh, "one shared mesh")
+		t.eq(ao.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "no real shadow")
+		var box := ao.mesh.get_aabb()
+		t.near(box.size.y, 0.0, 1e-5, "flat on the ground")
+		t.ok(box.position.z < 0.0 and box.end.z > 0.0, "around the contact line")
+		var tall := WorldSprites.AO_SCALE * (1.0 + 2.0 * WorldSprites.AO_MARGIN.y)  # the squashed painting plus its blur room
+		t.near(box.size.z * WorldArt.PITCH_SIN, tall, 1e-4, "squashed to 0.13 on screen, blur room included")
+		t.ok(tall < 0.35, "a thin band (%.3f of the width)" % tall)
+		var m := ao.material_override as ShaderMaterial
+		t.near(float(m.get_shader_parameter("strength")), 0.6, 0.001, "the boards' .ao opacity")
+	var building := WorldSprites.make_card("Barracks", 0, 2.44)
+	t.ok(building.get_node_or_null("SpriteContact") == null, "a building keeps its contact pad instead")
+	card.free()
+	other.free()
+	building.free()
+
+
+func test_unit_faces_its_horizontal_screen_motion(t) -> void:
+	var scene := _kestrel_scene()
+	var start: Vector3 = scene._hex_world(14, 12)
+	var west: Vector3 = scene._hex_world(12, 12)
+	var east: Vector3 = scene._hex_world(16, 12)
+	var north: Vector3 = scene._hex_world(16, 10)
+	# both units in every snapshot (a unit missing from one is removed, one appearing later is announced to the HUD)
+	# each snapshot is followed by the glide arriving (the test scene runs no frames)
+	var sync := func(squad_at: Vector3, tank_at: Vector3) -> void:
+		scene._sync_bridge_entities([_unit_entity(scene, 981, "Infantry", 1, squad_at), _unit_entity(scene, 982, "Tank", 0, tank_at)])
+		for id in [981, 982]:
+			var node: Node3D = scene.bridge_nodes[id]
+			node.position = node.get_meta("glide_to")
+	sync.call(start, start)
+	# the alien squad is painted facing right: moving toward -x mirrors it, and it keeps the mirror when it stops
+	var squad: Node3D = scene.bridge_nodes[981]
+	var card := squad.get_node("UnitVisual") as MeshInstance3D
+	var tank: Node3D = scene.bridge_nodes[982]
+	var tank_card := tank.get_node("UnitVisual") as MeshInstance3D
+	t.ok(not bool(card.get_meta("mirrored", true)), "spawned as painted")
+	sync.call(west, west)
+	t.ok(bool(card.get_meta("mirrored", false)), "moving toward -x: mirrored")
+	t.ok(card.mesh == WorldSprites.card_mesh(true), "the mirrored card mesh")
+	t.ok((card.get_node("SpriteShadow") as MeshInstance3D).mesh == WorldSprites.shadow_mesh(true), "the shadow's silhouette mirrors too")
+	t.ok((card.get_node("SpriteContact") as MeshInstance3D).mesh == WorldSprites.contact_mesh(true), "and the contact band")
+	t.ok(not squad.has_meta("glide_yaw"), "a card never turns")
+	t.near(squad.rotation.y, 0.0, 1e-6, "the root stays square to the camera")
+	# the human tank is painted facing left: moving toward -x shows it as painted
+	t.ok(not bool(tank_card.get_meta("mirrored", true)), "a left-facing painting moving toward -x is not mirrored")
+	sync.call(west, west)
+	t.ok(bool(card.get_meta("mirrored", false)), "stopped: keeps its last facing")
+	var parts: Array = squad.get_meta("pick_parts", [])
+	t.ok(parts.size() == 1 and (parts[0] as AABB).is_equal_approx(WorldSprites.pick_box(_card_texture(card), card.scale.x, float(card.get_meta("base_y")), true)), "the pick box mirrors with it")
+	sync.call(east, east)
+	t.ok(not bool(card.get_meta("mirrored", true)), "moving toward +x: as painted again")
+	t.ok(bool(tank_card.get_meta("mirrored", false)), "the tank mirrors moving toward +x")
+	t.near(north.x, east.x, 1e-6, "hex (16, 10) is straight north of (16, 12)")
+	sync.call(east, north)
+	t.ok(bool(tank_card.get_meta("mirrored", false)), "a purely vertical move keeps the facing")
+	scene.free()
+
+
+func test_gunship_bob_rides_on_the_card_lift(t) -> void:
+	var scene := _kestrel_scene()
+	scene._create_unit(0, Vector3(10, 0, 10), 3)
+	var gunship: Node3D = scene.units.back()
+	scene._create_unit(0, Vector3(11, 0, 10), 1)
+	var tank: Node3D = scene.units.back()
+	scene.time_alive = 0.6
+	scene._bob_units()
+	var g := gunship.get_node("UnitVisual") as Node3D
+	var k := tank.get_node("UnitVisual") as Node3D
+	t.near(g.position.y, float(g.get_meta("base_y")) + sin(1.2) * 0.018, 1e-6, "the gunship bobs over its lift")
+	t.near(k.position.y, float(k.get_meta("base_y")), 1e-6, "a tank stays on its lift")
+	scene.free()
+
+
+func test_unit_bars_and_badge_sit_over_the_painted_top(t) -> void:
+	var scene := _kestrel_scene()
+	var cos_pitch := _cos_pitch()
+	for owner in [0, 1]:
+		for kind in 6:
+			scene._create_unit(owner, Vector3(10, 0, 10), kind)
+			var unit: Node3D = scene.units.back()
+			var card := unit.get_node("UnitVisual") as Node3D
+			if not card.has_meta("sprite_kind"):
+				t.ok(false, "owner %d kind %d is not a card" % [owner, kind])
+				continue
+			var top := _card_point(card, 0.5, WorldSprites.opaque_bounds(_card_texture(card)).position.y).y * cos_pitch
+			var badge := unit.get_node("StrategicBadge") as Node3D
+			var badge_bottom := badge.position.y * cos_pitch - 0.065  # a 0.13-tall billboard
+			var badge_top := badge.position.y * cos_pitch + 0.065
+			t.ok(badge_bottom > top, "owner %d kind %d: badge over the painted top (%.3f > %.3f)" % [owner, kind, badge_bottom, top])
+			var bar := (unit.get_node("HealthBack") as Node3D).position.y * cos_pitch
+			t.ok(bar > badge_top, "owner %d kind %d: health bar over the badge" % [owner, kind])
+			t.ok(bar < top + 0.35, "owner %d kind %d: and not floating far above (%.3f)" % [owner, kind, bar - top])
+			t.ok((unit.get_node("ShieldBack") as Node3D).position.y > (unit.get_node("HealthFill") as Node3D).position.y, "shield over health")
+	scene.free()
+
+
+func test_click_on_a_unit_takes_its_painted_body_only(t) -> void:
+	var scene := _kestrel_scene()
+	var to_screen := _ortho(108.0)
+	scene._create_unit(0, scene._hex_world(14, 12), 1)
+	var tank: Node3D = scene.units.back()
+	scene.bridge_nodes[983] = tank
+	var card := tank.get_node("UnitVisual") as Node3D
+	t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, 0.5, 0.45)), to_screen), tank, "the painted hull")
+	t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, 0.25, 0.3)), to_screen), tank, "the painted turret, past the old reach")
+	for corner in [Vector2(0.02, 0.03), Vector2(0.98, 0.03)]:
+		t.eq(scene._pick_entity(to_screen.call(tank, _card_point(card, corner.x, corner.y)), to_screen), null, "transparent corner %s" % corner)
+	scene.free()
+
+
+func test_click_between_two_touching_units_picks_the_nearer_root(t) -> void:
+	var scene := _kestrel_scene()
+	var to_screen := _ortho(108.0)
+	var at: Vector3 = scene._hex_world(14, 12)
+	scene._create_unit(0, at, 1)
+	var tank: Node3D = scene.units.back()
+	scene.bridge_nodes[984] = tank
+	scene._create_unit(0, at + Vector3(0.5, 0, 0), 0)
+	var squad: Node3D = scene.units.back()
+	scene.bridge_nodes[985] = squad
+	squad.position.y = tank.position.y  # the same ground height: only the horizontal distance differs
+	for x in [0.235, 0.30]:
+		var click: Vector2 = to_screen.call(tank, Vector3(x, 0.12, 0.0))
+		t.ok(scene._parts_hold(tank, click, to_screen) and scene._parts_hold(squad, click, to_screen), "x %.2f: both painted bodies hold it" % x)
+		var want: Node3D = tank if x < 0.25 else squad
+		t.eq(scene._pick_entity(click, to_screen), want, "x %.2f: the nearer root" % x)
+	scene.free()
+
+
+func test_survival_units_keep_their_models(t) -> void:
+	var scene = MainScene.instantiate()
+	scene._create_materials()
+	scene._setup_environment()
+	scene._build_terrain()
+	for kind in 6:
+		scene._create_unit(1, Vector3(10, 0, 10), kind)
+		var unit: Node3D = scene.units.back()
+		var visual := unit.get_node("UnitVisual") as Node3D
+		t.ok(not visual.has_meta("sprite_kind"), "kind %d: no card" % kind)
+		t.ok(not visual.has_meta("base_y") and not unit.has_meta("pick_parts"), "kind %d: no profile metas" % kind)
+	scene.free()

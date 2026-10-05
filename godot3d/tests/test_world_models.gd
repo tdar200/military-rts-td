@@ -1,6 +1,6 @@
 extends RefCounted
-## Kestrel buildings and units (spec addendum W6): authored models fitted to a visual width table in tiles. Buildings with a
-## board sprite are sprite cards now (test_world_sprites.gd); a kind without one ("Bunker") keeps the fitted model.
+## Kestrel buildings and units (spec addendum W6): authored models fitted to a visual width table in tiles. Buildings and
+## units with a board sprite are sprite cards now (test_world_sprites.gd); a kind without one ("Bunker") keeps the model.
 const WorldArt := preload("res://scripts/world/world_art.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const MainScene = preload("res://main.tscn")
@@ -62,15 +62,17 @@ func test_kestrel_tank_is_bigger_than_infantry(t) -> void:
 	scene.free()
 
 
-func test_kestrel_unit_bars_sit_above_the_fitted_model(t) -> void:
+func test_kestrel_unit_bars_sit_above_the_sprite_card(t) -> void:
+	# units are sprite cards now (test_world_sprites.gd has the screen-space checks); the card is UNIT_TILES wide
 	var scene := _kestrel_scene()
 	for kind in [0, 1, 5]:
 		scene._create_unit(1, Vector3(6, 0, 6), kind)
 		var unit: Node3D = scene.units.back()
 		var visual := unit.get_node("UnitVisual") as Node3D
-		t.near(_width(visual), float(WorldArt.UNIT_TILES[kind]) * WorldArt.TILE, 0.05, "kind %d width" % kind)
+		t.near(visual.scale.x, float(WorldArt.UNIT_TILES[kind]) * WorldArt.TILE, 0.001, "kind %d width" % kind)
+		var top := WorldSprites.body_top_y(visual.get_meta("sprite_texture"), visual.scale.x, visual.position.y)
 		var bar := unit.get_node("HealthBack") as Node3D
-		t.ok(bar.position.y > WorldArt.merged_aabb(visual).end.y * visual.scale.y, "kind %d health bar above the model" % kind)
+		t.ok(bar.position.y > top, "kind %d health bar above the painted top" % kind)
 	scene.free()
 
 
@@ -162,7 +164,7 @@ func test_kestrel_selection_ring_wraps_the_model(t) -> void:
 	t.near(scene.selection_ring.scale.x, float(WorldArt.BUILDING_TILES.CommandCenter) * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to the CC width")
 	scene._create_unit(0, Vector3(6, 0, 6), 0)
 	scene._set_selection([scene.units.back()])
-	t.near(scene.selection_ring.scale.x, 1.0 * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to a squad")
+	t.near(scene.selection_ring.scale.x, float(WorldArt.UNIT_TILES[0]) * WorldArt.TILE * 0.55 / 0.46, 0.001, "ring scaled to a squad")
 	scene.ui.free()
 	scene.free()
 
