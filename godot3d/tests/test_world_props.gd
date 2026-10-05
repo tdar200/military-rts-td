@@ -41,6 +41,34 @@ func test_every_forest_tile_gets_a_canopy_and_water_gets_no_cards(t) -> void:
 				t.ok(canopy.has(Vector2i(x, y)), "forest tile %s has a canopy" % Vector2i(x, y))
 
 
+## Hollow Wood must not read as a rectangle: some (not all) grass tiles on its rim carry a canopy too.
+func test_forest_rim_is_ragged(t) -> void:
+	var s := _snap()
+	var m = GroundModel.from_snapshot(s)
+	var keep: Dictionary = WorldProps.keep_out(m, s["wave_route"])
+	var tree_tiles := {}
+	for item in _plan():
+		if String(item.sprite) == "forest":
+			tree_tiles[item.tile] = true
+	var rim := 0
+	var dressed := 0
+	for y in 26:
+		for x in 44:
+			if not String(m.glyph_at(x, y)) in WorldProps.FRINGE_GLYPHS or keep.has(Vector2i(x, y)):
+				continue
+			var by_wood := false
+			var by_keep := false
+			for n in WorldProps._neighbours(x, y):
+				by_wood = by_wood or WorldProps._glyph(m, n.x, n.y) == "t"
+				by_keep = by_keep or keep.has(n)
+			if by_wood and not by_keep:
+				rim += 1
+				if tree_tiles.has(Vector2i(x, y)):
+					dressed += 1
+	t.ok(rim > 20, "the fixture has a forest rim (%s tiles)" % rim)
+	t.ok(dressed >= rim / 4 and dressed <= rim * 3 / 4, "a ragged rim: %s of %s rim tiles carry a canopy" % [dressed, rim])
+
+
 func test_deposits_get_crystals_and_nothing_else(t) -> void:
 	var items := _plan()
 	for d in _snap()["deposits"]:

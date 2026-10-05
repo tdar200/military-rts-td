@@ -8,7 +8,7 @@ const TILE := 0.68
 const PAD_SLOTS := 64
 ## glyph: [[sprite, every_n, min_tiles, max_tiles, jitter_tiles], ...]; a rule fires when hash % every_n == 0.
 const RULES := {
-	"t": [["forest", 1, 1.9, 2.6, 0.30], ["forest", 2, 1.5, 2.0, 0.45]],
+	"t": [["forest", 1, 1.7, 2.8, 0.48], ["forest", 2, 1.3, 2.2, 0.70]],
 	"g": [["scrub", 9, 0.8, 1.1, 0.35], ["forest", 23, 1.4, 1.8, 0.30]],
 	"m": [["scrub", 6, 0.8, 1.1, 0.35]],
 	"f": [["scrub", 7, 0.8, 1.0, 0.35], ["rock", 9, 0.9, 1.3, 0.35], ["forest_dry", 37, 1.4, 1.7, 0.30]],
@@ -18,6 +18,8 @@ const RULES := {
 }
 const BANK := ["forest", 6, 1.1, 1.5, 0.25]  # riverside willows on dry land next to river or ford
 const BANK_GLYPHS := ["g", "m"]  # the grass bank only: the boards keep the dry flats bank open
+const FRINGE := ["forest", 2, 1.3, 2.0, 0.45]  # canopies on about half the grass rim of a wood, so it never reads as a block
+const FRINGE_GLYPHS := ["g", "m"]
 const CRYSTALS := [[1.25, Vector2(0.0, 0.0)], [0.85, Vector2(0.25, 0.15)]]
 const DECAL_SPRITES := ["crater", "pebbles", "shadow"]
 const TREE_SPRITES := ["forest", "forest_dry"]
@@ -140,6 +142,11 @@ static func plan(model, deposits: Array, origin: Vector2, hex: Vector2, margin: 
 				if (blocked and not sprite in DECAL_SPRITES) or (beside and sprite in TREE_SPRITES):
 					continue
 				_place(out, rules[k], x, y, k + 1, origin, hex)
+			if g in FRINGE_GLYPHS and not blocked and not beside:
+				for n in _neighbours(x, y):
+					if _glyph(model, n.x, n.y) == "t":
+						_place(out, FRINGE, x, y, 89, origin, hex)
+						break
 			if g in BANK_GLYPHS and not blocked and not beside:
 				for n in _neighbours(x, y):
 					if _glyph(model, n.x, n.y) in ["r", "w"]:
