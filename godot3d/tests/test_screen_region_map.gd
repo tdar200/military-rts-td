@@ -141,10 +141,14 @@ func test_ground_colours_come_from_the_shared_legend(t) -> void:
 	var terrain := preload("res://scripts/continuous_terrain.gd")
 	var look: Dictionary = terrain.GROUND_LOOK
 	var legend: Dictionary = terrain.GROUND_LEGEND
-	for glyph in look:
-		t.ok(legend.has(glyph), "glyph %s has a legend colour" % glyph)
-		t.eq(Hex.ground_color(glyph), Color(str(legend.get(glyph, ""))), "glyph %s uses the shared legend colour" % glyph)
+	var look_keys := look.keys()
+	var legend_keys := legend.keys()
+	look_keys.sort()
+	legend_keys.sort()
+	t.eq(legend_keys, look_keys, "the legend and the 3D look cover exactly the same glyphs")
+	for glyph in legend:
+		t.eq(Hex.ground_color(glyph), Color(str(legend[glyph])), "glyph %s uses the shared legend colour" % glyph)
 	# The UI key stays the palette the gp11 board was matched against; the 3D albedo is calibrated for the grade separately.
-	t.eq(String(legend["f"]), "c9923a", "Dry Flats key colour")
-	t.eq(String(legend["h"]), "6e747a", "Highland key colour")
+	t.eq(legend, {"g": "6a9a3a", "m": "97a64a", "f": "c9923a", "h": "6e747a", "t": "2f8a52",
+		"r": "3f86b8", "w": "6fb0c4", "s": "c9b27a", "o": "2a6a9a", "c": "5b5346"}, "the whole HUD key is pinned")
 	Hex.clear_caches()  # the static mesh caches outlive the tests; drop them so the exit leak check stays quiet

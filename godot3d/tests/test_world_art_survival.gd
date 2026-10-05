@@ -81,6 +81,9 @@ func test_survival_keeps_the_legacy_terrain_look(t) -> void:
 	t.eq(mat.shader.code.sha256_text(), "7703388a649501384902595f77763aea8ebe71be18ac2c254c4dd34bb51de5bb", "noise shader source unchanged")
 	t.eq(_mesh_digest(inst.mesh as ArrayMesh), "fbadf6e28b06edba4f3dee3ecc601ff0b34ecfc18e54bd66bb7c817a46ec0121", "terrain mesh (positions, normals, colours, UVs, indices) unchanged")
 	t.ok(mat.get_shader_parameter("rock_texture") == null, "no rock texture on the Survival terrain")
+	var detail: Texture2D = mat.get_shader_parameter("detail_texture")
+	t.ok(detail == load("res://assets/terrain/painterly/continuous_ground_detail_v4.png"), "Survival samples the imported detail texture")
+	t.ok(detail != null and not detail.get_image().has_mipmaps(), "unchanged import: no mipmaps on Survival")
 	t.eq((inst.mesh as ArrayMesh).surface_get_format(0) & Mesh.ARRAY_FORMAT_TEX_UV2, 0, "no UV2 channel in Survival")
 	scene.free()
 

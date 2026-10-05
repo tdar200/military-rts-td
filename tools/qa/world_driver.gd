@@ -68,9 +68,7 @@ func _world_shot(item: Dictionary) -> void:
 		var on: bool = not game.camera.is_position_behind(w)
 		var p: Vector2 = game.camera.unproject_position(w)
 		points[glyph] = [p.x, p.y, on and root.get_visible_rect().has_point(p)]
-	var hover_drawn: bool = is_instance_valid(game.hover_tile) and game.hover_tile.is_visible_in_tree() and game.hover_tile.layers != 0
 	var data := {"camera": {"yaw": game.camera_yaw, "zoom": game.camera_zoom, "focus": [game.camera_target.x, game.camera_target.z]},
-		"hover_drawn": hover_drawn,
 		"swatches": points, "fps": Performance.get_monitor(Performance.TIME_FPS),
 		"draw_calls": Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
 		"primitives": Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME),

@@ -178,10 +178,39 @@ func _terrain_material(detail_texture: Texture2D) -> ShaderMaterial:
 	shader.code = _ground_shader_code() if ground != null else _noise_shader_code()
 	var material := ShaderMaterial.new()
 	material.shader = shader
-	material.set_shader_parameter("detail_texture", detail_texture)
 	if ground != null:
-		material.set_shader_parameter("rock_texture", load("res://assets/terrain/painterly/highland_v3.png"))
+		material.set_shader_parameter("detail_texture", mipmapped(detail_texture))
+		material.set_shader_parameter("rock_texture", mipmapped(load("res://assets/terrain/painterly/highland_v3.png")))
+	else:
+		material.set_shader_parameter("detail_texture", detail_texture)
 	return material
+
+
+## Source path -> WeakRef of its mipmapped copy. At most one entry per source texture (two on Kestrel); a copy lives as
+## long as a terrain material holds it (once per process in the game) and is freed with it, so nothing outlives the tree.
+static var _mip_cache := {}
+
+
+## The painted ground is sampled at 2 to 3.5 texels per pixel; the imported PNGs carry no mipmaps (their import is shared
+## with Survival and stays as is), so the Kestrel path samples a mipmapped copy. Survival never calls this.
+static func mipmapped(texture: Texture2D) -> Texture2D:
+	if texture == null or texture.has_mipmaps():
+		return texture
+	var key := texture.resource_path if texture.resource_path != "" else str(texture.get_instance_id())
+	var ref: WeakRef = _mip_cache.get(key)
+	var live: Texture2D = ref.get_ref() if ref != null else null
+	if live != null:
+		return live
+	var source := texture.get_image()
+	if source == null:
+		return texture
+	var image := source.duplicate() as Image  # the dummy renderer hands out its own stored image; never mip the original
+	if image.is_compressed():
+		image.decompress()
+	image.generate_mipmaps()
+	var copy := ImageTexture.create_from_image(image)
+	_mip_cache[key] = weakref(copy)
+	return copy
 
 
 func _noise_shader_code() -> String:
@@ -231,7 +260,7 @@ shader_type spatial;
 render_mode diffuse_burley;
 uniform sampler2D detail_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D rock_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform float detail_strength = 0.75;
+uniform float detail_strength = 0.90;
 uniform float rotated_strength = 0.45;
 uniform float patch_strength = 0.32;
 uniform float rock_strength = 0.85;
@@ -266,10 +295,15 @@ void fragment() {
     land = mix(land, soft, rotated_strength);
     float patches = ground_noise(world_position.xz * 0.9) * 0.6 + ground_noise(world_position.xz * 3.6) * 0.4;
     land *= 1.0 - patch_strength * 0.5 + patches * patch_strength;
-    vec3 rock = texture(rock_texture, uv_a * 1.3).rgb;
-    float rock_l = dot(rock, vec3(0.299, 0.587, 0.114));
-    vec3 grey_rock = mix(rock, vec3(rock_l), 0.65) * (base / max(dot(base, vec3(0.299, 0.587, 0.114)), 0.05)) * 0.5;
-    land = mix(land, grey_rock, extra.y * rock_strength);
+    vec2 rock_uv = uv_a * 1.3;
+    vec2 rock_dx = dFdx(rock_uv);  // derivatives outside the branch, so the mip choice stays right at the ridge edge
+    vec2 rock_dy = dFdy(rock_uv);
+    if (extra.y > 0.0) {  // rock share is exactly 0.0 at every non-ridge vertex: no rock fetch there, same output
+        vec3 rock = textureGrad(rock_texture, rock_uv, rock_dx, rock_dy).rgb;
+        float rock_l = dot(rock, vec3(0.299, 0.587, 0.114));
+        vec3 grey_rock = mix(rock, vec3(rock_l), 0.65) * (base / max(dot(base, vec3(0.299, 0.587, 0.114)), 0.05)) * 0.5;
+        land = mix(land, grey_rock, extra.y * rock_strength);
+    }
     float slope = 1.0 - clamp(world_normal.y, 0.0, 1.0);
     land = mix(land, land * 0.62, smoothstep(0.25, 0.65, slope) * 0.6);
     float water = smoothstep(0.42, 0.62, COLOR.a);
