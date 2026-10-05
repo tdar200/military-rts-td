@@ -1058,7 +1058,7 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 		var tiles := float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)])
 		var visual := root.get_node_or_null("UnitVisual") as Node3D
 		if visual != null:
-			var fit := _fitted(visual, "unit:%d:%d" % [team, kind], tiles)
+			var fit := _fitted(visual, "unit:%d:%d:%s" % [team, kind, tiles], tiles)
 			visual.scale = Vector3.ONE * fit.x
 			bar_y = [fit.y + 0.12, fit.y + 0.125, fit.y + 0.195, fit.y + 0.198]
 		root.set_meta("visual_tiles", tiles)
@@ -2195,7 +2195,7 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	if world_art_on:
 		# spec addendum W6: the model is fitted to its width in tiles; the props under it go, a soft pad goes under it
 		var tiles := float(WorldArt.BUILDING_TILES.get(kind_name, 1.7))
-		var fit := _fitted(visual, "%d:%s" % [owner, asset_name], tiles)
+		var fit := _fitted(visual, "%d:%s:%s" % [owner, asset_name, tiles], tiles)  # one model can serve two widths
 		visual.scale = Vector3.ONE * fit.x
 		visual.set_meta("authored_scale", visual.scale)  # construction grows the fitted model, not the legacy scale
 		root.set_meta("visual_tiles", tiles)

@@ -157,3 +157,15 @@ func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
 	scene._show_hover_at(east)
 	t.ok(not scene.hover_tile.visible, "hidden under a unit")
 	scene.free()
+
+
+func test_kestrel_shared_models_keep_each_kinds_width(t) -> void:
+	# Refinery (2.1) and SupplyDepot (1.7) share human_refinery; an unknown kind falls back to human_industry (1.7), the
+	# VehicleFactory model (2.1). Build order must not decide the size.
+	for order in [["Refinery", "SupplyDepot"], ["SupplyDepot", "Refinery"], ["VehicleFactory", "Bunker"], ["Bunker", "VehicleFactory"]]:
+		var scene := _kestrel_scene()
+		for kind in order:
+			var root: Node3D = scene._create_bridge_building(0, kind, Vector3(10, 0, 10), 910)
+			var want := float(WorldArt.BUILDING_TILES.get(kind, 1.7)) * WorldArt.TILE
+			t.near(_width(root.get_node("Visual") as Node3D), want, 0.05, "%s width after %s" % [kind, order[0]])
+		scene.free()
