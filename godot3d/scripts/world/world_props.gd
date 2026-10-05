@@ -25,6 +25,9 @@ const CRYSTAL_SPRITES := ["ore", "alloy"]  # deposit markers: never cleared, a d
 const HIDDEN := Vector3(1e9, 0.0, 1e9)
 const SHADOW_OFFSET := Vector2(0.16, 0.10)  # times the card width, toward the lower right (the NW sun)
 const SHADOW_SCALE := 0.9
+## A mined-out deposit keeps its crystals, darker (shade times SPENT_SHADE) and greyed (COLOR.b, 0 for every live card).
+const SPENT_SHADE := 0.55
+const SPENT_GREY := 0.85
 ## The card shader turns each quad to the camera, so its pixels can leave the quad's own box by up to a card size
 ## (2.6 tiles at most). One node spans the whole map, so there is no visibility range (it would pop every prop at once).
 const CARD_CULL_MARGIN := 2.0
@@ -42,6 +45,11 @@ var _decal_at := PackedVector3Array()
 ## 1 for deposit crystals and their shadows (a deposit tile carries nothing else), which clear_around never hides.
 var _card_pinned := PackedByteArray()
 var _decal_pinned := PackedByteArray()
+## CPU copy of each card's instance colour (r foot sink, g shade, b grey), the crystal cards of each deposit tile, and
+## the deposit tiles already shown as spent.
+var _card_color := PackedColorArray()
+var _crystal_cards: Dictionary = {}
+var _spent: Dictionary = {}
 
 
 static func _hash(x: int, y: int, salt: int) -> int:
@@ -170,10 +178,16 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 	_decal_at.resize(decal_items.size())
 	_card_pinned.resize(card_items.size())
 	_decal_pinned.resize(decal_items.size())
+	_card_color.resize(card_items.size())
+	_crystal_cards.clear()
+	_spent.clear()
 	var crystal_tiles := {}
-	for it in card_items:
-		if String(it.sprite) in CRYSTAL_SPRITES:
-			crystal_tiles[it.tile] = true
+	for i in card_items.size():
+		if String(card_items[i].sprite) in CRYSTAL_SPRITES:
+			crystal_tiles[card_items[i].tile] = true
+			if not _crystal_cards.has(card_items[i].tile):
+				_crystal_cards[card_items[i].tile] = []
+			_crystal_cards[card_items[i].tile].append(i)
 	for i in card_items.size():
 		var it: Dictionary = card_items[i]
 		var s: Dictionary = _meta.sprites[it.sprite]
@@ -183,7 +197,8 @@ func build(parent: Node3D, items: Array, height_at: Callable) -> void:
 		_card_pinned[i] = 1 if String(it.sprite) in CRYSTAL_SPRITES else 0
 		cards.multimesh.set_instance_transform(i, Transform3D(basis, _card_at[i]))
 		cards.multimesh.set_instance_custom_data(i, _rect(it.sprite, it.flip))
-		cards.multimesh.set_instance_color(i, Color(float(s.sink), 0.92 + float(_hash(it.tile.x, it.tile.y, i) % 16) / 100.0, 0, 1))
+		_card_color[i] = Color(float(s.sink), 0.92 + float(_hash(it.tile.x, it.tile.y, i) % 16) / 100.0, 0, 1)
+		cards.multimesh.set_instance_color(i, _card_color[i])
 	for i in decal_items.size():
 		var it: Dictionary = decal_items[i]
 		var s: Dictionary = _meta.sprites[it.sprite]
@@ -228,6 +243,28 @@ func _clear(mm: MultiMesh, at: PackedVector3Array, pinned: PackedByteArray, worl
 			at[i] = HIDDEN
 			hidden += 1
 	return hidden
+
+
+## Dims and greys the crystals of every deposit tile that is no longer live (absent from `live_deposits`, the snapshot's
+## list, or at zero). Each tile changes once; returns how many cards changed.
+func mark_spent(live_deposits: Array) -> int:
+	if cards == null:
+		return 0
+	var live := {}
+	for d in live_deposits:
+		if d is Dictionary and int(d.get("remaining", 0)) > 0:
+			live[Vector2i(int(d.get("x", 0)), int(d.get("y", 0)))] = true
+	var changed := 0
+	for tile in _crystal_cards:
+		if live.has(tile) or _spent.has(tile):
+			continue
+		_spent[tile] = true
+		for i in _crystal_cards[tile]:
+			var c := _card_color[i]
+			_card_color[i] = Color(c.r, c.g * SPENT_SHADE, SPENT_GREY, c.a)
+			cards.multimesh.set_instance_color(i, _card_color[i])
+			changed += 1
+	return changed
 
 
 func add_pad(world: Vector3, width: float) -> int:
@@ -285,9 +322,11 @@ uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
 uniform float brightness = 1.0;
 varying vec4 rect;
 varying float shade;
+varying float grey;
 void vertex() {
     rect = INSTANCE_CUSTOM;
     shade = COLOR.g;
+    grey = COLOR.b;  // 0 on every live card; a spent deposit's crystals fade toward grey
     VERTEX.y -= COLOR.r;  // sink the sprite's painted foot into the ground
     float sx = length(MODEL_MATRIX[0].xyz);
     float sy = length(MODEL_MATRIX[1].xyz);
@@ -296,7 +335,7 @@ void vertex() {
 }
 void fragment() {
     vec4 c = texture(atlas, rect.xy + vec2(UV.x, UV.y) * rect.zw);
-    ALBEDO = c.rgb * brightness * shade;
+    ALBEDO = mix(c.rgb, vec3(dot(c.rgb, vec3(0.299, 0.587, 0.114))), grey) * brightness * shade;
     ALPHA = c.a;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
 }

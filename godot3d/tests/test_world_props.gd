@@ -294,3 +294,28 @@ func test_hover_draws_over_props_and_decals_under_overlays(t) -> void:
 	t.ok(decal_priority < 0, "decals blend before the other transparent overlays (%s)" % decal_priority)
 	t.ok(hover.render_priority > decal_priority, "hover sorts after the decals")
 	parent.free()
+
+
+func test_spent_deposits_dim_and_grey_only_their_crystals(t) -> void:
+	var parent := Node3D.new()
+	var props = WorldProps.new()
+	var items := _plan()
+	props.build(parent, items, func(_x, _z): return 0.0)
+	var before: PackedColorArray = props._card_color.duplicate()
+	var live: Array = _snap()["deposits"].filter(func(d): return not (int(d["x"]) == 18 and int(d["y"]) == 7))
+	t.eq(props.mark_spent(live), 2, "both crystal cards of the mined-out site change")
+	t.eq(props.mark_spent(live), 0, "a spent site is changed once, not every poll")
+	var cards := items.filter(func(i): return not String(i.sprite) in WorldProps.DECAL_SPRITES)
+	var changed := 0
+	for i in cards.size():
+		var c: Color = props._card_color[i]
+		if cards[i].tile == Vector2i(18, 7):
+			changed += 1
+			t.near(c.g, before[i].g * WorldProps.SPENT_SHADE, 0.0001, "spent crystal %s is darker" % i)
+			t.near(c.b, WorldProps.SPENT_GREY, 0.0001, "spent crystal %s is greyed" % i)
+			t.near(c.r, before[i].r, 0.0001, "its foot sink is kept")
+		else:
+			t.eq(c, before[i], "card %s keeps its colour" % i)
+	t.eq(changed, 2, "both crystal cards checked")
+	t.ok((props.cards.material_override as ShaderMaterial).shader.code.contains("COLOR.b"), "the card shader reads the grey amount")
+	parent.free()

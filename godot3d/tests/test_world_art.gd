@@ -365,3 +365,41 @@ func test_atmosphere_layer_sits_under_the_hud_and_takes_no_clicks(t) -> void:
 		uniforms.append(String(u.name))
 	t.ok(uniforms.has("warm") and uniforms.has("dark") and uniforms.has("vignette"), "its uniforms parsed, so it compiled")
 	scene.free()
+
+
+func test_kestrel_deposits_are_crystals_without_labels(t) -> void:
+	var scene := _kestrel_scene()
+	scene._sync_bridge_map(_snap())
+	var deposits := scene.find_children("Deposit_*", "Node3D", true, false)
+	t.eq(deposits.size(), _snap()["deposits"].size(), "one deposit node per deposit")
+	for d in deposits:
+		t.eq(d.get_child_count(), 0, "no disk, spheres or ORE label under the profile (%s)" % d.name)
+		t.ok(d.is_in_group("resource_deposits"), "still in its group")
+	t.eq(scene.deposit_tiles.size(), _snap()["deposits"].size(), "build rules still see every deposit tile")
+	scene.bridge_earthfront = false  # the deposit rule of _is_build_valid (Earthfront asks the construction zone instead)
+	scene.build_mode = "Refinery"
+	t.ok(scene._is_build_valid(Vector2i(18, 7)), "a Refinery is valid on the ore site")
+	t.ok(not scene._is_build_valid(Vector2i(10, 10)), "and invalid off it")
+	scene.build_mode = "Barracks"
+	t.ok(not scene._is_build_valid(Vector2i(18, 7)), "other buildings stay off the ore site")
+	scene.free()
+
+
+func test_kestrel_mined_out_deposit_crystals_turn_spent(t) -> void:
+	var scene := _kestrel_scene()
+	var snap := _snap()
+	scene._sync_bridge_map(snap)
+	scene._sync_spent_deposits(snap)
+	t.eq(scene.world_props._spent.size(), 0, "every deposit still has ore, nothing is spent")
+	# the sim drops an exhausted deposit from the snapshot list (Map::mine clears it); a zero amount counts the same
+	var later := _snap()
+	later["deposits"] = later["deposits"].filter(func(d): return not (int(d["x"]) == 18 and int(d["y"]) == 7))
+	for d in later["deposits"]:
+		if int(d["x"]) == 31 and int(d["y"]) == 2:
+			d["remaining"] = 0
+	scene._sync_spent_deposits(later)
+	t.ok(scene.world_props._spent.has(Vector2i(18, 7)), "the mined-out ore site reads as spent")
+	t.ok(scene.world_props._spent.has(Vector2i(31, 2)), "an alloy site at zero reads as spent")
+	t.eq(scene.world_props._spent.size(), 2, "the other sites keep their bright crystals")
+	t.eq(scene.deposit_tiles.size(), snap["deposits"].size(), "build rules are untouched")
+	scene.free()

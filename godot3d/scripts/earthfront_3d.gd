@@ -2022,6 +2022,7 @@ func _poll_bridge(delta: float) -> void:
 	bridge_winner = int(parsed.get("winner", -1))
 	_sync_ground(parsed)
 	_sync_bridge_map(parsed)
+	_sync_spent_deposits(parsed)
 	_sync_bridge_entities(parsed.get("entities", []))
 	_apply_era_visuals()
 	if was_bridge_active and bridge_research_count > previous_research_count:
@@ -2080,6 +2081,8 @@ func _sync_bridge_map(snapshot: Dictionary) -> void:
 		root.set_meta("phase", float((x * 13 + z * 7) % 19) * 0.31)
 		add_child(root)
 		root.position = Vector3(world.x, _height_world(world.x, world.z), world.z)
+		if world_art_on:
+			continue  # crystals are cards in WorldProps (spec addendum W9); the HUD pins carry the label
 		_cylinder(root, 0.36, 0.025, Vector3(0, 0.015, 0), materials.earth, 16)
 		for rock_index in range(5):
 			var angle := TAU * float(rock_index) / 5.0
@@ -2099,6 +2102,13 @@ func _sync_bridge_map(snapshot: Dictionary) -> void:
 		marker.outline_size = 4
 		marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		root.add_child(marker)
+
+
+## Kestrel only: a deposit the sim has mined out (it leaves the snapshot list, or reads zero) keeps its crystals, dimmed
+## and greyed, so the site reads as spent; its HUD pin is already gone (vm_gameplay.deposit_pins). Survival is untouched.
+func _sync_spent_deposits(snapshot: Dictionary) -> void:
+	if world_props != null:
+		world_props.mark_spent(snapshot.get("deposits", []))
 
 
 func _create_bridge_building(owner: int, kind_name: String, destination: Vector3, bridge_id: int) -> Node3D:

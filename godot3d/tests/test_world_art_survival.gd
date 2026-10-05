@@ -106,3 +106,15 @@ func test_survival_keeps_the_legacy_dressing(t) -> void:
 	t.ok(scene.world_props == null, "no prop MultiMeshes")
 	t.eq(scene.find_children("*", "MultiMeshInstance3D", true, false).size(), 0, "nothing new in the scene")
 	scene.free()
+
+
+func test_survival_deposits_keep_their_disk_and_label(t) -> void:
+	var scene := _survival_scene()
+	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+	var snap: Dictionary = JSON.parse_string(f.get_as_text())
+	scene._sync_bridge_map(snap)
+	var labels := 0
+	for d in scene.find_children("Deposit_*", "Node3D", true, false):
+		labels += d.find_children("*", "Label3D", true, false).size()
+	t.ok(labels > 0, "legacy ORE labels")
+	scene.free()
