@@ -492,3 +492,7 @@ writes `<qa dir>/states/*.png`. It actually writes `<qa dir>/state-*.png`. It wa
 - The QA `ui_driver` sends key events with a keycode only, so it cannot type into a `LineEdit`.
 - Forcing `ui_state(debrief)` in QA fabricates a defeat summary, so its numbers are not real play data.
 - Segment labels on a thin defeat-timeline segment clip.
+- Sim behaviour change (final fix round): on Earthfront maps a ground unit ordered onto an impassable tile (a building such as a
+  Command Center, or River/Sea) now walks to the nearest passable tile and stops there. Before, it kept the raw point and
+  stepped onto the impassable tile once its path ran out, so units could stand in the river. Units no longer "close the last
+  step" onto a building; combat auto-fire is unaffected. Legacy non-Earthfront scenarios and the golden hash are unchanged.
