@@ -5,6 +5,7 @@ extends RefCounted
 const TILE := 0.68  # one hex column in world units; land.jpg maps one column to 82 px
 const PITCH_SIN := 0.839  # 1.05 / sqrt(1.05^2 + 0.68^2): the camera rig in earthfront_3d._update_camera
 const TERRAIN_MARGIN_CELLS := 10
+const ENVIRONMENT := {"exposure": 0.95, "saturation": 0.50, "contrast": 1.04, "ambient_energy": 0.72, "background": "0c2a40"}
 const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoom": 7.5, "max_zoom": 18.0, "edge_cells": 8, "focus_zoom": 10.0}
 
 
@@ -64,3 +65,43 @@ static func hover_material() -> StandardMaterial3D:
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	m.albedo_color = Color(0.435, 0.839, 0.910, 0.55)  # 6fd6e8
 	return m
+
+
+static func apply_environment(env: Environment) -> void:
+	env.tonemap_exposure = float(ENVIRONMENT.exposure)
+	env.adjustment_saturation = float(ENVIRONMENT.saturation)
+	env.adjustment_contrast = float(ENVIRONMENT.contrast)
+	env.ambient_light_energy = float(ENVIRONMENT.ambient_energy)
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(String(ENVIRONMENT.background))
+
+
+## gen.py's "gSun": warm light from the top-left, darker toward the bottom-right, plus a soft edge vignette.
+static func atmosphere_layer() -> CanvasLayer:
+	var layer := CanvasLayer.new()
+	layer.name = "WorldAtmosphere"
+	layer.layer = 0
+	layer.set_meta("world_art", true)
+	var rect := ColorRect.new()
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var shader := Shader.new()
+	shader.code = """
+shader_type canvas_item;
+uniform vec4 warm : source_color = vec4(1.0, 0.949, 0.784, 0.14);
+uniform vec4 dark : source_color = vec4(0.0, 0.0, 0.0, 0.22);
+uniform float vignette = 0.22;
+void fragment() {
+    vec2 uv = SCREEN_UV;
+    float diag = clamp(uv.x * 0.55 + uv.y * 0.45, 0.0, 1.0);
+    float w = warm.a * (1.0 - smoothstep(0.0, 0.6, diag));
+    float edge = smoothstep(0.55, 1.05, length((uv - 0.5) * vec2(1.25, 1.6)));
+    float d = clamp(dark.a * smoothstep(0.4, 1.0, diag) + vignette * edge, 0.0, 0.6);
+    COLOR = vec4(mix(warm.rgb, dark.rgb, d / max(w + d, 0.001)), max(w, d));
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	rect.material = mat
+	layer.add_child(rect)
+	return layer

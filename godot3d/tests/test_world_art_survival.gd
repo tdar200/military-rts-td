@@ -49,3 +49,13 @@ func test_survival_keeps_the_amber_hover_torus(t) -> void:
 	t.near(torus.outer_radius, 0.47, 0.0001, "outer")
 	t.ok(scene.hover_tile.material_override == scene.materials.hover, "legacy amber material")
 	scene.free()
+
+
+func test_survival_keeps_the_legacy_environment(t) -> void:
+	var scene := _survival_scene()
+	var env: Environment = scene.environment
+	t.near(env.tonemap_exposure, 0.78, 0.0001, "exposure")
+	t.near(env.adjustment_saturation, 0.85, 0.0001, "saturation")
+	t.eq(env.background_mode, Environment.BG_SKY, "sky background")
+	t.ok(scene.world_atmosphere == null, "no atmosphere layer")
+	scene.free()

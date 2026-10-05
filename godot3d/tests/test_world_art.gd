@@ -221,3 +221,28 @@ func test_hex_outline_is_a_closed_six_sided_ring(t) -> void:
 	var mesh := WorldArt.hex_outline_mesh(0.44, 0.34, 0.035)
 	var verts: PackedVector3Array = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
 	t.eq(verts.size(), 6 * 6, "six quads, two triangles each")
+
+
+func _env(scene) -> Environment:
+	return scene.environment
+
+
+func test_kestrel_grade_is_calmer_and_never_shows_sky(t) -> void:
+	var scene := _kestrel_scene()
+	var env := _env(scene)
+	t.near(env.adjustment_saturation, float(WorldArt.ENVIRONMENT.saturation), 0.0001, "grade saturation from the table")
+	t.ok(env.adjustment_saturation < 0.85, "less saturated than the legacy grade")
+	t.eq(env.background_mode, Environment.BG_COLOR, "a colour background, so no sky can show")
+	t.eq(env.background_color.to_html(false), String(WorldArt.ENVIRONMENT.background), "deep sea background")
+	scene.free()
+
+
+func test_atmosphere_layer_sits_under_the_hud_and_takes_no_clicks(t) -> void:
+	var scene := _kestrel_scene()
+	var layer: CanvasLayer = scene.world_atmosphere
+	t.ok(layer != null and layer.get_meta("world_art", false), "atmosphere exists and survives world shots")
+	t.ok(layer.layer < 1, "below the HUD CanvasLayer (layer 1)")
+	var rect := layer.get_child(0) as ColorRect
+	t.eq(rect.mouse_filter, Control.MOUSE_FILTER_IGNORE, "never eats a click")
+	t.ok(rect.material is ShaderMaterial, "gradient and vignette shader")
+	scene.free()

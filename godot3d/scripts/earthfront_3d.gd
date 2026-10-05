@@ -41,6 +41,8 @@ var camera_zoom := 12.2
 var terrain_height: Dictionary = {}
 var terrain_renderer: Node3D
 var ground_model: RefCounted  # GroundModel from the snapshot ground layer; null = cosmetic noise terrain
+var environment: Environment  # the WorldEnvironment's resource, kept so the Kestrel grade can be applied later
+var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under the HUD
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var ocean_box: MeshInstance3D
 var sea_backdrop: MeshInstance3D  # Kestrel: flat sea far below the terrain, so the minimap and any frame past the mesh never show the clear colour
@@ -341,6 +343,7 @@ func _setup_environment() -> void:
 		env.ssao_radius = 1.65
 		env.ssao_intensity = 1.45
 	world_environment.environment = env
+	environment = env
 	add_child(world_environment)
 
 	var sun := DirectionalLight3D.new()
@@ -462,6 +465,11 @@ func _sync_ground(snapshot: Dictionary) -> void:
 ## Kestrel world-art profile (spec addendum W1 to W9). Runs once, when the first real ground layer arrives.
 func _apply_world_art(_snapshot: Dictionary) -> void:
 	camera_yaw = float(WorldArt.CAMERA.yaw)
+	if environment != null:
+		WorldArt.apply_environment(environment)
+	if world_atmosphere == null:
+		world_atmosphere = WorldArt.atmosphere_layer()
+		add_child(world_atmosphere)
 	if is_instance_valid(ocean_box):
 		ocean_box.visible = false
 	if not is_instance_valid(sea_backdrop):
