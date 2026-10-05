@@ -1,476 +1,432 @@
 {
  "gp01": {
-  "palette": 5.46,
-  "saturation": 2.99,
-  "warmth": 4.24,
-  "detail": 17.63,
-  "clutter": 10.75,
-  "layout": 14.73,
-  "total": 44.2,
-  "structure": 72.71,
+  "palette": 1.06,
+  "saturation": 0.57,
+  "warmth": 1.38,
+  "detail": 0.41,
+  "clutter": 0.38,
+  "layout": 15.5,
+  "total": 80.7,
+  "structure": 78.87,
   "raw": {
-   "palette_w": 22.77,
-   "sat_gap": 99.5,
+   "palette_w": 4.4,
+   "sat_gap": 19.1,
    "sat_p50": [
     112.9,
-    237.7
+    125.9
    ],
    "sat_p90": [
     164.3,
-    238.6
+    139.1
    ],
    "b": [
     17.8,
-    42.0
+    25.6
    ],
    "detail_ratio": [
-    0.233,
-    0.122,
-    0.187
+    0.921,
+    0.99,
+    0.97
    ],
    "detail_rank_ratio": [
-    1.131,
-    0.427,
-    0.804
+    1.019,
+    0.992,
+    0.938
    ],
    "clutter_ratio": [
-    0.059,
-    0.088
+    0.838,
+    0.991
    ],
    "clutter_rank_ratio": [
-    0.688,
-    0.626
+    1.009,
+    1.012
    ],
    "layout_corr": [
-    -0.06,
-    0.095
+    0.099,
+    -0.165
    ]
   },
   "swatches": {
    "g": {
-    "live": "206407",
+    "live": "848d49",
     "mock": "808844",
-    "de": 30.69
+    "de": 1.92
    },
    "m": {
-    "live": "5c800b",
+    "live": "8d914e",
     "mock": "848948",
-    "de": 24.88
+    "de": 3.25
    }
   }
  },
  "gp03": {
-  "palette": 3.03,
-  "saturation": 3.14,
-  "warmth": 1.98,
-  "detail": 13.34,
-  "clutter": 8.23,
-  "layout": 15.61,
-  "total": 54.66,
-  "structure": 60.25,
+  "palette": 0.71,
+  "saturation": 1.28,
+  "warmth": 0.14,
+  "detail": 1.4,
+  "clutter": 0.79,
+  "layout": 13.98,
+  "total": 81.7,
+  "structure": 78.66,
   "raw": {
-   "palette_w": 12.64,
-   "sat_gap": 104.5,
+   "palette_w": 2.95,
+   "sat_gap": 42.8,
    "sat_p50": [
     111.5,
-    234.0
+    54.1
    ],
    "sat_p90": [
     148.8,
-    235.3
+    120.5
    ],
    "b": [
     13.9,
-    25.3
+    13.1
    ],
    "detail_ratio": [
-    0.222,
-    0.219,
-    0.392
+    0.958,
+    0.988,
+    1.061
    ],
    "detail_rank_ratio": [
-    0.63,
-    0.309,
-    0.487
+    1.167,
+    1.135,
+    1.143
    ],
    "clutter_ratio": [
-    0.105,
-    0.17
+    0.775,
+    0.879
    ],
    "clutter_rank_ratio": [
-    0.201,
-    0.23
+    1.265,
+    1.072
    ],
    "layout_corr": [
-    -0.033,
-    -0.049
+    0.105,
+    0.031
    ]
   },
   "swatches": {
    "f": {
-    "live": "ba670f",
+    "live": "a7935a",
     "mock": "ac965e",
-    "de": 38.26
+    "de": 1.65
    },
    "h": {
-    "live": "263037",
+    "live": "74716b",
     "mock": "888680",
-    "de": 37.92
+    "de": 8.21
    }
   }
  },
  "gp04": {
-  "palette": 5.72,
-  "saturation": 3.09,
-  "warmth": 4.75,
-  "detail": 17.6,
-  "clutter": 11.69,
-  "layout": 15.19,
-  "total": 41.97,
-  "structure": 73.39,
+  "palette": 1.8,
+  "saturation": 0.67,
+  "warmth": 1.86,
+  "detail": 1.28,
+  "clutter": 1.15,
+  "layout": 15.29,
+  "total": 77.94,
+  "structure": 76.37,
   "raw": {
-   "palette_w": 23.84,
-   "sat_gap": 102.9,
+   "palette_w": 7.5,
+   "sat_gap": 22.3,
    "sat_p50": [
     106.7,
-    237.7
+    126.6
    ],
    "sat_p90": [
     163.7,
-    238.6
+    139.1
    ],
    "b": [
     15.1,
-    42.3
+    25.8
    ],
    "detail_ratio": [
-    0.248,
-    0.111,
-    0.196
+    0.954,
+    1.016,
+    1.062
    ],
    "detail_rank_ratio": [
-    1.379,
-    0.461,
-    0.886
+    1.245,
+    1.116,
+    1.054
    ],
    "clutter_ratio": [
-    0.05,
-    0.065
+    0.87,
+    1.035
    ],
    "clutter_rank_ratio": [
-    0.907,
-    0.792
+    1.346,
+    1.306
    ],
    "layout_corr": [
-    -0.097,
-    0.073
+    0.036,
+    -0.075
    ]
   },
   "swatches": {
    "g": {
-    "live": "206407",
+    "live": "848d49",
     "mock": "808844",
-    "de": 30.69
+    "de": 1.92
    },
    "m": {
-    "live": "5c800b",
+    "live": "8d914e",
     "mock": "848948",
-    "de": 24.88
+    "de": 3.25
    }
   }
  },
  "gp05": {
-  "palette": 3.46,
-  "saturation": 3.07,
-  "warmth": 2.71,
-  "detail": 12.57,
-  "clutter": 8.27,
-  "layout": 15.49,
-  "total": 54.43,
-  "structure": 64.37,
+  "palette": 1.12,
+  "saturation": 0.5,
+  "warmth": 0.77,
+  "detail": 1.0,
+  "clutter": 0.66,
+  "layout": 15.14,
+  "total": 80.8,
+  "structure": 77.6,
   "raw": {
-   "palette_w": 14.42,
-   "sat_gap": 102.3,
+   "palette_w": 4.69,
+   "sat_gap": 16.8,
    "sat_p50": [
     110.3,
-    236.5
+    117.1
    ],
    "sat_p90": [
     160.0,
-    238.5
+    133.2
    ],
    "b": [
     16.8,
-    32.3
+    21.2
    ],
    "detail_ratio": [
-    0.24,
-    0.235,
-    0.425
+    0.919,
+    1.007,
+    1.102
    ],
    "detail_rank_ratio": [
-    0.621,
-    0.366,
-    0.697
+    1.146,
+    1.077,
+    1.091
    ],
    "clutter_ratio": [
-    0.095,
-    0.184
+    0.802,
+    0.999
    ],
    "clutter_rank_ratio": [
-    0.255,
-    0.335
+    1.194,
+    1.155
    ],
    "layout_corr": [
-    0.099,
-    -0.164
+    0.221,
+    -0.24
    ]
   },
   "swatches": {
    "f": {
-    "live": "bc680f",
+    "live": "a7935b",
     "mock": "ac965e",
-    "de": 38.66
+    "de": 1.55
    },
    "g": {
-    "live": "246c07",
+    "live": "8a8c5e",
     "mock": "808844",
-    "de": 31.29
+    "de": 12.24
    },
    "r": {
-    "live": "2b5c8b",
+    "live": "47798c",
     "mock": "3a6c81",
-    "de": 18.1
+    "de": 5.29
    }
   }
  },
  "gp06": {
-  "palette": 5.23,
-  "saturation": 2.96,
-  "warmth": 3.86,
-  "detail": 15.63,
-  "clutter": 9.16,
-  "layout": 13.78,
-  "total": 49.37,
-  "structure": 74.96,
+  "palette": 0.7,
+  "saturation": 0.51,
+  "warmth": 0.86,
+  "detail": 1.77,
+  "clutter": 1.1,
+  "layout": 15.37,
+  "total": 79.69,
+  "structure": 78.79,
   "raw": {
-   "palette_w": 21.8,
-   "sat_gap": 98.8,
+   "palette_w": 2.91,
+   "sat_gap": 17.0,
    "sat_p50": [
     115.3,
-    237.7
+    125.7
    ],
    "sat_p90": [
     163.3,
-    238.6
+    139.6
    ],
    "b": [
     19.7,
-    41.7
+    24.6
    ],
    "detail_ratio": [
-    0.272,
-    0.157,
-    0.224
+    1.1,
+    1.258,
+    1.223
    ],
    "detail_rank_ratio": [
-    1.132,
-    0.472,
-    0.873
+    0.968,
+    1.049,
+    1.04
    ],
    "clutter_ratio": [
-    0.086,
-    0.132
+    1.187,
+    1.441
    ],
    "clutter_rank_ratio": [
-    0.699,
-    0.657
+    0.968,
+    1.033
    ],
    "layout_corr": [
-    0.137,
-    0.025
+    0.104,
+    -0.154
    ]
   },
   "swatches": {
    "g": {
-    "live": "206407",
+    "live": "848d49",
     "mock": "808844",
-    "de": 30.69
+    "de": 1.92
    },
    "m": {
-    "live": "5c800b",
+    "live": "8d914e",
     "mock": "848948",
-    "de": 24.88
+    "de": 3.25
    }
   }
  },
  "gp07": {
-  "palette": 3.47,
-  "saturation": 3.3,
-  "warmth": 1.39,
-  "detail": 10.86,
-  "clutter": 6.92,
-  "layout": 13.45,
-  "total": 60.62,
-  "structure": 66.26,
+  "palette": 0.83,
+  "saturation": 0.12,
+  "warmth": 0.56,
+  "detail": 2.02,
+  "clutter": 0.95,
+  "layout": 15.1,
+  "total": 80.42,
+  "structure": 75.91,
   "raw": {
-   "palette_w": 14.44,
-   "sat_gap": 110.0,
+   "palette_w": 3.46,
+   "sat_gap": 3.9,
    "sat_p50": [
     114.0,
-    234.8
+    115.4
    ],
    "sat_p90": [
     139.4,
-    238.5
+    133.1
    ],
    "b": [
     22.7,
-    30.6
+    19.4
    ],
    "detail_ratio": [
-    0.291,
-    0.305,
-    0.448
+    1.065,
+    1.204,
+    1.187
    ],
    "detail_rank_ratio": [
-    0.599,
-    0.425,
-    0.64
+    1.237,
+    1.273,
+    1.155
    ],
    "clutter_ratio": [
-    0.133,
-    0.254
+    0.974,
+    1.222
    ],
    "clutter_rank_ratio": [
-    0.198,
-    0.303
+    1.292,
+    1.234
    ],
    "layout_corr": [
-    0.29,
-    -0.083
+    0.136,
+    -0.149
    ]
   },
   "swatches": {
    "f": {
-    "live": "bc680f",
+    "live": "a7935b",
     "mock": "ac965e",
-    "de": 38.66
+    "de": 1.55
    },
    "g": {
-    "live": "246c07",
+    "live": "8a8c5e",
     "mock": "808844",
-    "de": 31.29
+    "de": 12.24
    },
    "r": {
-    "live": "2b5c8b",
+    "live": "47798c",
     "mock": "3a6c81",
-    "de": 18.1
+    "de": 5.29
    }
   }
  },
  "gp08": {
-  "palette": 6.39,
-  "saturation": 3.06,
-  "warmth": 5.7,
-  "detail": 14.62,
-  "clutter": 8.76,
-  "layout": 14.44,
-  "total": 47.03,
-  "structure": 73.38,
+  "palette": 3.18,
+  "saturation": 0.79,
+  "warmth": 3.0,
+  "detail": 2.1,
+  "clutter": 1.2,
+  "layout": 15.19,
+  "total": 74.53,
+  "structure": 78.83,
   "raw": {
-   "palette_w": 26.61,
-   "sat_gap": 102.1,
+   "palette_w": 13.25,
+   "sat_gap": 26.5,
    "sat_p50": [
     103.1,
-    237.6
+    125.9
    ],
    "sat_p90": [
     168.9,
-    238.6
+    138.7
    ],
    "b": [
     9.4,
-    42.0
+    26.5
    ],
    "detail_ratio": [
-    0.275,
-    0.159,
-    0.298
+    1.094,
+    1.212,
+    1.407
    ],
    "detail_rank_ratio": [
-    1.001,
-    0.403,
-    0.826
+    0.979,
+    0.953,
+    0.929
    ],
    "clutter_ratio": [
-    0.101,
-    0.136
+    1.322,
+    1.359
    ],
    "clutter_rank_ratio": [
-    0.664,
-    0.621
+    1.052,
+    1.052
    ],
    "layout_corr": [
-    -0.002,
-    0.076
+    0.096,
+    -0.121
    ]
   },
   "swatches": {
    "g": {
-    "live": "206407",
+    "live": "848d49",
     "mock": "808844",
-    "de": 30.69
+    "de": 1.92
    },
    "m": {
-    "live": "5c800b",
+    "live": "8d914e",
     "mock": "848948",
-    "de": 24.88
+    "de": 3.25
    }
   }
- },
- "_perf": {
-  "home": {
-   "draw_calls": 574.0,
-   "primitives": 138388.0,
-   "process_ms": 350.53
-  },
-  "max": {
-   "draw_calls": 1446.0,
-   "primitives": 223498.0,
-   "process_ms": 341.1
-  },
-  "note": "software (llvmpipe, Xvfb :94), HUD hidden, Kestrel idle after deploy; draw_calls and primitives are deterministic, fps and process_ms are not meaningful here"
- },
- "_perf_gpu": {
-  "idle_default": {
-   "fps": 168.5,
-   "frame_ms_p50": 5.56,
-   "frame_ms_p95": 9.8,
-   "draw_calls_p50": 838.0,
-   "primitives_p50": 152056.0,
-   "gpu_ms_p50": 1.68,
-   "cpu_render_ms_p50": 2.3
-  },
-  "idle_zoomed_out": {
-   "fps": 135.7,
-   "frame_ms_p50": 7.07,
-   "frame_ms_p95": 9.87,
-   "draw_calls_p50": 1655.0,
-   "primitives_p50": 230046.0,
-   "gpu_ms_p50": 1.9,
-   "cpu_render_ms_p50": 3.43
-  },
-  "idle_default2": {
-   "fps": 167.4,
-   "frame_ms_p50": 5.56,
-   "frame_ms_p95": 9.48,
-   "draw_calls_p50": 838.0,
-   "primitives_p50": 152056.0,
-   "gpu_ms_p50": 1.68,
-   "cpu_render_ms_p50": 2.37
-  },
-  "note": "RTX 3050 via PRIME offload, uncapped, 8 s windows, Kestrel idle after deploy, whole frame with HUD, 2026-10-05 on 7051540, load average about 6"
- },
- "_scorer": "v2: palette 12, saturation 6, warmth 7, detail 28 (3 bands, raw and rank), clutter 17 (2 scales, raw and rank), layout 30; structure = grade-proof subscore; captured 2026-10-05 on 7051540 (3 runs, spread in world_frames.json noise_terms)"
+ }
 }
