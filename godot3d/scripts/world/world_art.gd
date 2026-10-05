@@ -9,6 +9,41 @@ const ENVIRONMENT := {"exposure": 0.95, "saturation": 0.50, "contrast": 1.04, "a
 const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoom": 7.5, "max_zoom": 18.0, "edge_cells": 8, "focus_zoom": 10.0}
 
 
+## Visual width of every building and unit in tiles (spec addendum W6); the authored model is scaled to it.
+const BUILDING_TILES := {"CommandCenter": 2.8, "Barracks": 2.1, "VehicleFactory": 2.1, "Airfield": 2.1, "ResearchLab": 2.1,
+	"Refinery": 2.1, "AntimatterPlant": 2.1, "PowerPlant": 1.7, "Battery": 1.7, "SupplyDepot": 1.7, "GunTurret": 1.3,
+	"AaTurret": 1.3, "Wall": 1.0}
+const UNIT_TILES := [1.0, 1.6, 1.0, 1.5, 1.8, 1.5]  # by _create_unit kind: infantry, tank, anti-armour, gunship, capital, harvester
+## Authored material name (lower case contains) -> albedo for the boards' warm concrete, olive and gunmetal.
+const MODEL_PALETTE := {"concrete": "b3a893", "olive": "6f7448", "gunmetal": "474d52", "energy": "3f8f9c"}
+
+
+## Union of every MeshInstance3D AABB under `root`, in `root`'s local space (works outside the scene tree).
+static func merged_aabb(root: Node3D) -> AABB:
+	var out := AABB()
+	var first := true
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.mesh == null:
+			continue
+		var xf := Transform3D.IDENTITY
+		var p: Node = mi
+		while p != root and p is Node3D:
+			xf = (p as Node3D).transform * xf
+			p = p.get_parent()
+		var box: AABB = xf * mi.get_aabb()
+		out = box if first else out.merge(box)
+		first = false
+	return out
+
+
+## The absolute uniform scale that makes `root`'s wider ground axis `tiles` tiles wide.
+static func fit_factor(root: Node3D, tiles: float) -> float:
+	var box := merged_aabb(root)
+	var width := maxf(box.size.x, box.size.z)
+	return tiles * TILE / width if width > 0.0001 else 1.0
+
+
 static func active(model) -> bool:
 	return model != null
 

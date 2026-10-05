@@ -118,3 +118,24 @@ func test_survival_deposits_keep_their_disk_and_label(t) -> void:
 		labels += d.find_children("*", "Label3D", true, false).size()
 	t.ok(labels > 0, "legacy ORE labels")
 	scene.free()
+
+
+func test_survival_keeps_tactical_buildings(t) -> void:
+	var scene := _survival_scene()
+	var site := Node3D.new()
+	scene.add_child(site)
+	var hq: Node3D = scene.tactical_models.building(scene, site, "CommandCenter")
+	t.ok(hq != null, "the box-built CC still builds")
+	t.ok(not site.has_meta("visual_tiles"), "no width table outside the profile")
+	scene.free()
+
+
+func test_survival_units_keep_the_legacy_size(t) -> void:
+	var scene := _survival_scene()
+	scene._create_unit(0, Vector3(6, 0, 6), 1)
+	var tank: Node3D = scene.units.back()
+	t.ok(not tank.has_meta("visual_tiles"), "no width table outside the profile")
+	t.eq((tank.get_node("UnitVisual") as Node3D).scale, Vector3.ONE * 0.70, "legacy tank scale")
+	t.near((tank.get_node("HealthBack") as Node3D).position.y, 0.88, 1e-6, "legacy health bar height")
+	t.near((tank.get_node("ShieldFill") as Node3D).position.y, 0.958, 1e-6, "legacy shield bar height")
+	scene.free()

@@ -46,6 +46,7 @@ var environment: Environment  # the WorldEnvironment's resource, kept so the Kes
 var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under the HUD
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
+var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
 var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
 var _ground_route: Array = []  # its wave route: the scatter keeps cards off it (and off the ford and its approach)
 var ocean_box: MeshInstance3D
@@ -1051,6 +1052,16 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 		_create_human_unit_model(root, kind)
 	else:
 		_create_alien_unit_model(root, kind)
+	var bar_y: Array = [0.88, 0.885, 0.955, 0.958]  # health back, fill, shield back, fill
+	if world_art_on:
+		# spec addendum W6: every unit model (the box-built squads included, they build UnitVisual too) fits its width
+		var tiles := float(WorldArt.UNIT_TILES[clampi(kind, 0, WorldArt.UNIT_TILES.size() - 1)])
+		var visual := root.get_node_or_null("UnitVisual") as Node3D
+		if visual != null:
+			var fit := _fitted(visual, "unit:%d:%d" % [team, kind], tiles)
+			visual.scale = Vector3.ONE * fit.x
+			bar_y = [fit.y + 0.12, fit.y + 0.125, fit.y + 0.195, fit.y + 0.198]
+		root.set_meta("visual_tiles", tiles)
 	_add_unit_badge(root, team, kind)
 	var team_material: Material = materials.human_marker if team == HUMAN else materials.alien_marker
 	var marker_mesh := TorusMesh.new()
@@ -1062,16 +1073,16 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 	marker.name = "TeamMarker"
 	marker.visible = true
 	marker.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var health_back := _box(root, Vector3(0.62, 0.035, 0.055), Vector3(0, 0.88, 0), materials.alien_dark)
+	var health_back := _box(root, Vector3(0.62, 0.035, 0.055), Vector3(0, bar_y[0], 0), materials.alien_dark)
 	health_back.name = "HealthBack"
 	health_back.visible = false
-	var health_fill := _box(root, Vector3(0.56, 0.045, 0.065), Vector3(0, 0.885, 0), materials.glass if team == HUMAN else materials.alien)
+	var health_fill := _box(root, Vector3(0.56, 0.045, 0.065), Vector3(0, bar_y[1], 0), materials.glass if team == HUMAN else materials.alien)
 	health_fill.name = "HealthFill"
 	health_fill.visible = false
-	var shield_back := _box(root, Vector3(0.62, 0.028, 0.045), Vector3(0, 0.955, 0), materials.alien_dark)
+	var shield_back := _box(root, Vector3(0.62, 0.028, 0.045), Vector3(0, bar_y[2], 0), materials.alien_dark)
 	shield_back.name = "ShieldBack"
 	shield_back.visible = false
-	var shield_fill := _box(root, Vector3(0.56, 0.036, 0.055), Vector3(0, 0.958, 0), materials.plasma)
+	var shield_fill := _box(root, Vector3(0.56, 0.036, 0.055), Vector3(0, bar_y[3], 0), materials.plasma)
 	shield_fill.name = "ShieldFill"
 	shield_fill.visible = false
 	units.append(root)
@@ -1519,6 +1530,11 @@ func _set_selection(selection: Array) -> void:
 		torus.ring_segments = 8
 		selection_ring = _mesh(torus, materials.glass, selected.position + Vector3.UP * 0.04)
 	selection_ring.visible = true
+	if world_art_on:  # spec addendum W6: the ring wraps the fitted model (the torus is 0.46 across its tube centre)
+		var ring_scale := 1.0
+		if selected.has_meta("visual_tiles"):
+			ring_scale = float(selected.get_meta("visual_tiles")) * WorldArt.TILE * 0.55 / 0.46
+		selection_ring.scale = Vector3(ring_scale, 1.0, ring_scale)
 	var category := String(selected.get_meta("category", "unit"))
 	if not is_instance_valid(range_ring):
 		var range_mesh := TorusMesh.new()
@@ -2111,6 +2127,16 @@ func _sync_spent_deposits(snapshot: Dictionary) -> void:
 		world_props.mark_spent(snapshot.get("deposits", []))
 
 
+## Kestrel only (spec addendum W6): the absolute scale that makes `visual` `tiles` tiles wide (x) and the fitted model's
+## top in its parent's space (y). `merged_aabb` measures before the visual's own scale, so x is never multiplied by the
+## authored scale. Cached per model key.
+func _fitted(visual: Node3D, key: String, tiles: float) -> Vector2:
+	if not _fit_cache.has(key):
+		var k := WorldArt.fit_factor(visual, tiles)
+		_fit_cache[key] = Vector2(k, WorldArt.merged_aabb(visual).end.y * k)
+	return _fit_cache[key]
+
+
 func _create_bridge_building(owner: int, kind_name: String, destination: Vector3, bridge_id: int) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Core_%s_%03d" % [kind_name, bridge_id]
@@ -2154,19 +2180,35 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	var asset_map: Dictionary = human_assets if owner == HUMAN else alien_assets
 	var fallback := "human_industry" if owner == HUMAN else "alien_spire"
 	var asset_name := String(asset_map.get(kind_name, fallback))
+	if world_art_on and owner == HUMAN and kind_name == "VehicleFactory":
+		asset_name = "human_industry"  # the profile shows every human building as its authored model; the factory has its own
 	var model_scale := 0.32 if kind_name == "CommandCenter" else (0.40 if kind_name == "Wall" else 0.30)
 	var visual: Node3D
-	if owner == HUMAN and kind_name in ["CommandCenter", "ResearchLab", "Barracks", "VehicleFactory", "Airfield", "PowerPlant", "Battery", "Refinery", "SupplyDepot"]:
+	if not world_art_on and owner == HUMAN and kind_name in ["CommandCenter", "ResearchLab", "Barracks", "VehicleFactory", "Airfield", "PowerPlant", "Battery", "Refinery", "SupplyDepot"]:
 		visual = tactical_models.building(self, root, kind_name)
 	else:
 		visual = _place_scene(root, "res://assets/models/authored/%s.glb" % asset_name, Vector3.ZERO, Vector3.ONE * model_scale, 0.0)
 	visual.name = "Visual"
-	for prop in get_tree().get_nodes_in_group("scenery"):
-		if prop is Node3D and prop.global_position.distance_to(destination) < 0.85:
-			prop.hide()
-	if world_props != null:
-		world_props.clear_around(destination, 0.85)  # the same clearing for the Kestrel prop MultiMeshes
-	if kind_name == "CommandCenter":
+	var bar_y: Array = [1.15, 1.155, 1.24, 1.245]  # health back, fill, shield back, fill
+	if world_art_on:
+		# spec addendum W6: the model is fitted to its width in tiles; the props under it go, a soft pad goes under it
+		var tiles := float(WorldArt.BUILDING_TILES.get(kind_name, 1.7))
+		var fit := _fitted(visual, "%d:%s" % [owner, asset_name], tiles)
+		visual.scale = Vector3.ONE * fit.x
+		visual.set_meta("authored_scale", visual.scale)  # construction grows the fitted model, not the legacy scale
+		root.set_meta("visual_tiles", tiles)
+		bar_y = [fit.y + 0.18, fit.y + 0.185, fit.y + 0.27, fit.y + 0.275]
+		if world_props != null:
+			world_props.clear_around(destination, tiles * WorldArt.TILE * 0.5)
+			var slot: int = world_props.add_pad(destination, tiles * WorldArt.TILE)
+			if slot >= 0:
+				var props: RefCounted = world_props
+				root.tree_exiting.connect(func(): props.release_pad(slot))
+	else:
+		for prop in get_tree().get_nodes_in_group("scenery"):
+			if prop is Node3D and prop.global_position.distance_to(destination) < 0.85:
+				prop.hide()
+	if kind_name == "CommandCenter" and not world_art_on:  # the HUD names buildings under the profile
 		var banner := Label3D.new()
 		banner.text = "COMMAND" if owner == HUMAN else "CORE NODE"
 		banner.position = Vector3(0, 1.0, 0)
@@ -2177,16 +2219,16 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 		banner.outline_size = 4
 		banner.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		root.add_child(banner)
-	var health_back := _box(root, Vector3(0.82, 0.045, 0.07), Vector3(0, 1.15, 0), materials.alien_dark)
+	var health_back := _box(root, Vector3(0.82, 0.045, 0.07), Vector3(0, bar_y[0], 0), materials.alien_dark)
 	health_back.name = "HealthBack"
 	health_back.visible = false
-	var health_fill := _box(root, Vector3(0.76, 0.055, 0.08), Vector3(0, 1.155, 0), materials.glass if owner == HUMAN else materials.alien)
+	var health_fill := _box(root, Vector3(0.76, 0.055, 0.08), Vector3(0, bar_y[1], 0), materials.glass if owner == HUMAN else materials.alien)
 	health_fill.name = "HealthFill"
 	health_fill.visible = false
-	var shield_back := _box(root, Vector3(0.82, 0.035, 0.055), Vector3(0, 1.24, 0), materials.alien_dark)
+	var shield_back := _box(root, Vector3(0.82, 0.035, 0.055), Vector3(0, bar_y[2], 0), materials.alien_dark)
 	shield_back.name = "ShieldBack"
 	shield_back.visible = false
-	var shield_fill := _box(root, Vector3(0.76, 0.044, 0.065), Vector3(0, 1.245, 0), materials.plasma)
+	var shield_fill := _box(root, Vector3(0.76, 0.044, 0.065), Vector3(0, bar_y[3], 0), materials.plasma)
 	shield_fill.name = "ShieldFill"
 	shield_fill.visible = false
 	return root
@@ -2886,7 +2928,12 @@ func _place_scene(parent: Node, path: String, pos: Vector3, scale_value: Vector3
 				matte.emission_enabled = false
 				var material_name := source.resource_name.to_lower()
 				if path.contains("human_"):
-					if "energy" in material_name:
+					if world_art_on:  # the boards' warm concrete, olive and gunmetal (spec addendum W6)
+						for key in WorldArt.MODEL_PALETTE:
+							if key in material_name:
+								matte.albedo_color = Color(String(WorldArt.MODEL_PALETTE[key]))
+								break
+					elif "energy" in material_name:
 						matte.albedo_color = Color("31545c")
 					elif "olive" in material_name:
 						matte.albedo_color = Color("59614e")

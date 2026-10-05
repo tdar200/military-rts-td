@@ -278,7 +278,7 @@ func add_pad(world: Vector3, width: float) -> int:
 
 
 func release_pad(slot: int) -> void:
-	if slot < 0 or decals == null:
+	if slot < 0 or not is_instance_valid(decals):  # a building can leave the tree with the whole scene
 		return
 	decals.multimesh.set_instance_transform(slot, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 	_free_pads.append(slot)
