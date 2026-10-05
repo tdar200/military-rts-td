@@ -39,8 +39,32 @@ func _card_point(card: Node3D, u: float, v: float) -> Vector3:
 	return Vector3((u - 0.5) * w, card.position.y + (WorldSprites.FOOT - v) * h / _cos_pitch(), 0.0)
 
 
+## The sprite a card draws (its material samples a pre-graded copy and names the source).
 func _card_texture(card: Node3D) -> Texture2D:
-	return ((card as MeshInstance3D).material_override as StandardMaterial3D).albedo_texture
+	var m := (card as MeshInstance3D).material_override as StandardMaterial3D
+	return m.get_meta("source_texture", m.albedo_texture)
+
+
+## Mean luma and mean chroma (max - min channel) of the painted body (alpha > 250) of an RGBA8 image.
+func _body_tone(img: Image) -> Vector2:
+	var sum := Vector2.ZERO
+	var n := 0
+	for y in range(0, img.get_height(), 2):
+		for x in range(0, img.get_width(), 2):
+			var c := img.get_pixel(x, y)
+			if c.a > 0.98:
+				sum += Vector2(0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b, maxf(c.r, maxf(c.g, c.b)) - minf(c.r, minf(c.g, c.b)))
+				n += 1
+	return sum / maxf(1.0, float(n))
+
+
+func _rgba8(img: Image) -> Image:
+	if img.is_compressed():
+		img.decompress()
+	img.clear_mipmaps()
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+	return img
 
 
 func test_every_profile_building_has_a_sprite_or_is_listed(t) -> void:
@@ -86,6 +110,32 @@ func test_one_material_per_texture(t) -> void:
 	t.eq((a as GeometryInstance3D).cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "a card casts no shadow")
 	a.free()
 	b.free()
+
+
+func test_card_material_pre_grades_the_painting(t) -> void:
+	# The Kestrel post chain (filmic, saturation 0.5, the gSun overlay) lifts and greys what it draws; the cards (only
+	# them) sample a copy of the sprite pre-graded by WorldSprites.GRADE so the painting reads on screen as on the boards.
+	var tex := WorldSprites.texture_for("CommandCenter", 0)
+	var m := WorldSprites.material_for(tex) as StandardMaterial3D
+	t.ok(m.get_meta("source_texture", null) == tex, "the material names its source sprite")
+	t.ok(m.albedo_texture != tex, "and draws a graded copy, not the sprite itself")
+	var src := _rgba8(tex.get_image().duplicate() as Image)
+	var graded_tex := m.albedo_texture
+	var img := _rgba8(graded_tex.get_image().duplicate() as Image) if graded_tex != null and graded_tex.get_image() != null else null
+	t.ok(img != null and img.get_size() == src.get_size(), "same size as the sprite")
+	if img == null or img.get_size() != src.get_size():
+		return
+	var want := src.duplicate() as Image
+	want.adjust_bcs(float(WorldSprites.GRADE.brightness), float(WorldSprites.GRADE.contrast), float(WorldSprites.GRADE.saturation))
+	for p in [Vector2i(128, 128), Vector2i(60, 150), Vector2i(200, 90), Vector2i(3, 3)]:
+		t.ok(img.get_pixelv(p).is_equal_approx(want.get_pixelv(p)), "pixel %s graded by GRADE" % p)
+		t.near(img.get_pixelv(p).a, src.get_pixelv(p).a, 0.002, "alpha %s untouched (picking, shadows)" % p)
+	var a := _body_tone(src)
+	var b := _body_tone(img)
+	t.ok(b.x < a.x * 0.95, "darker body (luma %.3f < %.3f)" % [b.x, a.x])
+	t.ok(b.y > a.y * 1.05, "more colourful body (chroma %.3f > %.3f)" % [b.y, a.y])
+	var shadow := WorldSprites.shadow_material_for(tex) as ShaderMaterial
+	t.ok(shadow.get_shader_parameter("sprite") == tex, "the shadows read the ungraded alpha")
 
 
 func test_card_is_tiles_wide_and_stands_on_its_root(t) -> void:
@@ -282,7 +332,8 @@ func test_card_casts_the_boards_silhouette_shadow(t) -> void:
 	t.near(box.end.z * WorldArt.PITCH_SIN, 0.34 * d, 1e-4, "0.34 of the height above the line, on screen")
 	t.near(box.end.x - 0.5, tan(deg_to_rad(60.0)) * 0.34 * d, 1e-3, "sheared toward the lower right")
 	var m := shadow.material_override as ShaderMaterial
-	t.near(float(m.get_shader_parameter("strength")), 0.40 * 0.52, 0.001, "the boards' opacity")
+	t.ok(WorldSprites.SHADOW_GAIN > 1.0, "the post chain lifts dark ground: the live shadows are drawn stronger")
+	t.near(float(m.get_shader_parameter("strength")), 0.40 * 0.52 * WorldSprites.SHADOW_GAIN, 0.001, "the boards' opacity, compensated")
 	t.ok(m.get_shader_parameter("sprite") == WorldSprites.texture_for("CommandCenter", 0), "the sprite's own silhouette")
 	WorldSprites.show_built(card, false)
 	t.ok((shadow.material_override as ShaderMaterial).get_shader_parameter("sprite") == WorldSprites.foundation(), "a site's shadow is the foundation's")
@@ -409,7 +460,7 @@ func test_unit_shadows_the_boards_way(t) -> void:
 		t.near(box.size.z * WorldArt.PITCH_SIN, tall, 1e-4, "squashed to 0.13 on screen, blur room included")
 		t.ok(tall < 0.35, "a thin band (%.3f of the width)" % tall)
 		var m := ao.material_override as ShaderMaterial
-		t.near(float(m.get_shader_parameter("strength")), 0.6, 0.001, "the boards' .ao opacity")
+		t.near(float(m.get_shader_parameter("strength")), minf(1.0, 0.6 * WorldSprites.SHADOW_GAIN), 0.001, "the boards' .ao opacity, compensated")
 	var building := WorldSprites.make_card("Barracks", 0, 2.44)
 	t.ok(building.get_node_or_null("SpriteContact") == null, "a building keeps its contact pad instead")
 	card.free()
@@ -469,12 +520,38 @@ func test_gunship_bob_rides_on_the_card_lift(t) -> void:
 	scene._bob_units()
 	var g := gunship.get_node("UnitVisual") as Node3D
 	var k := tank.get_node("UnitVisual") as Node3D
-	t.near(g.position.y, float(g.get_meta("base_y")) + sin(1.2) * 0.018, 1e-6, "the gunship bobs over its lift")
+	var hover := float(WorldSprites.HOVER["Helicopter"])
+	t.near(g.position.y, float(g.get_meta("base_y")) + hover + sin(1.2) * 0.018, 1e-6, "the gunship bobs over its lift and hover")
 	t.near(k.position.y, float(k.get_meta("base_y")), 1e-6, "a tank stays on its lift")
 	scene.free()
 
 
-func test_unit_bars_and_badge_sit_over_the_painted_top(t) -> void:
+func test_gunship_hovers_over_its_ground_shadow(t) -> void:
+	var scene := _kestrel_scene()
+	var at: Vector3 = scene._hex_world(12, 12)
+	scene._sync_bridge_entities([_unit_entity(scene, 990, "Helicopter", 0, at), _unit_entity(scene, 991, "Tank", 0, scene._hex_world(14, 12))])
+	var hover := float(WorldSprites.HOVER.get("Helicopter", 0.0))
+	t.ok(hover > 0.15 and hover < 0.6, "a small hover lift (%.2f)" % hover)
+	for id in [990, 991]:
+		var unit: Node3D = scene.bridge_nodes[id]
+		var card := unit.get_node("UnitVisual") as MeshInstance3D
+		var lifted := hover if id == 990 else 0.0
+		var base := float(card.get_meta("base_y"))
+		t.near(card.position.y, base + lifted, 1e-5, "%d: the card rides %.2f over its ground lift" % [id, lifted])
+		for part in ["SpriteShadow", "SpriteContact"]:
+			var shade := card.get_node(part) as Node3D
+			var y := card.position.y + shade.position.y * card.scale.y
+			t.near(y, base, 1e-5, "%d: the %s stays on the ground" % [id, part])
+		var box: AABB = (unit.get_meta("pick_parts") as Array)[0]
+		var want := WorldSprites.pick_box(_card_texture(card), card.scale.x, base + lifted, false)
+		t.ok(box.is_equal_approx(want), "%d: the pick box follows the painted body up" % id)
+		var top := _card_point(card, 0.5, WorldSprites.opaque_bounds(_card_texture(card)).position.y).y
+		t.ok((unit.get_node("HealthBack") as Node3D).position.y > top, "%d: bars over the lifted painting" % id)
+	scene.free()
+
+
+func test_unit_bars_sit_over_the_painted_top_and_no_badge_shows(t) -> void:
+	# the boards draw no badge over a unit (the team ring at the feet says whose it is); Survival keeps its badges
 	var scene := _kestrel_scene()
 	var cos_pitch := _cos_pitch()
 	for owner in [0, 1]:
@@ -486,14 +563,13 @@ func test_unit_bars_and_badge_sit_over_the_painted_top(t) -> void:
 				t.ok(false, "owner %d kind %d is not a card" % [owner, kind])
 				continue
 			var top := _card_point(card, 0.5, WorldSprites.opaque_bounds(_card_texture(card)).position.y).y * cos_pitch
-			var badge := unit.get_node("StrategicBadge") as Node3D
-			var badge_bottom := badge.position.y * cos_pitch - 0.065  # a 0.13-tall billboard
-			var badge_top := badge.position.y * cos_pitch + 0.065
-			t.ok(badge_bottom > top, "owner %d kind %d: badge over the painted top (%.3f > %.3f)" % [owner, kind, badge_bottom, top])
+			var badge := unit.get_node_or_null("StrategicBadge") as Node3D
+			t.ok(badge == null or not badge.visible, "owner %d kind %d: no badge over the painting" % [owner, kind])
 			var bar := (unit.get_node("HealthBack") as Node3D).position.y * cos_pitch
-			t.ok(bar > badge_top, "owner %d kind %d: health bar over the badge" % [owner, kind])
-			t.ok(bar < top + 0.35, "owner %d kind %d: and not floating far above (%.3f)" % [owner, kind, bar - top])
+			t.ok(bar > top + 0.02, "owner %d kind %d: health bar over the painted top" % [owner, kind])
+			t.ok(bar < top + 0.15, "owner %d kind %d: and close to it (%.3f)" % [owner, kind, bar - top])
 			t.ok((unit.get_node("ShieldBack") as Node3D).position.y > (unit.get_node("HealthFill") as Node3D).position.y, "shield over health")
+			t.ok((unit.get_node("TeamMarker") as Node3D).visible, "owner %d kind %d: the team ring stays at the feet" % [owner, kind])
 	scene.free()
 
 

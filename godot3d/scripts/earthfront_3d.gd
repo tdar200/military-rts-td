@@ -145,10 +145,10 @@ var deposit_tiles: Dictionary = {}
 var hover_tile: MeshInstance3D
 var hover_outline_key := Vector3i(-1, -1, -1)  # hex and zoom the Kestrel hover outline was last built for
 const HOVER_LIFT_KESTREL := 0.07
-## Kestrel unit cards: the badge (a 0.13-tall billboard) and the bars ride this far over the painted top, so on screen the
-## badge clears the painting and the bars clear the badge (a vertical offset y shows as y * cos(pitch) on screen).
+## Kestrel unit cards: the badge (kept hidden: the boards draw none) and the bars ride this far over the painted top (a
+## vertical offset y shows as y * cos(pitch) on screen), so the bars sit just over the painting.
 const UNIT_BADGE_OVER := 0.14
-const UNIT_BARS_OVER := 0.30
+const UNIT_BARS_OVER := 0.12
 var range_ring: MeshInstance3D
 var camera_focus_target := Vector3(16.7, 0.0, 10.0)
 var camera_focus_zoom := 12.2
@@ -1078,6 +1078,8 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 			root.set_meta("pick_parts", [whole])  # a squad's whole box: a click between its soldiers is still on it
 		root.set_meta("visual_tiles", tiles)
 	_add_unit_badge(root, team, kind, badge_y)
+	if card != null:
+		(root.get_node("StrategicBadge") as Node3D).visible = false  # the boards draw none; the team ring says whose it is
 	var team_material: Material = materials.human_marker if team == HUMAN else materials.alien_marker
 	var marker_mesh := TorusMesh.new()
 	marker_mesh.inner_radius = 0.15 if kind == 0 else 0.26
@@ -1108,8 +1110,9 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 func _lift_unit_card(root: Node3D, card: MeshInstance3D, goal: Vector3) -> void:
 	var ground := _height_world(goal.x, goal.z)
 	var lift := _card_lift(Vector3(goal.x, ground, goal.z), card.scale.x) - (goal.y - ground)
-	var delta := lift - float(card.get_meta("base_y", card.position.y))
-	card.position.y = lift + (card.position.y - float(card.get_meta("base_y", card.position.y)))  # keeps a gunship's bob
+	var rest := float(card.get_meta("base_y", card.position.y - float(card.get_meta("hover", 0.0))))
+	var delta := lift - rest
+	card.position.y = lift + (card.position.y - rest)  # keeps a gunship's hover and bob
 	card.set_meta("base_y", lift)
 	card.set_meta("lift_at", goal)
 	if absf(delta) > 0.0:
@@ -1121,7 +1124,8 @@ func _lift_unit_card(root: Node3D, card: MeshInstance3D, goal: Vector3) -> void:
 
 
 func _refresh_unit_pick(root: Node3D, card: MeshInstance3D) -> void:
-	var box := WorldSprites.pick_box(card.get_meta("sprite_texture"), card.scale.x, float(card.get_meta("base_y")), bool(card.get_meta("mirrored", false)))
+	var lift := float(card.get_meta("base_y")) + float(card.get_meta("hover", 0.0))
+	var box := WorldSprites.pick_box(card.get_meta("sprite_texture"), card.scale.x, lift, bool(card.get_meta("mirrored", false)))
 	root.set_meta("pick_parts", [box])
 
 
@@ -1269,7 +1273,7 @@ func _bob_units() -> void:
 			continue
 		var visual := unit.get_node_or_null("UnitVisual") as Node3D
 		if visual:
-			var rest := float(visual.get_meta("base_y", 0.0))
+			var rest := float(visual.get_meta("base_y", 0.0)) + float(visual.get_meta("hover", 0.0))
 			visual.position.y = rest + (sin(time_alive * 2.0) * 0.018 if int(unit.get_meta("kind", 0)) == 3 else 0.0)
 			visual.rotation.z = 0.0
 			var turret := visual.find_child("Turret", true, false) as Node3D

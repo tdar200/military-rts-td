@@ -27,7 +27,10 @@ const FOUNDATION := "foundation_v1"
 ## (skewX(60deg) scaleY(-.34)), at opacity .40 * .52, blurred (a coarser mip level stands in for the 4 px blur).
 const SHADOW_SCALE := 0.34
 const SHADOW_SHEAR := 0.589  # tan(60 degrees) * SHADOW_SCALE: screen x per unit of height above the contact line
-const SHADOW_ALPHA := 0.208
+## The Kestrel post chain lifts dark ground (filmic shoulder, saturation 0.5, the gSun overlay), so both board shadows
+## (.shd here, .ao below) are drawn this much stronger than the boards' CSS opacity to read as dark on screen.
+const SHADOW_GAIN := 1.6
+const SHADOW_ALPHA := 0.208 * SHADOW_GAIN
 const SHADOW_LOD := 2.0
 
 ## Board pixel widths (Main.dc.html, BuildDeck, StructureSelected, OrdersArmed, WaveInbound, CoreAssault). Battery is the
@@ -81,10 +84,18 @@ const FACING_DEADBAND := 0.02  # world units of horizontal motion below which a 
 ## painting's height); the band reaches AO_MARGIN past the painting on each side so the blur has room.
 const AO_SCALE := 0.13
 const AO_DROP := 0.025
-const AO_ALPHA := 0.6
+const AO_ALPHA := minf(1.0, 0.6 * SHADOW_GAIN)
 const AO_SIGMA := 0.38
 const AO_LOD := 4.5
 const AO_MARGIN := Vector2(0.15, 0.76)  # in card u and v: about two blur sigmas
+## The cards' pre-grade (Image.adjust_bcs: multiply, contrast about mid grey, saturation about the pixel mean). The Kestrel
+## post chain (filmic, exposure 0.95, saturation 0.50, the gSun overlay) draws a sprite lighter and greyer than the boards
+## do; the cards sample a copy graded by this so the painting reads on screen as on the boards. Cards only: the shadows
+## read the sprite's alpha, the props atlas and the ground keep their own grade.
+const GRADE := {"brightness": 0.80, "contrast": 1.02, "saturation": 1.60}
+## Unit kinds drawn in the air: the card rides this far (world units, vertical) over its ground lift, its cast shadow
+## and contact band stay on the ground under it.
+const HOVER := {"Helicopter": 0.30}
 ## Profile kinds that keep their fitted 3D model (none today); any kind outside SPRITES falls back the same way.
 const NO_SPRITE: Array[String] = []
 
@@ -123,7 +134,8 @@ static func foundation() -> Texture2D:
 
 
 ## One shared unshaded material per texture: alpha blended with a depth pre-pass, so the painted body hides what stands
-## behind it and the soft painted edges still blend.
+## behind it and the soft painted edges still blend. It samples the sprite pre-graded by GRADE and names the sprite in its
+## `source_texture` meta.
 static func material_for(tex: Texture2D) -> Material:
 	var key := tex.resource_path if tex.resource_path != "" else str(tex.get_instance_id())
 	if not _materials.has(key):
@@ -131,10 +143,27 @@ static func material_for(tex: Texture2D) -> Material:
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
 		m.cull_mode = BaseMaterial3D.CULL_DISABLED
-		m.albedo_texture = tex
+		m.albedo_texture = graded(tex)
+		m.set_meta("source_texture", tex)
 		m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 		_materials[key] = m
 	return _materials[key]
+
+
+## A copy of `tex` graded by GRADE (alpha untouched, mipmaps rebuilt), or `tex` itself when its image cannot be read.
+static func graded(tex: Texture2D) -> Texture2D:
+	var img := tex.get_image()
+	if img == null or img.is_empty():
+		return tex
+	img = img.duplicate() as Image  # a headless texture hands out its own image: never grade the sprite in place
+	if img.is_compressed():
+		img.decompress()
+	img.clear_mipmaps()
+	if img.get_format() != Image.FORMAT_RGBA8:
+		img.convert(Image.FORMAT_RGBA8)
+	img.adjust_bcs(float(GRADE.brightness), float(GRADE.contrast), float(GRADE.saturation))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
 
 
 ## The painted body's box in card UV (0..1, v down from the top): the bounding box of the pixels whose alpha passes
@@ -317,7 +346,9 @@ static func make_card(kind: String, owner: int, tiles: float, contact := false) 
 	card.material_override = material_for(tex)
 	card.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	card.scale = Vector3.ONE * tiles * WorldArt.TILE
-	card.position = Vector3(0.0, CARD_LIFT, 0.0)
+	var hover := float(HOVER.get(kind, 0.0))
+	card.position = Vector3(0.0, CARD_LIFT + hover, 0.0)
+	card.set_meta("hover", hover)
 	card.set_meta("sprite_kind", kind)
 	card.set_meta("sprite_texture", tex)
 	card.set_meta("native_facing", int(FACING.get(tex.resource_path.get_file().get_basename(), 0)))
@@ -327,6 +358,7 @@ static func make_card(kind: String, owner: int, tiles: float, contact := false) 
 	shadow.mesh = shadow_mesh()
 	shadow.material_override = shadow_material_for(tex)
 	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shadow.position.y = -hover / card.scale.y  # a hovering card's shadows stay on the ground
 	card.add_child(shadow)
 	if contact:
 		var band := MeshInstance3D.new()
@@ -334,6 +366,7 @@ static func make_card(kind: String, owner: int, tiles: float, contact := false) 
 		band.mesh = contact_mesh()
 		band.material_override = contact_material_for(tex)
 		band.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		band.position.y = -hover / card.scale.y
 		card.add_child(band)
 	return card
 
