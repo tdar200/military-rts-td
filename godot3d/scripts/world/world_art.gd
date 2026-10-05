@@ -13,8 +13,9 @@ const CAMERA := {"yaw": 0.0, "default_zoom": 10.0, "deploy_from": 15.5, "min_zoo
 ## Visual width of every building in tiles: the width of its sprite card (WorldSprites), from the boards' pixel sizes.
 ## The boards draw land.jpg 1:1 and land.jpg maps one TILE to 82 px, so tiles = board px / 82 (WorldSprites.MOCK_PX):
 ## CC 250 px = 3.05, barracks / factory / refinery 200 = 2.44, power plant 170 = 2.07 (the board's second one, the
-## battery here, 160 = 1.95), antimatter plant 190 = 2.32 (no board: its taller painting), lab 150 = 1.83, gun turret 115 = 1.40, wall 100 = 1.22, AA 85 = 1.04. The card includes the
-## sprite's transparent margin; the painted body is about 0.85 to 0.9 of it. A kind without a sprite fits its model to it.
+## battery here, 160 = 1.95), antimatter plant 190 = 2.32 (no board: its taller painting), lab 150 = 1.83, gun turret
+## 115 = 1.40, wall 100 = 1.22, AA 85 = 1.04. The card includes the sprite's transparent margin; the painted body is
+## about 0.85 to 0.9 of it. A kind without a sprite fits its model to it.
 const BUILDING_TILES := {"CommandCenter": 3.05, "Barracks": 2.44, "VehicleFactory": 2.44, "Airfield": 2.44, "ResearchLab": 1.83,
 	"Refinery": 2.44, "AntimatterPlant": 2.32, "PowerPlant": 2.07, "Battery": 1.95, "SupplyDepot": 2.07, "GunTurret": 1.40,
 	"AaTurret": 1.04, "Wall": 1.22}
