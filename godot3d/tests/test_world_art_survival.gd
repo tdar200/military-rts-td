@@ -166,7 +166,7 @@ func test_survival_keeps_the_32_pixel_root_pick(t) -> void:
 	scene._create_unit(0, Vector3(10, 0, 10), 1)  # a tank (the box-built buildings need the scene in the tree)
 	var tank: Node3D = scene.units.back()
 	scene.bridge_nodes[920] = tank
-	t.ok(not tank.has_meta("pick_box"), "no fitted pick height outside the profile")
+	t.ok(not tank.has_meta("pick_parts"), "no fitted pick height outside the profile")
 	var root: Vector2 = to_screen.call(tank, Vector3.UP * 0.15)
 	t.eq(scene._pick_entity(root + Vector2(31.0, 0.0), to_screen), tank, "31 px from the root lifted 0.15 picks")
 	t.eq(scene._pick_entity(root + Vector2(0.0, -33.0), to_screen), null, "33 px above it does not")
