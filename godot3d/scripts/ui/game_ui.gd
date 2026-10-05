@@ -13,8 +13,14 @@ const ResearchScreen = preload("res://scripts/ui/research_screen.gd")
 const LiveResearch = preload("res://scripts/ui/live_research.gd")
 const Assault = preload("res://scripts/ui/assault/assault.gd")
 const WorldMarks = preload("res://scripts/ui/world_marks.gd")
+const Keybinds = preload("res://scripts/ui/keybinds.gd")
+const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
+const PauseMenu = preload("res://scripts/ui/sections/pause_menu.gd")
+const ControlsReference = preload("res://scripts/ui/sections/controls_reference.gd")
 
 const VM_INTERVAL := 0.1
+## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it ignores the flag.
+const STOP_SLACK_TICKS := 6
 const MINIMAP_CENTER := Vector3(16.7, 34.0, 10.0)
 const MINIMAP_SPAN := 35.0
 
@@ -29,6 +35,13 @@ var marks: Control  # WorldMarks: hostile diamonds over the 3D scene, under the 
 var research: Control  # the Science modal; the game's `science_overlay` is this node
 var live_research
 var selection_box: Panel
+var pause_layer: Control  # the pause menu and the controls screen, over everything but the title
+var pause_open := false
+var controls_open := false
+var confirm := ""  # "restart" or "quit" while the confirm panel is up
+var _controls_over_play := false  # F1 opened the controls with no pause menu behind them: Back resumes
+var _pause_tick := 0
+var _pause_hash := 0
 var minimap_view: SubViewportContainer
 var _clock := 0.0
 var _since_vm := VM_INTERVAL
@@ -66,6 +79,11 @@ func setup(game) -> void:
 	research.visible = false
 	research.action.connect(_on_research_action)
 	layer.add_child(research)
+	pause_layer = Control.new()
+	pause_layer.name = "PauseLayer"
+	pause_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pause_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(pause_layer)
 	title = TitleScreen.new()
 	title.action.connect(_on_title_action)
 	layer.add_child(title)
@@ -112,6 +130,13 @@ func _input(event: InputEvent) -> void:
 ## Called every frame by the game. The view model is rebuilt about ten times a second, and never while a click is
 ## in flight over the HUD, so a button is not replaced between its press and its release.
 func process(delta: float) -> void:
+	if paused():
+		# Frozen: no HUD rebuild, no ticker, no log samples, and the alert clock stands still. Only the pause screens refresh.
+		_since_vm += delta
+		if _since_vm >= VM_INTERVAL:
+			_since_vm = 0.0
+			_refresh_pause()
+		return
 	_clock += delta
 	session_log.observe(g)
 	adapter.poll_ticker(g.objective_label.text, _clock)
@@ -156,6 +181,8 @@ func _update_marks() -> void:
 ## True when the point (viewport pixels) is over any UI surface, so the 3D scene must not react to it.
 func blocks_point(point: Vector2) -> bool:
 	if title != null and title.visible:
+		return true
+	if paused():
 		return true
 	if scrim != null or research.blocks_point(point):
 		return true
@@ -244,3 +271,177 @@ func _on_debrief_action(name: String, _arg: Variant) -> void:
 				scrim = null
 		"restart":
 			g._restart_mission()
+
+
+# ---------------------------------------------------------------- pause menu and controls screen
+
+## True while the pause menu or the controls screen is up: the world takes no input and the HUD does not update.
+func paused() -> bool:
+	return pause_open or controls_open
+
+
+## What Esc does right now, most specific first: close the controls screen, close the confirm panel, resume, close the
+## Science modal, cancel an armed order or placement, otherwise open the pause menu ("none" while the debrief is up).
+func escape_route(armed: bool) -> String:
+	if controls_open:
+		return "close_controls"
+	if confirm != "":
+		return "close_confirm"
+	if pause_open:
+		return "resume"
+	if research.visible:
+		return "close_research"
+	if armed:
+		return "cancel_orders"
+	if scrim != null or not hud.visible:
+		return "none"
+	return "open_pause"
+
+
+## Esc and F1 for the game's input handler. True when the key was used here; the research and armed-order cases stay with
+## the handler (their existing code closes the modal or cancels the order).
+func route_key(event: InputEvent, armed := false) -> bool:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return false
+	if event.keycode == Keybinds.CONTROLS:
+		if scrim != null or not hud.visible:
+			return false
+		if controls_open:
+			close_controls()
+		else:
+			open_controls()
+		return true
+	if event.keycode != Keybinds.CANCEL:
+		return false
+	match escape_route(armed):
+		"close_controls":
+			close_controls()
+		"close_confirm":
+			confirm = ""
+			_refresh_pause(true)
+		"resume":
+			close_pause()
+		"open_pause":
+			open_pause()
+		_:
+			return false
+	return true
+
+
+func open_pause() -> void:
+	if paused() or scrim != null or not hud.visible:
+		return
+	pause_open = true
+	confirm = ""
+	_enter_pause()
+
+
+func close_pause() -> void:
+	pause_open = false
+	controls_open = false
+	_controls_over_play = false
+	confirm = ""
+	_leave_pause()
+
+
+## From the pause menu's Controls button, or F1 in play (which then pauses by itself and resumes on Back).
+func open_controls() -> void:
+	if scrim != null or not hud.visible:
+		return
+	if controls_open:
+		return
+	_controls_over_play = not pause_open
+	controls_open = true
+	if _controls_over_play:
+		_enter_pause()  # F1 in play: stop the simulation too
+	else:
+		_refresh_pause(true)
+
+
+func close_controls() -> void:
+	controls_open = false
+	if _controls_over_play:
+		_controls_over_play = false
+		_leave_pause()
+	else:
+		_refresh_pause(true)
+
+
+func _enter_pause() -> void:
+	_pause_tick = int(g.bridge_tick)
+	if g.has_method("set_sim_paused"):
+		g.set_sim_paused(true)
+	_refresh_pause(true)
+
+
+func _leave_pause() -> void:
+	if g.has_method("set_sim_paused"):
+		g.set_sim_paused(false)
+	_clear_pause_layer()
+	_pause_hash = 0
+	_since_vm = VM_INTERVAL  # the HUD redraws on the first frame back
+
+
+func _clear_pause_layer() -> void:
+	for child in pause_layer.get_children():
+		pause_layer.remove_child(child)
+		child.queue_free()
+
+
+## The pause menu's view model: the snapshot rows (vm_gameplay.pause) plus the host's state. `stopped` is true while the
+## bridge tick has not moved since the pause began, so the marker never claims a stop that is not happening.
+func _pause_vm() -> Dictionary:
+	var snap = g.get("bridge_snapshot")
+	var losses := -1
+	if session_log != null:
+		losses = 0
+		for kind in session_log.lost:
+			losses += int(session_log.lost[kind])
+	var stopped: bool = int(g.bridge_tick) - _pause_tick <= STOP_SLACK_TICKS
+	var vm := VmGameplay.pause(snap if snap is Dictionary else {}, losses, stopped)
+	if vm.is_empty():
+		vm = {"stopped": stopped, "keys": VmGameplay.pause_keys()}
+	vm["confirm"] = confirm
+	vm["can_restart"] = g.has_method("_restart_mission")
+	return vm
+
+
+## Rebuilds whichever pause screen is up when its view model changed (never between a press and its release).
+func _refresh_pause(force := false) -> void:
+	if not paused():
+		return
+	var vm: Dictionary = Keybinds.vm(not _controls_over_play) if controls_open else _pause_vm()
+	var h := hash([controls_open, vm])
+	if not force and (h == _pause_hash or _left_down):
+		return
+	_pause_hash = h
+	_clear_pause_layer()
+	var emit := Callable(self, "_on_pause_action")
+	if controls_open:
+		ControlsReference.build(pause_layer, vm, emit)
+	else:
+		PauseMenu.build(pause_layer, vm, emit)
+
+
+func _on_pause_action(name: String, _arg: Variant = null) -> void:
+	match name:
+		"resume":
+			close_pause()
+		"open_controls":
+			open_controls()
+		"controls_back":
+			close_controls()
+		"ask_restart":
+			confirm = "restart"
+			_refresh_pause(true)
+		"ask_quit":
+			confirm = "quit"
+			_refresh_pause(true)
+		"keep_playing":
+			confirm = ""
+			_refresh_pause(true)
+		"restart":
+			close_pause()
+			g._restart_mission()  # the existing restart: restart.flag for the bridge, then the scene reloads to the title
+		"quit":
+			get_tree().quit()

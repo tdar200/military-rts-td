@@ -265,6 +265,52 @@ only while the Logistics tab is open; clicking the lit lens again turns it off.
 - The lens text (legend, note, summary, supply rows) is built once per snapshot beside the hex marks, not every frame (the
   borders summary walks the enemy border).
 
+### Gameplay boards 9 and 10 (Pause menu gp09, Controls gp10), decided 2026-10-05 (Task 14A)
+Built: `scripts/ui/keybinds.gd` (the one keybinding list: Esc, F1, F2, `.`, A, Q, U, Delete, Y, F, Home, 1 to 4, the train
+and build maps, the six camera actions), read by the input handler in `earthfront_3d.gd` and listed by the Controls screen;
+the Pause menu (`sections/pause_menu.gd`: Paused marker, Command pause panel with Resume, Controls, Restart mission, Quit
+game, the Mission snapshot, and the Restart or Quit confirm strip); the Controls screen (`sections/controls_reference.gd`:
+six groups in three columns, a Back button, a footer tip); `components/key_chip.gd`; `spread` option on HoloButton (label
+left, key cap right, as the pause board's space-between buttons).
+- Real pause. The game had no pause (the HUD speed buttons are dead and not shown live), so a pause that only drew a scrim
+  would be fake. Godot writes `pause.flag` in the bridge runtime directory (`set_sim_paused`), and `godot-bridge` skips the sim
+  step and command intake while the file exists, still publishing the snapshot every frame. This is the one Rust edit of the
+  task (`crates/server/src/bin/godot-bridge.rs`: `pause_path`, removed at startup and on `restart.flag`, one loop branch). It
+  is additive, touches no sim code and no hash. The process is not paused: UI, camera-free input and the pause screens still run;
+  HUD view-model polling and the alert clock are frozen. The marker reads "Simulation stopped" only while the bridge tick has
+  not advanced more than 6 ticks since the pause began, otherwise it reads "Simulation still running" in the warning tone, so
+  it never claims a stop it cannot prove (an older bridge binary without the flag shows the warning).
+- Esc precedence: Controls, then the confirm strip, then an open pause menu (resume), then the research modal (its own
+  handler), then an armed attack-move, rally or placement (cancels, existing behaviour), then nothing before deploy, under the
+  debrief scrim or with the HUD hidden, else it opens the pause menu. F1 toggles Controls (pausing first when opened in play).
+- Restart maps to the existing `_restart_mission()` (restart.flag plus scene reload), so it returns to the title and a fresh
+  mission, not an in-place restart; the menu footnote says so. When the host has no such method the Restart button is hidden.
+  Quit is `get_tree().quit()`, labelled "Quit game" (the board says "Quit to title"; the game has no title to quit to without
+  restarting, so it would be a false label). Both ask for a second confirmation. The confirm button reads "Restart", as the
+  board does; the menu button reads "Restart mission".
+- Hidden, no feature behind them: Settings (F10), Save and keep playing (F5), the Objective and Last save snapshot rows
+  (the game has no objective text and no saves), the Rebind keys button and the Alt footer tip on Controls. The snapshot rows
+  that exist are Waves survived, Elapsed (tick / 30), Next wave, Material, Power (warning tone when demand exceeds generation),
+  Units alive (the ledger) and Losses (the session log).
+- Controls rows dropped because the key does not exist: Orbit (middle drag), Jump to alert (Space), Jump on minimap,
+  Pause simulation (P), Game speed, Quick save, Map overlays (Tab), Clear selection, Recall and centre, Open Build tab,
+  Place several, Rotate ghost, Stop, Hold, Focus fire, Resupply, Spread out, Queue waypoint, Return to HQ, Set rally point
+  key, Queue five, Cancel last queued. Rows added because the key exists and the board lacks it: Rotate (Z, E), Focus selection
+  (F), Science panel (Y), Select idle crew (.), Tactical ability (Q), Repair (U), Sell (Delete), the seven build keys and five
+  train keys. Control groups read 1-4 (four groups), not 1-9. Select all army is F2, not Ctrl+A. Attack-move is A then a right click.
+  Deck cards show their own key, so the Alt overlay is not needed.
+- Departures: no backdrop blur behind the scrim (Godot's CanvasItem has no cheap blur and the mock's is 3 px); the Pause
+  screens live in `sections/` (view-model sections) rather than `screens/`; Controls draws a flat ground (no top radial glow).
+- Harness: gp09 and gp10 gallery arms use the Kestrel snapshot (`fixtures_gp.gd` pause_board, controls_board; 14:36 elapsed,
+  01:52 next wave, 840 material, 160 / 168 kW). The battlefield is masked. gp09 rects: paused_marker 3.01 (6.0), menu_head
+  3.13 (6.1), btn_resume 2.09 (5.1), btn_controls 1.41 (4.4), snapshot_head 1.68 (4.7), snapshot_rows 2.10 (5.1), confirm_panel
+  3.59 (6.6); ignore: the mock's broken image icon on the Resume button. gp10 rects: header_left 5.04 (8.0), btn_back 17.20
+  (20.2), camera_head 2.47 (5.5), camera_zoom 2.05 (5.0), selection_head 3.70 (6.7), orders_head 2.42 (5.4), footer_frame 0.08
+  (3.1); ignore: the footer sentence. btn_back is high because the shared key cap is about 3 px narrower than the mock's
+  inline-sized one, which shifts the whole button 4 px; its limit was not loosened. Nothing below the first rows of the
+  groups, the menu's lower buttons or the Units alive row is a rect: their rows, labels and heights differ from the mock by
+  content, so a rect there would measure wording, not fidelity.
+
 ## 5. Known cosmetic items
 
 - The research screen has an empty band at the top where the era-gate block would sit.

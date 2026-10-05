@@ -512,6 +512,48 @@ static func _clock(seconds: int) -> String:
 	return "%d s" % seconds if seconds < 60 else "%d:%02d" % [seconds / 60, seconds % 60]
 
 
+## Pause menu (board 9): the mission snapshot rows and the confirm sub-panel text, all from the snapshot. The board's
+## Objective, wave "of 05" total and "Last save" rows are not built: the snapshot has no objective text, no wave total and
+## the game has no save. `losses` is the client's own count of lost units (session_log), -1 when it has none. `stopped`
+## says the simulation really is not stepping (the caller compares the bridge tick). {} without a snapshot.
+static func pause(snap: Dictionary, losses := -1, stopped := true) -> Dictionary:
+	if snap.is_empty() or not snap.has("tick"):
+		return {}
+	var elapsed := _mmss(int(float(int(snap["tick"])) / _ticks_per_second()))
+	var rows: Array = [
+		{"label": "Waves survived", "value": str(int(snap.get("waves_survived", 0)))},
+		{"label": "Elapsed", "value": elapsed, "mono": true},
+	]
+	var next_ticks := int(snap.get("next_wave_ticks", -1))
+	if next_ticks >= 0:
+		rows.append({"label": "Next wave", "value": _mmss(_seconds(next_ticks)), "mono": true})
+	if snap.has("money_bits"):
+		rows.append({"label": "Material", "value": str(int(snap["money_bits"]) / 65536), "mono": true})
+	if snap.has("power_generation") and snap.has("power_demand"):
+		var gen := int(snap["power_generation"])
+		var demand := int(snap["power_demand"])
+		rows.append({"label": "Power", "value": "%d / %d kW" % [gen, demand], "mono": true, "tone": "warn" if demand > gen else ""})
+	var led := ledger(snap)
+	if led.has("units"):
+		rows.append({"label": "Units alive", "value": str(int(led["units"])), "mono": true})
+	if losses >= 0:
+		rows.append({"label": "Losses", "value": str(losses), "mono": true})
+	var out := {"stopped": stopped, "elapsed": elapsed, "rows": rows, "keys": pause_keys()}
+	if str(snap.get("map_name", "")) != "":
+		out["map"] = str(snap["map_name"])
+	return out
+
+
+## The key caps printed on the menu's Resume and Controls buttons, from the one keybinding list.
+static func pause_keys() -> Dictionary:
+	var kb = load("res://scripts/ui/keybinds.gd")
+	return {"resume": kb.cap(kb.PAUSE), "controls": kb.cap(kb.CONTROLS)}
+
+
+static func _mmss(seconds: int) -> String:
+	return "%02d:%02d" % [seconds / 60, seconds % 60]
+
+
 ## Enemy territory card (board 3): what the snapshot holds of the alien side. There is no fog in the sim, so the board's
 ## "partly seen" and "~14 est." are not built; counts are exact. {} when no alien entity exists.
 static func enemy_intel(snap: Dictionary, ground_model) -> Dictionary:

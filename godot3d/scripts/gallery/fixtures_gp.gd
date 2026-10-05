@@ -248,3 +248,26 @@ static func _enemy_cells() -> Array:
 		for j in 6:
 			cells.append({"u": 0.78 + 0.02 * i, "v": 0.08 + 0.02 * j, "k": "enemy"})
 	return cells
+
+
+## Board 9 (PauseMenu): the committed Kestrel snapshot at the board's clock (14:36 elapsed, next wave 01:52, 840 material,
+## 160 / 168 kW), run through the same vm_gameplay.pause() the live game uses, in the Restart confirmation state the board
+## shows. Not built (no feature): the Objective and Last save rows, Settings, Save and keep playing.
+static func pause_board() -> Dictionary:
+	var snap: Dictionary = JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
+	var tps: int = load("res://scripts/ui/live_adapter.gd").TICKS_PER_SECOND
+	snap["tick"] = (14 * 60 + 36) * tps
+	snap["next_wave_ticks"] = (60 + 52) * tps
+	snap["money_bits"] = 840 * 65536
+	snap["power_generation"] = 160
+	snap["power_demand"] = 168
+	snap["waves_survived"] = 1
+	var vm: Dictionary = load("res://scripts/ui/vm_gameplay.gd").pause(snap, 4, true)
+	vm["confirm"] = "restart"
+	vm["can_restart"] = true
+	return vm
+
+
+## Board 10 (Controls): the one keybinding list, opened from the pause menu.
+static func controls_board() -> Dictionary:
+	return load("res://scripts/ui/keybinds.gd").vm(true)

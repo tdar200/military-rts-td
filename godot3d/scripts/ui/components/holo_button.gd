@@ -19,6 +19,8 @@ var pad_x := 18.0
 var label_px := 17
 var label_sp := 0.08
 var wrap_label := false
+## Label at the left padding and the key cap at the right padding (the pause menu .btn is a space-between row).
+var spread := false
 var icon_px := 18
 var _label: TextBox
 
@@ -41,7 +43,7 @@ func _init() -> void:
 	button_up.connect(queue_redraw)
 
 
-## Options: variant, primary, danger, key, icon, column, px, sp, min_h, pad, w, h (explicit size), tab_on.
+## Options: variant, primary, danger, key, icon, column, px, sp, min_h, pad, w, h (explicit size), tab_on, spread.
 func setup(label: String, o := {}) -> Control:
 	text = label
 	variant = o.get("variant", variant)
@@ -52,6 +54,7 @@ func setup(label: String, o := {}) -> Control:
 	icon_name = o.get("icon", icon_name)
 	column = o.get("column", column)
 	wrap_label = o.get("wrap", wrap_label)
+	spread = o.get("spread", spread)
 	icon_px = o.get("icon_px", icon_px)
 	min_height = o.get("min_h", 40.0 if variant == "tab" else min_height)
 	pad_x = o.get("pad", 14.0 if variant == "tab" else pad_x)
@@ -108,6 +111,9 @@ func _place_label() -> void:
 		var wrapped_h := _label.get_minimum_size().y
 		_label.size = Vector2(inner_w - lead_w, wrapped_h)
 		_label.position = Vector2(1.0 + pad_x + lead_w, (size.y - wrapped_h) * 0.5)
+	elif spread:
+		_label.size = _label.get_minimum_size()
+		_label.position = Vector2(1.0 + pad_x, (size.y - _label.size.y) * 0.5)
 	else:
 		_label.size = _label.get_minimum_size()
 		var total := _label.size.x + (8.0 + _key_width() if key_text != "" else 0.0)
@@ -173,6 +179,8 @@ func _draw() -> void:
 		var at: Vector2
 		if column:
 			at = Vector2((size.x - _key_width()) * 0.5, _label.position.y + _label.size.y + 2.0)
+		elif spread:
+			at = Vector2(size.x - 1.0 - pad_x - _key_width(), (size.y - KeyCap.HEIGHT) * 0.5)
 		else:
 			at = Vector2(_label.position.x + _label.size.x + 8.0, (size.y - KeyCap.HEIGHT) * 0.5)
 		KeyCap.paint(self, at, key_text, sp, T.LINE, T.TEXT, T.KEY_BG, 600)

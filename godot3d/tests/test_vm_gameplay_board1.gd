@@ -249,10 +249,14 @@ func test_earthfront_key_handler_keeps_ctrl_a_attack_move_and_puts_army_on_f2(t)
 	# A real input test would need the whole 3D scene; the handler is pinned at source level instead.
 	var src: String = (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
 	t.ok(not src.contains("KEY_A and event.ctrl_pressed"), "no Ctrl+A branch ahead of attack-move")
-	t.ok(src.contains("if event.keycode == KEY_F2:\n\t\t\tif select_army() > 0:"), "F2 selects the army")
-	t.ok(src.contains("elif event.keycode == KEY_PERIOD:\n\t\t\tselect_idle_crew()"), "period selects an idle crew")
-	t.ok(src.contains("elif event.keycode == KEY_A:\n\t\t\tattack_move_armed = true"), "A (with or without Ctrl) still arms attack-move")
-	var f2s := src.split("KEY_F2").size() - 1
-	var periods := src.split("KEY_PERIOD").size() - 1
+	t.ok(src.contains("if event.keycode == Keybinds.SELECT_ARMY:\n\t\t\tif select_army() > 0:"), "F2 selects the army")
+	t.ok(src.contains("elif event.keycode == Keybinds.SELECT_IDLE:\n\t\t\tselect_idle_crew()"), "period selects an idle crew")
+	t.ok(src.contains("elif event.keycode == Keybinds.ATTACK_MOVE:\n\t\t\tattack_move_armed = true"), "A (with or without Ctrl) still arms attack-move")
+	var f2s := src.split("Keybinds.SELECT_ARMY").size() - 1
+	var periods := src.split("Keybinds.SELECT_IDLE").size() - 1
 	t.eq(f2s, 1, "F2 is handled in exactly one place")
 	t.eq(periods, 1, "period is handled in exactly one place")
+	var kb = load("res://scripts/ui/keybinds.gd")
+	t.eq(kb.SELECT_ARMY, KEY_F2, "the army key is still F2")
+	t.eq(kb.SELECT_IDLE, KEY_PERIOD, "the idle-crew key is still the period")
+	t.eq(kb.ATTACK_MOVE, KEY_A, "attack-move is still A")

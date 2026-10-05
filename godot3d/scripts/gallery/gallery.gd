@@ -32,6 +32,10 @@ func _ready() -> void:
 			add_child(overlay)
 			overlay.set_marks(_l("gallery/fixtures_gp.gd").logistics_marks())
 			_hud(_l("gallery/fixtures_gp.gd").logistics_board(), false)
+		"gp09":
+			_l("ui/sections/pause_menu.gd").build(self, _l("gallery/fixtures_gp.gd").pause_board())
+		"gp10":
+			_l("ui/sections/controls_reference.gd").build(self, _l("gallery/fixtures_gp.gd").controls_board())
 		"builddeck":
 			_hud(_l("gallery/fixtures_build.gd").build_deck(), true)
 		"builddeck_many", "builddeck_none", "builddeck_locked", "builddeck_short", "builddeck_no_queue", "builddeck_invalid":

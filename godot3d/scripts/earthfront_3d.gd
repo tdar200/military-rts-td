@@ -13,6 +13,7 @@ const HUMAN := 0
 const ALIEN := 1
 const TICKS_PER_SECOND := 30.0
 const GameUI = preload("res://scripts/ui/game_ui.gd")
+const Keybinds = preload("res://scripts/ui/keybinds.gd")
 const GroundModel = preload("res://scripts/terrain/ground_model.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
@@ -1070,7 +1071,8 @@ func _process(delta: float) -> void:
 	_update_tutorial()
 	_update_hover_tile()
 	_update_build_ghost()
-	_update_camera_controls(delta)
+	if not ui.paused():
+		_update_camera_controls(delta)  # a paused game does not pan or orbit under the menu
 	_update_units(delta)
 	_animate_world(delta)
 	for unit in units:
@@ -1196,8 +1198,13 @@ func _update_camera() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not mission_deployed:
 		return
+	# F1 and Esc first (game_ui.gd escape_route holds the precedence), then a paused game takes no further input.
+	if ui.route_key(event, _orders_armed()):
+		return
+	if ui.paused():
+		return
 	if science_overlay and science_overlay.visible:
-		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_Y]:
+		if event is InputEventKey and event.pressed and event.keycode in [Keybinds.CANCEL, Keybinds.SCIENCE]:
 			science_overlay.visible = false
 		return
 	if event is InputEventMouseMotion and dragging:
@@ -1254,17 +1261,18 @@ func _unhandled_input(event: InputEvent) -> void:
 					_show_order_path(selected_units, ground, attack_move_armed)
 				attack_move_armed = false
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_F2:
+		if event.keycode == Keybinds.SELECT_ARMY:
 			if select_army() > 0:
 				objective_label.text = "ARMY SELECTED"
-		elif event.keycode == KEY_PERIOD:
+		elif event.keycode == Keybinds.SELECT_IDLE:
 			select_idle_crew()
-		elif event.keycode == KEY_A:
+		elif event.keycode == Keybinds.ATTACK_MOVE:
 			attack_move_armed = true
 			rally_armed = false
 			build_mode = ""
 			objective_label.text = "ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION"
-		elif event.keycode == KEY_ESCAPE:
+		elif event.keycode == Keybinds.CANCEL:
+			# Only reached while something is armed: with nothing armed game_ui.route_key opened the pause menu above.
 			attack_move_armed = false
 			rally_armed = false
 			build_mode = ""
@@ -1273,50 +1281,30 @@ func _unhandled_input(event: InputEvent) -> void:
 			if science_overlay:
 				science_overlay.visible = false
 			objective_label.text = "COMMAND MODE CANCELLED"
-		elif event.keycode in [KEY_1, KEY_2, KEY_3, KEY_4]:
-			var group := int(event.keycode - KEY_1 + 1)
+		elif event.keycode in Keybinds.GROUPS:
+			var group := int(Keybinds.GROUPS.find(event.keycode)) + 1
 			if event.ctrl_pressed:
 				control_groups[group] = selected_units.duplicate()
 				objective_label.text = "CONTROL GROUP %d ASSIGNED" % group
 			else:
 				recall_control_group(group)
-		elif event.keycode == KEY_T:
-			_write_bridge_train("Infantry")
-		elif event.keycode == KEY_K:
-			_write_bridge_train("Tank")
-		elif event.keycode == KEY_V:
-			_write_bridge_train("AntiArmor")
-		elif event.keycode == KEY_H:
-			_write_bridge_train("Helicopter")
-		elif event.keycode == KEY_X:
-			_write_bridge_train("Capital")
-		elif event.keycode == KEY_Q:
+		elif Keybinds.TRAIN.has(event.keycode):
+			_write_bridge_train(Keybinds.TRAIN[event.keycode])
+		elif event.keycode == Keybinds.ABILITY:
 			_write_bridge_ability()
-		elif event.keycode == KEY_U:
+		elif event.keycode == Keybinds.REPAIR:
 			_write_bridge_structure_action("repair")
-		elif event.keycode == KEY_DELETE:
+		elif event.keycode == Keybinds.SELL:
 			_write_bridge_structure_action("sell")
-		elif event.keycode == KEY_P:
-			_arm_build("PowerPlant")
-		elif event.keycode == KEY_R:
-			_arm_build("Refinery")
-		elif event.keycode == KEY_B:
-			_arm_build("Barracks")
-		elif event.keycode == KEY_G:
-			_arm_build("GunTurret")
-		elif event.keycode == KEY_J:
-			_arm_build("AaTurret")
-		elif event.keycode == KEY_C:
-			_arm_build("Wall")
-		elif event.keycode == KEY_L:
-			_arm_build("ResearchLab")
-		elif event.keycode == KEY_Y:
+		elif Keybinds.BUILD.has(event.keycode):
+			_arm_build(Keybinds.BUILD[event.keycode])
+		elif event.keycode == Keybinds.SCIENCE:
 			_toggle_science_panel()
-		elif event.keycode == KEY_F and is_instance_valid(selected):
+		elif event.keycode == Keybinds.FOCUS and is_instance_valid(selected):
 			camera_focus_target = selected.global_position
 			camera_focus_zoom = 8.2
 			camera_cinematic = 0.8
-		elif event.keycode == KEY_HOME:
+		elif event.keycode == Keybinds.HOME:
 			camera_focus_target = _hex_world(3, 14)
 			camera_focus_zoom = 8.8
 
@@ -2566,6 +2554,23 @@ func _show_end_screen(winner: int) -> void:
 	end_screen_shown = true
 	_play_tone(360.0 if winner == HUMAN else 120.0, 0.34, 0.18, 420.0 if winner == HUMAN else -50.0)
 	ui.show_debrief()
+
+
+## True while an order, a rally or a placement waits for its click (what Esc cancels before it opens the pause menu).
+func _orders_armed() -> bool:
+	return attack_move_armed or rally_armed or build_mode != ""
+
+
+## The pause menu's real effect. The bridge stops stepping the simulation while `pause.flag` exists in the runtime
+## directory (godot-bridge.rs), the same file-flag channel as start.flag and restart.flag; removing it resumes the run.
+func set_sim_paused(on: bool) -> void:
+	var path := runtime_directory.path_join("pause.flag")
+	if on:
+		var flag := FileAccess.open(path, FileAccess.WRITE)
+		if flag:
+			flag.store_line("pause")
+	elif FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
 func _restart_mission() -> void:

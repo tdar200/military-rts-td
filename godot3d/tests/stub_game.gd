@@ -91,6 +91,10 @@ func _restart_mission() -> void:
 	calls.append(["restart"])
 
 
+func set_sim_paused(on: bool) -> void:
+	calls.append(["pause", on])
+
+
 func mouse_position() -> Vector2:
 	return mouse
 
