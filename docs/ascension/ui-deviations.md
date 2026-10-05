@@ -507,16 +507,23 @@ every legacy path. What still differs from the boards, and why:
   per building, square to the fixed camera above the painted contact line (85 % of the card height, the boards' sort
   line) and lying on the ground below it, at the boards' pixel size (82 px per tile: CC 3.05 tiles, barracks, factory and
   refinery 2.44, power plant 2.07, lab 1.83, gun turret 1.40, wall 1.22, AA 1.04). The enemy draws the `alien_*`
-  sprites. A building under construction shows the foundation sprite. Each card casts the boards' sheared silhouette
-  shadow and keeps a soft contact pad under its painted footprint. The lab is `capital_v1`, the sprite the boards' build
+  sprites. A building under construction shows the foundation sprite at the boards' site size (170 px, 2.07 tiles; never
+  wider than the building it becomes, so a wall or turret site keeps the building's width), and its bars, pick box and
+  crown follow the smaller painting until it completes. The boards paint no alien foundation, so an enemy site shows the
+  same one. Each card casts the boards' sheared silhouette shadow and keeps a soft contact pad on the ground under its
+  painted footprint. A sprite that fails to load never breaks a building or a unit: a site without its foundation keeps
+  the finished sprite, and an entity without its sprite keeps its fitted model at the model width table
+  (`WorldArt.MODEL_BUILDING_TILES`, `MODEL_UNIT_TILES`; the card widths include a painting's transparent margin). Every
+  sprite's alpha scan, paint mask and graded copy are built once as the Kestrel ground loads (`WorldSprites.prewarm`,
+  about 160 ms headless), not on the frame a kind first appears. The lab is `capital_v1`, the sprite the boards' build
   deck uses for it; the airfield and the depot have no board sprite and share the barracks and refinery sprites.
   Units are sprite cards too, one per unit (`WorldArt.UNIT_TILES`: infantry 0.98, tank 1.71, anti-armour 1.10, gunship
   2.32, capital 4.02, harvester 1.34): the infantry sprite is itself the boards' three-figure squad, so a squad is one
   card, as the boards draw it. A card never turns; it shows its painting mirrored while it moves against the way it is
   painted facing and keeps its last facing when it stops (the boards draw every unit unmirrored). Units carry the boards'
   silhouette shadow and `.ao` contact band instead of a pad and keep their team ring at the feet; their health bars sit
-  just over the painted top. The strategic badge (a coloured plate with I, AR, AT, AIR, CAP or HAR) is hidden on Kestrel:
-  the boards draw none, and over a column of squads one hex apart it covered the squad above. The gunship card hovers 0.30
+  just over the painted top. The strategic badge (a coloured plate with I, AR, AT, AIR, CAP or HAR) is not built for a
+  Kestrel unit card: the boards draw none, and over a column of squads one hex apart it covered the squad above. The gunship card hovers 0.30
   world units over the ground (`WorldSprites.HOVER`) with its bob; its shadow, contact band and team ring stay on the
   ground under it. The human capital unit uses `capital_v1`, the same painting as the lab.
 - Colour: the Kestrel post chain (filmic, exposure 0.95, saturation 0.50, the `gSun` overlay) drew the sprites lighter and
@@ -530,13 +537,23 @@ every legacy path. What still differs from the boards, and why:
   or shows a side the painting does not have; the lab and the human capital unit share `capital_v1`; the airfield and
   the supply depot borrow the barracks and refinery sprites (no board draws them).
 - Placement stays one hex per building, so a big sprite overhangs its neighbours (mostly to the north, where the
-  painting rises) and two big neighbours can overlap on screen. Picking follows the painted body, not the hex: a click
-  inside the screen rectangle of the sprite's opaque pixels selects it, a click on a transparent corner of the card does
-  not, a unit beside a CC still takes its own click (a unit holding the click beats any building, then the narrowest
-  building wins; between two touching units the nearer root wins), and a click on none
-  keeps the legacy 32 px reach around a root (`_pick_entity`). The hover outline draws without a depth test, so it is
-  hidden on a hex a building stands on and on a hex whose centre the painted body covers on screen: for a CC the hexes
-  north, north-east, north-west and two north of it; the hexes beside and south of its base still show the outline.
+  painting rises) and two big neighbours can overlap on screen. Picking follows the painted pixels, not the hex: a click
+  must fall inside the screen rectangle of the sprite's opaque pixels and on paint by the sprite's 64 x 64 paint mask
+  (a cell holds paint when any pixel in it passes alpha 128, dilated by one cell, mirrored with a unit's card), so a
+  see-through gap inside that rectangle (between the CC's towers, under a tank's barrel: about 40 % of a painting's box)
+  selects whatever shows through it. A unit holding the click beats any building, then the narrowest building wins;
+  between two touching units the nearer root wins, and a click on none keeps the legacy 32 px reach around a root
+  (`_pick_entity`). The hover outline draws without a depth test, so it is hidden on a hex a building or unit stands on
+  and on a hex whose centre a painted body's box covers on screen (as drawn: lifted for the gunship, mirrored, a site's
+  foundation): for a CC the hexes north, north-east, north-west and two north of it; the hexes beside and south of its
+  base still show the outline.
+- Selection draws the boards' ellipse, not the legacy spinning ring. A building takes StructureSelected's (rx 132 and
+  ry 46 for a 200 px barracks, centred 155 px below the sprite's top, filled at 8 %), scaled by its painted width and
+  drawn on the ground under the painting, so its back arc passes behind the sprite and the front arc wraps the base as
+  on the board. A unit card takes CoreAssault's (rx 58 and ry 22 for a 140 px tank, 19 px over its contact line), drawn
+  over the painting as that board draws it (z-index above the sprites), flat on the ground, mirrored with the card, and
+  under a hovering gunship on the ground. OrdersArmed draws its unit ellipses under the sprites instead; under the
+  painting a unit's ellipse, smaller than its hull, would barely show, so CoreAssault's layering is the one followed.
 - The camera keeps its 57 degree pitch. The boards are painted at a steeper three-quarter view, so roofs read smaller
   and fronts taller in the live frame. The camera is north-up with a default zoom of 10.
 - Home and the deploy shot look 4.1 world units (about 6 columns) east of your Command Center
@@ -585,3 +602,6 @@ Every board is at least 20 points above `tools/ui/world_baseline.json`. Notes on
   `ford` frame's grass swatch point (16, 10) now falls under a Hollow Wood rim canopy, so it samples a tree (12.2); on open
   grass it read 2.6 before and the ground albedo did not change.
 - `tools/ui/world_scores.json` was refreshed with this run (the user approved refreshing it).
+- The review fixes (paint-mask picking, the selection ellipse, the foundation sizing) were captured again the same way:
+  every board is within 0.02 of the table (gp01 80.88, gp03 82.62, gp04 77.85, gp05 80.68, gp06 80.56, gp07 80.29, gp08
+  74.38), so `tools/ui/world_scores.json` was left as it is. The Survival home frame pairs at 99.77 against its last capture.
