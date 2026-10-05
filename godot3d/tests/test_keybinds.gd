@@ -159,3 +159,25 @@ func test_the_screen_is_grouped_as_the_board_groups_it(t) -> void:
 	t.eq(vm["columns"][0].map(func(g): return g["name"]), ["Camera", "System"], "column 1")
 	t.eq(vm["columns"][1].map(func(g): return g["name"]), ["Selection", "Build"], "column 2")
 	t.eq(vm["columns"][2].map(func(g): return g["name"]), ["Orders", "Production"], "column 3")
+
+
+func test_the_map_key_collides_with_nothing(t) -> void:
+	var owners: Array = []
+	for name in _constants():
+		if KEY_M in _constants()[name]:
+			owners.append(str(name))
+	t.eq(owners, ["REGION_MAP"], "M belongs to the strategic map alone (no build, train, ability or camera key uses it)")
+	t.ok(not (KEY_M in _camera_codes()), "M is not a camera key")
+	t.ok(not FileAccess.get_file_as_string("res://project.godot").contains("\"physical_keycode\":%d" % KEY_M), "project.godot binds no action to M")
+	var count := 0
+	for code in KB.shown_codes():
+		if code == KEY_M:
+			count += 1
+	t.eq(count, 1, "M is on the controls screen once")
+	var listed := false
+	for col in KB.vm()["columns"]:
+		for grp in col:
+			for r in grp["rows"]:
+				if r["label"] == "Strategic map" and r["keys"] == [{"t": "M"}]:
+					listed = true
+	t.ok(listed, "listed as Strategic map with the key cap M")

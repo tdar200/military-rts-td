@@ -129,6 +129,9 @@ func _ready() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--runtime-dir="):
 			runtime_directory = argument.trim_prefix("--runtime-dir=")
+	# A pause.flag left by a crash or a force-quit while paused would hold the bridge still on the next launch; a fresh scene
+	# is never paused. Same path logic as set_sim_paused.
+	set_sim_paused(false)
 	_create_materials()
 	_setup_environment()
 	_setup_audio()
@@ -1071,8 +1074,8 @@ func _process(delta: float) -> void:
 	_update_tutorial()
 	_update_hover_tile()
 	_update_build_ghost()
-	if not ui.paused():
-		_update_camera_controls(delta)  # a paused game does not pan or orbit under the menu
+	if not ui.world_blocked():
+		_update_camera_controls(delta)  # a paused game (or the strategic map) does not pan or orbit under the screen
 	_update_units(delta)
 	_animate_world(delta)
 	for unit in units:
@@ -1201,7 +1204,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# F1 and Esc first (game_ui.gd escape_route holds the precedence), then a paused game takes no further input.
 	if ui.route_key(event, _orders_armed()):
 		return
-	if ui.paused():
+	if ui.world_blocked():
 		return
 	if science_overlay and science_overlay.visible:
 		if event is InputEventKey and event.pressed and event.keycode in [Keybinds.CANCEL, Keybinds.SCIENCE]:

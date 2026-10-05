@@ -1,7 +1,7 @@
 extends RefCounted
 ## Pause menu (board 9): the "Paused" marker, the command menu, the mission snapshot and, after Restart or Quit is pressed,
 ## a confirm panel. Driven by vm_gameplay.pause() plus the host's state ({confirm, can_restart}); `emit` is Callable(name, arg)
-## and receives resume, open_controls, ask_restart, ask_quit, keep_playing, restart and quit. Builds nothing for {}.
+## and receives resume, open_controls, open_guide (only when vm.can_guide), ask_restart, ask_quit, keep_playing, restart and quit. Builds nothing for {}.
 ## Not built, because the game has no such feature: Settings, Save and keep playing, the Objective and Last save rows.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
@@ -76,6 +76,13 @@ static func _menu(parent: Control, vm: Dictionary, emit: Callable) -> void:
 	if emit.is_valid():
 		controls.pressed.connect(emit.bind("open_controls", null))
 	y += BTN_H
+	if vm.get("can_guide", false):
+		# Codex entry (board 12). The game sets can_guide; the board 9 fixture does not, so that screen keeps its own height.
+		y += BTN_GAP
+		var guide := _button(parent, "Terrain guide", cx, y, cw, {})
+		if emit.is_valid():
+			guide.pressed.connect(emit.bind("open_guide", null))
+		y += BTN_H
 	var can_restart: bool = vm.get("can_restart", true)
 	y += BTN_GAP + 4.0
 	K.rule(parent, cx, y, cw, 1, T.LINE_DIM)

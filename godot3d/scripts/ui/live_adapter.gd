@@ -75,8 +75,12 @@ var g  # earthfront_3d.gd, or a stub with the same members in tests
 const LiveAssault = preload("res://scripts/ui/live_assault.gd")
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 const OverlayFeed = preload("res://scripts/world/overlay_feed.gd")
+const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
 
 var tab := "build"
+## True while the first-minutes briefing card is up (game_ui.gd sets it): that card carries the objectives, so the objectives
+## panel is left out and the left card stack starts below the briefing.
+var briefing_up := false
 ## The active minimap lens (vm_gameplay.LENSES); lives here so the HUD stays a pure view.
 var lens := "land"
 ## The Logistics tab's map overlay (overlay_feed.gd): "" off, otherwise power, supply, borders, coverage or yield. Client-side only.
@@ -161,11 +165,12 @@ func hud_vm(now: float) -> Dictionary:
 	var vm := {
 		"brand": {"title": "Ascension", "sub": "Era %d / %s" % [g.bridge_era + 1, "Earthfront" if g.bridge_earthfront else "Campaign"]},
 		"chips": _chips(),
-		"objectives": _objectives(),
 		"minimap": {"keys": []},
 		"map_marks": {"marks": _marks(), "view": _view()},
 		"deck": {"tabs": _tabs(), "body": _deck_body()},
 	}
+	if not briefing_up:
+		vm["objectives"] = _objectives()
 	var wave := _wave_chip()
 	if not wave.is_empty():
 		vm["wave"] = wave
@@ -250,6 +255,8 @@ func _board_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
 	var objectives = vm.get("objectives", null)
 	if objectives is Dictionary:
 		top = LEFT_STACK_TOP + 42.0 + 25.0 * (objectives.get("items", []) as Array).size() + LEFT_STACK_GAP
+	elif briefing_up:
+		top = EarlyMission.rect().end.y + LEFT_STACK_GAP
 	var y := top
 	var wave := VmGameplay.wave_panel(snap, ground)
 	if not wave.is_empty():
@@ -276,7 +283,7 @@ func _board_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
 		groups["y"] = y
 		vm["control_groups"] = groups
 		y += CONTROL_GROUPS_H + LEFT_STACK_GAP
-	if y > top and vm.has("territory") and vm["territory"] is Dictionary:
+	if (y > top or briefing_up) and vm.has("territory") and vm["territory"] is Dictionary:
 		vm["territory"]["y"] = maxf(float(vm["territory"].get("y", 274.0)), y)
 	if g.attack_move_armed:
 		vm["armed"] = {"hint": "Right click a tile to go, Esc to cancel"}

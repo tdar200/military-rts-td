@@ -17,10 +17,17 @@ const Keybinds = preload("res://scripts/ui/keybinds.gd")
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 const PauseMenu = preload("res://scripts/ui/sections/pause_menu.gd")
 const ControlsReference = preload("res://scripts/ui/sections/controls_reference.gd")
+const VmMaps = preload("res://scripts/ui/vm_maps.gd")
+const RegionMap = preload("res://scripts/ui/sections/region_map.gd")
+const TerrainGuide = preload("res://scripts/ui/sections/terrain_guide.gd")
+const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
 
 const VM_INTERVAL := 0.1
 ## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it ignores the flag.
 const STOP_SLACK_TICKS := 6
+## The strategic map re-reads the snapshot this often (seconds); it redraws only when what it shows changed.
+const REGION_INTERVAL := 0.5
+const BRIEFING_INTERVAL := 0.2
 const MINIMAP_CENTER := Vector3(16.7, 34.0, 10.0)
 const MINIMAP_SPAN := 35.0
 
@@ -39,6 +46,16 @@ var pause_layer: Control  # the pause menu and the controls screen, over everyth
 var pause_open := false
 var controls_open := false
 var confirm := ""  # "restart" or "quit" while the confirm panel is up
+var guide_open := false  # the terrain guide (board 12), opened from the pause menu, shown in the pause layer
+var region_open := false  # the strategic map (board 11): M toggles it, the simulation keeps running behind it
+var region_layer: Control
+var briefing_layer: Control  # the first-minutes briefing card (board 6)
+var briefing_dismissed := false
+var lens_on: Dictionary = RegionMap.DEFAULT_LENSES.duplicate()
+var _region_hash := 0
+var _region_clock := REGION_INTERVAL
+var _briefing_hash := 0
+var _briefing_clock := BRIEFING_INTERVAL
 var _controls_over_play := false  # F1 opened the controls with no pause menu behind them: Back resumes
 var _pause_tick := 0
 var _pause_hash := 0
@@ -74,21 +91,28 @@ func setup(game) -> void:
 	selection_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	selection_box.visible = false
 	layer.add_child(selection_box)
+	briefing_layer = _full_rect_layer("BriefingLayer")
+	region_layer = _full_rect_layer("RegionLayer")
 	live_research = LiveResearch.new()
 	research = ResearchScreen.new()
 	research.visible = false
 	research.action.connect(_on_research_action)
 	layer.add_child(research)
-	pause_layer = Control.new()
-	pause_layer.name = "PauseLayer"
-	pause_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pause_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(pause_layer)
+	pause_layer = _full_rect_layer("PauseLayer")
 	title = TitleScreen.new()
 	title.action.connect(_on_title_action)
 	layer.add_child(title)
 	title.apply(LiveScreens.title_vm(true, game.bridge_technology_total))
 	title.focus_first()
+
+
+func _full_rect_layer(layer_name: String) -> Control:
+	var c := Control.new()
+	c.name = layer_name
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	c.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(c)
+	return c
 
 
 ## The real battlefield, seen from above, inside the HUD's map slot. It shares the main world, so marks and view box draw over it.
@@ -141,6 +165,14 @@ func process(delta: float) -> void:
 	session_log.observe(g)
 	adapter.poll_ticker(g.objective_label.text, _clock)
 	_update_marks()
+	_briefing_clock += delta
+	if _briefing_clock >= BRIEFING_INTERVAL:
+		_briefing_clock = 0.0
+		_refresh_briefing()
+	_region_clock += delta
+	if region_open and _region_clock >= REGION_INTERVAL:
+		_region_clock = 0.0
+		_refresh_region()
 	_since_vm += delta
 	if _since_vm < VM_INTERVAL:
 		return
@@ -182,9 +214,11 @@ func _update_marks() -> void:
 func blocks_point(point: Vector2) -> bool:
 	if title != null and title.visible:
 		return true
-	if paused():
+	if world_blocked():
 		return true
 	if scrim != null or research.blocks_point(point):
+		return true
+	if briefing_layer.get_child_count() > 0 and EarlyMission.rect().has_point(point):
 		return true
 	return hud.visible and hud.blocks_point(point)
 
@@ -280,15 +314,25 @@ func paused() -> bool:
 	return pause_open or controls_open
 
 
-## What Esc does right now, most specific first: close the controls screen, close the confirm panel, resume, close the
-## Science modal, cancel an armed order or placement, otherwise open the pause menu ("none" while the debrief is up).
+## True when the world must take no input: a paused game, or the strategic map covering the screen (the simulation keeps
+## running behind the map, so the camera and orders just do not react to it).
+func world_blocked() -> bool:
+	return paused() or region_open
+
+
+## What Esc does right now, most specific first: close the controls screen, close the terrain guide, close the confirm panel,
+## resume, close the strategic map, close the Science modal, cancel an armed order or placement, otherwise open the pause menu ("none" while the debrief is up).
 func escape_route(armed: bool) -> String:
 	if controls_open:
 		return "close_controls"
+	if guide_open:
+		return "close_guide"
 	if confirm != "":
 		return "close_confirm"
 	if pause_open:
 		return "resume"
+	if region_open:
+		return "close_region"
 	if research.visible:
 		return "close_research"
 	if armed:
@@ -304,18 +348,33 @@ func route_key(event: InputEvent, armed := false) -> bool:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return false
 	if event.keycode == Keybinds.CONTROLS:
-		if scrim != null or not hud.visible:
+		# The Science modal owns the screen: F1 must not open the controls over it (the game's handler lets Esc close it).
+		if scrim != null or not hud.visible or research.visible:
 			return false
+		if region_open:
+			close_region()
 		if controls_open:
 			close_controls()
 		else:
 			open_controls()
+		return true
+	if event.keycode == Keybinds.REGION_MAP:
+		if scrim != null or not hud.visible or paused() or research.visible:
+			return false
+		if region_open:
+			close_region()
+		else:
+			open_region()
 		return true
 	if event.keycode != Keybinds.CANCEL:
 		return false
 	match escape_route(armed):
 		"close_controls":
 			close_controls()
+		"close_guide":
+			close_guide()
+		"close_region":
+			close_region()
 		"close_confirm":
 			confirm = ""
 			_refresh_pause(true)
@@ -339,6 +398,7 @@ func open_pause() -> void:
 func close_pause() -> void:
 	pause_open = false
 	controls_open = false
+	guide_open = false
 	_controls_over_play = false
 	confirm = ""
 	_leave_pause()
@@ -367,6 +427,20 @@ func close_controls() -> void:
 		_refresh_pause(true)
 
 
+## The pause menu's Terrain guide button. Needs the table the guide is built from.
+func open_guide() -> void:
+	if not pause_open or controls_open or guide_open or _guide_vm().is_empty():
+		return
+	guide_open = true
+	confirm = ""
+	_refresh_pause(true)
+
+
+func close_guide() -> void:
+	guide_open = false
+	_refresh_pause(true)
+
+
 func _enter_pause() -> void:
 	_pause_tick = int(g.bridge_tick)
 	if g.has_method("set_sim_paused"):
@@ -388,6 +462,22 @@ func _clear_pause_layer() -> void:
 		child.queue_free()
 
 
+## The snapshot and its ground model, as the HUD slices read them; both empty/null before the first snapshot.
+func _snapshot_and_ground() -> Array:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or snap.is_empty():
+		return [{}, null]
+	var ground = g.get("ground_model")
+	if ground == null:
+		ground = preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
+	return [snap, ground]
+
+
+func _guide_vm() -> Dictionary:
+	var sg := _snapshot_and_ground()
+	return VmMaps.terrain_guide(sg[0], sg[1]) if sg[1] != null else {}
+
+
 ## The pause menu's view model: the snapshot rows (vm_gameplay.pause) plus the host's state. `stopped` is true while the
 ## bridge tick has not moved since the pause began, so the marker never claims a stop that is not happening.
 func _pause_vm() -> Dictionary:
@@ -403,6 +493,7 @@ func _pause_vm() -> Dictionary:
 		vm = {"stopped": stopped, "keys": VmGameplay.pause_keys()}
 	vm["confirm"] = confirm
 	vm["can_restart"] = g.has_method("_restart_mission")
+	vm["can_guide"] = not _guide_vm().is_empty()
 	return vm
 
 
@@ -410,8 +501,14 @@ func _pause_vm() -> Dictionary:
 func _refresh_pause(force := false) -> void:
 	if not paused():
 		return
-	var vm: Dictionary = Keybinds.vm(not _controls_over_play) if controls_open else _pause_vm()
-	var h := hash([controls_open, vm])
+	var vm: Dictionary
+	if controls_open:
+		vm = Keybinds.vm(not _controls_over_play)
+	elif guide_open:
+		vm = _guide_vm()
+	else:
+		vm = _pause_vm()
+	var h := hash([controls_open, guide_open, vm])
 	if not force and (h == _pause_hash or _left_down):
 		return
 	_pause_hash = h
@@ -419,6 +516,8 @@ func _refresh_pause(force := false) -> void:
 	var emit := Callable(self, "_on_pause_action")
 	if controls_open:
 		ControlsReference.build(pause_layer, vm, emit)
+	elif guide_open:
+		TerrainGuide.build(pause_layer, vm, emit)
 	else:
 		PauseMenu.build(pause_layer, vm, emit)
 
@@ -429,6 +528,10 @@ func _on_pause_action(name: String, _arg: Variant = null) -> void:
 			close_pause()
 		"open_controls":
 			open_controls()
+		"open_guide":
+			open_guide()
+		"guide_back":
+			close_guide()
 		"controls_back":
 			close_controls()
 		"ask_restart":
@@ -445,3 +548,95 @@ func _on_pause_action(name: String, _arg: Variant = null) -> void:
 			g._restart_mission()  # the existing restart: restart.flag for the bridge, then the scene reloads to the title
 		"quit":
 			get_tree().quit()
+
+
+# ---------------------------------------------------------------- strategic map (board 11)
+
+## M: opens the map over the HUD. The simulation keeps running; the world takes no input until it closes.
+func open_region() -> void:
+	if region_open or scrim != null or not hud.visible or paused():
+		return
+	var sg := _snapshot_and_ground()
+	if VmMaps.region_map(sg[0], sg[1]).is_empty():
+		return  # no ground layer or no named regions yet: nothing honest to draw
+	region_open = true
+	_region_clock = 0.0
+	_refresh_region(true)
+
+
+func close_region() -> void:
+	region_open = false
+	_region_hash = 0
+	for child in region_layer.get_children():
+		region_layer.remove_child(child)
+		child.queue_free()
+
+
+## Rebuilds the map when the lenses or anything it draws changed (hash of the whole view model); never between a press and its
+## release. The ground mesh is cached by Hex, so a rebuild reuses it.
+func _refresh_region(force := false) -> void:
+	if not region_open:
+		return
+	var sg := _snapshot_and_ground()
+	var vm := VmMaps.region_map(sg[0], sg[1])
+	if vm.is_empty():
+		close_region()
+		return
+	vm["lens_on"] = lens_on.duplicate()
+	var h := hash(vm)
+	if not force and (h == _region_hash or _left_down):
+		return
+	_region_hash = h
+	for child in region_layer.get_children():
+		region_layer.remove_child(child)
+		child.queue_free()
+	var holder := ColorRect.new()  # swallows clicks over the whole screen
+	holder.name = "RegionBackdrop"
+	holder.color = Color("07101a")
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder.mouse_filter = Control.MOUSE_FILTER_STOP
+	region_layer.add_child(holder)
+	RegionMap.build(region_layer, vm, Callable(self, "_on_region_action"))
+
+
+func _on_region_action(name: String, arg: Variant = null) -> void:
+	match name:
+		"region_close":
+			close_region()
+		"region_lens":
+			if lens_on.has(str(arg)):
+				lens_on[str(arg)] = not lens_on[str(arg)]
+				_refresh_region(true)
+		"focus_deposit":
+			close_region()
+			adapter.on_action("focus_deposit", arg)
+
+
+# ---------------------------------------------------------------- first-minutes briefing (board 6)
+
+## Up while the first objective group is being worked (tutorial stages 0 to 2), until the player hides it. It only exists as
+## a card at the top left: once hidden or out of range its nodes are freed, so it can never block input afterwards.
+func _refresh_briefing() -> void:
+	var vm := {}
+	if hud.visible and not briefing_dismissed and scrim == null:
+		var snap = g.get("bridge_snapshot")
+		vm = VmMaps.briefing(int(g.tutorial_stage), snap if snap is Dictionary else {}, int(g.bridge_winner))
+	adapter.briefing_up = not vm.is_empty()
+	var h := hash(vm)
+	if h == _briefing_hash and (briefing_layer.get_child_count() > 0) == not vm.is_empty():
+		return
+	if _left_down and briefing_layer.get_child_count() > 0 and not vm.is_empty():
+		return
+	_briefing_hash = h
+	for child in briefing_layer.get_children():
+		briefing_layer.remove_child(child)
+		child.queue_free()
+	EarlyMission.build(briefing_layer, vm, Callable(self, "_on_briefing_action"))
+
+
+func _on_briefing_action(name: String, _arg: Variant = null) -> void:
+	if name == "briefing_dismiss":
+		briefing_dismissed = true
+		adapter.briefing_up = false
+		_since_vm = VM_INTERVAL
+		_refresh_briefing()

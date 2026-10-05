@@ -15,6 +15,8 @@ const ABILITY := KEY_Q
 const REPAIR := KEY_U
 const SELL := KEY_DELETE
 const SCIENCE := KEY_Y
+## Opens and closes the strategic map (screen over play, the simulation keeps running). M is free: no train, build or camera key uses it.
+const REGION_MAP := KEY_M
 const FOCUS := KEY_F
 const HOME := KEY_HOME
 ## Number keys 1..4 recall a control group; Ctrl with one assigns it.
@@ -79,6 +81,7 @@ static func groups() -> Array:
 			_row("Pause menu", [PAUSE]),
 			_row("This screen", [CONTROLS]),
 			_row("Science panel", [SCIENCE]),
+			_row("Strategic map", [REGION_MAP]),
 		]},
 		{"name": "Selection", "rows": [
 			_row("Select", ["Left click"], "MOUSE_BUTTON_LEFT"),

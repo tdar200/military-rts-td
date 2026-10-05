@@ -238,14 +238,14 @@ func test_the_game_routes_keys_through_the_ui_before_anything_else(t) -> void:
 	t.ok(script.can_instantiate(), "earthfront_3d.gd still compiles")
 	var src: String = script.source_code
 	var i_route := src.find("if ui.route_key(event, _orders_armed()):")
-	var i_paused := src.find("if ui.paused():\n\t\treturn")
+	var i_paused := src.find("if ui.world_blocked():\n\t\treturn")
 	var i_science := src.find("if science_overlay and science_overlay.visible:")
 	var i_mouse := src.find("if event is InputEventMouseMotion and dragging:")
 	t.ok(i_route > 0 and i_route < i_paused and i_paused < i_science and i_science < i_mouse, "route_key, then the paused gate, then the Science modal, then the world")
 	t.ok(src.contains("func _orders_armed() -> bool:\n\treturn attack_move_armed or rally_armed or build_mode != \"\""), "armed means attack-move, rally or a placement")
 	t.ok(src.contains("elif event.keycode == Keybinds.CANCEL:"), "the armed-order cancel is still there")
 	t.ok(src.contains("\"pause.flag\""), "the pause reaches the bridge through pause.flag")
-	t.ok(src.contains("if not ui.paused():\n\t\t_update_camera_controls(delta)"), "the camera does not pan under the menu")
+	t.ok(src.contains("if not ui.world_blocked():\n\t\t_update_camera_controls(delta)"), "the camera does not pan under the menu or the map")
 	var ui_src: String = (load("res://scripts/ui/game_ui.gd") as GDScript).source_code
 	t.ok(ui_src.contains("Keybinds.CONTROLS") and ui_src.contains("Keybinds.CANCEL"), "game_ui routes the keys through the constants")
 
