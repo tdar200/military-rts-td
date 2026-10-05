@@ -34,6 +34,11 @@ window.addEventListener('load', () => setTimeout(() => {
 </script>
 """
 
+# gp09's pause-menu board stacks its battlefield sprites above the menu chrome; with real sprites they would cover the
+# buttons the chrome check measures, so its world sprites stay blank (as they always were).
+BLANK_WORLD_SPRITES = {"gp09"}
+
+
 def screens():
     return json.loads((HERE / "screens.json").read_text())
 
@@ -52,6 +57,8 @@ def prepare(screen, extra_head=""):
         css = (GAMEPLAY / "hud.css").read_text(encoding="utf8")
         html = html.replace('<link rel="stylesheet" href="./hud.css">', "<style>" + css + "</style>")
     blob = json.loads((MOCKS / "blob-map.json").read_text())
+    if gameplay and screen not in BLANK_WORLD_SPRITES:
+        blob.update(json.loads((HERE / "gameplay-blob-map.json").read_text()))
     def sprite(m):
         if gameplay and m.group(1) == LAND_BLOB:
             return "file://" + str(GAMEPLAY / "terrain/land.jpg")

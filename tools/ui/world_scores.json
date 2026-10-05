@@ -1,0 +1,258 @@
+{
+ "gp01": {
+  "palette": 22.64,
+  "saturation": 20.0,
+  "detail": 15.0,
+  "clutter": 10.0,
+  "warmth": 15.0,
+  "total": 17.36,
+  "raw": {
+   "palette_w": 22.64,
+   "sat_mock": 112.9,
+   "sat_live": 237.5,
+   "detail_ratio": 0.183,
+   "clutter_ratio": 0.072,
+   "b_mock": 17.8,
+   "b_live": 41.9
+  },
+  "swatches": {
+   "g": {
+    "live": "206407",
+    "mock": "808844",
+    "de": 30.69
+   },
+   "m": {
+    "live": "5c800b",
+    "mock": "848948",
+    "de": 24.88
+   }
+  }
+ },
+ "gp03": {
+  "palette": 11.68,
+  "saturation": 20.0,
+  "detail": 15.0,
+  "clutter": 10.0,
+  "warmth": 7.14,
+  "total": 36.18,
+  "raw": {
+   "palette_w": 11.68,
+   "sat_mock": 111.5,
+   "sat_live": 233.8,
+   "detail_ratio": 0.226,
+   "clutter_ratio": 0.106,
+   "b_mock": 13.9,
+   "b_live": 21.1
+  },
+  "swatches": {
+   "f": {
+    "live": "ba670f",
+    "mock": "ac965e",
+    "de": 38.26
+   },
+   "h": {
+    "live": "273138",
+    "mock": "888680",
+    "de": 37.46
+   }
+  }
+ },
+ "gp04": {
+  "palette": 23.9,
+  "saturation": 20.0,
+  "detail": 15.0,
+  "clutter": 10.0,
+  "warmth": 15.0,
+  "total": 16.1,
+  "raw": {
+   "palette_w": 23.9,
+   "sat_mock": 106.7,
+   "sat_live": 237.5,
+   "detail_ratio": 0.163,
+   "clutter_ratio": 0.046,
+   "b_mock": 15.1,
+   "b_live": 42.5
+  },
+  "swatches": {
+   "g": {
+    "live": "206407",
+    "mock": "808844",
+    "de": 30.69
+   },
+   "m": {
+    "live": "5c800b",
+    "mock": "848948",
+    "de": 24.88
+   }
+  }
+ },
+ "gp05": {
+  "palette": 14.15,
+  "saturation": 20.0,
+  "detail": 15.0,
+  "clutter": 10.0,
+  "warmth": 15.0,
+  "total": 25.85,
+  "raw": {
+   "palette_w": 14.15,
+   "sat_mock": 110.3,
+   "sat_live": 234.9,
+   "detail_ratio": 0.231,
+   "clutter_ratio": 0.085,
+   "b_mock": 16.8,
+   "b_live": 34.8
+  },
+  "swatches": {
+   "f": {
+    "live": "bc680f",
+    "mock": "ac965e",
+    "de": 38.66
+   },
+   "g": {
+    "live": "246c07",
+    "mock": "808844",
+    "de": 31.29
+   },
+   "r": {
+    "live": "2e546d",
+    "mock": "3a6c81",
+    "de": 10.44
+   }
+  }
+ },
+ "gp06": {
+  "palette": 21.72,
+  "saturation": 20.0,
+  "detail": 15.0,
+  "clutter": 10.0,
+  "warmth": 15.0,
+  "total": 18.28,
+  "raw": {
+   "palette_w": 21.72,
+   "sat_mock": 115.3,
+   "sat_live": 237.5,
+   "detail_ratio": 0.226,
+   "clutter_ratio": 0.105,
+   "b_mock": 19.7,
+   "b_live": 41.7
+  },
+  "swatches": {
+   "g": {
+    "live": "206407",
+    "mock": "808844",
+    "de": 30.69
+   },
+   "m": {
+    "live": "5c800b",
+    "mock": "848948",
+    "de": 24.88
+   }
+  }
+ },
+ "gp07": {
+  "palette": 13.6,
+  "saturation": 20.0,
+  "detail": 13.99,
+  "clutter": 10.0,
+  "warmth": 11.72,
+  "total": 30.69,
+  "raw": {
+   "palette_w": 13.6,
+   "sat_mock": 114.0,
+   "sat_live": 234.6,
+   "detail_ratio": 0.274,
+   "clutter_ratio": 0.107,
+   "b_mock": 22.7,
+   "b_live": 34.4
+  },
+  "swatches": {
+   "f": {
+    "live": "bc680f",
+    "mock": "ac965e",
+    "de": 38.66
+   },
+   "g": {
+    "live": "246c07",
+    "mock": "808844",
+    "de": 31.29
+   },
+   "r": {
+    "live": "2e546d",
+    "mock": "3a6c81",
+    "de": 10.44
+   }
+  }
+ },
+ "gp08": {
+  "palette": 26.47,
+  "saturation": 20.0,
+  "detail": 15.0,
+  "clutter": 10.0,
+  "warmth": 15.0,
+  "total": 13.53,
+  "raw": {
+   "palette_w": 26.47,
+   "sat_mock": 103.1,
+   "sat_live": 237.5,
+   "detail_ratio": 0.227,
+   "clutter_ratio": 0.121,
+   "b_mock": 9.4,
+   "b_live": 41.8
+  },
+  "swatches": {
+   "g": {
+    "live": "206407",
+    "mock": "808844",
+    "de": 30.69
+   },
+   "m": {
+    "live": "5c800b",
+    "mock": "848948",
+    "de": 24.88
+   }
+  }
+ },
+ "_perf": {
+  "home": {
+   "draw_calls": 574.0,
+   "primitives": 138388.0,
+   "process_ms": 350.53
+  },
+  "max": {
+   "draw_calls": 1446.0,
+   "primitives": 223498.0,
+   "process_ms": 341.1
+  },
+  "note": "software (llvmpipe, Xvfb :94), HUD hidden, Kestrel idle after deploy; draw_calls and primitives are deterministic, fps and process_ms are not meaningful here"
+ },
+ "_perf_gpu": {
+  "idle_default": {
+   "fps": 168.5,
+   "frame_ms_p50": 5.56,
+   "frame_ms_p95": 9.8,
+   "draw_calls_p50": 838.0,
+   "primitives_p50": 152056.0,
+   "gpu_ms_p50": 1.68,
+   "cpu_render_ms_p50": 2.3
+  },
+  "idle_zoomed_out": {
+   "fps": 135.7,
+   "frame_ms_p50": 7.07,
+   "frame_ms_p95": 9.87,
+   "draw_calls_p50": 1655.0,
+   "primitives_p50": 230046.0,
+   "gpu_ms_p50": 1.9,
+   "cpu_render_ms_p50": 3.43
+  },
+  "idle_default2": {
+   "fps": 167.4,
+   "frame_ms_p50": 5.56,
+   "frame_ms_p95": 9.48,
+   "draw_calls_p50": 838.0,
+   "primitives_p50": 152056.0,
+   "gpu_ms_p50": 1.68,
+   "cpu_render_ms_p50": 2.37
+  },
+  "note": "RTX 3050 via PRIME offload, uncapped, 8 s windows, Kestrel idle after deploy, whole frame with HUD, 2026-10-05 on 7051540, load average about 6"
+ }
+}
