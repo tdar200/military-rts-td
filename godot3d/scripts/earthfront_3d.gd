@@ -2551,11 +2551,19 @@ func _show_hover_at(ground: Vector3) -> void:
 	hover_tile.visible = build_mode == "" and not (world_art_on and _hex_occupied(tile))
 
 
-## Kestrel only: a bridge building or unit stands on `tile`. The outline draws without a depth test (so a tree card in
+## Kestrel only: a bridge building or unit stands on `tile`, or a fitted model overhangs its centre. The outline draws without a depth test (so a tree card in
 ## front cannot hide it), so on an occupied hex it would paint over the model; the hex stays hovered for the inspector.
 func _hex_occupied(tile: Vector2i) -> bool:
+	var centre := _hex_world(tile.x, tile.y)
 	for node in bridge_nodes.values():
-		if is_instance_valid(node) and _world_to_tile((node as Node3D).position) == tile:
+		if not is_instance_valid(node):
+			continue
+		var at := (node as Node3D).position
+		if _world_to_tile(at) == tile:
+			return true
+		# a fitted model wider than its hex (the 2.8-tile CC) covers its neighbours' centres too
+		var half := float(node.get_meta("visual_tiles", 0.0)) * WorldArt.TILE * 0.5
+		if Vector2(at.x - centre.x, at.z - centre.z).length() < half:
 			return true
 	return false
 

@@ -191,6 +191,21 @@ func test_kestrel_hover_outline_stays_off_occupied_hexes(t) -> void:
 	scene.free()
 
 
+func test_kestrel_hover_outline_stays_off_a_command_center_overhang(t) -> void:
+	# a 2.8-tile Command Center covers the centres of its six neighbour hexes; a Barracks (2.1) does not (test above)
+	var scene := _kestrel_scene()
+	var tile := Vector2i(10, 10)
+	var world: Vector3 = scene._hex_world(tile.x, tile.y)
+	scene.bridge_nodes[907] = scene._create_bridge_building(0, "CommandCenter", world, 907)
+	for n in [Vector2i(11, 10), Vector2i(9, 10), Vector2i(10, 9), Vector2i(10, 11)]:
+		scene._show_hover_at(scene._hex_world(n.x, n.y))
+		t.ok(not scene.hover_tile.visible, "hidden on the neighbour %s under the CC" % n)
+		t.eq(scene.hover_cell, n, "the neighbour is still hovered (the inspector reads it)")
+	scene._show_hover_at(scene._hex_world(12, 10))
+	t.ok(scene.hover_tile.visible, "shown two hexes away, clear of the model")
+	scene.free()
+
+
 func test_kestrel_shared_models_keep_each_kinds_width(t) -> void:
 	# Refinery (2.1) and SupplyDepot (1.7) share human_refinery; an unknown kind falls back to human_industry (1.7), the
 	# VehicleFactory model (2.1). Build order must not decide the size.
