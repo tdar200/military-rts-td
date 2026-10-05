@@ -368,6 +368,38 @@ Built: `scripts/ui/vm_maps.gd` (view-model slices `region_map`, `terrain_guide`,
   step wording); limits are achieved plus 3, none loosened. The gp06 top bar and Build deck are not rects: the mock draws the
   older bar and deck, which the Build layout (gp02) already measures.
 
+### Live QA and cleanup (Task 15), decided 2026-10-05
+Everything above was measured against mocks in the harness; this pass played the real Kestrel Reach build under software
+GL (Xvfb, Dummy audio, 1920x1080, about 3 fps) and looked at every capture. What it changed or confirmed:
+- Survival keeps its noise terrain and shows no ground UI. The bridge emits an all-Grassland `ground` layer for every
+  scenario (so the snapshot shape never forks); the client used to build a flat model from it, which replaced the noise
+  terrain with plain green, added the Logistics tab and printed "Grassland 100%" on a territory card. `GroundModel.is_flat`
+  (a well-formed layer of `g` only) now means "no terrain": `from_snapshot` returns null, `OverlayFeed.tab_available` is false
+  and `_sync_ground` returns quietly. A wrong-sized all-`g` string is still reported once as malformed. Survival therefore has
+  no Logistics tab, no territory card, no tile inspector, no M map and no river line in the briefing.
+- Pause marker. At 3 fps the bridge answers a pause late, so the marker could stay on "SIMULATION STILL RUNNING" for as long as
+  the poll lagged. `GameUI` now watches the tick while paused: it shows "STILL RUNNING" only while the tick keeps advancing
+  past the slack, and flips to "STOPPED" once the tick has stood still for 0.6 s (`STOP_STILL_SECONDS`). Real frame rates
+  never see the difference.
+- Camera on a Kestrel deploy and on Home. The survival corner (3,14) is wrong for Kestrel, whose colony sits at the
+  Command Center. With a ground layer, Home and Deploy centre on the player's Command Center (`home_focus`); Survival is
+  unchanged.
+- Reduced: the river bonus has three homes and the selected structure's terrain card is not one of them. "River +12 kW" shows
+  on the hover tile inspector (only when nothing is selected, because a selection owns the bottom centre), on the Yield lens
+  badge ("river +12") and in the briefing text. The structure panel's terrain card lists movement, cover and range only.
+- Cosmetic: the Yield lens legend draws its two badge swatches ("+20% ore bonus", "River cooling") as empty outlined boxes.
+- Not a bug, worth knowing: an idle player's Command Center falls to wave 1 at about 1:45 on Kestrel (the sim's undefended
+  fall is tick 3159, just past the 2700-tick grace). A live session has to build defences in the first minute.
+- The Build layout (a deck tab open at the start) still draws the older top bar ("ERA 01 CONTEMPORARY HUMANITY") and has no
+  territory card; the main layout draws the board 1 bar. That split predates this branch (gp02 measures the older bar).
+- Crater note. The terrain guide's Crater card reads "Some shelter from fire, but slow going. Nothing can be built here."
+  The earlier draft said where craters came from; the snapshot says nothing about that, so the line is limited to the table.
+- The briefing sits over the top of the territory card while it is up (the mock stacks them the same way); Hide removes it
+  and the territory card is whole again.
+- Leak tidy. `ResearchScreen` freed its `_meter` only in `_exit_tree`, which never runs for a screen that is freed unparented.
+  A `NOTIFICATION_PREDELETE` handler now frees it. Suite exit counters went from 56 RIDs, 251 ObjectDB instances and 1
+  resource still in use back to 0 RIDs, 137 ObjectDB instances and no resource line.
+
 ## 5. Known cosmetic items
 
 - The research screen has an empty band at the top where the era-gate block would sit.
@@ -439,6 +471,13 @@ writes `<qa dir>/states/*.png`. It actually writes `<qa dir>/state-*.png`. It wa
 
 ## 7. What was not verified live
 
+- Task 15 played Kestrel only at about 3 fps under software GL. Frame pacing, hover latency and the look of the shadows on a real
+  GPU were not judged. A turret on Highland outranging a grass turret was not seen live (the Rust tests pin it).
+- The ford slowdown was measured from snapshot polling, not by eye: a unit crossing paces about half as fast on the ford
+  as on the Dry Flats (a wave unit: 0.020 against 0.040 world units per tick over 81 and 293 sampled ticks). The grass sample was too noisy
+  (stops and turns) to quote.
+- Nothing played to the end: the Kestrel colony fell within the first three waves in every run, and the live win path is unseen.
+- No sound was played (Godot ran with the Dummy audio driver), so audio was not judged.
 - The live win path was not exercised. The full campaign QA bot ended in a recorded loss at tick 19975 with 0 script
   errors.
 - A real victory debrief casualty table was not seen live. The table was rendered only through a throwaway driver

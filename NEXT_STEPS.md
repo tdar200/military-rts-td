@@ -88,3 +88,22 @@ Apple/Google developer accounts — not available in a headless CI box.
 Everything above is content/feature scaffolding. The highest-value ongoing work is
 running the lane-defense scenario, tuning `balance.ron` (no recompile), and
 adjusting lane/wave design until the attack/defend loop is genuinely engaging.
+
+## Kestrel Reach and the gameplay HUD (2026-10, branch gameplay-hud-kestrel-reach)
+
+State: Kestrel Reach (`godot-bridge --scenario kestrel`) and the twelve gameplay boards are built and checked against the
+mocks in `docs/ascension/ui-mocks-gameplay/`; every deviation is listed in `docs/ascension/ui-deviations.md` (section 4,
+"Live QA and cleanup"). Survival is unchanged and shows none of the new ground UI. The golden hash is unmoved.
+
+Open items, in rough order of value:
+- Play Kestrel on a real GPU. Live QA ran at about 3 fps under software GL, so frame pacing, hover latency and shadow
+  strength were never judged, and no run reached a win (every colony fell within three waves). Balance for a human player on
+  this map is untested.
+- Show "River +12 kW" on the selected structure's terrain card. Today it appears on the hover inspector (nothing selected),
+  the Yield lens and the briefing only.
+- Yield lens legend swatches render as empty boxes.
+- Missing sim mechanics the mocks assumed, deliberately not faked: fog, "across the river -25%", multi-hex footprints,
+  Cancel last, Resupply, Focus fire, per-minute yields, a wave composition list, a campaign or checkpoint.
+- Make `run-3d.sh` pass a scenario to the bridge (today it passes its arguments to Godot only), so Kestrel starts with one
+  command.
+- Supply lens needs a stocked depot with a building in reach; with none it is hidden by design.

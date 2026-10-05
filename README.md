@@ -39,6 +39,27 @@ The Godot frontend displays the authoritative Rust battlefield with a restrained
 
 3D controls: `WASD` pan, `Z/E` rotate, mouse wheel zoom, `F` focus selection, `Home` recall the Earthfront, left-click or drag-select, right-click context order, `A` attack-move, `F2` select the whole army, `.` select an idle crew, `T/K/V/H/X` train the combined-arms roster, the Build panel constructs the economy and defence network, `Y` research, `U` repair, and `Delete` sell. `Esc` with nothing armed opens the pause menu (a real pause: the simulation stops; Resume, Controls, Terrain guide, Restart mission, Quit game), `F1` opens the controls reference and `M` opens the strategic map (the simulation keeps running; Esc or `M` closes it). A contextual Build / Units / Orders / Science command deck shows costs, roles, prerequisites, construction and production progress. On Earthfront maps a Logistics tab (mouse only, no key) draws one map overlay at a time: Power lines, Supply routes (once a stocked depot has a building in reach), Borders, turret Coverage or Yield bonuses. Operation Dawnshield guides the real opening dependency chain, telegraphs its 90-second first wave, announces unit/research/combat events, and ends with match statistics and instant redeployment. There is deliberately no fog of war.
 
+### Scenarios and bridge flags
+
+`./run-3d.sh` starts the bridge with the default scenario, **Survival** (the original generated map). **Kestrel Reach** is a
+hand-authored 44x26 coastal basin: a river that only the Wyllow Ford crosses (vehicles move at half pace on the
+ford, infantry at 70%), highland that adds weapon range, forest cover, dry flats, a bay and a named region map. It adds the tile inspector,
+territory card, Logistics lenses, the strategic map (`M`), the terrain guide (pause menu) and the briefing card. Survival
+shows none of those. Start Kestrel Reach by running the bridge yourself, then the client, which reads
+`godot3d/runtime/snapshot.json`:
+
+```bash
+cargo build --release -p rts-server --bin godot-bridge
+target/release/godot-bridge --scenario kestrel godot3d/runtime/snapshot.json &
+tools/godot/Godot_v4.7.2-stable_linux.x86_64 --path godot3d
+```
+
+`godot-bridge [--scenario kestrel|survival] [--dump-snapshot <path>] <snapshot path> [frame limit]`: `--scenario` defaults to
+`survival` and an unknown value exits with status 2; `--dump-snapshot` writes the scenario's first snapshot to that path and exits (used for test fixtures). QA runs never touch your
+display or speakers: `python3 tools/qa/launch_ui.py <dir> [--software] [--scenario kestrel|survival]` starts an isolated
+bridge and client (Godot always gets `--audio-driver Dummy`), prints the owned PIDs and writes them to `<dir>/pids.json`;
+drive it with `tools/qa/ui_client.py` and stop it by those PIDs.
+
 ## Run it
 
 ```bash

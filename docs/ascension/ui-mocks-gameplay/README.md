@@ -7,3 +7,14 @@ Every board crops that world with a camera offset and places sprites in world co
 
 Place names (Kestrel Reach, Calder River, Wyllow Ford, The Dry Flats, Ironback Ridge, Hollow Wood) and every number in
 the boards are design proposals, not shipped behaviour.
+
+## Status and how to check it (2026-10-05)
+
+All twelve boards are built in the Godot client (`godot3d/scripts/ui/sections/`, gallery arms `gp01` to `gp12`).
+`tools/ui/verify_all.sh` renders each board here in headless Chrome and diffs it against the Godot gallery capture per
+rectangle (limits in `tools/ui/compare_gpNN.json`; the painted battlefield and sprite boxes are masked). The boards carry
+design proposals, so the live screens print real values where a board has invented ones; `docs/ascension/ui-deviations.md`
+lists each block that was dropped or reduced and why. To see the live game instead of the gallery:
+`python3 tools/qa/launch_ui.py <dir> --software --scenario kestrel`, then drive it with `tools/qa/ui_client.py` and
+`tools/qa/hud_states.py`.
+
