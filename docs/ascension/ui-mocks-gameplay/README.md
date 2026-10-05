@@ -18,3 +18,19 @@ lists each block that was dropped or reduced and why. To see the live game inste
 `python3 tools/qa/launch_ui.py <dir> --software --scenario kestrel`, then drive it with `tools/qa/ui_client.py` and
 `tools/qa/hud_states.py`.
 
+
+## Live world art and how to re-score it (2026-10-05)
+
+The Kestrel 3D world follows `terrain/gen.py`, the recipe that paints `terrain/land.jpg`. Its per-glyph ground fills
+(grass, meadow, Dry Flats, Highland, Hollow Wood, shore) are the terrain shader's `GROUND_LOOK` albedos in
+`godot3d/scripts/continuous_terrain.gd`, calibrated to the land.jpg medians; its `continuous_ground_detail_v4` layer and
+the 37 degree rotated soft-light copy are `detail_strength` and `rotated_strength`, the noise patches are
+`patch_strength`, and Highland blends to the rock texture. The river (bank sand, dark edges, lighter centre), the ford and
+the sea that deepens away from the shore with a surf line are the shader's water bands. The forest, scrub, rock, crater
+and willow clusters with their soft drop shadows are prop rules in `godot3d/scripts/world/world_props.gd` (`RULES`,
+`BANK`, `FRINGE`), drawn as atlas cards and shadow decals; ore crystals and the hue-rotated alloy are crystal cards on
+deposit tiles; the `gSun` gradient is the atmosphere layer in `godot3d/scripts/world/world_art.gd`. To re-score, render
+the boards with `tools/ui/render_mock.py gpNN <mocks>/gpNN.png`, capture world-only frames on a private Xvfb with
+`python3 tools/qa/world_capture.py <dir> --display :94` (frames and crops are in `tools/ui/world_frames.json`), then run
+`python3 tools/ui/world_diff.py run --mocks <mocks> --live <dir> --out <side dir> --check tools/ui/world_baseline.json`,
+which prints each board's total and structure against the frozen baseline and writes a side-by-side PNG per board.

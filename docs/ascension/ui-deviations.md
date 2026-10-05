@@ -496,3 +496,59 @@ writes `<qa dir>/states/*.png`. It actually writes `<qa dir>/state-*.png`. It wa
   Command Center, or River/Sea) now walks to the nearest passable tile and stops there. Before, it kept the raw point and
   stepped onto the impassable tile once its path ran out, so units could stand in the river. Units no longer "close the last
   step" onto a building; combat auto-fire is unaffected. Legacy non-Earthfront scenarios and the golden hash are unchanged.
+
+## 9. Kestrel world art (2026-10-05)
+
+The Kestrel 3D world was re-arted to read like boards gp01 and gp03 to gp08 (spec addendum
+`docs/superpowers/specs/2026-10-05-kestrel-world-art-design.md`, rulings W1 to W9). Survival and every other scenario keep
+every legacy path. What still differs from the boards, and why:
+
+- Buildings and units are 3D authored models, not the boards' painted sprites. Each model is fitted to a width table in
+  tiles (`WorldArt.BUILDING_TILES`, `WorldArt.UNIT_TILES`: CC 2.8, production 2.1, power and depot 1.7, turrets 1.3, wall
+  1.0; tank 1.6, harvester 1.5, infantry 1.0) and gets a soft contact pad and a selection ring sized to that width.
+- Placement stays one hex per building, so a big model overhangs its neighbours and two big neighbours can overlap on
+  screen. Picking stays per tile. The hover outline draws without a depth test, so it is hidden on a hex a model stands
+  on and on a hex whose centre a fitted model covers (the six neighbours of a CC); a 2.1-tile building does not reach its
+  neighbours' centres, so the outline still shows there over the edge of the model.
+- The camera keeps its 57 degree pitch. The boards are painted at a steeper three-quarter view, so roofs read smaller
+  and fronts taller in the live frame. The camera is north-up with a default zoom of 10.
+- Home and the deploy shot look 4.1 world units (about 6 columns) east of your Command Center
+  (`WorldArt.CAMERA.home_offset`), so the base sits in the left third and the Calder River shows top right. The boards put
+  the river mid-frame because their base is about 7 columns from it; on the live map the river is 15 columns east of the
+  CC on its row, so base and river cannot both sit where the boards have them at zoom 10.
+- At deploy the live colony is one CC and four infantry squads; the home-frame boards (gp01, gp04, gp06, gp08) show a
+  built-up base with tanks, a refinery and turrets. That gap is content, not art.
+- Props are camera-facing billboard cards drawn from a baked atlas of the game's own painted sprites, with flat soft
+  drop-shadow decals. A card takes the depth of its base, so a deposit's crystal card on the hex in front of a CC draws
+  over the CC's front ramp (seen with the ore at (7, 11) below the starting CC). Left as is: it is small and correct in
+  depth order.
+- The sea colour is computed from the distance to the coast in the terrain shader, not painted. The coast follows the hex
+  grid, so the bay's west shore is a straight edge and the surf line is thin where the coast is shaded.
+- Hollow Wood is one canopy card per forest tile plus a second on every other tile, with wide jitter and a ragged rim of
+  canopies on about half of the grass tiles around it (`WorldProps.FRINGE`), so it reads as a wood, not a block.
+- Unit badges sit just above the fitted model, and the invasion relay label floats above the health bars, so neither
+  hides inside a bigger model.
+
+### Board scores (world_diff, private Xvfb software capture, HEAD after Task 11)
+
+| Board | Frame | Baseline total | Final total | Delta | Baseline structure | Final structure |
+|---|---|---|---|---|---|---|
+| gp01 | home | 46.54 | 80.70 | +34.16 | 73.67 | 78.88 |
+| gp03 | enemy | 54.49 | 81.70 | +27.21 | 55.88 | 78.66 |
+| gp04 | home | 40.75 | 77.94 | +37.19 | 72.45 | 76.37 |
+| gp05 | ford | 55.54 | 80.79 | +25.25 | 69.33 | 77.60 |
+| gp06 | home | 50.63 | 79.69 | +29.06 | 74.66 | 78.79 |
+| gp07 | ford | 59.89 | 80.42 | +20.53 | 71.27 | 75.91 |
+| gp08 | home | 49.14 | 74.53 | +25.39 | 74.22 | 78.83 |
+
+Every board is at least 20 points above `tools/ui/world_baseline.json`. Notes on the weakest:
+
+- gp07 has the smallest margin (+20.53). The `ford` frame centres on Wyllow Ford, so the river runs mid-frame; the gp07
+  board has it along the left edge with the Dry Flats filling the rest. The capture frame was not moved to chase the score.
+- gp08 has the lowest total (74.53). The board is the power overlay: its cyan network lines and darker grade are HUD world
+  marks, not ground, so palette and warmth lose points against the plain live ground.
+- Ground swatches against the boards (CIE76 Delta E): grass 1.9, meadow 3.3, flats 1.6, river 5.3, highland 8.2. The
+  `ford` frame's grass swatch point (16, 10) now falls under a Hollow Wood rim canopy, so it samples a tree (12.2); on open
+  grass it read 2.6 before and the ground albedo did not change.
+- `tools/ui/world_scores.json` was not refreshed in Task 11 (rewriting it is the user's call); the table above is the
+  current run.
