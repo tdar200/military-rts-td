@@ -500,6 +500,11 @@ func _snapshot_and_ground() -> Array:
 	return [snap, ground]
 
 
+var _ground_key := 0  # cache for _has_real_ground
+var _ground_real := false
+var _ground_decodes := 0  # test hook: how often the layer was really decoded
+
+
 ## True when the match has real terrain to describe: a valid, non-flat ground model. Survival's all-Grassland layer has none
 ## (the client keeps its noise terrain), so the terrain guide and the briefing stay away from it. Cheap: the live game already
 ## holds the model; otherwise one decode of the snapshot layer.
@@ -507,7 +512,16 @@ func _has_real_ground() -> bool:
 	if g.get("ground_model") != null:
 		return true
 	var snap = g.get("bridge_snapshot")
-	return snap is Dictionary and preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap) != null
+	if not (snap is Dictionary):
+		return false
+	# The layer is fixed for a match, so decode it once per distinct (ground, size) rather than on every briefing and pause
+	# refresh: a String hash is far cheaper than from_snapshot, which also copies the table.
+	var key := hash([str(snap.get("ground", "")), int(snap.get("map_width", 0)), int(snap.get("map_height", 0))])
+	if key != _ground_key:
+		_ground_key = key
+		_ground_real = preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap) != null
+		_ground_decodes += 1
+	return _ground_real
 
 
 ## Cheap: true when there is a real (non-flat) ground model AND the snapshot carries a named ground_table row, i.e. exactly when

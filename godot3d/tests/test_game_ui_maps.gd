@@ -233,6 +233,10 @@ func test_survival_flat_ground_offers_no_terrain_guide(t) -> void:
 	t.ok(U.button_with(ui.pause_layer, "Terrain guide") == null, "no dead Terrain guide button on Survival")
 	ui.open_guide()
 	t.ok(not ui.guide_open, "and the guide cannot be opened")
+	for i in 20:
+		ui._can_guide()
+		ui._refresh_briefing()
+	t.eq(ui._ground_decodes, 1, "the flat layer is decoded once, not on every refresh")
 	_drop(p)
 
 
