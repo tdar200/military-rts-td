@@ -56,6 +56,9 @@ W6. Buildings and units stay 3D. Under the profile human buildings use the autho
     (a unit's whole box), the narrowest model wins when several hold the click, and a click on no model falls back to
     the legacy 32 px reach around the root. The `COMMAND` / `CORE NODE` Label3D banners are dropped under the profile
     (the HUD names buildings) and health bars sit above the scaled model.
+    Reversed 2026-10-05: the user ruled that buildings and units are the boards' own painted sprites on camera-facing
+    cards ("Billboard the painted sprites"); see `docs/superpowers/plans/2026-10-05-kestrel-sprite-entities.md` and
+    `docs/ascension/ui-deviations.md` section 9. The rest of this ruling (Survival keeps its models) still holds.
 W7. The amber hover torus becomes a thin cyan hex outline under the profile.
 W8. Atmosphere: a non-interactive CanvasLayer under the HUD paints the gen.py `gSun` gradient and a soft vignette; the
     environment background becomes deep sea `#0c2a40` so no sky can show.

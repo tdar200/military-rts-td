@@ -29,7 +29,9 @@ the 37 degree rotated soft-light copy are `detail_strength` and `rotated_strengt
 the sea that deepens away from the shore with a surf line are the shader's water bands. The forest, scrub, rock, crater
 and willow clusters with their soft drop shadows are prop rules in `godot3d/scripts/world/world_props.gd` (`RULES`,
 `BANK`, `FRINGE`), drawn as atlas cards and shadow decals; ore crystals and the hue-rotated alloy are crystal cards on
-deposit tiles; the `gSun` gradient is the atmosphere layer in `godot3d/scripts/world/world_art.gd`. To re-score, render
+deposit tiles; the `gSun` gradient is the atmosphere layer in `godot3d/scripts/world/world_art.gd`. Buildings and units
+are these boards' own sprites on camera-facing cards at the boards' pixel sizes (`godot3d/scripts/world/world_sprites.gd`).
+To re-score, render
 the boards with `tools/ui/render_mock.py gpNN <mocks>/gpNN.png`, capture world-only frames on a private Xvfb with
 `python3 tools/qa/world_capture.py <dir> --display :94` (frames and crops are in `tools/ui/world_frames.json`), then run
 `python3 tools/ui/world_diff.py run --mocks <mocks> --live <dir> --out <side dir> --check tools/ui/world_baseline.json`,

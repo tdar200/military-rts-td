@@ -514,8 +514,21 @@ every legacy path. What still differs from the boards, and why:
   2.32, capital 4.02, harvester 1.34): the infantry sprite is itself the boards' three-figure squad, so a squad is one
   card, as the boards draw it. A card never turns; it shows its painting mirrored while it moves against the way it is
   painted facing and keeps its last facing when it stops (the boards draw every unit unmirrored). Units carry the boards'
-  silhouette shadow and `.ao` contact band instead of a pad, keep their team ring at the feet, and float their badge and
-  bars over the painted top. The human capital unit uses `capital_v1`, the same painting as the lab.
+  silhouette shadow and `.ao` contact band instead of a pad and keep their team ring at the feet; their health bars sit
+  just over the painted top. The strategic badge (a coloured plate with I, AR, AT, AIR, CAP or HAR) is hidden on Kestrel:
+  the boards draw none, and over a column of squads one hex apart it covered the squad above. The gunship card hovers 0.30
+  world units over the ground (`WorldSprites.HOVER`) with its bob; its shadow, contact band and team ring stay on the
+  ground under it. The human capital unit uses `capital_v1`, the same painting as the lab.
+- Colour: the Kestrel post chain (filmic, exposure 0.95, saturation 0.50, the `gSun` overlay) drew the sprites lighter and
+  greyer than the boards (CC body Lab L 45.8 and chroma 5.3 live against 36.5 and 7.3 on gp01). The cards, and only the
+  cards, sample a copy of each sprite pre-graded by `WorldSprites.GRADE` (brightness 0.80, contrast 1.02, saturation
+  1.60); the live CC now measures L 36.6, chroma 7.2. The post chain is not uniform (it shifts blue a little more than
+  red), so other sprites can sit a shade off. Both board shadows (`.shd`, `.ao`) are drawn 1.6 times the boards' CSS
+  opacity (`WorldSprites.SHADOW_GAIN`) because the same chain lifts dark ground.
+- What still differs from the boards' sprites: each painting has one fixed facing, and a unit moving the other way shows
+  it mirrored, so a mirrored sprite's light falls from the wrong side; the cards are flat billboards, so nothing turns
+  or shows a side the painting does not have; the lab and the human capital unit share `capital_v1`; the airfield and
+  the supply depot borrow the barracks and refinery sprites (no board draws them).
 - Placement stays one hex per building, so a big sprite overhangs its neighbours (mostly to the north, where the
   painting rises) and two big neighbours can overlap on screen. Picking follows the painted body, not the hex: a click
   inside the screen rectangle of the sprite's opaque pixels selects it, a click on a transparent corner of the card does
@@ -533,7 +546,9 @@ every legacy path. What still differs from the boards, and why:
   `jump_hq` and `hq` actions, `live_adapter._focus_hq`) still centres the CC: it answers an HQ alert, so the fight around
   the CC belongs mid-frame, not at the left edge.
 - At deploy the live colony is one CC and four infantry squads; the home-frame boards (gp01, gp04, gp06, gp08) show a
-  built-up base with tanks, a refinery and turrets. That gap is content, not art.
+  built-up base with tanks, a refinery and turrets. That gap is content, not art: the scenario and the sim are left as
+  they are, so the home frame never shows the boards' full base, and the tank, harvester, gunship and capital cards
+  were checked in a QA view with presentation-only spawned cards, not in the deploy frames.
 - Props are camera-facing billboard cards drawn from a baked atlas of the game's own painted sprites, with flat soft
   drop-shadow decals. A card takes the depth of its base, so a deposit's crystal card on the hex in front of a CC draws
   over the CC's front ramp (seen with the ore at (7, 11) below the starting CC). Left as is: it is small and correct in
@@ -542,29 +557,31 @@ every legacy path. What still differs from the boards, and why:
   grid, so the bay's west shore is a straight edge and the surf line is thin where the coast is shaded.
 - Hollow Wood is one canopy card per forest tile plus a second on every other tile, with wide jitter and a ragged rim of
   canopies on about half of the grass tiles around it (`WorldProps.FRINGE`), so it reads as a wood, not a block.
-- Unit badges sit just above the fitted model, and the invasion relay label floats above the health bars, so neither
-  hides inside a bigger model.
+- The invasion relay label floats above a building's health bars, so it never hides inside the painted sprite.
 
-### Board scores (world_diff, private Xvfb software capture, HEAD after Task 11)
+### Board scores (world_diff, private Xvfb software capture, after the sprite entities plan, 2026-10-05)
 
 | Board | Frame | Baseline total | Final total | Delta | Baseline structure | Final structure |
 |---|---|---|---|---|---|---|
-| gp01 | home | 46.54 | 80.70 | +34.16 | 73.67 | 78.88 |
-| gp03 | enemy | 54.49 | 81.70 | +27.21 | 55.88 | 78.66 |
-| gp04 | home | 40.75 | 77.94 | +37.19 | 72.45 | 76.37 |
-| gp05 | ford | 55.54 | 80.79 | +25.25 | 69.33 | 77.60 |
-| gp06 | home | 50.63 | 79.69 | +29.06 | 74.66 | 78.79 |
-| gp07 | ford | 59.89 | 80.42 | +20.53 | 71.27 | 75.91 |
-| gp08 | home | 49.14 | 74.53 | +25.39 | 74.22 | 78.83 |
+| gp01 | home | 46.54 | 80.88 | +34.34 | 73.67 | 79.02 |
+| gp03 | enemy | 54.49 | 82.62 | +28.13 | 55.88 | 79.45 |
+| gp04 | home | 40.75 | 77.84 | +37.09 | 72.45 | 76.52 |
+| gp05 | ford | 55.54 | 80.69 | +25.15 | 69.33 | 77.49 |
+| gp06 | home | 50.63 | 80.57 | +29.94 | 74.66 | 80.02 |
+| gp07 | ford | 59.89 | 80.30 | +20.41 | 71.27 | 75.71 |
+| gp08 | home | 49.14 | 74.38 | +25.24 | 74.22 | 78.53 |
+
+The sprite buildings and units moved every board by less than 1 point against the world-art scores (gp01 80.70, gp03
+81.70, gp04 77.94, gp05 80.79, gp06 79.69, gp07 80.42, gp08 74.53): the deploy frames hold one CC, four squads and a
+few enemy buildings, so the statistics are dominated by the ground. `tools/ui/world_scores.json` holds this run.
 
 Every board is at least 20 points above `tools/ui/world_baseline.json`. Notes on the weakest:
 
-- gp07 has the smallest margin (+20.53). The `ford` frame centres on Wyllow Ford, so the river runs mid-frame; the gp07
+- gp07 has the smallest margin (+20.41). The `ford` frame centres on Wyllow Ford, so the river runs mid-frame; the gp07
   board has it along the left edge with the Dry Flats filling the rest. The capture frame was not moved to chase the score.
-- gp08 has the lowest total (74.53). The board is the power overlay: its cyan network lines and darker grade are HUD world
+- gp08 has the lowest total (74.38). The board is the power overlay: its cyan network lines and darker grade are HUD world
   marks, not ground, so palette and warmth lose points against the plain live ground.
 - Ground swatches against the boards (CIE76 Delta E): grass 1.9, meadow 3.3, flats 1.6, river 5.3, highland 8.2. The
   `ford` frame's grass swatch point (16, 10) now falls under a Hollow Wood rim canopy, so it samples a tree (12.2); on open
   grass it read 2.6 before and the ground albedo did not change.
-- `tools/ui/world_scores.json` was not refreshed in Task 11 (rewriting it is the user's call); the table above is the
-  current run.
+- `tools/ui/world_scores.json` was refreshed with this run (the user approved refreshing it).
