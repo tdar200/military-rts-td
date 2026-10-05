@@ -206,7 +206,7 @@ static func _coverage(snap: Dictionary) -> Array:
 		var pct := 0
 		if ground != null:
 			pct = int(ground.props_at(int(cell[0]), int(cell[1])).get("range_pct", 0))
-		out.append({"kind": "ring", "cell": cell, "r": float(f["range"]) * float(100 + pct) / 100.0, "dashed": true, "tone": "good" if f["kind"] == "AaTurret" else "cyan"})
+		out.append({"kind": "ring", "cell": cell, "r": VM.effective_turret_range(f, ground), "dashed": true, "tone": "good" if f["kind"] == "AaTurret" else "cyan"})
 		if pct > 0:
 			out.append({"kind": "badge", "cell": cell, "text": "+%d%%" % pct})
 	return out
@@ -432,13 +432,13 @@ static func legend(snap: Dictionary, lens: String) -> Array:
 			]
 			for row in snap.get("ground_table", []):
 				if row is Dictionary and int(row.get("range_pct", 0)) > 0:
-					rows.append({"tone": "cyan", "style": "badge", "text": "%s adds %d%% range" % [str(row.get("name", "")), int(row["range_pct"])]})
+					rows.append({"tone": "cyan", "style": "badge", "sample": "+%d%%" % int(row["range_pct"]), "text": "%s adds %d%% range" % [str(row.get("name", "")), int(row["range_pct"])]})
 			return rows
 		"yield":
 			return [
 				{"tone": "cyan", "style": "dashed", "text": "Refinery ore reach, %d hex" % VM.ORE_BONUS_RADIUS},
-				{"tone": "cyan", "style": "badge", "text": "+%d%% ore bonus, ore within reach" % VM.ORE_BONUS_PCT},
-				{"tone": "cyan", "style": "badge", "text": "River cooling, kW added to a reactor"},
+				{"tone": "cyan", "style": "badge", "sample": "+%d%%" % VM.ORE_BONUS_PCT, "text": "+%d%% ore bonus, ore within reach" % VM.ORE_BONUS_PCT},
+				{"tone": "cyan", "style": "badge", "sample": "+12", "text": "River cooling, kW added to a reactor"},
 			]
 	return []
 

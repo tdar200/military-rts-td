@@ -1093,6 +1093,16 @@ static func wave_arrows(snap: Dictionary) -> Array:
 	return out
 
 
+## A turret's weapon range as the sim applies it: the base range extended by the range_pct of the ground it stands on
+## (Highland +25%). `ground_model` may be null (no ground layer): the base range.
+static func effective_turret_range(field: Dictionary, ground_model) -> float:
+	var pct := 0
+	if ground_model != null:
+		var cell: Array = field["cell"]
+		pct = int(ground_model.props_at(int(cell[0]), int(cell[1])).get("range_pct", 0))
+	return float(field["range"]) * float(100 + pct) / 100.0
+
+
 ## World overlay data: the player's finished turrets with the sim's weapon range.
 static func turret_fields(snap: Dictionary) -> Array:
 	var out: Array = []

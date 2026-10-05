@@ -96,6 +96,8 @@ static func _legend_row(parent: Control, x: float, y: float, row: Dictionary) ->
 				K.rule(parent, x + i * 14.0, mid - 1.0, 8, 2, color)
 		"badge":
 			K.panel(parent, x + 3.0, y + 1.0, 30, 20, "glass", {"border": color})
+			# The swatch shows what the map badge reads ("+20%", "+12"), so the key matches the thing it explains.
+			K.text(parent, str(row.get("sample", "+")), {"x": x + 3.0, "y": y + 4.0, "w": 30, "f": "mono", "px": 11, "al": "c", "col": color})
 		_:
 			K.rule(parent, x, mid - 2.0, SWATCH_W, 4, color)
 	K.text(parent, str(row.get("text", "")), {"x": x + SWATCH_W + 12.0, "y": y + 2.0, "px": 14, "col": T.TEXT})

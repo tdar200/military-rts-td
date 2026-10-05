@@ -321,9 +321,10 @@ func board_marks(project: Callable) -> Array:
 			if int(field["id"]) != picked[0]:
 				continue
 			var cell: Array = field["cell"]
+			var reach := VmGameplay.effective_turret_range(field, _ground_for(snap))
 			var c: Vector2 = project.call(cell[0], cell[1])
-			var east: Vector2 = project.call(int(cell[0]) + roundi(float(field["range"]) / VmGameplay.SIM_HEX_X), cell[1])
-			var south: Vector2 = project.call(cell[0], int(cell[1]) + int(field["range"]))
+			var east: Vector2 = project.call(int(cell[0]) + roundi(reach / VmGameplay.SIM_HEX_X), cell[1])
+			var south: Vector2 = project.call(cell[0], int(cell[1]) + roundi(reach))
 			if c != Vector2.INF and east != Vector2.INF and south != Vector2.INF:
 				marks.append({"kind": "ring", "x": c.x, "y": c.y, "rx": absf(east.x - c.x), "ry": absf(south.y - c.y)})
 	if VmGameplay.wave_in_window(snap):
@@ -363,6 +364,14 @@ func _control_groups() -> Dictionary:
 		if not live.is_empty() and live.size() == picked.size() and live.all(func(node): return picked.has(node)):
 			active = int(n)
 	return VmGameplay.control_groups(groups, active)
+
+
+## The game's ground model, or one decoded from the snapshot; null on flat or ground-less maps.
+func _ground_for(snap: Dictionary):
+	var ground = g.get("ground_model")
+	if ground == null:
+		ground = preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap)
+	return ground
 
 
 ## The assault layout keeps its own panels; it only gains what board 3 adds on top: the enemy territory card and, over a

@@ -4,6 +4,7 @@ extends RefCounted
 const Adapter = preload("res://scripts/ui/live_adapter.gd")
 const Stub = preload("res://tests/stub_game.gd")
 const Hud = preload("res://scripts/ui/hud.gd")
+const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 
 
 func _bits(col: int, row: int) -> Array:
@@ -239,6 +240,22 @@ func test_selected_turret_gets_its_range_as_a_ring(t) -> void:
 	t.near(marks[0]["rx"], 7.0 * 40.0, 0.01, "five sim units is seven columns of 0.75")
 	_select(p[0], [50])
 	t.eq(p[1].board_marks(_project), [], "only the selected turret shows its range")
+
+
+func test_selected_turret_ring_includes_the_highland_range_bonus(t) -> void:
+	var p := _make()
+	var ground = p[0].ground_model
+	# Kestrel's Ironback Ridge (columns 24+, rows 0 to 5) is Highland: +25% range.
+	t.eq(String(ground.name_at(30, 2)), "Highland", "fixture: (30, 2) is Highland")
+	p[0].bridge_snapshot["entities"].append(_entity(70, "GunTurret", "building", 30, 2))
+	p[0].add_node(70, "GunTurret", "building", 0, Vector3.ZERO)
+	_select(p[0], [70])
+	var marks: Array = p[1].board_marks(_project)
+	t.eq(_kinds(marks), ["ring"], "the weapon range")
+	t.near(marks[0]["ry"], 6.0 * 30.0, 0.01, "5 x 1.25 = 6.25 rows (rounded to whole hexes), not the base 5")
+	t.near(marks[0]["rx"], 8.0 * 40.0, 0.01, "and 8 columns of 0.75, not 7")
+	t.near(VmGameplay.effective_turret_range({"cell": [30, 2], "range": 5}, ground), 6.25, 0.001, "the helper is exact")
+	t.near(VmGameplay.effective_turret_range({"cell": [30, 2], "range": 5}, null), 5.0, 0.001, "no ground model: the base range")
 
 
 func test_wave_route_draws_while_the_panel_is_up(t) -> void:

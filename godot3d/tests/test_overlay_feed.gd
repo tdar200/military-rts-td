@@ -384,6 +384,9 @@ func test_legend_rows_carry_real_numbers(t) -> void:
 		joined += str(r["text"]) + "|"
 	t.ok(joined.contains("Highland") and joined.contains("25"), "Highland range bonus read from ground_table")
 	t.ok(str(Feed.legend(snap, "yield")[0]["text"]).length() > 0, "yield legend")
+	for row in Feed.legend(snap, "yield") + Feed.legend(snap, "coverage"):
+		if row["style"] == "badge":
+			t.ok(str(row.get("sample", "")).begins_with("+"), "every badge swatch has a sample: " + str(row["text"]))
 	t.eq(Feed.legend(snap, ""), [], "off has no legend")
 
 

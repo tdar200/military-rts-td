@@ -32,6 +32,19 @@ func test_shows_caption_active_lens_legend_and_what_is_drawn(t) -> void:
 	root.free()
 
 
+func test_badge_legend_swatches_carry_their_sample_text(t) -> void:
+	var root := Control.new()
+	var body := _body("yield")
+	body["legend"] = [
+		{"tone": "cyan", "style": "badge", "sample": "+20%", "text": "+20% ore bonus, ore within reach"},
+		{"tone": "cyan", "style": "badge", "sample": "+12", "text": "River cooling, kW added to a reactor"},
+	]
+	Section.build(root, body)
+	t.ok(U.texts(root).has("+20%"), "the ore swatch draws its own sample label, apart from the legend text")
+	t.ok(U.texts(root).has("+12"), "the river swatch draws its own sample label")
+	root.free()
+
+
 func test_lens_buttons_are_buttons_with_human_text_and_emit_the_lens(t) -> void:
 	var root := Control.new()
 	var calls: Array = []

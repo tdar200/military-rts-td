@@ -500,11 +500,21 @@ func _snapshot_and_ground() -> Array:
 	return [snap, ground]
 
 
-## Cheap: true when the snapshot carries a named ground_table row, i.e. exactly when _guide_vm has anything to build (the pause view
-## model asks every 0.1 s, so it must not build the whole guide).
+## True when the match has real terrain to describe: a valid, non-flat ground model. Survival's all-Grassland layer has none
+## (the client keeps its noise terrain), so the terrain guide and the briefing stay away from it. Cheap: the live game already
+## holds the model; otherwise one decode of the snapshot layer.
+func _has_real_ground() -> bool:
+	if g.get("ground_model") != null:
+		return true
+	var snap = g.get("bridge_snapshot")
+	return snap is Dictionary and preload("res://scripts/terrain/ground_model.gd").from_snapshot(snap) != null
+
+
+## Cheap: true when there is a real (non-flat) ground model AND the snapshot carries a named ground_table row, i.e. exactly when
+## _guide_vm has anything to build (the pause view model asks every 0.1 s, so it must not build the whole guide).
 func _can_guide() -> bool:
 	var snap = g.get("bridge_snapshot")
-	if not (snap is Dictionary):
+	if not (snap is Dictionary) or not _has_real_ground():
 		return false
 	var table = snap.get("ground_table", [])
 	if not (table is Array):
@@ -660,7 +670,7 @@ func _on_region_action(name: String, arg: Variant = null) -> void:
 ## a card at the top left: once hidden or out of range its nodes are freed, so it can never block input afterwards.
 func _refresh_briefing() -> void:
 	var vm := {}
-	if hud.visible and not briefing_dismissed and scrim == null:
+	if hud.visible and not briefing_dismissed and scrim == null and _has_real_ground():
 		var snap = g.get("bridge_snapshot")
 		vm = VmMaps.briefing(int(g.tutorial_stage), snap if snap is Dictionary else {}, int(g.bridge_winner))
 	adapter.briefing_up = not vm.is_empty()

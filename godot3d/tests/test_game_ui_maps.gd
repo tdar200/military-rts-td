@@ -213,6 +213,29 @@ func test_the_debrief_closes_an_open_map_so_esc_cannot_reach_it(t) -> void:
 	_drop(p)
 
 
+## Survival's bridge emits an all-Grassland ground layer plus a named ground_table row; the client has no ground model for it.
+func _make_flat(t) -> Array:
+	var p := _make(t)
+	var g = p[0]
+	var cells: int = int(g.bridge_snapshot["map_width"]) * int(g.bridge_snapshot["map_height"])
+	g.bridge_snapshot["ground"] = "g".repeat(cells)
+	g.ground_model = null
+	return p
+
+
+func test_survival_flat_ground_offers_no_terrain_guide(t) -> void:
+	var p := _make_flat(t)
+	var g = p[0]
+	var ui = p[1]
+	t.ok(not ui._can_guide(), "a named table row on flat ground is not enough: nothing to guide")
+	t.ok(not ui._pause_vm()["can_guide"], "the pause view model does not offer it")
+	ui.route_key(_key(KEY_ESCAPE))
+	t.ok(U.button_with(ui.pause_layer, "Terrain guide") == null, "no dead Terrain guide button on Survival")
+	ui.open_guide()
+	t.ok(not ui.guide_open, "and the guide cannot be opened")
+	_drop(p)
+
+
 # ------------------------------------------------------------------ briefing
 
 func test_the_briefing_shows_in_the_first_stages_and_hides_for_good(t) -> void:
@@ -288,3 +311,14 @@ func test_pause_flag_is_cleared_when_the_game_starts(t) -> void:
 	t.ok(not FileAccess.file_exists(dir.path_join("pause.flag")), "a stale flag left by a crash is removed by the call _ready makes")
 	game.free()
 	DirAccess.remove_absolute(dir)
+
+
+func test_survival_flat_ground_shows_no_briefing_card(t) -> void:
+	var p := _make_flat(t)
+	var g = p[0]
+	var ui = p[1]
+	g.tutorial_stage = 1
+	ui._refresh_briefing()
+	t.eq(ui.briefing_layer.get_child_count(), 0, "no briefing card without real terrain")
+	t.ok(not ui.adapter.briefing_up, "and the HUD keeps its objectives panel")
+	_drop(p)
