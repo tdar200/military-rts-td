@@ -59,6 +59,9 @@ var bridge_snapshot: Dictionary = {}
 var ground_model: RefCounted = null
 ## Hex under the cursor as a Vector2i, null when the pointer is off the map. The real game has no such member yet.
 var hover_cell = null
+## Mirrors earthfront_3d.alert_pings (Kestrel's AlertPings, null in Survival) and its clock (alert_clock: the effects time).
+var alert_pings = null
+var clock := 0.0
 
 
 ## `fog_off` loads the EARTHFRONT_FOG=0 twin of the start frame (every alien entity present) for tests about the alien base.
@@ -113,6 +116,10 @@ func minimap_world_rect() -> Rect2:
 
 func view_ground_rect() -> Rect2:
 	return seen_rect
+
+
+func alert_clock() -> float:
+	return clock
 
 
 func focus_camera(pos: Vector3, zoom: float) -> void:

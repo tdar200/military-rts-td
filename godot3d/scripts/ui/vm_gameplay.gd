@@ -144,10 +144,18 @@ static func idle_crews(snap: Dictionary) -> Dictionary:
 
 
 ## Seconds until the next wave, from next_wave_ticks at the top bar's tick rate. {} when the snapshot has no timer.
-static func next_alert(snap: Dictionary) -> Dictionary:
-	if not snap.has("next_wave_ticks") or int(snap["next_wave_ticks"]) < 0:
-		return {}
-	return {"label": "Wave %02d" % (int(snap.get("waves_survived", 0)) + 1), "seconds": _seconds(int(snap["next_wave_ticks"]))}
+## Kestrel feeds its alert pings in `pings` ({jump: alerts Space can frame, key: its cap, attack: a ring is live}; empty
+## in Survival and before the first hit): they ride on the same chip, timer or not.
+static func next_alert(snap: Dictionary, pings := {}) -> Dictionary:
+	var out := {}
+	if snap.has("next_wave_ticks") and int(snap["next_wave_ticks"]) >= 0:
+		out = {"label": "Wave %02d" % (int(snap.get("waves_survived", 0)) + 1), "seconds": _seconds(int(snap["next_wave_ticks"]))}
+	if int(pings.get("jump", 0)) > 0:
+		out["jump"] = int(pings["jump"])
+		out["key"] = str(pings.get("key", ""))
+		if bool(pings.get("attack", false)):
+			out["attack"] = true
+	return out
 
 
 ## The expected route of the next wave (live-computed by the bridge, so it can change; [] if the base is walled off).

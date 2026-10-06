@@ -84,6 +84,7 @@ const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 const OverlayFeed = preload("res://scripts/world/overlay_feed.gd")
 const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
 const KestrelObjectives = preload("res://scripts/world/kestrel_objectives.gd")
+const Keybinds = preload("res://scripts/ui/keybinds.gd")
 
 var tab := "build"
 ## True while the first-minutes briefing card is up (game_ui.gd sets it): that card carries the objectives, so the objectives
@@ -242,7 +243,7 @@ func _with_gameplay(vm: Dictionary) -> Dictionary:
 	var slices := {
 		"territory": _territory(snap, ground),
 		"idle": VmGameplay.idle_crews(snap),
-		"alert": VmGameplay.next_alert(snap),
+		"alert": VmGameplay.next_alert(snap, _alert_feed()),
 		"veterans": VmGameplay.veterans(snap),
 		"yields": VmGameplay.yields(snap),
 		"pins": _pins(snap),
@@ -699,7 +700,23 @@ func _marks() -> Array:
 		else:
 			kind = "H" if core or String(node.get_meta("category", "")) == "building" else "h"
 		marks.append({"x": snappedf(clampf((node.position.x - rect.position.x) / rect.size.x, 0.0, 1.0), 0.005), "y": snappedf(clampf((node.position.z - rect.position.y) / rect.size.y, 0.0, 1.0), 0.005), "k": kind})
+	# Kestrel: the live alert pings (the player's own hit units and buildings), each with its hit time, so the slice only
+	# changes when a ring comes or goes; MapMarks pulses it from the alert clock. Survival has no alert_pings.
+	var pings = g.get("alert_pings")
+	if pings != null:
+		for p in pings.live(float(g.alert_clock())):
+			var at: Vector3 = p["pos"]
+			marks.append({"x": snappedf(clampf((at.x - rect.position.x) / rect.size.x, 0.0, 1.0), 0.005), "y": snappedf(clampf((at.z - rect.position.y) / rect.size.y, 0.0, 1.0), 0.005), "k": "p", "t": float(p["t"])})
 	return marks
+
+
+## Kestrel: what the alert pings add to the next-alert chip (VmGameplay.next_alert): how many alerts Space can frame, its
+## key cap, and whether a ring is live. {} in Survival and before the first hit.
+func _alert_feed() -> Dictionary:
+	var pings = g.get("alert_pings")
+	if pings == null or pings.history.is_empty():
+		return {}
+	return {"jump": pings.history.size(), "key": Keybinds.cap(Keybinds.JUMP_ALERT), "attack": pings.active(float(g.alert_clock()))}
 
 
 func _view() -> Dictionary:

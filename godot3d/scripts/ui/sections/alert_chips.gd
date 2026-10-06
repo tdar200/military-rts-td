@@ -2,7 +2,9 @@ extends RefCounted
 ## Alert chips (board 1, top right): "N idle crews" (a Button that selects the first idle unit) and "Next alert mm:ss"
 ## (the next wave timer). Driven by vm["idle"] ({count, first_id}) and vm["alert"] ({label, seconds}); each chip exists
 ## only with its own slice and nothing is built when neither does. The idle chip shows its "." key cap because the game
-## binds "." to select-first-idle; the board's Space cap on the other chip has no binding and is not drawn.
+## binds "." to select-first-idle. The board's Space cap on the other chip is drawn only when the slice carries `jump`
+## (Kestrel, once one of the player's units or buildings has been hit: Space then frames it), with a red border while a
+## ping ring is live (`attack`). Without a timer that chip reads "Last alert".
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 
@@ -28,5 +30,11 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 		if emit.is_valid():
 			hit.pressed.connect(emit.bind("select_idle", idle.get("first_id")))
 		x += chip.size.x + GAP
-	if alert is Dictionary and alert.has("seconds"):
-		K.chip(parent, x, Y, "", T.DIM, [{"t": "Next alert", "col": T.DIM}, {"t": clock(int(alert["seconds"])), "col": T.TEXT_HI, "wt": 500}], {"h": H})
+	if alert is Dictionary and (alert.has("seconds") or int(alert.get("jump", 0)) > 0):
+		var parts: Array = [{"t": "Next alert", "col": T.DIM}, {"t": clock(int(alert["seconds"])), "col": T.TEXT_HI, "wt": 500}] if alert.has("seconds") else [{"t": "Last alert", "col": T.DIM}]
+		var o := {"h": H}
+		if int(alert.get("jump", 0)) > 0:
+			parts.append({"key": str(alert.get("key", ""))})
+			if bool(alert.get("attack", false)):
+				o["border"] = T.BAD
+		K.chip(parent, x, Y, "", T.DIM, parts, o)
