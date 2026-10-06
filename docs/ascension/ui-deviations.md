@@ -126,7 +126,8 @@ table or the bridge has nothing behind them:
 - Enemy territory card: Defences (gun, AA and wall counts), Garrison (alien unit count), Terrain (the two most common
   ground names along the enemy border, names only) and Reinforce (next wave timer and size). Not built: "partly seen",
   "~14 est." and "east shore" lines (no fog, explored or discovery state, no sight range, no direction data) and any
-  river attack penalty (not a sim mechanic).
+  river attack penalty (not a sim mechanic). Since the Kestrel fog (section 9, Task 7) the card reads known structures,
+  units in sight and "Not scouted"; the estimate and shore lines are still not built.
 - Combat preview rows: (1) damage type against armour class, one row per selected attacker kind, for example "Explosive
   vs Structure +50% damage", from the sim's damage matrix (`damage_multiplier`); built only when the attacker kind and the
   target's kind and category are known; (2) "Veteran rank N" with "+10%", "+20%" or "+35% damage" from the sim's
@@ -334,6 +335,8 @@ Built: `scripts/ui/vm_maps.gd` (view-model slices `region_map`, `terrain_guide`,
   percent, Unexplored and Islet pins, "Resources seen", Next goals, the painted terrain art (a flat hex fill replaces it, so the
   map area is masked in the diff), the compass and the scale bar, the board's "Coastal river basin" subtitle (the snapshot has no
   such text; the sub line is the era). The board's Alloy and Ore pins use the existing resource-pin section (Resources lens).
+  Since the Kestrel fog (section 9, Task 7) the Kestrel strategic map shrouds unseen hexes and has an Explored percent row;
+  the other dropped items stand.
 - Terrain guide (gp12). One card per `ground_table` row, then an Ore card and an Alloy card with real numbers (deposit counts,
   ore left from the snapshot, the mirrored refinery bonus; the Alloy card says Mining: None because alloy is scenery in the
   Earthfront sim, and exists only when the snapshot is Earthfront and has alloy deposits). Every number on a ground card is a
@@ -392,6 +395,8 @@ GL (Xvfb, Dummy audio, 1920x1080, about 3 fps) and looked at every capture. What
 - Cosmetic: the Yield lens legend draws its two badge swatches ("+20% ore bonus", "River cooling") as empty outlined boxes.
 - Not a bug, worth knowing: an idle player's Command Center falls to wave 1 at about 1:45 on Kestrel (the sim's undefended
   fall is tick 3159, just past the 2700-tick grace). A live session has to build defences in the first minute.
+  Superseded 2026-10-06 by the Kestrel opening (section 9, "Kestrel opening"): wave one now spawns at 2:30, a scripted
+  probe strikes first at about 1:55, and an idle player's Command Center falls at about 2:45 (tick 4959).
 - The Build layout (a deck tab open at the start) still draws the older top bar ("ERA 01 CONTEMPORARY HUMANITY") and has no
   territory card; the main layout draws the board 1 bar. That split predates this branch (gp02 measures the older bar).
 - Crater note. The terrain guide's Crater card reads "Some shelter from fire, but slow going. Nothing can be built here."
@@ -773,6 +778,32 @@ moves, and the ground under it answers.
   worse side by a little: placement panel 6.38 to 8.47 (limit 9.53), deck cards 6.21 to 7.31 (9.21), deck queue 6.39 to 7.09
   (9.39). No limit was loosened and no other rectangle of any screen changed.
 
+### Kestrel opening (Kestrel next-level plan Task 2, 2026-10-06)
+
+Rust, `crates/core/src/game/scenario.rs` only (plus bridge test expectations and the regenerated fixture). Survival and
+the golden hash are unchanged.
+
+- The human side starts with a working base, all fully built on buildable, passable ground beside the Command Center
+  (7,9): Power Plant (5,8), Refinery (6,11), Barracks (9,7), one Harvester (6,12) and the 4 riflemen (ids 1 to 4 kept).
+  Power is 90 kW for 30 kW of demand. The Refinery sits within 1 hex of the ore at (7,11), so it carries the +20% bonus.
+- The Harvester mines and unloads without moving: the ore and the Refinery are both in its reach from its start tile, so
+  its cargo cycles and money rises (about 28 credits per 60 ticks on its own) while it stands still. A QA session that saw
+  "the harvester never moved" was seeing this, not a stalled economy (Task 10 playthrough).
+- Start credits 1200 (was 1800): the free stock is worth 590, so the player gets no net windfall. The alien side keeps 1800.
+- Wave one spawns at 2:30 (tick 4500, was 1:30). The wave interval and sizes after it are unchanged.
+- A scripted alien probe (three riflemen, ids 9 to 11, `Scenario::scripted_commands`) moves to a picket by the ford at
+  0:55 (tick 1650) and attack-moves on the human building nearest it at 1:50 (tick 3300). First contact is about tick 3412
+  and the first structure hit about tick 3461 (1:55), usually the Barracks. The orders are ordinary commands, so they
+  replay from the command log; only the bridge calls `scripted_commands` today, so another host must add that call.
+- The alien AI stays asleep until wave one (the bridge gate `waves_survived() > 0` is unchanged); the probe is the only
+  pre-wave pressure.
+- An idle player loses: the probe takes the Barracks, then wave one plus the probe take the Command Center at about 2:45
+  (tick 4959). The starting riflemen by the CC do not react to the Barracks being hit (out of acquisition range); the
+  objectives task added a "<structure> under attack" alert for that.
+- The defended AI playtest changed shape: the gifted Harvester feeds a playtest AI that never trains one, so it now wins
+  outright (tick 13622, 2 waves) instead of holding 3 waves. Its assertion is "never overrun before wave 3, or a human
+  win" (`KESTREL_DEFENDED_WAVES`).
+
 ### Kestrel objectives and briefing (Kestrel next-level plan Task 3, 2026-10-06)
 
 - On Kestrel (`world_art_on`) the Survival-era tutorial (ten stages, "Secure the landing zone" to "Counterattack") no longer
@@ -788,6 +819,10 @@ moves, and the ground under it answers.
   30 kW", "Power short: 90 of 120 kW, build a Reactor (P)").
 - Before wave one the setup objectives are judged live (a lost Reactor, Refinery, Harvester or rifle squad reopens its line,
   toast "Objective reopened"); once wave one is held they stay done and the card points at the Core Node.
+- Known limit (found in the Task 10 playthrough): "Hold the ford" reads the sim's `waves_survived`, which counts waves
+  that have spawned (`Sim::waves_survived`, "the survival-mode score"). So the objective ticks done when wave one spawns at
+  2:30, before it reaches the ford, as long as the sim has not named another winner. A stricter "wave one destroyed"
+  needs a signal the snapshot does not carry (under fog the client cannot count the wave's survivors).
 - The briefing (board 6 card) stays up for the first three objectives. Its paragraph is first-minutes intel: the ore beside
   the Command Centre, the ford wave one crosses and its mission time (2:30), the alien probe that may strike sooner, and the
   Core Node's cell. The gallery's board 6 keeps the tutorial's briefing (its mock draws that copy), so no pixel gate moved.
@@ -833,6 +868,11 @@ decisions are checked by tests and by the pool's `[audio]` log (`EARTHFRONT_AUDI
 - `tools/ui/run_cap.sh` now passes `--audio-driver Dummy` (`launch_ui.py` already did), pinned by
   `tools/audio/test_quiet_launchers.py`. The three loop imports use `compress/mode=0` (lossless) so the forward loop has no
   codec seam.
+- The 18 sounds are synthesised by `tools/audio/build_sfx.py` (Task 4: numpy only, fixed seeds, CC0 by construction, 16-bit
+  mono 44.1 kHz WAV, about 1.7 MB, manifest `godot3d/assets/audio/sfx/sfx_manifest.json`). Rerunning it rewrites the same
+  bytes; NEXT_STEPS.md has the regenerate and re-import steps.
+- Fog (Task 7) adds one more gate: a world sound whose point is not visible now or on the previous poll is skipped, so an
+  unseen fight is silent.
 
 ### Kestrel fog of war in the client (Kestrel next-level plan Task 7, 2026-10-06)
 

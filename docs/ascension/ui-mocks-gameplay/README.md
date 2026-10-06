@@ -36,3 +36,7 @@ the boards with `tools/ui/render_mock.py gpNN <mocks>/gpNN.png`, capture world-o
 `python3 tools/qa/world_capture.py <dir> --display :94` (frames and crops are in `tools/ui/world_frames.json`), then run
 `python3 tools/ui/world_diff.py run --mocks <mocks> --live <dir> --out <side dir> --check tools/ui/world_baseline.json`,
 which prints each board's total and structure against the frozen baseline and writes a side-by-side PNG per board.
+
+Since the Kestrel next-level plan (2026-10-06) the live Kestrel start is fogged and prebuilt, so world frames for this
+scoreboard are captured with `EARTHFRONT_FOG=0` and compared against `tools/ui/world_scores.json`; the boards themselves
+(and their mock copy) were not changed.
