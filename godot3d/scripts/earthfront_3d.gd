@@ -3135,6 +3135,7 @@ func _dispatch_shots(snapshot: Dictionary) -> int:
 		shot_seen.clear()
 		shot_impacts.clear()
 	shot_tick = tick
+	_shot_record_near(Vector3.INF)  # drops the records of shots landed more than SHOT_HIT_WINDOW ago
 	for key in shot_seen.keys():
 		if int(shot_seen[key]) < tick - SHOT_WINDOW:
 			shot_seen.erase(key)

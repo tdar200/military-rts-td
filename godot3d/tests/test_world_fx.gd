@@ -601,3 +601,13 @@ func test_survival_never_draws_shots(t) -> void:
 	t.ok(FileAccess.get_file_as_string("res://scripts/earthfront_3d.gd").contains("if world_art_on and world_fx != null:\n\t\t_dispatch_shots(parsed)"),
 		"the poll only dispatches shots on Kestrel")
 	survival.free()
+
+
+func test_landed_shot_records_do_not_pile_up(t) -> void:
+	var scene := _fight_scene([])
+	scene._dispatch_shots({"tick": 4, "shots": [_row(scene, 4, Vector2i(10, 12), Vector2i(13, 13))]})
+	for i in 20:
+		scene._advance_fx(0.1)
+	scene._dispatch_shots({"tick": 70, "shots": [_row(scene, 70, Vector2i(10, 12), Vector2i(14, 13))]})
+	t.eq(scene.shot_impacts.size(), 1, "a poll drops the records of shots long landed, HP drop or not")
+	scene.free()
