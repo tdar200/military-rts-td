@@ -2,10 +2,16 @@ extends RefCounted
 ## The Build board's sample data (BuildDeck.dc.html) as a view model. Gallery and tests only, never the live game.
 const SPR := "res://assets/ui/sprites/"
 const Logic = preload("res://scripts/ui/build_logic.gd")
+const Adapter = preload("res://scripts/ui/live_adapter.gd")
 
 
+## `sprite` is a legacy ui sprite name, or a bridge building kind (VehicleFactory) whose own world sprite the card shows, as
+## the live deck does on Kestrel (LiveAdapter.icon_path_for_building).
 static func card(id: String, name: String, sprite: String, key: String, cost: Array, prereq: String, o := {}) -> Dictionary:
-	var d := {"id": id, "name": name, "sprite": SPR + sprite + ".png", "key": key,
+	var icon: String = Adapter.icon_path_for_building(sprite)
+	if icon == "":
+		icon = SPR + sprite + ".png"
+	var d := {"id": id, "name": name, "sprite": icon, "key": key,
 		"cost": Logic.format_cost(cost[0], cost[1], cost[2]), "prereq": prereq}
 	d.merge(o)
 	return d
@@ -17,14 +23,14 @@ static func cards() -> Array:
 		card("reactor", "Reactor", "power_plant_v2", "P", [220, 240, -80], "Needs: Command Centre"),
 		card("refinery", "Refinery", "refinery_v2", "R", [300, 300, 25], "Needs: Command Centre"),
 		card("barracks", "Barracks", "barracks_v2", "B", [180, 200, 10], "Needs: Command Centre"),
-		card("vehicle_factory", "Vehicle Factory", "barracks_v2", "", [280, 360, 40], "Needs: Barracks", {"selected": true}),
-		card("airfield", "Airfield", "helicopter_v2", "", [360, 400, 45], "Needs: Aircraft tech", {"locked": true}),
+		card("vehicle_factory", "Vehicle Factory", "VehicleFactory", "", [280, 360, 40], "Needs: Barracks", {"selected": true}),
+		card("airfield", "Airfield", "Airfield", "", [360, 400, 45], "Needs: Aircraft tech", {"locked": true}),
 		card("laser_turret", "Laser Turret", "gun_turret_v2", "G", [150, 120, 15], "Needs: Barracks"),
 		card("aa_turret", "AA Turret", "aa_turret_v2", "", [170, 140, 15], "Needs: Air defence", {"locked": true}),
 		card("wall", "Wall", "wall_v2", "W", [20, 20, 0], "Needs: Command Centre"),
-		card("supply_depot", "Supply Depot", "foundation_v1", "", [140, 160, 8], "Needs: Refinery"),
-		card("lab", "Lab", "capital_v1", "", [320, 320, 30], "Needs: Reactor"),
-		card("battery", "Battery", "power_plant_v2", "", [160, 180, 6], "Needs: Battery tech", {"locked": true}),
+		card("supply_depot", "Supply Depot", "SupplyDepot", "", [140, 160, 8], "Needs: Refinery"),
+		card("lab", "Lab", "ResearchLab", "", [320, 320, 30], "Needs: Reactor"),
+		card("battery", "Battery", "Battery", "", [160, 180, 6], "Needs: Battery tech", {"locked": true}),
 	]
 
 
@@ -58,7 +64,7 @@ static func build_deck() -> Dictionary:
 		"build_minimap": {},
 		"map_marks": {"marks": [], "view": {}},
 		"build_placement": {
-			"sprite": SPR + "barracks_v2.png", "tone": "good", "status": "Valid and affordable",
+			"sprite": Adapter.icon_path_for_building("VehicleFactory"), "tone": "good", "status": "Valid and affordable",
 			"title": "Vehicle Factory / Preview",
 			"costs": [{"cap": "Materials", "value": "280"}, {"cap": "Work", "value": "360"}, {"cap": "Power", "value": "40 kW", "tone": "warn"}, {"cap": "Build", "value": "30 s"}],
 			"note": "Enter reserves 280 once. Available materials fall from 840 to 560.",
@@ -75,7 +81,7 @@ static func build_deck() -> Dictionary:
 			"kind": "build",
 			"tabs": [{"id": "build", "label": "Build", "on": true}, {"id": "units", "label": "Units"}, {"id": "orders", "label": "Orders"}, {"id": "science", "label": "Science"}, {"id": "logistics", "label": "Logistics"}],
 			"cards": cards(),
-			"queue": {"sprite": SPR + "foundation_v1.png", "title": "Queue: Supply Depot", "tag": "Stalled", "tone": "warn",
+			"queue": {"sprite": Adapter.icon_path_for_building("SupplyDepot"), "title": "Queue: Supply Depot", "tag": "Stalled", "tone": "warn",
 				"detail": "Waiting: materials 12 short (delivered 128 / 140)", "ratio": 0.91, "ratio_label": "91% delivered"},
 		}},
 	}
@@ -113,7 +119,7 @@ static func edge(kind: String) -> Dictionary:
 		"invalid":
 			var proj := Logic.projection(160, 150, 40)
 			vm["build_placement"] = {
-				"sprite": SPR + "barracks_v2.png", "tone": "bad", "status": "Blocked",
+				"sprite": Adapter.icon_path_for_building("VehicleFactory"), "tone": "bad", "status": "Blocked",
 				"title": "Vehicle Factory / Preview",
 				"costs": [{"cap": "Materials", "value": "280", "tone": "bad"}, {"cap": "Work", "value": "360"}, {"cap": "Power", "value": "40 kW", "tone": "bad"}, {"cap": "Build", "value": "30 s"}],
 				"note": "Materials 280 needed, 120 available.",

@@ -51,6 +51,8 @@ var cursor_valid := true
 
 ## Kestrel Reach: `use_kestrel()` loads the committed real snapshot, and the same members the game fills from it.
 var kestrel := false
+## Mirrors earthfront_3d.world_art_on: the HUD draws world sprites as its icons only when this is true.
+var world_art_on := false
 var bridge_snapshot: Dictionary = {}
 var ground_model: RefCounted = null
 ## Hex under the cursor as a Vector2i, null when the pointer is off the map. The real game has no such member yet.
@@ -62,6 +64,7 @@ func use_kestrel() -> void:
 	bridge_snapshot = JSON.parse_string(f.get_as_text())
 	ground_model = preload("res://scripts/terrain/ground_model.gd").from_snapshot(bridge_snapshot)
 	kestrel = true
+	world_art_on = true
 
 
 func era_name() -> String:

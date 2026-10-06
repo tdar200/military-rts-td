@@ -749,17 +749,11 @@ static func _compass(a: Array, b: Array) -> int:
 	return posmod(sector, 8)
 
 
+## The snapshot panels only exist with a ground layer (Kestrel), where the HUD draws a kind's own world sprite.
 static func _sprite_path(kind: String) -> String:
 	var adapter = load("res://scripts/ui/live_adapter.gd")
-	if kind == "CommandCenter":
-		return adapter.SPR + "command_center_v2.png"
-	for card in adapter.BUILD_CARDS:
-		if str(card[1]) == kind:
-			return adapter.SPR + str(card[7])
-	for card in adapter.UNIT_CARDS:
-		if str(card[3]) == kind and str(card[7]) != "":
-			return adapter.SPR + str(card[7])
-	return ""
+	var path: String = adapter.icon_path_for_building(kind)
+	return path if path != "" else adapter.icon_path_for_unit(kind)
 
 
 ## The name a human building of `kind` shows: numbered (Barracks 2) only when the player has several of that kind, in

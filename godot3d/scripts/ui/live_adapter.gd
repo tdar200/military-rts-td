@@ -2,6 +2,7 @@ extends RefCounted
 ## Maps the live game (bridge_* state, selection metas, notification events) to the HUD view model,
 ## and maps HUD actions back to the game's existing handlers. Holds no game logic.
 ## Data the snapshot does not carry is left out of the view model, never invented.
+const WorldSprites = preload("res://scripts/world/world_sprites.gd")
 const SPR := "res://assets/ui/sprites/"
 const TICKS_PER_SECOND := 30.0
 const ALERT_TTL := 9.0
@@ -25,6 +26,7 @@ const KIND_NAMES := {
 	"Helicopter": "Gunship", "Harvester": "Harvester", "Capital": "Capital unit",
 }
 const GROUP_LABELS := {"Infantry": "INF", "AntiArmor": "AT", "Tank": "TANK", "Helicopter": "GUNSHIP", "Harvester": "HARV", "Capital": "CAP"}
+## Survival's group chips; Kestrel (world art on) draws every kind's own world sprite instead, see icon_path_for_unit.
 const GROUP_SPRITES := {"Infantry": "infantry_v2.png", "AntiArmor": "anti_armor_v2.png", "Tank": "tank_v2.png", "Helicopter": "helicopter_v2.png"}
 ## Tutorial stage -> objective group, and the detail shown while that stage is active.
 const OBJECTIVE_GROUPS := [
@@ -43,6 +45,8 @@ const TABS := [["build", "Build", "build"], ["units", "Units", "units"], ["order
 ## Added after the others once the snapshot carries the ground layer (Earthfront): the map lens tab.
 const LOGISTICS_TAB := ["logistics", "Logistics", "logistics"]
 ## id, bridge kind, name, hotkey, material, kW (negative = output), role line, sprite. Costs are the game's command table.
+## The sprite is Survival's legacy art (several kinds borrow another kind's picture); with world art on (Kestrel) the deck, the
+## queue card and the group chips take the kind's own world sprite from icon_path_for_building / icon_path_for_unit instead.
 const BUILD_CARDS := [
 	["power", "PowerPlant", "Reactor", "P", 100, -80, "Adds generation", "power_plant_v2.png"],
 	["refinery", "Refinery", "Refinery", "R", 150, 20, "Harvests exposed ore", "refinery_v2.png"],
@@ -681,7 +685,9 @@ func _selection() -> Dictionary:
 		var groups: Array = []
 		for kind in by_kind:
 			var entry: Dictionary = {"id": kind, "label": "%s x%d" % [GROUP_LABELS.get(kind, String(kind).to_upper()), by_kind[kind]["count"]], "ratio": by_kind[kind]["hp"] / by_kind[kind]["count"], "tone": _health_tone(by_kind[kind]["hp"] / by_kind[kind]["count"])}
-			if GROUP_SPRITES.has(kind):
+			if _world_art() and icon_path_for_unit(String(kind)) != "":
+				entry["sprite"] = icon_path_for_unit(String(kind))
+			elif GROUP_SPRITES.has(kind):
 				entry["sprite"] = SPR + GROUP_SPRITES[kind]
 			else:
 				entry["icon"] = "units"
@@ -945,11 +951,51 @@ func _build_alert_rows(armed: Array) -> Array:
 	return rows
 
 
+## The kind's own painted sprite (WorldSprites.SPRITES, human side), "" when the table has none or the file is missing so the
+## caller falls back to its generic icon. One mapping feeds the build deck, the queue card, the group chips and the
+## selected-structure panels (vm_gameplay).
+static func _world_icon(kind: String, units: bool) -> String:
+	if not WorldSprites.SPRITES.has(kind) or (kind in WorldSprites.UNIT_KINDS) != units:
+		return ""
+	var path: String = WorldSprites.DIR % String(WorldSprites.SPRITES[kind][0])
+	return path if ResourceLoader.exists(path) else ""
+
+
+static func icon_path_for_building(kind: String) -> String:
+	return _world_icon(kind, false)
+
+
+static func icon_path_for_unit(kind: String) -> String:
+	return _world_icon(kind, true)
+
+
+## True on Kestrel (earthfront_3d.world_art_on); Survival keeps the legacy icons byte for byte.
+func _world_art() -> bool:
+	return bool(g.get("world_art_on"))
+
+
+func _card_sprite(card: Array) -> String:
+	if _world_art():
+		var path := icon_path_for_building(String(card[1]))
+		if path != "":
+			return path
+	return SPR + String(card[7])
+
+
+## The queue card shows what the selected structure is producing (production_name is a unit kind).
+func _queue_sprite(production: String) -> String:
+	if _world_art():
+		var path := icon_path_for_unit(production)
+		if path != "":
+			return path
+	return SPR + "foundation_v1.png"
+
+
 func _build_body() -> Dictionary:
 	var cards: Array = []
 	for card in BUILD_CARDS:
 		var reason := _card_block_reason(card)
-		var entry := {"id": card[0], "name": card[2], "sprite": SPR + card[7], "key": card[3], "cost": _cost_line(card[4], card[5]), "prereq": card[6]}
+		var entry := {"id": card[0], "name": card[2], "sprite": _card_sprite(card), "key": card[3], "cost": _cost_line(card[4], card[5]), "prereq": card[6]}
 		if reason != "":
 			entry["locked"] = true
 			entry["prereq"] = reason
@@ -965,7 +1011,7 @@ func _build_body() -> Dictionary:
 	var body := {"kind": "build", "tabs": tabs, "cards": cards, "legend": ["M materials", "kW power draw (+ is output)"]}
 	var queue := _queue()
 	if not queue.is_empty():
-		body["queue"] = {"title": "Queue: " + String(g.selected.get_meta("production_name", "")), "tag": "Producing", "tone": "cyan", "detail": "Selected structure", "ratio": queue[0]["ratio"], "ratio_label": "%d%%" % roundi(queue[0]["ratio"] * 100.0), "sprite": SPR + "foundation_v1.png"}
+		body["queue"] = {"title": "Queue: " + String(g.selected.get_meta("production_name", "")), "tag": "Producing", "tone": "cyan", "detail": "Selected structure", "ratio": queue[0]["ratio"], "ratio_label": "%d%%" % roundi(queue[0]["ratio"] * 100.0), "sprite": _queue_sprite(String(g.selected.get_meta("production_name", "")))}
 	return body
 
 
@@ -982,7 +1028,7 @@ func _placement(card: Array, added_kw: int) -> Dictionary:
 	var after := _projection(generation, g.bridge_power_demand, maxi(added_kw, 0))
 	var note := "Click to place. Available material falls from %d to %d." % [g.bridge_money, g.bridge_money - card[4]] if affordable else "Short by %d material." % (card[4] - g.bridge_money)
 	return {
-		"sprite": SPR + card[7], "tone": tone, "status": status, "title": "%s / Preview" % card[2],
+		"sprite": _card_sprite(card), "tone": tone, "status": status, "title": "%s / Preview" % card[2],
 		"costs": [{"cap": "Materials", "value": str(card[4])}, {"cap": "Power", "value": "%s kW" % ("+%d" % -card[5] if card[5] < 0 else str(card[5])), "tone": "warn" if after["over"] > 0 else ""}],
 		"note": note,
 		"grid": {"value": after["value"], "tone": after["tone"], "note": "after commissioning", "segments": after["segments"], "marker": after["marker"],
