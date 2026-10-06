@@ -768,3 +768,26 @@ moves, and the ground under it answers.
   itself still draws the old stand-ins, so the Build board's rectangles that contain those icons moved toward the mock's
   worse side by a little: placement panel 6.38 to 8.47 (limit 9.53), deck cards 6.21 to 7.31 (9.21), deck queue 6.39 to 7.09
   (9.39). No limit was loosened and no other rectangle of any screen changed.
+
+### Kestrel objectives and briefing (Kestrel next-level plan Task 3, 2026-10-06)
+
+- On Kestrel (`world_art_on`) the Survival-era tutorial (ten stages, "Secure the landing zone" to "Counterattack") no longer
+  runs. Its stages never fit the prebuilt opening: stage 0 jumped to 1 at once, stages 3 and 5 were satisfied before the
+  player did anything, and the survey and landing-zone copy never applied. `godot3d/scripts/world/kestrel_objectives.gd`
+  derives five objectives from the snapshot instead: Power the base, Start the economy, Raise a squad, Hold the ford, Break
+  the Core Node. The HUD objectives card (cap "Kestrel Reach"), the first-minutes briefing and the "Mission updated" toasts
+  read it. Survival keeps `_advance_tutorial` / `_update_tutorial`, `OBJECTIVE_GROUPS`, `STAGE_DETAIL` and the
+  "Operation Dawnshield" card byte for byte; `_process` calls the tutorial only when world art is off.
+- The first objective is already met at the start (the prebuilt Reactor gives 90 kW for 30 kW of demand). The card shows it
+  as done with the real numbers, so the player learns where power is read; it reopens if the Reactor falls before wave one.
+- Before wave one the setup objectives are judged live (a lost Reactor, Refinery, Harvester or rifle squad reopens its line,
+  toast "Objective reopened"); once wave one is held they stay done and the card points at the Core Node.
+- The briefing (board 6 card) stays up for the first three objectives. Its paragraph is first-minutes intel: the ore beside
+  the Command Centre, the ford wave one crosses and its mission time (2:30), the alien probe that may strike sooner, and the
+  Core Node's cell. The gallery's board 6 keeps the tutorial's briefing (its mock draws that copy), so no pixel gate moved.
+- Command tabs follow a new objective as the tutorial's did: Raise a squad opens Units, Hold the ford and Break the Core
+  Node open Orders. A reopened objective leaves the tab alone.
+- New on Kestrel: "<structure> under attack" (a hostile toast) when a human building loses HP, at most one every 5 s over
+  all structures and one every 15 s per structure, with the hit's existing shake and tone. Task 2 found that idle riflemen
+  never react to a structure under fire. The latest hit's position and cell are kept (`live_adapter.last_structure_attack`)
+  for the minimap work in a later task.
