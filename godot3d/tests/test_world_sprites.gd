@@ -4,6 +4,7 @@ extends RefCounted
 const WorldArt := preload("res://scripts/world/world_art.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const WorldProps := preload("res://scripts/world/world_props.gd")
+const WorldFx := preload("res://scripts/world/world_fx.gd")
 const MainScene = preload("res://main.tscn")
 
 const PROFILE_KINDS := ["CommandCenter", "PowerPlant", "Refinery", "Barracks", "VehicleFactory", "Airfield", "SupplyDepot",
@@ -954,3 +955,304 @@ func test_a_fresh_sites_hover_cover_uses_the_pick_floor(t) -> void:
 	t.ok(not WorldSprites.covers_ground(tex, w, offset, card.position.y, false, 0.0), "nothing drawn there yet")
 	t.ok(WorldSprites.card_covers_ground(card, offset), "but the hover cover takes the pick floor")
 	scene.free()
+
+
+# --- Movement animation (plan 2026-10-05-kestrel-combat-motion-fx, Task 4) -----------------------------------------
+
+## Card-local points: the top corners of the standing part, the contact line's ends and the far edge of the ground strip.
+func _card_tops() -> Array:
+	var up := Vector3(0.0, _cos_pitch(), -WorldArt.PITCH_SIN) * WorldSprites.ASPECT * WorldSprites.FOOT
+	return [Vector3(-0.5, 0, 0) + up, Vector3(0.5, 0, 0) + up]
+
+
+func _card_base() -> Array:
+	var strip := Vector3(0.0, 0.0, (1.0 - WorldSprites.FOOT) * WorldSprites.ASPECT / WorldArt.PITCH_SIN)
+	return [Vector3(-0.5, 0, 0), Vector3(0.5, 0, 0), Vector3.ZERO, Vector3(-0.5, 0, 0) + strip, Vector3(0.5, 0, 0) + strip]
+
+
+## The largest screen distance (world units) any top corner of the card moved from where `rest` draws it.
+func _top_shift(card: Node3D, rest: Transform3D) -> float:
+	var most := 0.0
+	for p in _card_tops():
+		var a: Vector3 = card.transform * p
+		var b: Vector3 = rest * p
+		var d := Vector2(a.x - b.x, (a.z - b.z) * WorldArt.PITCH_SIN - (a.y - b.y) * _cos_pitch())
+		most = maxf(most, d.length())
+	return most
+
+
+func _xf_near(a: Transform3D, b: Transform3D, eps := 1e-5) -> bool:
+	for i in 3:
+		if (a.basis[i] - b.basis[i]).length() > eps:
+			return false
+	return (a.origin - b.origin).length() <= eps
+
+
+## The rest transform the card's own metas define: uniform at its width, centred, at its lift plus hover.
+func _rest_of(card: Node3D) -> Transform3D:
+	var w := WorldSprites.card_width(card)
+	return Transform3D(Basis.from_scale(Vector3.ONE * w), Vector3(0.0, float(card.get_meta("base_y")) + float(card.get_meta("hover", 0.0)), 0.0))
+
+
+## One frame in _process order: the glide, the movement animation, the bob, the effects and recoil.
+func _frame(scene, dt := 1.0 / 30.0) -> void:
+	scene.time_alive += dt
+	scene._glide_bridge_nodes(dt)
+	scene._animate_unit_cards(dt)
+	scene._bob_units()
+	scene._advance_fx(dt)
+
+
+## Marches bridge unit `id` from `from` toward +x at `speed` world units per second, a poll every 4 frames.
+func _march(scene, id: int, kind: String, owner: int, from: Vector3, frames: int, speed := 1.4, extra := Callable()) -> Vector3:
+	var at := from
+	for i in frames:
+		if i % 4 == 0:
+			at = from + Vector3(speed * float(i) / 30.0, 0.0, 0.0)
+			scene._sync_bridge_entities([_unit_entity(scene, id, kind, owner, at)])
+		if extra.is_valid():
+			extra.call(i)
+		_frame(scene)
+	return at
+
+
+func _spheres(scene: Node) -> int:
+	var n := 0
+	for c in scene.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh is SphereMesh:
+			n += 1
+	return n
+
+
+func test_every_unit_kind_has_one_animation_entry(t) -> void:
+	for kind in WorldSprites.UNIT_KINDS:
+		t.ok(WorldSprites.ANIM.has(kind), "%s has its row in the one animation table" % kind)
+		t.ok(float((WorldSprites.ANIM[kind] as Dictionary).get("dust", 0.0)) > 0.0, "%s kicks up dust at its own spacing" % kind)
+		var row := WorldSprites.anim_row(kind)
+		var slot := 0
+		for key in WorldSprites.ANIM_KEYS:
+			var want := float((WorldSprites.ANIM[kind] as Dictionary).get(key, WorldSprites.ANIM_KEYS[key]))
+			t.ok(is_equal_approx(row[slot], want), "%s: the packed row's %s matches the table" % [kind, key])
+			slot += 1
+		for key in WorldSprites.ANIM[kind]:
+			t.ok(WorldSprites.ANIM_KEYS.has(key), "%s: %s is a known animation key" % [kind, key])
+	t.ok(float(WorldSprites.ANIM["Tank"].dust) < float(WorldSprites.ANIM["Infantry"].dust), "a tank trails more dust than a squad")
+
+
+func test_every_unit_kind_animates_while_moving_and_returns_exactly_to_rest(t) -> void:
+	var scene := _kestrel_scene()
+	for owner in [0, 1]:
+		for kind in 6:
+			scene._create_unit(owner, scene._hex_world(12, 12), kind)
+			var unit: Node3D = scene.units.back()
+			var card := unit.get_node("UnitVisual") as MeshInstance3D
+			var name: String = WorldSprites.UNIT_KINDS[kind]
+			var label := "owner %d %s" % [owner, name]
+			var rest := card.transform
+			var w := card.scale.x
+			var pick: Array = (unit.get_meta("pick_parts") as Array).duplicate(true)
+			var ring: Dictionary = scene._ring_shape(unit)
+			var bar := (unit.get_node("HealthBack") as Node3D).position
+			var most := 0.0
+			var grounded := true
+			for i in 30:
+				var tt := 0.3 + float(i) / 30.0
+				t.ok(WorldSprites.animate(card, name, 1.2, tt, tt * 1.2, 1.0, 0.8 if i < 3 else 0.0), "%s frame %d: animating" % [label, i])
+				most = maxf(most, _top_shift(card, rest))
+				for p in _card_base():
+					if absf((card.transform * p).y - (rest * p).y) > 1e-5:
+						grounded = false
+				t.ok(card.transform.origin.is_equal_approx(rest.origin), "%s frame %d: the root point never moves" % [label, i])
+			t.ok(grounded, "%s: the contact line and the painted base stay on the ground" % label)
+			t.ok(most > 0.006, "%s: the painting moves while walking (%.4f)" % [label, most])
+			t.ok(most < 0.08 * w, "%s: subtly (%.4f of a %.2f card)" % [label, most, w])
+			t.eq(unit.get_meta("pick_parts"), pick, "%s: the pick box never moves" % label)
+			t.eq(scene._ring_shape(unit), ring, "%s: the selection ellipse keeps its place and size" % label)
+			t.ok((unit.get_node("HealthBack") as Node3D).position == bar, "%s: the bars stay" % label)
+			t.ok(not WorldSprites.animate(card, name, 0.0, 2.0, 2.0, 1.0, 0.0), "%s: standing still: off" % label)
+			t.ok(_xf_near(card.transform, rest, 1e-5), "%s: back exactly at rest" % label)
+			t.ok(not card.has_meta("pose_rest") and not card.has_meta("pose_anim"), "%s: no pose state left behind" % label)
+	scene.free()
+
+
+func test_pose_layers_compose_over_one_rest(t) -> void:
+	# recoil (x, z), the bob (y) and the walk (lean and squash about the base) are layers over one rest transform
+	var card := WorldSprites.make_card("Tank", 0, 1.71, true)
+	card.set_meta("base_y", 0.05)
+	card.position.y = 0.05
+	var rest := _rest_of(card)
+	t.ok(_xf_near(card.transform, rest, 1e-7), "the rest the metas define is where the card stands")
+	WorldSprites.animate(card, "Tank", 1.0, 0.40, 0.5, 1.0, 0.7)
+	var walk := card.transform.basis
+	t.ok(not walk.is_equal_approx(rest.basis), "walking reshapes the card")
+	WorldSprites.kick(card, Vector3(1, 0, 0), 0.0)
+	WorldSprites.recoil_step(card, 0.03)
+	t.ok(card.position.x < -0.005, "a kick during the walk moves it back (%.4f)" % card.position.x)
+	t.ok(card.transform.basis.is_equal_approx(walk), "and keeps the walk's shape")
+	WorldSprites.animate(card, "Tank", 1.0, 0.43, 0.53, 1.0, 0.7)
+	t.ok(card.position.x < -0.005, "the next walk frame keeps the kick")
+	WorldSprites.recoil_step(card, 0.5)
+	t.near(card.position.x, 0.0, 1e-7, "the kick ends at the rest x")
+	t.ok(not card.transform.basis.is_equal_approx(rest.basis), "while the walk goes on")
+	card.set_meta("base_y", 0.09)  # the ground under it rose: _lift_unit_card moves the rest
+	WorldSprites.rest_moved(card)
+	t.near(card.position.y, 0.09, 1e-6, "a new lift moves the posed card")
+	WorldSprites.animate(card, "Tank", 0.0, 0.6, 0.7, 1.0, 0.0)
+	t.ok(_xf_near(card.transform, _rest_of(card), 1e-6), "stopped: exactly the new rest")
+	card.free()
+
+
+func test_a_tilting_gunship_keeps_its_shadows_on_the_ground_under_it(t) -> void:
+	var card := WorldSprites.make_card("Helicopter", 0, 2.32, true)
+	card.set_meta("base_y", 0.04)
+	card.position.y = 0.04 + float(WorldSprites.HOVER["Helicopter"])
+	for i in 10:
+		WorldSprites.animate(card, "Helicopter", 1.5, 0.1 * i, 0.15 * i, 1.0, 0.0)
+	t.ok(_top_shift(card, _rest_of(card)) > 0.01, "it tilts into its motion")
+	for part in ["SpriteShadow", "SpriteContact"]:
+		var at: Vector3 = card.transform * (card.get_node(part) as Node3D).position
+		t.near(at.x, 0.0, 1e-5, "%s: still under the root" % part)
+		t.near(at.y, 0.04, 1e-5, "%s: still on the ground" % part)
+	WorldSprites.animate(card, "Helicopter", 0.0, 2.0, 2.0, 1.0, 0.0)
+	t.ok(_xf_near(card.transform, _rest_of(card)), "hovering still: at rest")
+	for part in ["SpriteShadow", "SpriteContact"]:
+		t.ok((card.get_node(part) as Node3D).position.is_equal_approx(Vector3(0, -float(WorldSprites.HOVER["Helicopter"]) / card.scale.y, 0)), "%s: home" % part)
+	card.free()
+
+
+func test_a_bridge_unit_animates_only_while_it_moves(t) -> void:
+	var scene := _kestrel_scene()
+	var from: Vector3 = scene._hex_world(10, 12)
+	scene.world_fx.set_view(from, Vector2(12, 10))
+	scene._sync_bridge_entities([_unit_entity(scene, 1201, "Tank", 0, from)])
+	var tank: Node3D = scene.bridge_nodes[1201]
+	var card := tank.get_node("UnitVisual") as MeshInstance3D
+	var spheres := _spheres(scene)
+	_frame(scene)  # the root settles the 0.08 it spawned over its glide goal
+	var rest := card.transform
+	for i in 40:
+		_frame(scene)
+	t.ok(card.transform == rest, "idle: the card is untouched")
+	t.eq(scene.unit_motion.size(), 0, "idle: nothing tracked")
+	t.eq(scene.world_fx.spawned_total(), 0, "idle: no dust")
+	var seen := {"most": 0.0}  # a lambda captures locals by value: it writes into this
+	var watch := func(_i: int) -> void: seen.most = maxf(float(seen.most), _top_shift(card, _rest_of(card)))
+	_march(scene, 1201, "Tank", 0, from, 60, 1.4, watch)
+	t.ok(scene.unit_motion.size() == 1, "moving: tracked")
+	t.ok(float(seen.most) > 0.004, "moving: the card rumbles (%.4f)" % float(seen.most))
+	t.ok(scene.world_fx.spawned_total() > 0 and scene.world_fx.live_sprites().has(WorldFx.SMOKE), "a dust trail")
+	t.eq(_spheres(scene), spheres, "no legacy sphere puff on Kestrel")
+	for i in 120:
+		_frame(scene)
+	t.eq(scene.unit_motion.size(), 0, "stopped: no longer tracked")
+	t.ok(_xf_near(card.transform, _rest_of(card)), "stopped: exactly at rest")
+	t.ok(not card.has_meta("pose_rest"), "and no pose state left")
+	scene.free()
+
+
+func test_dust_follows_the_kind(t) -> void:
+	var counts := {}
+	for kind in ["Tank", "Infantry", "Helicopter"]:
+		var scene := _kestrel_scene()
+		var from: Vector3 = scene._hex_world(10, 12)
+		scene.world_fx.set_view(from, Vector2(12, 10))
+		scene._sync_bridge_entities([_unit_entity(scene, 1301, kind, 0, from)])
+		var seen := {"rings": false}
+		var watch := func(_i: int) -> void: seen.rings = bool(seen.rings) or scene.world_fx.live_sprites().has(WorldFx.RING)
+		_march(scene, 1301, kind, 0, from, 60, 1.4, watch)
+		counts[kind] = scene.world_fx.spawned_total()
+		if kind == "Helicopter":
+			t.ok(bool(seen.rings), "a moving gunship's rotor wash rings the ground")
+		scene.free()
+	t.ok(int(counts.Infantry) > 0, "a squad kicks up a little dust (%s)" % counts)
+	t.ok(int(counts.Tank) > int(counts.Infantry), "a tank trails more (%s)" % counts)
+
+
+func test_dust_never_evicts_combat_effects(t) -> void:
+	var pair := [WorldFx.new(), Node3D.new()]
+	pair[0].build(pair[1])
+	var fx = pair[0]
+	fx.collapse(Vector3.ZERO, 2.44, 0)
+	var rubble: int = fx.find_slot(WorldFx.RUBBLE)
+	for i in 400:
+		fx.dust(Vector3(float(i % 9) * 0.2, 0, 0), 0.3)
+	t.ok(fx.slot_live(rubble) and fx.find_slot(WorldFx.RUBBLE) == rubble, "the collapse's rubble survives a dust storm")
+	t.ok(fx.pool_count() <= WorldFx.DUST_ROOM, "dust only fills the pool to DUST_ROOM (%d)" % fx.pool_count())
+	(pair[1] as Node3D).free()
+
+
+func test_recoil_during_a_walk_comes_home_to_the_right_rest(t) -> void:
+	for spec in [[1401, "Tank"], [1402, "Helicopter"]]:
+		var scene := _kestrel_scene()
+		var from: Vector3 = scene._hex_world(10, 12)
+		scene.world_fx.set_view(from, Vector2(12, 10))
+		var id: int = spec[0]
+		var kind: String = spec[1]
+		scene._sync_bridge_entities([_unit_entity(scene, id, kind, 0, from)])
+		var unit: Node3D = scene.bridge_nodes[id]
+		var card := unit.get_node("UnitVisual") as MeshInstance3D
+		var seen := {"both": false, "bobbed": true}
+		var kick := func(i: int) -> void:
+			if i == 30:
+				WorldSprites.kick(card, Vector3(1, 0, 0), scene.world_fx.time)
+				scene.recoiling[card.get_instance_id()] = card
+			if i == 31:
+				# the walk's shape and the kick both show on one frame
+				seen.both = card.position.x < -0.003 and not card.transform.basis.is_equal_approx(Basis.from_scale(Vector3.ONE * WorldSprites.card_width(card)))
+			if i > 2 and kind == "Helicopter":
+				var want := float(card.get_meta("base_y")) + float(card.get_meta("hover")) + sin(scene.time_alive * 2.0) * 0.018
+				seen.bobbed = bool(seen.bobbed) and absf(card.position.y - want) < 1e-5
+		_march(scene, id, kind, 0, from, 50, 1.4, kick)
+		t.ok(bool(seen.both), "%s: the recoil rides on the walk, neither overwrites the other" % kind)
+		t.ok(bool(seen.bobbed), "%s: the bob rides on the walk and the lift" % kind)
+		for i in 120:
+			_frame(scene)
+		var rest := _rest_of(card)
+		if kind == "Helicopter":
+			rest.origin.y += sin(scene.time_alive * 2.0) * 0.018
+		t.ok(_xf_near(card.transform, rest), "%s: stopped and kicked: exactly at the rest of where it stopped" % kind)
+		t.ok(not card.has_meta("pose_rest") and not card.has_meta("recoil_t0"), "%s: no pose or recoil state left" % kind)
+		scene.free()
+
+
+func test_survival_units_never_animate(t) -> void:
+	var scene = MainScene.instantiate()
+	scene._create_materials()
+	scene._setup_environment()
+	scene._build_terrain()
+	scene._create_unit(0, Vector3(10, 0, 10), 1)
+	var unit: Node3D = scene.units.back()
+	unit.set_meta("category", "unit")
+	scene.bridge_nodes[5] = unit
+	unit.set_meta("glide_to", unit.position + Vector3(2, 0, 0))
+	var visual := unit.get_node("UnitVisual") as Node3D
+	var basis := visual.transform.basis
+	for i in 20:
+		scene._glide_bridge_nodes(1.0 / 30.0)
+		scene._animate_unit_cards(1.0 / 30.0)
+	t.eq(scene.unit_motion.size(), 0, "a model is never tracked")
+	t.ok(visual.transform.basis == basis, "nor reshaped")
+	t.ok(FileAccess.get_file_as_string("res://scripts/earthfront_3d.gd").contains("\t\t\t\t\t_dust_puff(entity_node.position - direction * 0.26)"),
+		"Survival keeps its sphere puff on the bridge path")
+	scene.free()
+
+
+func test_kestrel_status_bars_cast_no_ground_shadow(t) -> void:
+	# a bar's real shadow fell far from its unit as a dark stripe on the ground (Task 4 QA); Survival keeps its look
+	var scene := _kestrel_scene()
+	scene._create_unit(0, scene._hex_world(12, 12), 1)
+	scene._sync_bridge_entities([{"id": 1501, "category": "building", "kind": "Barracks", "owner": 0, "x_bits": 0, "z_bits": 0,
+		"hp_bits": 65536 * 50, "max_hp_bits": 65536 * 100}])
+	for node in [scene.units.back(), scene.bridge_nodes[1501]]:
+		for bar in ["HealthBack", "HealthFill", "ShieldBack", "ShieldFill"]:
+			var part := node.get_node_or_null(bar) as GeometryInstance3D
+			if part != null:
+				t.eq(part.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "%s %s: no ground shadow" % [node.name, bar])
+	scene.free()
+	var survival = MainScene.instantiate()
+	survival._create_materials()
+	survival._setup_environment()
+	survival._build_terrain()
+	survival._create_unit(0, Vector3(10, 0, 10), 1)
+	t.eq((survival.units.back().get_node("HealthBack") as GeometryInstance3D).cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_ON, "Survival unchanged")
+	survival.free()

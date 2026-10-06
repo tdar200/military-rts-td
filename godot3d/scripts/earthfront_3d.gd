@@ -61,6 +61,25 @@ var shot_tick := -1  # the tick of the last shots window read (a lower one means
 var shots_drawn_total := 0
 var shot_impacts: Array = []  # {at: Vector3 ground point, t: effects time it lands, kind: attacker kind, drew: bool}
 var recoiling: Dictionary = {}  # instance id -> a unit card kicking back from its shot
+## Kestrel movement animation (Task 4): unit root instance id -> its UnitMotion, for the units whose root moved this frame
+## or whose card is still settling; empty while nothing moves.
+var unit_motion: Dictionary = {}
+
+
+## One tracked unit's movement state (typed fields: the per-frame loop reads them for up to every unit on the map).
+class UnitMotion:
+	var node: Node3D
+	var card: Node3D
+	var kind: String
+	var row: PackedFloat64Array  # WorldSprites.anim_row(kind)
+	var prev: Vector3  # the root's position last frame
+	var speed := 0.0  # smoothed ground speed, world units per s
+	var vel := Vector2.ZERO  # smoothed ground velocity
+	var accel := 0.0  # smoothed change of speed
+	var gait := 0.0  # distance walked
+	var dust := 0.0  # distance since the last dust puff
+	var side := 1.0  # the side of the path the next puff rises on
+	var wash := 0.0  # seconds since the last rotor-wash ring
 var sim_paused := false  # set_sim_paused: the bridge holds the sim still, the effects hold their time
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
 var _fit_parts: Dictionary = {}  # Kestrel only: model key -> each fitted mesh box in its root's space (picking)
@@ -78,6 +97,8 @@ const NO_HOVER := Vector2i(-1, -1)
 const BRIDGE_POLL := 0.12
 const GLIDE_RATE := 3.98  # = -ln(1 - 0.38) / BRIDGE_POLL, per second
 const TURN_RATE := 3.46  # = -ln(1 - 0.34) / BRIDGE_POLL, per second
+const MOTION_SMOOTH := 0.18  # s: smooths the glide's steps (a poll every BRIDGE_POLL) into a unit's ground speed
+const DUST_SPEED := 0.27  # world units per s: a unit slower than this (a third of the way into its animation) raises no dust
 var hover_cell := NO_HOVER  # hex under the cursor, NO_HOVER when none; only reassigned when the hex changes
 ## The pointer as the last mouse event placed it (see mouse_position). Unknown until one arrives, and again once the
 ## pointer leaves the window, when mouse_position falls back to asking the window system.
@@ -1146,6 +1167,8 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 	var shield_fill := _box(root, Vector3(0.56, 0.036, 0.055), Vector3(0, bar_y[3], 0), materials.plasma)
 	shield_fill.name = "ShieldFill"
 	shield_fill.visible = false
+	if world_art_on:
+		_bars_cast_no_shadow(root)
 	units.append(root)
 
 
@@ -1153,11 +1176,15 @@ func _create_unit(team: int, pos: Vector3, kind: int) -> void:
 ## lift keeps the card's ground strip over the terrain before it. Bars and badge move with it, the pick box follows.
 func _lift_unit_card(root: Node3D, card: MeshInstance3D, goal: Vector3) -> void:
 	var ground := _height_world(goal.x, goal.z)
-	var lift := _card_lift(Vector3(goal.x, ground, goal.z), card.scale.x) - (goal.y - ground)
+	var lift := _card_lift(Vector3(goal.x, ground, goal.z), WorldSprites.card_width(card)) - (goal.y - ground)
 	var rest := float(card.get_meta("base_y", card.position.y - float(card.get_meta("hover", 0.0))))
 	var delta := lift - rest
-	card.position.y = lift + (card.position.y - rest)  # keeps a gunship's hover and bob
-	card.set_meta("base_y", lift)
+	if card.has_meta("pose_rest"):  # a moving or kicking card: its pose's rest moves, the layers ride on it
+		card.set_meta("base_y", lift)
+		WorldSprites.rest_moved(card)
+	else:
+		card.position.y = lift + (card.position.y - rest)  # keeps a gunship's hover and bob
+		card.set_meta("base_y", lift)
 	card.set_meta("lift_at", goal)
 	if absf(delta) > 0.0:
 		for name in ["StrategicBadge", "HealthBack", "HealthFill", "ShieldBack", "ShieldFill"]:
@@ -1169,7 +1196,7 @@ func _lift_unit_card(root: Node3D, card: MeshInstance3D, goal: Vector3) -> void:
 
 func _refresh_unit_pick(root: Node3D, card: MeshInstance3D) -> void:
 	var lift := float(card.get_meta("base_y")) + float(card.get_meta("hover", 0.0))
-	var box := WorldSprites.pick_box(card.get_meta("sprite_texture"), card.scale.x, lift, bool(card.get_meta("mirrored", false)))
+	var box := WorldSprites.pick_box(card.get_meta("sprite_texture"), WorldSprites.card_width(card), lift, bool(card.get_meta("mirrored", false)))
 	root.set_meta("pick_parts", [box])
 
 
@@ -1249,6 +1276,7 @@ func _process(delta: float) -> void:
 		_update_camera_controls(delta)  # a paused game (or the strategic map) does not pan or orbit under the screen
 	_update_units(delta)
 	_glide_bridge_nodes(delta)
+	_animate_unit_cards(delta)
 	_animate_world(delta)
 	if world_fx != null:
 		world_fx.set_view(camera_view_target(), WorldArt.view_half_extent(camera_zoom, camera_aspect, camera_yaw))
@@ -1306,23 +1334,33 @@ func _process(delta: float) -> void:
 func _glide_bridge_nodes(delta: float) -> void:
 	var move := 1.0 - exp(-delta * GLIDE_RATE)
 	var turn := 1.0 - exp(-delta * TURN_RATE)
+	var still := WorldSprites.ANIM_STILL * delta
 	for node in bridge_nodes.values():
 		if not is_instance_valid(node) or not node.has_meta("glide_to"):
 			continue
 		var goal: Vector3 = node.get_meta("glide_to")
 		if node.position.distance_squared_to(goal) > 0.000001:
+			var before: Vector3 = node.position
 			node.position = node.position.lerp(goal, move)
+			if world_art_on and not unit_motion.has(node.get_instance_id()) and Vector2(node.position.x - before.x, node.position.z - before.z).length() > still:
+				_track_motion(node, before)
 		if node.has_meta("glide_yaw"):
 			node.rotation.y = lerp_angle(node.rotation.y, float(node.get_meta("glide_yaw")), turn)
 
 
-## The gunship's hover bob, over its rest height (`base_y`: a Kestrel card's lift, 0 for a model).
+## The gunship's hover bob, over its rest height (`base_y`: a Kestrel card's lift, 0 for a model). A posed Kestrel card
+## (WorldSprites.apply_pose: moving or kicking) takes the bob as one layer of its pose.
 func _bob_units() -> void:
 	for unit in units:
 		if not is_instance_valid(unit):
 			continue
 		var visual := unit.get_node_or_null("UnitVisual") as Node3D
 		if visual:
+			if visual.has_meta("pose_rest"):
+				if int(unit.get_meta("kind", 0)) == 3:
+					visual.set_meta("pose_bob", sin(time_alive * 2.0) * 0.018)
+					WorldSprites.apply_pose(visual)
+				continue
 			var rest := float(visual.get_meta("base_y", 0.0)) + float(visual.get_meta("hover", 0.0))
 			visual.position.y = rest + (sin(time_alive * 2.0) * 0.018 if int(unit.get_meta("kind", 0)) == 3 else 0.0)
 			visual.rotation.z = 0.0
@@ -1657,7 +1695,7 @@ func _ring_shape(node: Node3D) -> Dictionary:
 	var card := _sprite_card(node)
 	var shape := {}
 	if card != null:
-		shape = WorldSprites.ring(WorldSprites.drawn_texture(card), card.scale.x, card.name == "UnitVisual", bool(card.get_meta("mirrored", false)))
+		shape = WorldSprites.ring(WorldSprites.drawn_texture(card), WorldSprites.card_width(card), card.name == "UnitVisual", bool(card.get_meta("mirrored", false)))
 	else:
 		var radius := float(node.get_meta("visual_tiles", 1.0 / WorldArt.TILE)) * WorldArt.TILE * 0.55
 		shape = {"centre": Vector3.ZERO, "rx": radius, "rz": radius}
@@ -2522,9 +2560,20 @@ func _create_bridge_building(owner: int, kind_name: String, destination: Vector3
 	var shield_fill := _box(root, Vector3(0.76, 0.044, 0.065), Vector3(0, bar_y[3], 0), materials.plasma)
 	shield_fill.name = "ShieldFill"
 	shield_fill.visible = false
+	if world_art_on:
+		_bars_cast_no_shadow(root)
 	if card != null:
 		_fit_building_card(root, card, 1.0)
 	return root
+
+
+## Kestrel: an entity's status bars cast no real shadow. The sun threw each shown bar's box far across the ground as a
+## dark stripe nowhere near its owner (Task 4 QA); the boards draw bars without one. Survival keeps its look.
+func _bars_cast_no_shadow(root: Node3D) -> void:
+	for name in ["HealthBack", "HealthFill", "ShieldBack", "ShieldFill"]:
+		var bar := root.get_node_or_null(name) as GeometryInstance3D
+		if bar != null:
+			bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 ## Kestrel: shows a building `progress` (0..1) built (WorldSprites.show_progress: a site rises as its own painting from
@@ -2618,7 +2667,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 				entity_node.set_meta("glide_yaw", atan2(-direction.x, -direction.z))
 			if time_alive - float(entity_node.get_meta("last_dust", 0.0)) > 0.38 and int(entity_node.get_meta("kind", 0)) > 0:
 				entity_node.set_meta("last_dust", time_alive)
-				_dust_puff(entity_node.position - direction * 0.26)
+				if world_fx == null:  # Kestrel: the moving card kicks up WorldFx dust instead (_kick_dust)
+					_dust_puff(entity_node.position - direction * 0.26)
 		else:
 			entity_node.remove_meta("glide_yaw")
 		entity_node.set_meta("glide_to", destination)  # _glide_bridge_nodes moves the node there over the next frames
@@ -3290,6 +3340,82 @@ func _advance_fx(delta: float) -> void:
 		var card = recoiling[id]
 		if not is_instance_valid(card) or not WorldSprites.recoil_step(card, world_fx.time):
 			recoiling.erase(id)
+
+
+## Kestrel movement animation (Task 4): starts tracking a unit whose root the glide moved from `before` this frame (its
+## card must be a sprite card; a building or a model is never tracked).
+func _track_motion(node: Node3D, before: Vector3) -> void:
+	if String(node.get_meta("category", "")) != "unit":
+		return
+	var card := node.get_node_or_null("UnitVisual") as MeshInstance3D
+	if card == null or not card.has_meta("sprite_kind"):
+		return
+	var m := UnitMotion.new()
+	m.node = node
+	m.card = card
+	m.kind = String(card.get_meta("sprite_kind"))
+	m.row = WorldSprites.anim_row(m.kind)
+	m.prev = before
+	unit_motion[node.get_instance_id()] = m
+
+
+## Every frame, for the tracked units only: the root's own displacement this frame, smoothed over MOTION_SMOOTH (the glide
+## moves in 8 Hz steps), is the ground speed that drives WorldSprites.animate on the effects clock (frozen while paused);
+## a unit stopped and settled leaves the set with its card exactly at rest. A moving unit kicks up dust.
+func _animate_unit_cards(delta: float) -> void:
+	if unit_motion.is_empty() or delta <= 0.0:
+		return
+	var t: float = world_fx.time if world_fx != null else time_alive
+	var k := 1.0 - exp(-delta / MOTION_SMOOTH)
+	var still := WorldSprites.ANIM_STILL * delta
+	var dust := world_fx != null and not sim_paused
+	for id in unit_motion.keys():
+		var m: UnitMotion = unit_motion[id]
+		if not is_instance_valid(m.node) or not is_instance_valid(m.card):
+			unit_motion.erase(id)
+			continue
+		var p: Vector3 = m.node.position
+		var step := Vector2(p.x - m.prev.x, p.z - m.prev.z)
+		m.prev = p
+		var moved := step.length()
+		var old := m.speed
+		m.speed = lerpf(old, moved / delta, k)
+		m.vel = m.vel.lerp(step / delta, k)
+		m.accel = lerpf(m.accel, (m.speed - old) / delta, k)
+		m.gait += moved
+		var heading := m.vel.x / maxf(m.vel.length(), 1e-4)
+		if not WorldSprites.animate(m.card, m.kind, m.speed, t, m.gait, heading, m.accel / WorldSprites.LURCH_ACCEL):
+			if moved <= still:
+				unit_motion.erase(id)
+			continue
+		if dust:
+			_kick_dust(m, moved, delta)
+
+
+## Dust from a moving unit (WorldFx.dust, at its kind's spacing along its path, alternately either side behind it), and a
+## moving gunship's rotor wash (WorldFx.wash, a ring and two puffs on the ground under it).
+func _kick_dust(m: UnitMotion, moved: float, delta: float) -> void:
+	if m.speed < DUST_SPEED:
+		return
+	var row := m.row
+	m.dust += moved
+	var spacing := row[WorldSprites.A_DUST]
+	if spacing > 0.0 and m.dust >= spacing:
+		m.dust = fmod(m.dust, spacing)
+		m.side = -m.side
+		var dir := m.vel.normalized()
+		var size := row[WorldSprites.A_DUST_SIZE]
+		var at := m.node.position - Vector3(dir.x, 0.0, dir.y) * row[WorldSprites.A_DUST_BACK] + Vector3(-dir.y, 0.0, dir.x) * (m.side * size * 0.3)
+		at.y = _height_world(at.x, at.z)
+		world_fx.dust(at, size, Vector2(-dir.x * 0.12, 0.0), row[WorldSprites.A_DUST_ALPHA])
+	var wash := row[WorldSprites.A_WASH]
+	if wash > 0.0:
+		m.wash += delta
+		if m.wash >= wash:
+			m.wash = 0.0
+			var under := m.node.position
+			under.y = _height_world(under.x, under.z)
+			world_fx.wash(under, row[WorldSprites.A_DUST_SIZE])
 
 
 ## Kestrel death (Survival keeps _death_effect): a unit explodes where it stood, a building's painting goes at once and a

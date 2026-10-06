@@ -19,6 +19,10 @@ extends RefCounted
 ## life ends; the layers hide when no card is live (idle frames draw nothing). An effect whose anchor is outside the view
 ## (set_view) plus VIEW_MARGIN spawns nothing.
 ##
+## Dust (Task 4): `dust(pos, size)` is a soft puff of the ground's own colour rising where a moving unit's tracks or boots
+## meet the ground, `wash(pos, size)` a moving gunship's rotor wash (a ring spreading on the ground, two puffs blown
+## aside). Both are the smoke and dust-ring sprites of the human band tinted DUST_TINT: dust belongs to the ground.
+##
 ## Shots (Task 3): `shot(from, to, attacker_kind, owner)` draws one round of the bridge's shots window on the same cards:
 ## a muzzle flash, a tracer, shell or plasma bolt (row 3 of the band: a vertical streak, head up) stretched along the
 ## shot's screen direction and flying muzzle to target, and an impact flash when it lands. Everything is screen space:
@@ -35,6 +39,12 @@ const FRAMES := 8
 const POOL := 128  # Task 3 doubled it: a firefight's shots (up to 6 cards each) must not recycle a collapse's rubble
 const STRIDE := 20  # floats per instance in a MultiMesh buffer: a 3x4 transform, a colour, the custom data
 const NUDGE := 1.2  # world units toward the camera for smoke and glow cards
+## Dust (Task 4) sits low: a moving unit's own card, drawn with a depth pre-pass, hides the dust rising behind it.
+const DUST_NUDGE := 0.12
+## Dust is the lowest priority: it spawns only while fewer than DUST_ROOM cards are live, so it never takes the slot of a
+## combat effect (the pool recycles the oldest card at POOL).
+const DUST_ROOM := 80
+const DUST_LIFE := 0.85
 const GROUND_LIFT := 0.06  # decals lie flat on the ground this far over the anchor (the ground height at their centre)
 const VIEW_MARGIN := 2.5
 ## The most cards each recipe spawns (the tests hold them to it).
@@ -353,6 +363,29 @@ func collapse(pos: Vector3, tiles: float, owner: int) -> int:
 	return 15
 
 
+## A dust puff `size` wide at the ground point `pos`: it swells, rises a little, drifts by `drift` (screen units per s)
+## and fades over DUST_LIFE. Nothing when the pool is busy (DUST_ROOM) or `pos` is out of view. Returns the cards spawned.
+func dust(pos: Vector3, size: float, drift := Vector2.ZERO, alpha := 0.45) -> int:
+	if _layers.is_empty() or _live >= DUST_ROOM or not _in_view(pos):
+		return 0
+	_card(SMOKE, 0, pos, {"life": DUST_LIFE, "size": [size * 0.55, size], "off": Vector2(0.0, size * 0.32), "vel": drift + Vector2(0.0, 0.1),
+		"tint": DUST_TINT, "alpha": alpha, "fade_in": 0.12, "fade_out": 0.3, "nudge": DUST_NUDGE})
+	return 1
+
+
+## A moving gunship's rotor wash on the ground point `pos` under it: a dust ring spreading flat on the ground and a puff
+## blown out to either side, `size` the puffs' width.
+func wash(pos: Vector3, size: float) -> int:
+	if _layers.is_empty() or _live >= DUST_ROOM or not _in_view(pos):
+		return 0
+	_card(RING, 0, pos, {"life": 0.6, "size": [size * 0.9, size * 2.2], "ground": 0.55, "tint": DUST_TINT, "alpha": 0.35, "fade_in": 0.1,
+		"fade_out": 0.3})
+	for side in [-1.0, 1.0]:
+		_card(SMOKE, 0, pos, {"life": DUST_LIFE, "size": [size * 0.4, size * 0.8], "off": Vector2(side * size * 0.35, size * 0.25),
+			"vel": Vector2(side * 0.45, 0.06), "tint": DUST_TINT, "alpha": 0.3, "fade_in": 0.12, "fade_out": 0.3, "nudge": DUST_NUDGE})
+	return 3
+
+
 static func shot_style(kind: String) -> int:
 	match kind:
 		"Tank", "AntiArmor", "Capital":
@@ -446,17 +479,20 @@ static func _spin_of(serial: int) -> float:
 ## the centre from the anchor, world units), vel and acc (screen units per s and per s squared), rot and spin (radians,
 ## radians per s), tint, alpha (peak), fade_in and fade_out (fractions of the life), ground (0 for a camera-facing card,
 ## else a decal lying flat on the ground, north up, `ground` times as deep as wide: 1 for a round sprite, 0.5 for RUBBLE),
-## aspect (height over width of a standing card, default 1). Returns the slot.
+## aspect (height over width of a standing card, default 1), nudge (world units toward the camera, default NUDGE). Returns
+## the slot.
 func _card(sprite: int, band: int, anchor: Vector3, opts: Dictionary) -> int:
 	var slot := -1
-	var oldest := -1
-	for i in POOL:
-		if not _cards[i].live:
-			slot = i
-			break
-		if oldest < 0 or int(_cards[i].serial) < int(_cards[oldest].serial):
-			oldest = i
+	if _live < POOL:  # the first free slot (the oldest is only looked for when every slot is live)
+		for i in POOL:
+			if not _cards[i].live:
+				slot = i
+				break
 	if slot < 0:
+		var oldest := 0
+		for i in POOL:
+			if int(_cards[i].serial) < int(_cards[oldest].serial):
+				oldest = i
 		slot = oldest
 		_live -= 1
 		_clear_slot(slot)
@@ -483,6 +519,7 @@ func _card(sprite: int, band: int, anchor: Vector3, opts: Dictionary) -> int:
 	c.fade_out = float(opts.get("fade_out", 0.6))
 	c.ground = float(opts.get("ground", 0.0))
 	c.aspect = float(opts.get("aspect", 1.0))
+	c.nudge = float(opts.get("nudge", NUDGE))
 	c.flip = sprite in [FIREBALL, SMOKE, DEBRIS, EMBER] and _serial % 2 == 1  # mirrored every other card: no two alike
 	_serial += 1
 	_live += 1
@@ -579,7 +616,7 @@ func advance(delta: float) -> void:
 			var sa := sin(angle)
 			x = (right * ca + up * sa) * width
 			y = (up * ca - right * sa) * height
-			centre = c.anchor + right * off.x + up * off.y + back * NUDGE
+			centre = c.anchor + right * off.x + up * off.y + back * float(c.nudge)
 		var a := float(c.alpha)
 		if float(c.fade_in) > 0.0:
 			a *= smoothstep(0.0, float(c.fade_in), f)

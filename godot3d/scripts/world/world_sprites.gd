@@ -608,12 +608,15 @@ static func make_card(kind: String, owner: int, tiles: float, contact := false) 
 	card.set_meta("sprite_texture", tex)
 	card.set_meta("native_facing", int(FACING.get(tex.resource_path.get_file().get_basename(), 0)))
 	card.set_meta("mirrored", false)
+	var drop := -hover / card.scale.y  # a hovering card's shadows stay on the ground
+	if hover > 0.0:
+		card.set_meta("shadow_drop", drop)  # apply_pose keeps them there under a tilt
 	var shadow := MeshInstance3D.new()
 	shadow.name = "SpriteShadow"
 	shadow.mesh = shadow_mesh()
 	shadow.material_override = shadow_material_for(tex)
 	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	shadow.position.y = -hover / card.scale.y  # a hovering card's shadows stay on the ground
+	shadow.position.y = drop
 	card.add_child(shadow)
 	if contact:
 		var band := MeshInstance3D.new()
@@ -621,7 +624,7 @@ static func make_card(kind: String, owner: int, tiles: float, contact := false) 
 		band.mesh = contact_mesh()
 		band.material_override = contact_material_for(tex)
 		band.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		band.position.y = -hover / card.scale.y
+		band.position.y = drop
 		card.add_child(band)
 	return card
 
@@ -698,7 +701,7 @@ static func pick_box(tex: Texture2D, width: float, lift: float = CARD_LIFT, mirr
 ## Whether `card`'s painted body covers the ground point `offset` (x, z from the root) on screen, as the hover outline
 ## sees it: lifted and mirrored as drawn, a site by what it picks (pick_reveal: at least SITE_PICK_FLOOR of its body).
 static func card_covers_ground(card: MeshInstance3D, offset: Vector2) -> bool:
-	return covers_ground(drawn_texture(card), card.scale.x, offset, card.position.y, bool(card.get_meta("mirrored", false)), pick_reveal(card))
+	return covers_ground(drawn_texture(card), card_width(card), offset, rest_lift(card), bool(card.get_meta("mirrored", false)), pick_reveal(card))
 
 
 ## Whether the painted body's box covers the ground point `offset` (x, z from the root) on screen: hover outlines skip it.
@@ -746,9 +749,98 @@ static func ring(tex: Texture2D, width: float, unit := false, mirrored := false)
 	return {"centre": Vector3(x, 0.0, z), "rx": rx, "rz": rx * shape.z / WorldArt.PITCH_SIN}
 
 
-## Recoil (plan 2026-10-05-kestrel-combat-motion-fx, Task 3): a unit card that fires kicks back along the ground, away
-## from its target, over RECOIL_S and comes home exactly. It moves the card alone (x and z: the gunship bob owns y), never
-## the root, so the pick box, the bars and the selection ellipse stay where they are. Buildings never recoil.
+## Pose (plan 2026-10-05-kestrel-combat-motion-fx, Task 4): one rest transform per unit card and layers over it. A card at
+## rest carries no pose state and every mover writes it as before; the first layer that starts (a recoil kick, the
+## movement animation) records the rest (`pose_rest`: the card's basis, x and z, and y = base_y + hover, its lift and
+## hover), and from then on each layer only sets its own offset and calls apply_pose, which draws
+## rest + bob (y, the gunship's) + kick (x and z, the recoil) + the animation's reshape (about the contact line). When the
+## kick and the animation have both ended the card is written back to the rest (plus the bob) and the pose state goes:
+## no mover ever overwrites another, and a stopped card stands exactly where its rest says. _lift_unit_card moves the
+## rest of a posed card (rest_moved); _bob_units sets the bob layer of a posed gunship. Picking, the bars, the selection
+## ellipse and the hover cover read the rest (card_width, rest_lift), never the posed card.
+
+
+## The card's width at rest (the posed basis is reshaped).
+static func card_width(card: Node3D) -> float:
+	if card.has_meta("pose_rest"):
+		return (card.get_meta("pose_rest") as Transform3D).basis.x.length()
+	return card.scale.x
+
+
+## The card's height over its root at rest (a gunship's includes its bob while it is not posed, as before).
+static func rest_lift(card: Node3D) -> float:
+	if card.has_meta("pose_rest"):
+		return (card.get_meta("pose_rest") as Transform3D).origin.y
+	return card.position.y
+
+
+## Records the card's rest the first time a layer starts (a kick on a walk keeps the walk's rest).
+static func pose_begin(card: Node3D) -> void:
+	if card.has_meta("pose_rest"):
+		return
+	var y := card.position.y  # a ground card stands at its rest whenever it is not posed
+	if card.has_meta("base_y") and card.has_meta("shadow_drop"):
+		y = float(card.get_meta("base_y")) + float(card.get_meta("hover", 0.0))
+		card.set_meta("pose_bob", card.position.y - y)  # a gunship caught mid-bob keeps it until _bob_units sets the next
+	card.set_meta("pose_rest", Transform3D(card.basis, Vector3(card.position.x, y, card.position.z)))
+
+
+## The rest's height follows the card's lift (base_y) and hover; re-poses the card. False when the card is not posed.
+static func rest_moved(card: Node3D) -> bool:
+	if not card.has_meta("pose_rest"):
+		return false
+	var rest: Transform3D = card.get_meta("pose_rest")
+	rest.origin.y = float(card.get_meta("base_y", rest.origin.y)) + float(card.get_meta("hover", 0.0))
+	card.set_meta("pose_rest", rest)
+	apply_pose(card)
+	return true
+
+
+## Draws the card as its rest plus every live layer; with neither a kick nor an animation left, writes the rest (plus the
+## bob) and drops the pose state.
+static func apply_pose(card: Node3D) -> void:
+	var at = card.get_meta("pose_rest", false)  # false: not posed (a null default would be no default)
+	if not at is Transform3D:
+		return
+	var rest: Transform3D = at
+	var origin := rest.origin
+	origin.y += float(card.get_meta("pose_bob", 0.0))
+	var kick = card.get_meta("pose_kick", false)
+	if kick is Vector2:
+		origin.x += (kick as Vector2).x
+		origin.z += (kick as Vector2).y
+	var posed = card.get_meta("pose_anim", false)
+	if not posed is Vector3:
+		card.transform = Transform3D(rest.basis, origin)
+		_place_shadows(card, Vector3(0.0, 1.0, 1.0))
+		if not kick is Vector2:
+			card.remove_meta("pose_rest")
+			card.remove_meta("pose_bob")
+		return
+	var shape: Vector3 = posed  # lean (a shear of local y into x), x scale, local y scale
+	card.transform = Transform3D(rest.basis * Basis(Vector3(shape.y, 0.0, 0.0), Vector3(shape.x, shape.z, 0.0), Vector3(0.0, 0.0, 1.0)), origin)
+	_place_shadows(card, shape)
+
+
+## A hovering card's shadows hang under it (shadow_drop, in card units); under a reshape they are placed so that they
+## still land straight under the root on the ground.
+static func _place_shadows(card: Node3D, shape: Vector3) -> void:
+	if not card.has_meta("shadow_drop"):
+		return
+	var drop := float(card.get_meta("shadow_drop"))
+	var at := Vector3(0.0, drop, 0.0)
+	if shape != Vector3(0.0, 1.0, 1.0):
+		at.y = drop / shape.z
+		at.x = -shape.x * at.y / shape.y
+	for part in ["SpriteShadow", "SpriteContact"]:
+		var n := card.get_node_or_null(part) as Node3D
+		if n != null:
+			n.position = at
+
+
+## Recoil (Task 3, a pose layer since Task 4): a unit card that fires kicks back along the ground, away from its target,
+## over RECOIL_S and comes home exactly. It moves the card alone (x and z: the gunship bob owns y), never the root, so the
+## pick box, the bars and the selection ellipse stay where they are. Buildings never recoil.
 const RECOIL_S := 0.1
 const RECOIL_OUT := 0.3  # the share of RECOIL_S spent kicking out; the rest eases home
 ## The kick (world units) per unit kind; a kind not listed kicks RECOIL_DEFAULT.
@@ -762,31 +854,125 @@ static func kick(card: Node3D, toward: Vector3, start: float) -> void:
 	var away := Vector3(-toward.x, 0.0, -toward.z)
 	if away.length_squared() < 1e-10:
 		return
-	if not card.has_meta("recoil_rest"):
-		card.set_meta("recoil_rest", Vector2(card.position.x, card.position.z))
+	pose_begin(card)
 	var amount := float(RECOIL.get(String(card.get_meta("sprite_kind", "")), RECOIL_DEFAULT))
 	card.set_meta("recoil_dir", away.normalized() * amount)
 	card.set_meta("recoil_t0", start)
 
 
 ## Places a kicking card for time `now`; true while the kick runs (or waits on its start), false once the card is home
-## (exactly at its rest position, the recoil state cleared).
+## (exactly at its rest, the recoil state cleared).
 static func recoil_step(card: Node3D, now: float) -> bool:
 	if not card.has_meta("recoil_t0"):
 		return false
-	var rest: Vector2 = card.get_meta("recoil_rest")
 	var f := (now - float(card.get_meta("recoil_t0"))) / RECOIL_S
 	if f >= 1.0:
-		card.position.x = rest.x
-		card.position.z = rest.y
 		card.remove_meta("recoil_t0")
 		card.remove_meta("recoil_dir")
-		card.remove_meta("recoil_rest")
+		card.remove_meta("pose_kick")
+		apply_pose(card)
 		return false
 	var p := 0.0
 	if f > 0.0:
 		p = smoothstep(0.0, 1.0, f / RECOIL_OUT) if f < RECOIL_OUT else pow(1.0 - (f - RECOIL_OUT) / (1.0 - RECOIL_OUT), 2.0)
 	var d: Vector3 = card.get_meta("recoil_dir")
-	card.position.x = rest.x + d.x * p
-	card.position.z = rest.y + d.z * p
+	card.set_meta("pose_kick", Vector2(d.x * p, d.z * p))
+	apply_pose(card)
+	return true
+
+
+## Movement animation (Task 4): a moving unit's card is reshaped about its contact line, so the painted ground (the
+## contact line and the ground strip before it) never leaves the terrain: a lean (a shear: the top slides along x) and a
+## squash or stretch (its width, and its standing height on screen). Amplitudes are shares of the card on screen, at
+## full speed (ANIM_FULL); a unit standing still is never touched. One row per unit kind:
+##   lean   the top's lean into the motion (share of the standing height); the gunship's is its forward tilt
+##   stride, bounce, rock (on foot): world units walked per two footfalls; the height's swing over a footfall; the
+##          alternating side-to-side rock of each step
+##   rumble, rumble_hz (tracks, wheels): the height's jitter on the ground and its rate
+##   lurch  (vehicles): the stretch along the motion (and the lean back) as it pulls away, the squash (and the dip
+##          forward) as it brakes, at a full lurch (LURCH_ACCEL)
+##   sway, sway_hz (heavy kinds): a slow rock of the top
+##   dust, dust_size, dust_back, dust_alpha: world units travelled per dust puff, its width, how far behind the root it
+##          rises, its opacity (WorldFx.dust); wash (the gunship): seconds between rotor-wash rings (WorldFx.wash)
+const ANIM := {
+	"Infantry": {"lean": 0.035, "stride": 0.62, "bounce": 0.07, "rock": 0.05,
+		"dust": 0.55, "dust_size": 0.26, "dust_back": 0.12, "dust_alpha": 0.32},
+	"Tank": {"lean": 0.0, "rumble": 0.022, "rumble_hz": 11.0, "lurch": 0.045,
+		"dust": 0.2, "dust_size": 0.42, "dust_back": 0.42, "dust_alpha": 0.5},
+	"AntiArmor": {"lean": 0.0, "rumble": 0.018, "rumble_hz": 9.0, "lurch": 0.04,
+		"dust": 0.28, "dust_size": 0.34, "dust_back": 0.26, "dust_alpha": 0.45},
+	"Harvester": {"lean": 0.01, "rumble": 0.012, "rumble_hz": 7.0, "lurch": 0.05, "sway": 0.035, "sway_hz": 1.3,
+		"dust": 0.24, "dust_size": 0.4, "dust_back": 0.32, "dust_alpha": 0.5},
+	"Helicopter": {"lean": 0.065, "sway": 0.02, "sway_hz": 0.8,
+		"dust": 0.45, "dust_size": 0.5, "dust_back": 0.0, "dust_alpha": 0.3, "wash": 0.42},
+	"Capital": {"lean": 0.0, "sway": 0.022, "sway_hz": 0.45, "rumble": 0.006, "rumble_hz": 5.0, "lurch": 0.03,
+		"dust": 0.3, "dust_size": 0.7, "dust_back": 0.6, "dust_alpha": 0.45},
+}
+const ANIM_STILL := 0.05  # world units per s: slower is standing (the glide's last creep), the card at rest
+const ANIM_FULL := 0.6  # world units per s: full amplitude from here (units march at about 0.7 to 2)
+const LURCH_ACCEL := 2.5  # world units per s squared of (smoothed) speed change: a full lurch
+## anim_row's slots: ANIM's keys in order, each with the value a row that omits it takes.
+enum { A_LEAN, A_STRIDE, A_BOUNCE, A_ROCK, A_RUMBLE, A_RUMBLE_HZ, A_LURCH, A_SWAY, A_SWAY_HZ, A_DUST, A_DUST_SIZE, A_DUST_BACK,
+	A_DUST_ALPHA, A_WASH }
+const ANIM_KEYS := {"lean": 0.0, "stride": 0.0, "bounce": 0.0, "rock": 0.0, "rumble": 0.0, "rumble_hz": 10.0, "lurch": 0.0,
+	"sway": 0.0, "sway_hz": 1.0, "dust": 0.0, "dust_size": 0.3, "dust_back": 0.25, "dust_alpha": 0.45, "wash": 0.0}
+static var _anim_rows: Dictionary = {}
+
+
+## A kind's ANIM row as packed numbers (the A_ slots), built once per kind: the per-frame paths read slots, not keys. An
+## unknown kind animates as a Tank.
+static func anim_row(kind: String) -> PackedFloat64Array:
+	var row = _anim_rows.get(kind)
+	if row == null:
+		var spec: Dictionary = ANIM.get(kind, ANIM["Tank"])
+		row = PackedFloat64Array()
+		for key in ANIM_KEYS:
+			row.append(float(spec.get(key, ANIM_KEYS[key])))
+		_anim_rows[kind] = row
+	return row
+
+
+## Poses `card` for one frame of movement: `kind` a UNIT_KINDS name, `speed` its smoothed ground speed (world units per
+## s), `t` the effects clock (s), `gait` the distance it has walked (world units), `heading` the motion's screen-x share
+## (-1 left .. 1 right), `lurch` its smoothed acceleration as a share of LURCH_ACCEL (-1 braking .. 1 pulling away). At
+## ANIM_STILL or slower it ends the animation layer (the card returns exactly to its rest) and returns false.
+static func animate(card: Node3D, kind: String, speed: float, t: float, gait := 0.0, heading := 0.0, lurch := 0.0) -> bool:
+	if speed <= ANIM_STILL:
+		if card.has_meta("pose_anim"):
+			card.remove_meta("pose_anim")
+			apply_pose(card)
+		return false
+	var row := anim_row(kind)
+	var a := smoothstep(ANIM_STILL, ANIM_FULL, speed)
+	var lean := heading * row[A_LEAN] * a
+	var g := 1.0  # the standing height's scale on screen
+	var sx := 1.0
+	var stride := row[A_STRIDE]
+	if stride > 0.0:
+		var step := sin(PI * gait / stride)  # a half wave per footfall
+		g += row[A_BOUNCE] * a * (absf(step) - 0.5)
+		lean += row[A_ROCK] * a * step * 0.5
+	var rumble := row[A_RUMBLE]
+	if rumble > 0.0:
+		var hz := TAU * row[A_RUMBLE_HZ] * t
+		g += rumble * a * (0.6 * sin(hz) + 0.4 * sin(hz * 1.73 + 1.1))
+		lean += rumble * 0.35 * a * sin(hz * 0.61 + 2.0)
+	var sway := row[A_SWAY]
+	if sway > 0.0:
+		var hz := TAU * row[A_SWAY_HZ] * t
+		lean += sway * a * sin(hz)
+		g += sway * 0.3 * a * sin(hz * 2.0 + 0.7)
+	var st := row[A_LURCH]  # times the lurch: over 0 pulling away (stretch, lean back), under 0 braking
+	if st > 0.0 and lurch != 0.0:
+		st *= clampf(lurch, -1.0, 1.0) * smoothstep(ANIM_STILL, 3.0 * ANIM_STILL, speed)  # gone as the unit settles
+		var along := absf(heading)
+		lean -= heading * st
+		sx += st * (along - 0.4 * (1.0 - along))
+		g += st * ((1.0 - along) - 0.4 * along)
+	var c := cos_pitch()
+	pose_begin(card)
+	# local y is the standing part's height times cos_pitch on screen: a lean of the top by `lean` of the standing height
+	# is a shear of lean / c, and a screen height scale g is a local y scale 1 + (g - 1) / c^2 (the part's depth stays)
+	card.set_meta("pose_anim", Vector3(lean / c, sx, 1.0 + (g - 1.0) / (c * c)))
+	apply_pose(card)
 	return true
