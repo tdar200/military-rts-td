@@ -121,6 +121,8 @@ static var _shader: Shader
 static var _materials: Array = [null, null, null]
 
 var camera: Camera3D  # optional: the cards face it; without one they face the fixed Kestrel view
+## Kestrel fog of war (a FogView, or null): an effect spawns only where the player sees now or saw on the last poll.
+var fog: RefCounted
 var time := 0.0
 var speed := 1.0  # presentation time scale; QA sets 0 to hold the effects still for a capture
 var _layers: Array[MultiMeshInstance3D] = []
@@ -283,13 +285,16 @@ func slot_rect(slot: int) -> Color:
 	return Color(b[o], b[o + 1], b[o + 2], b[o + 3])
 
 
-## Whether a ground point is on screen (plus VIEW_MARGIN): the shot dispatcher skips a shot with neither end in view.
+## Whether a ground point is on screen (plus VIEW_MARGIN) and, under fog, seen: the shot dispatcher skips a shot with
+## neither end in view.
 func in_view(pos: Vector3) -> bool:
 	return _in_view(pos)
 
 
 func _in_view(pos: Vector3) -> bool:
-	return absf(pos.x - _view_focus.x) <= _view_half.x + VIEW_MARGIN and absf(pos.z - _view_focus.z) <= _view_half.y + VIEW_MARGIN
+	if absf(pos.x - _view_focus.x) > _view_half.x + VIEW_MARGIN or absf(pos.z - _view_focus.z) > _view_half.y + VIEW_MARGIN:
+		return false
+	return fog == null or fog.seen_recently(pos)
 
 
 func _band(owner: int) -> int:

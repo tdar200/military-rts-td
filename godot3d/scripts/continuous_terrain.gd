@@ -2,6 +2,7 @@ extends Node3D
 class_name ContinuousTerrain
 
 const WorldArt := preload("res://scripts/world/world_art.gd")
+const FogView := preload("res://scripts/world/fog_view.gd")
 
 var map_width := 0
 var map_height := 0
@@ -15,6 +16,8 @@ var coast_noise := FastNoiseLite.new()
 var ground: RefCounted = null  # GroundModel; null keeps the cosmetic noise terrain
 var edge_margin_cells := 4.0  # mesh reach past the map; WorldArt.TERRAIN_MARGIN_CELLS once a ground model is applied
 var _detail_texture: Texture2D
+var _fog_texture: Texture2D  # Kestrel fog of war: the FogView mask the ground shader samples (null until a mask arrives)
+var _fog_on := false
 
 ## Per-glyph look of the snapshot ground layer: base height, noise amplitude, sRGB colour, water flag.
 const GROUND_LOOK := {
@@ -191,9 +194,30 @@ func _terrain_material(detail_texture: Texture2D) -> ShaderMaterial:
 	if ground != null:
 		material.set_shader_parameter("detail_texture", mipmapped(detail_texture))
 		material.set_shader_parameter("rock_texture", mipmapped(load("res://assets/terrain/painterly/highland_v3.png")))
+		_fog_parameters(material)
 	else:
 		material.set_shader_parameter("detail_texture", detail_texture)
 	return material
+
+
+## Kestrel fog of war (presentation only): the ground shades by the FogView mask `texture` while `enabled`. Off, the
+## shader skips its fog branch and draws exactly as without fog. The noise ground (Survival) has no mask and ignores it.
+func set_fog(texture: Texture2D, enabled: bool) -> void:
+	if ground == null:
+		return
+	_fog_texture = texture
+	_fog_on = enabled and texture != null
+	var instance := get_node_or_null("ContinuousPainterlyTerrain") as GeometryInstance3D
+	if instance != null and instance.material_override is ShaderMaterial:
+		_fog_parameters(instance.material_override)
+
+
+func _fog_parameters(material: ShaderMaterial) -> void:
+	material.set_shader_parameter("fog_enabled", 1.0 if _fog_on else 0.0)
+	material.set_shader_parameter("fog_grid", Vector4(origin_x, origin_z, cell_x, cell_z))
+	material.set_shader_parameter("fog_cells", Vector2(map_width, map_height))
+	if _fog_texture != null:
+		material.set_shader_parameter("fog_mask", _fog_texture)
 
 
 ## Source path -> WeakRef of its mipmapped copy. At most one entry per source texture (two on Kestrel); a copy lives as
@@ -267,7 +291,7 @@ void fragment() {
 ## in bands: sand banks, a river from dark edges to its centre (the ford keeps its class colour), a sea that deepens with
 ## distance from the shore, and a broken surf line on the coast only.
 func _ground_shader_code() -> String:
-	return """
+	return ("""
 shader_type spatial;
 render_mode diffuse_burley;
 uniform sampler2D detail_texture : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
@@ -297,6 +321,7 @@ float ground_noise(vec2 p) {
     return mix(mix(ground_hash(i), ground_hash(i + vec2(1, 0)), f.x),
                mix(ground_hash(i + vec2(0, 1)), ground_hash(i + vec2(1, 1)), f.x), f.y);
 }
+""" + FogView.SHADER_FUNCTIONS + """
 float soft_light(float base, float blend) {
     float d = base <= 0.25 ? ((16.0 * base - 12.0) * base + 4.0) * base : sqrt(base);
     return blend <= 0.5 ? base - (1.0 - 2.0 * blend) * base * (1.0 - base) : base + (2.0 * blend - 1.0) * (d - base);
@@ -351,11 +376,18 @@ void fragment() {
     if (surf > 0.0) {
         surf *= 0.55 + 0.45 * ground_noise(world_position.xz * 6.0 + vec2(TIME * 0.1));
     }
-    ALBEDO = mix(mix(land, wet, water), surf_colour, surf * surf_strength);
+    vec3 albedo = mix(mix(land, wet, water), surf_colour, surf * surf_strength);
+    float specular = mix(0.06, 0.25, water);
+    if (fog_enabled > 0.5) {  // Kestrel fog of war: shroud unseen ground, dim explored ground, keep visible ground
+        float seen = fog_at(world_position.xz);
+        albedo = fog_tint(albedo, seen);
+        specular *= 0.1 + 0.9 * seen;
+    }
+    ALBEDO = albedo;
     ROUGHNESS = mix(0.95, 0.35, water);
-    SPECULAR = mix(0.06, 0.25, water);
+    SPECULAR = specular;
 }
-"""
+""")
 
 
 func _build_surface(detail_texture: Texture2D) -> void:

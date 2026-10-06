@@ -125,6 +125,7 @@ static var _shadow_shader: Shader
 static var _shadow_materials := {}  # texture path -> ShaderMaterial
 static var _site_shader: Shader
 static var _site_materials := {}  # texture path -> ShaderMaterial (each site card draws a duplicate: its own cut)
+static var _memory_materials := {}  # texture path -> StandardMaterial3D, material_for dimmed to MEMORY_SHADE (fog memory)
 static var _ghost_shader: Shader
 static var _ghost_materials := {}  # texture path + tint -> ShaderMaterial
 static var _contact_shader: Shader
@@ -172,6 +173,26 @@ static func clear_caches() -> void:
 	_contact_materials.clear()
 	_site_materials.clear()
 	_ghost_materials.clear()
+	_memory_materials.clear()
+
+
+## Kestrel fog of war: a remembered building (seen once, now out of sight) is drawn this much darker, through one shared
+## memory material per painting (material_for with albedo_color at MEMORY_SHADE; the same pipeline, nothing to warm) or,
+## on a site card, its own site material's `shade`.
+const MEMORY_SHADE := 0.55
+
+
+static func memory_material_for(tex: Texture2D) -> Material:
+	if tex == null:
+		return null
+	var key := _key(tex)
+	if not _memory_materials.has(key):
+		var m := (material_for(tex) as StandardMaterial3D).duplicate() as StandardMaterial3D
+		m.albedo_color = Color(MEMORY_SHADE, MEMORY_SHADE, MEMORY_SHADE, 1.0)
+		m.set_meta("source_texture", tex)
+		m.set_meta("memory", true)
+		_memory_materials[key] = m
+	return _memory_materials[key]
 
 
 ## Builds every catalogue sprite's caches at once (the alpha scan, the graded copy, the shadow materials) so the first
@@ -510,6 +531,7 @@ uniform float cut = 1.0;
 uniform float tint = 0.18;
 uniform vec3 scaffold : source_color = vec3(0.62, 0.56, 0.40);
 uniform float lattice = 0.34;
+uniform float shade = 1.0;  // MEMORY_SHADE on a remembered site (fog of war), else 1
 void fragment() {
     vec4 c = texture(sprite, UV);
     float built = step(cut, UV.y);
@@ -531,7 +553,7 @@ void fragment() {
     vec3 steel = mix(scaffold * 0.55, vec3(0.76, 0.70, 0.54), frame);
     steel = mix(steel, vec3(0.42, 0.33, 0.22), deck);
     float sheet = 0.16;
-    ALBEDO = mix(steel, body, built);
+    ALBEDO = mix(steel, body, built) * shade;
     ALPHA = mix(sil * max(max(frame * lattice, sheet), deck * 0.9), c.a, built);
 }
 """

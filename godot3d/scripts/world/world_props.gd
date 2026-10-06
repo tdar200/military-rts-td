@@ -2,6 +2,7 @@ extends RefCounted
 ## Kestrel prop scatter (spec addendum W5). `plan` is pure and deterministic; `build` draws every prop with two
 ## MultiMeshes: camera-facing cards (trees, scrub, rocks, crystals) and flat decals (drop shadows, craters, pebbles, pads).
 
+const FogView := preload("res://scripts/world/fog_view.gd")
 const ATLAS_PNG := "res://assets/world/props_atlas.png"
 const ATLAS_JSON := "res://assets/world/props_atlas.json"
 const TILE := 0.68
@@ -290,6 +291,20 @@ func mark_spent(live_deposits: Array) -> int:
 	return changed
 
 
+## Kestrel fog of war: both prop layers shade by the FogView mask `texture` while `enabled` (a card by its foot, so a
+## tree is shrouded whole; a decal per point, like the ground). Off, they draw exactly as without fog.
+func set_fog(texture: Texture2D, enabled: bool, grid := Vector4(2.1, 1.0, 0.68, 0.70), cells := Vector2(44, 26)) -> void:
+	for mmi in [cards, decals]:
+		if mmi == null or not mmi.material_override is ShaderMaterial:
+			continue
+		var m: ShaderMaterial = mmi.material_override
+		m.set_shader_parameter("fog_enabled", 1.0 if enabled and texture != null else 0.0)
+		m.set_shader_parameter("fog_grid", grid)
+		m.set_shader_parameter("fog_cells", cells)
+		if texture != null:
+			m.set_shader_parameter("fog_mask", texture)
+
+
 func add_pad(world: Vector3, width: float) -> int:
 	if _free_pads.is_empty():
 		return -1
@@ -350,11 +365,14 @@ shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_opaque;
 uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
 uniform float brightness = 1.0;
+""" + FogView.SHADER_FUNCTIONS + """
 varying vec4 rect;
 varying float shade;
 varying float grey;
+varying vec2 fog_xz;
 void vertex() {
     rect = INSTANCE_CUSTOM;
+    fog_xz = MODEL_MATRIX[3].xz;  // the card's foot: a tree is shrouded whole
     shade = COLOR.g;
     grey = COLOR.b;  // 0 on every live card; a spent deposit's crystals fade toward grey
     VERTEX.y -= COLOR.r;  // sink the sprite's painted foot into the ground
@@ -365,7 +383,11 @@ void vertex() {
 }
 void fragment() {
     vec4 c = texture(atlas, rect.xy + vec2(UV.x, UV.y) * rect.zw);
-    ALBEDO = mix(c.rgb, vec3(dot(c.rgb, vec3(0.299, 0.587, 0.114))), grey) * brightness * shade;
+    vec3 albedo = mix(c.rgb, vec3(dot(c.rgb, vec3(0.299, 0.587, 0.114))), grey) * brightness * shade;
+    if (fog_enabled > 0.5) {
+        albedo = fog_tint(albedo, fog_at(fog_xz));
+    }
+    ALBEDO = albedo;
     ALPHA = c.a;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
 }
@@ -373,6 +395,7 @@ void fragment() {
 	var m := ShaderMaterial.new()
 	m.shader = shader
 	m.set_shader_parameter("atlas", atlas)
+	m.set_shader_parameter("fog_enabled", 0.0)
 	return m
 
 
@@ -382,20 +405,28 @@ func _decal_material(atlas: Texture2D) -> ShaderMaterial:
 shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
 uniform sampler2D atlas : source_color, filter_linear_mipmap, repeat_disable;
+""" + FogView.SHADER_FUNCTIONS + """
 varying vec4 rect;
 varying float fade;
+varying vec2 fog_xz;
 void vertex() {
     rect = INSTANCE_CUSTOM;
     fade = COLOR.a;  // instance alpha: 1, or SPENT_SHADE for a spent deposit's crystal shadows
+    fog_xz = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;
 }
 void fragment() {
     vec4 c = texture(atlas, rect.xy + UV * rect.zw);
-    ALBEDO = c.rgb;
+    vec3 albedo = c.rgb;
+    if (fog_enabled > 0.5) {
+        albedo = fog_tint(albedo, fog_at(fog_xz));
+    }
+    ALBEDO = albedo;
     ALPHA = c.a * fade;
 }
 """
 	var m := ShaderMaterial.new()
 	m.shader = shader
 	m.set_shader_parameter("atlas", atlas)
+	m.set_shader_parameter("fog_enabled", 0.0)
 	m.render_priority = -1  # one sort key spans the map: blend under the grid, territory and hover overlays
 	return m
