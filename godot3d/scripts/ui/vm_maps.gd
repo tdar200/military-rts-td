@@ -407,9 +407,10 @@ static func briefing(stage: int, snap: Dictionary, winner := -1) -> Dictionary:
 ## Kestrel's briefing card, from the game's KestrelObjectives result (`objectives`) and the snapshot: the current objective
 ## as the title, the done, current and next objective lines (the current one by its detail, as the HUD card shows it), and
 ## one paragraph of first-minutes intel: the ore beside the Command Centre, the ford wave one crosses and the mission time it
-## is due (tick + next_wave_ticks, so it reads 2:30 whenever it is opened), the alien probe that may strike before it, and
-## the Core Node's cell, and under Kestrel fog of war that their side stays dark until scouted. A place, time or cell the
-## snapshot lacks is left out, never invented. {} past
+## is due (tick + next_wave_ticks, so it reads 2:30 whenever it is opened) and the alien probe that may strike before it,
+## under Kestrel fog of war "from the dark east bank". The paragraph must fit the card's three body lines
+## (early_mission.gd BODY_LINES, tested with the card's own wrap), so the Core Node's cell is left to the minimap and the
+## objectives card (fix round, review I4). A place or time the snapshot lacks is left out, never invented. {} past
 ## KESTREL_BRIEFING_LAST_STAGE, once the match is decided (the game's `winner` or the snapshot's), or without objectives.
 static func kestrel_briefing(objectives: Dictionary, snap: Dictionary, winner := -1) -> Dictionary:
 	var stage := int(objectives.get("stage", 0))
@@ -433,13 +434,9 @@ static func kestrel_briefing(objectives: Dictionary, snap: Dictionary, winner :=
 	if int(snap.get("waves_survived", 0)) == 0 and int(snap.get("next_wave_ticks", -1)) >= 0:
 		var due := ceili(float(int(snap.get("tick", 0)) + int(snap["next_wave_ticks"])) / float(load("res://scripts/ui/live_adapter.gd").TICKS_PER_SECOND))
 		wave = "%d:%02d" % [due / 60, due % 60]
+	var probe := "an alien probe may strike sooner%s." % (" from the dark east bank" if VM.fogged(snap) else "")
 	if ford != "" and wave != "":
-		body += " Wave one crosses %s at %s; an alien probe may strike sooner." % [ford, wave]
+		body += " Wave one crosses %s at %s; %s" % [ford, wave, probe]
 	elif wave != "":
-		body += " Wave one lands at %s; an alien probe may strike sooner." % wave
-	var core = snap.get("core_node", null)
-	if core is Array and core.size() >= 2:
-		body += " Their Core Node is at (%d, %d)." % [int(core[0]), int(core[1])]
-	if VM.fogged(snap):
-		body += " Their side stays dark until your units scout it."
+		body += " Wave one lands at %s; %s" % [wave, probe]
 	return {"tag": "Step %d of %d" % [stage, list.size()], "title": str(objectives.get("title", "")), "body": body, "items": items, "ratio": float(done) / float(list.size())}

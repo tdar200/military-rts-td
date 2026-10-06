@@ -378,7 +378,7 @@ func test_survival_keeps_the_legacy_stage_text(t) -> void:
 
 # ------------------------------------------------------------------ briefing
 
-func test_the_kestrel_briefing_names_the_ore_the_ford_the_wave_the_probe_and_the_core(t) -> void:
+func test_the_kestrel_briefing_names_the_ore_the_ford_the_wave_the_probe_and_the_dark_bank(t) -> void:
 	var vm: Dictionary = Maps.kestrel_briefing(KO.evaluate(_hauling(_snap())), _snap())
 	t.eq(vm["title"], "Raise a squad", "the current objective")
 	t.eq(vm["tag"], "Step 3 of 5", "the step out of the five objectives")
@@ -389,14 +389,44 @@ func test_the_kestrel_briefing_names_the_ore_the_ford_the_wave_the_probe_and_the
 	], "done, current, next")
 	t.near(vm["ratio"], 2.0 / 5.0, 0.0001, "two of five done")
 	var body: String = vm["body"]
-	for want in ["Ore", "Command Centre", "Wyllow Ford", "2:30", "probe", "(37, 8)"]:
+	for want in ["Ore", "Command Centre", "Wyllow Ford", "2:30", "probe"]:
 		t.ok(body.contains(want), "the body mentions '%s': %s" % [want, body])
-	t.ok(body.contains("dark until your units scout it"), "the fogged start says their side is unscouted: %s" % body)
+	t.ok(not body.contains("(37, 8)"), "the Core Node's cell is left to the minimap and the objectives card (fix round I4)")
+	t.eq(body, "Ore lies beside your Command Centre. Wave one crosses Wyllow Ford at 2:30; an alien probe may strike sooner from the dark east bank.", "the fogged start folds the unscouted side into the probe sentence")
 	for banned in ["fog", "survey", "explor", "sight", "\u2013", "\u2014"]:
 		t.ok(not body.to_lower().contains(banned), "the body never says '%s'" % banned)
 	var off := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text()) as Dictionary
 	var plain: String = Maps.kestrel_briefing(KO.evaluate(_hauling(off)), off)["body"]
-	t.ok(not plain.to_lower().contains("scout"), "fog off: no scouting line")
+	t.eq(plain, "Ore lies beside your Command Centre. Wave one crosses Wyllow Ford at 2:30; an alien probe may strike sooner.", "fog off: no dark bank")
+
+
+## Fix round I4: the card reserves Card.BODY_LINES (3) lines of 18.5 px for the paragraph and the objective rows follow at
+## a fixed offset, so a longer body drew over "Start the economy". Measured with the card's own TextBox wrap (the theme
+## font at 14 px in the 326 px column), every Kestrel briefing the opening can show must fit.
+func test_the_kestrel_briefing_body_fits_its_three_card_lines(t) -> void:
+	var Card = load("res://scripts/ui/sections/early_mission.gd")
+	var cases := {}
+	for fixture in ["kestrel_snapshot.json", "kestrel_snapshot_fog_off.json"]:
+		var base: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://tests/fixtures/" + fixture))
+		cases[fixture + " start"] = base.duplicate(true)
+		cases[fixture + " hauling"] = _hauling(base.duplicate(true))
+		var later := _hauling(base.duplicate(true))
+		later["tick"] = 3000
+		later["next_wave_ticks"] = 1500
+		cases[fixture + " at 1:40"] = later
+		var no_power := base.duplicate(true)
+		_remove(no_power, 5)
+		no_power["power_generation"] = 10
+		cases[fixture + " power lost"] = no_power
+	for name in cases:
+		var snap: Dictionary = cases[name]
+		var vm: Dictionary = Maps.kestrel_briefing(KO.evaluate(snap), snap)
+		t.ok(not vm.is_empty(), "%s: a briefing is up" % name)
+		var root := Control.new()
+		Card.build(root, vm)
+		var body = root.get_node("Body")
+		t.ok(body.lines().size() <= Card.BODY_LINES, "%s: %d lines for %d reserved: %s" % [name, body.lines().size(), Card.BODY_LINES, body.lines()])
+		root.free()
 
 
 func test_the_kestrel_briefing_runs_to_the_squad_and_ends_with_the_match(t) -> void:

@@ -415,9 +415,12 @@ GL (Xvfb, Dummy audio, 1920x1080, about 3 fps) and looked at every capture. What
 - The minimap shows the whole map letterboxed in its slot. On Kestrel a click or drag inside the map moves the camera
   there; a click in the letterbox does nothing (see "Kestrel minimap interaction").
 - Hostile diamonds appear only while alien units are on screen (covered by `test_live_assault.gd`).
-- Kestrel briefing card (seen in the Task 10 playthrough, 1920x1080): with the fog sentence the intel paragraph runs to
-  five lines, and its last line ("side stays dark until your units scout it.") draws over the first objective row
-  ("Start the economy"). The card height does not grow with the paragraph. Not fixed.
+- Kestrel briefing card (seen in the Task 10 playthrough, 1920x1080): with the fog sentence the intel paragraph ran to
+  four lines (the card reserves three, `early_mission.gd` `BODY_LINES`), and its last line ("side stays dark until your
+  units scout it.") drew over the first objective row ("Start the economy"). Fixed in the copy (fix round, review I4): the
+  fog note is folded into the probe sentence and the Core Node's cell is dropped (the minimap and the objectives card show
+  it), so the paragraph is three lines; `test_the_kestrel_briefing_body_fits_its_three_card_lines` measures every opening
+  variant with the card's own wrap. The card height is unchanged.
 - Kestrel toasts still cover the territory card for their 9 s (by design since Task 3; the card's header shows through
   the toast backgrounds in captures).
 - Placement toasts read "Place gunturret" and "Gunturret foundation ordered" (the kind name is case-folded without its
@@ -855,8 +858,8 @@ the golden hash are unchanged.
   is on its way the line reads "Wave one crossing at Wyllow Ford". This is presentation only and reads only visible
   entities.
 - The briefing (board 6 card) stays up for the first three objectives. Its paragraph is first-minutes intel: the ore beside
-  the Command Centre, the ford wave one crosses and its mission time (2:30), the alien probe that may strike sooner, and the
-  Core Node's cell. The gallery's board 6 keeps the tutorial's briefing (its mock draws that copy), so no pixel gate moved.
+  the Command Centre, the ford wave one crosses and its mission time (2:30) and the alien probe that may strike sooner
+  (the Core Node's cell was cut in the fix round so the paragraph fits its three lines). The gallery's board 6 keeps the tutorial's briefing (its mock draws that copy), so no pixel gate moved.
 - Command tabs follow a new objective as the tutorial's did: Raise a squad opens Units, Hold the ford and Break the Core
   Node open Orders. A reopened objective leaves the tab alone.
 - New on Kestrel: "<structure> under attack" (a hostile toast) when a human building loses HP, at most one every 5 s over
@@ -942,7 +945,8 @@ frame draws exactly as before (the fog branch in each shader is off).
   sight", Memory "N last seen", Scouted "N% of the map", and shows before contact. The wave panel, wave card, objectives
   line and assault relay strip show the relay total (`alien_relays`, briefing intel), never `active_alien_relays`. The
   strategic map shrouds unseen hexes, dims explored ones and remembered sites, and adds an Explored percent row. The
-  Kestrel briefing adds "Their side stays dark until your units scout it." The title's Visibility fact reads "Fog of war,
+  Kestrel briefing's probe sentence ends "from the dark east bank" (it was a separate sentence, "Their side stays dark
+  until your units scout it.", until the fix round folded it in to fit the card). The title's Visibility fact reads "Fog of war,
   scout the alien side" once a fogged snapshot arrives (the gallery title board shows that copy). `hash` is never shown.
 - Deposits: resource pins still show over unseen ground, because the bridge sends deposits as the briefing survey
   reported them and refreshes them only where the player can see (Task 6); amounts in the dark are the last known.
