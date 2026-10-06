@@ -17,7 +17,9 @@ const LEVELS := [0, 128, 255]
 
 ## Shared by the Kestrel ground and both prop shaders. `fog_at` samples the mask at a world xz point: the two nearest
 ## columns are read at their texel centres (an odd column half a row lower, as the hexes sit), each with a linear blend
-## along its rows, then blended across with a smoothstep, so cell edges stay soft. Off the map the edge texel is clamped.
+## along its rows, then blended across with a smoothstep, so cell edges stay soft. Off the map the edge texel is clamped,
+## and past the north and south edges the value fades within a row into a sliding mean of four columns (continuous in x):
+## odd-q edge rows often alternate seen and unseen, and a clamped single column would run on over the margin as a stripe.
 ## `fog_tint` maps 0 (unseen) to a near-black blue shroud, 0.5 (explored) to a dim, slightly desaturated ground and 1
 ## (visible) to the colour itself. Callers apply it only when `fog_enabled` is on, so fog off draws exactly as before.
 const SHADER_FUNCTIONS := """
@@ -35,7 +37,18 @@ float fog_at(vec2 xz) {
     float gz = (xz.y - fog_grid.y) / fog_grid.w;
     float c0 = floor(gx);
     float t = smoothstep(0.0, 1.0, gx - c0);
-    return mix(fog_column(c0, gz), fog_column(c0 + 1.0, gz), t);
+    float v = mix(fog_column(c0, gz), fog_column(c0 + 1.0, gz), t);
+    float beyond = max(-gz, gz - fog_cells.y + 0.5);
+    if (beyond > 0.0) {
+        float a = fog_column(c0 - 1.0, gz);
+        float b = fog_column(c0, gz);
+        float c = fog_column(c0 + 1.0, gz);
+        float d = fog_column(c0 + 2.0, gz);
+        float e = fog_column(c0 + 3.0, gz);
+        float wide = mix(a + b + c + d, b + c + d + e, gx - c0) * 0.25;
+        v = mix(v, wide, smoothstep(0.0, 1.0, beyond));
+    }
+    return v;
 }
 vec3 fog_tint(vec3 c, float v) {
     float l = dot(c, vec3(0.299, 0.587, 0.114));
@@ -215,6 +228,37 @@ func _write_image() -> void:
 	else:
 		_texture.update(_image)
 	texture_updates += 1
+
+
+## The shader's `fog_at` in GDScript (0 unseen, 0.5 explored, 1 visible, soft between); 1 everywhere without a mask.
+func sample(xz: Vector2) -> float:
+	if not _active:
+		return 1.0
+	var gx := (xz.x - origin_x) / hex_x
+	var gz := (xz.y - origin_z) / hex_z
+	var c0 := floorf(gx)
+	var v := _mixf(_column(c0, gz), _column(c0 + 1.0, gz), smoothstep(0.0, 1.0, gx - c0))
+	var beyond := maxf(-gz, gz - float(height) + 0.5)
+	if beyond > 0.0:
+		var a := _column(c0 - 1.0, gz)
+		var b := _column(c0, gz)
+		var c := _column(c0 + 1.0, gz)
+		var d := _column(c0 + 2.0, gz)
+		var e := _column(c0 + 3.0, gz)
+		var wide := _mixf(a + b + c + d, b + c + d + e, gx - c0) * 0.25
+		v = _mixf(v, wide, smoothstep(0.0, 1.0, beyond))
+	return v
+
+
+## One column read at its texel centre with the texture's linear filter along the rows (clamped at the edges).
+func _column(col: float, gz: float) -> float:
+	var c := clampf(col, 0.0, float(width - 1))
+	var r := gz - fmod(c, 2.0) * 0.5
+	var r0 := floori(r)
+	var f := r - float(r0)
+	var a := float(LEVELS[_cells[clampi(r0, 0, height - 1) * width + int(c)]]) / 255.0
+	var b := float(LEVELS[_cells[clampi(r0 + 1, 0, height - 1) * width + int(c)]]) / 255.0
+	return _mixf(a, b, f)
 
 
 ## The shader's `fog_tint` in GDScript (tests and the region map use it).

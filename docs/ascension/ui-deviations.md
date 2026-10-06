@@ -843,10 +843,13 @@ frame draws exactly as before (the fog branch in each shader is off).
 - `scripts/world/fog_view.gd` (pure) reads the mask (0 unseen, 1 explored, 2 visible). An empty or wrong-length mask is no
   fog, without a warning. Points off the grid read the nearest edge cell. Its L8 texture (one texel per cell: 0, 128,
   255) is rewritten only when the mask string changes, and the same texture object is shared by every material.
-- Shroud: the Kestrel ground shader and both prop shaders (cards by their foot, so a tree is shrouded whole; decals per
-  point) sample the mask through the shared `FogView.SHADER_FUNCTIONS`: the two nearest columns at their texel centres (an
+- Shroud: the Kestrel ground shader and both prop shaders (cards by their foot, so a tree is shrouded or lit whole and a tree
+  standing just in the dark can show as a dark silhouette over lit ground; decals per point) sample the mask through the shared `FogView.SHADER_FUNCTIONS`: the two nearest columns at their texel centres (an
   odd column half a row lower), a linear blend along the rows and a smoothstep across, so edges are soft and clamped at
-  the map edge. Unseen is near black with a little blue, explored is about half brightness and slightly desaturated,
+  the map edge. Past the north and south edges the value fades within a row into a sliding mean of four columns: the
+  edge row of a sight disc alternates seen and unseen cells, and a clamped column ran on over the margin as a stripe.
+  The off-map margin therefore continues the nearest edge's shading (lit beside a seen edge, an even dim band where the
+  edge row is mixed). `FogView.sample` mirrors `fog_at` for tests. Unseen is near black with a little blue, explored is about half brightness and slightly desaturated,
   visible is untouched; water specular fades in the shroud. No new shader was added (the fog is a uniform branch in shaders
   already drawn from deploy), so nothing new needs warming.
 - The minimap is a SubViewport of the same world, so it shows the same shroud; its marks come from the entity nodes, which
@@ -866,5 +869,7 @@ frame draws exactly as before (the fog branch in each shader is off).
   strategic map shrouds unseen hexes, dims explored ones and remembered sites, and adds an Explored percent row. The
   Kestrel briefing adds "Their side stays dark until your units scout it." The title's Visibility fact reads "Fog of war,
   scout the alien side" once a fogged snapshot arrives (the gallery title board shows that copy). `hash` is never shown.
+- Deposits: resource pins still show over unseen ground, because the bridge sends deposits as the briefing survey
+  reported them and refreshes them only where the player can see (Task 6); amounts in the dark are the last known.
 - Gallery: gp08 (logistics) and gp11 (strategic map) read the EARTHFRONT_FOG=0 twin fixture, since their boards draw the
   alien base, which the fogged start hides.

@@ -316,6 +316,36 @@ func test_the_shroud_is_near_black_blue_unseen_and_dim_explored(t) -> void:
 	t.eq(seen, grass, "visible is untouched")
 
 
+func test_the_shroud_does_not_run_off_the_map_edge_as_stripes(t) -> void:
+	# Odd-q edge rows often alternate seen and unseen (a sight disc's top row). Past the north edge the shader fades into
+	# the mean of four columns, so the margin reads as one even band, not a seen stripe per column. FogView.sample mirrors
+	# the shader's fog_at.
+	var fog = FogView.new()
+	var vis: Array = [Vector2i(4, 0), Vector2i(6, 0), Vector2i(8, 0), Vector2i(10, 0), Vector2i(12, 0)]
+	for c in range(4, 13):
+		for r in range(1, 6):
+			vis.append(Vector2i(c, r))
+	fog.parse(_mask(vis), W, H)
+	var inside: Array = []
+	var margin: Array = []
+	for c in range(6, 11):
+		var x: float = 2.1 + c * 0.68
+		inside.append(fog.sample(Vector2(x, 1.0)))
+		margin.append(fog.sample(Vector2(x, 1.0 - 2.0 * 0.70)))
+	t.ok(inside.max() - inside.min() > 0.6, "inside the map the edge row keeps its alternating cells (%s)" % [inside])
+	t.ok(margin.max() - margin.min() < 0.2, "two rows past the edge the band is even (%s)" % [margin])
+	t.ok(margin.min() > 0.2 and margin.max() < 0.8, "and it reads as half seen, neither a stripe nor black")
+	var jump := 0.0
+	var last: float = fog.sample(Vector2(2.1 + 2.0 * 0.68, 1.0 - 2.0 * 0.70))
+	for i in range(1, 121):
+		var now: float = fog.sample(Vector2(2.1 + (2.0 + i * 0.1) * 0.68, 1.0 - 2.0 * 0.70))
+		jump = maxf(jump, absf(now - last))
+		last = now
+	t.ok(jump < 0.06, "and it changes smoothly along the edge, no hard column steps (largest step %.3f)" % jump)
+	t.near(fog.sample(Vector2(2.1 + 8 * 0.68, 1.0 + 3 * 0.70)), 1.0, 0.01, "a visible cell centre samples 1")
+	t.near(fog.sample(Vector2(2.1 + 30 * 0.68, 1.0 + 20 * 0.70)), 0.0, 0.01, "an unseen one samples 0")
+
+
 func test_survival_has_no_fog_anywhere(t) -> void:
 	var scene := _survival_scene()
 	var ground: ShaderMaterial = scene.terrain_renderer.get_node("ContinuousPainterlyTerrain").material_override
@@ -446,6 +476,24 @@ func test_a_remembered_building_is_dim_has_no_bars_and_cannot_be_picked(t) -> vo
 	t.ok(not bool(node.get_meta("remembered", false)), "seen again: live")
 	t.ok(card.material_override == WorldSprites.material_for(card.get_meta("sprite_texture")), "with its live material")
 	t.ok(node.get_node("HealthFill").visible, "and its bar")
+	_done(scene)
+
+
+func test_a_remembered_relay_names_itself_without_its_live_power(t) -> void:
+	var scene := _kestrel_scene()
+	var cc := _building(scene, 1, "CommandCenter", 0, Vector2i(8, 9))
+	var sight := _disc(Vector2i(14, 9), 6)
+	var depot := _building(scene, 550, "SupplyDepot", 1, Vector2i(16, 9))
+	scene.bridge_services = {550: {"id": 550, "alien_relay": true, "power": 600}}
+	scene.bridge_initialized = false
+	_poll(scene, 100, _mask(sight), [cc, depot])
+	scene.bridge_initialized = true
+	var marker: Label3D = scene.bridge_nodes[550].get_node("RelayMarker")
+	t.eq(marker.text, "INVASION RELAY +2 / WAVE", "in sight: its live status")
+	var ghost := depot.duplicate()
+	ghost["remembered"] = true
+	_poll(scene, 104, _mask([], sight), [cc, ghost])
+	t.eq(marker.text, "INVASION RELAY", "remembered: the name only (the bridge repeats its last services entry)")
 	_done(scene)
 
 
