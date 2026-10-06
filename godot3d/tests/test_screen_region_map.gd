@@ -64,7 +64,8 @@ func test_screen_shows_real_labels_and_numbers(t) -> void:
 	var text := _all_text(root)
 	for r in snap["regions"]:
 		t.ok(text.contains(str(r["name"]).to_lower()), "region label %s is drawn" % r["name"])
-	for want in ["strategic map", "composition", "territory", "343 tiles", "hostile sites", "enemy territory", "wave %02d route" % int(vm["route"]["wave"]), "lenses", "m to close"]:
+	# 364 zone tiles: the start's prebuilt refinery is a build anchor, so its radius joins the Command Center's.
+	for want in ["strategic map", "composition", "territory", "364 tiles", "hostile sites", "enemy territory", "wave %02d route" % int(vm["route"]["wave"]), "lenses", "m to close"]:
 		t.ok(text.contains(want), "the screen shows '%s'" % want)
 	t.ok(text.contains("grassland 51%"), "the legend reads the ground counts")
 	root.free()

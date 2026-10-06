@@ -60,6 +60,8 @@ func test_structure_carries_real_health_state_and_queue(t) -> void:
 	var snap := _snap()
 	var b := _barracks(snap)
 	snap = _with(snap, [b])
+	# The start base's own Barracks (id 7) is removed so the test's barracks is the only one.
+	snap["entities"] = snap["entities"].filter(func(e): return int(e["id"]) != 7)
 	var s := VM.structure(snap, GroundModel.from_snapshot(snap), 50)
 	t.eq(s["kind"], "Barracks", "the entity's kind")
 	t.eq(s["name"], "Barracks", "a lone barracks is not numbered")
@@ -83,8 +85,10 @@ func test_structure_numbers_buildings_of_the_same_kind_in_entity_order(t) -> voi
 	var b := _barracks(snap, 51, 9, 11)
 	snap = _with(snap, [a, b])
 	var ground := GroundModel.from_snapshot(snap)
-	t.eq(VM.structure(snap, ground, 50)["name"], "Barracks 1", "first of two")
-	t.eq(VM.structure(snap, ground, 51)["name"], "Barracks 2", "second of two")
+	# The start base already holds a Barracks (id 7), first in entity order.
+	t.eq(VM.structure(snap, ground, 7)["name"], "Barracks 1", "the start barracks is first of three")
+	t.eq(VM.structure(snap, ground, 50)["name"], "Barracks 2", "second of three")
+	t.eq(VM.structure(snap, ground, 51)["name"], "Barracks 3", "third of three")
 
 
 func test_structure_tag_follows_health_power_and_construction(t) -> void:
@@ -153,7 +157,7 @@ func test_structure_is_empty_for_units_aliens_and_unknown_ids(t) -> void:
 	var snap := _snap()
 	var ground := GroundModel.from_snapshot(snap)
 	t.eq(VM.structure(snap, ground, 1), {}, "an infantry unit is not a structure")
-	t.eq(VM.structure(snap, ground, 7), {}, "alien buildings get no controls")
+	t.eq(VM.structure(snap, ground, 14), {}, "alien buildings get no controls (14 is the alien Barracks)")
 	t.eq(VM.structure(snap, ground, 999), {}, "unknown id")
 	t.eq(VM.structure(snap, null, 0).get("terrain", {}), {}, "without a ground model the terrain column is left out")
 
@@ -163,7 +167,7 @@ func test_site_card_measures_distance_and_direction_to_forest_and_ford(t) -> voi
 	snap = _with(snap, [_barracks(snap)])
 	var ground := GroundModel.from_snapshot(snap)
 	var site := VM.site_card(snap, ground, 50)
-	t.eq(site["cap"], "Barracks site", "caption names the structure")
+	t.eq(site["cap"], "Barracks 2 site", "caption names the structure, numbered after the start base's Barracks 7")
 	t.eq(_row(site["rows"], "Terrain")["value"], "Grassland", "ground under it")
 	var ford := _row(site["rows"], "Ford")
 	t.ok(ford["value"].contains("tiles") and ford["value"].contains("E"), "the ford is east of the base, with a tile count")

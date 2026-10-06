@@ -130,10 +130,10 @@ func test_enemy_intel_counts_what_the_snapshot_holds(t) -> void:
 	var snap := _snap()
 	var e := VM.enemy_intel(snap, GroundModel.from_snapshot(snap))
 	t.eq(_row(e["rows"], "Defences")["value"], "4 gun, 2 AA", "four gun turrets and two AA, no walls listed")
-	t.eq(_row(e["rows"], "Garrison")["value"], "6 units", "six alien units, no seen/estimated split")
+	t.eq(_row(e["rows"], "Garrison")["value"], "9 units", "nine alien units (six garrison plus the three-rifle probe at the Holdfast), no seen/estimated split")
 	t.eq(_row(e["rows"], "Terrain")["value"], "Dry flats, Highland", "the two commonest grounds inside the border")
 	var reinforce := _row(e["rows"], "Reinforce")
-	t.eq(reinforce["value"], "1:30, 10 units", "next wave timer and expedition size")
+	t.eq(reinforce["value"], "2:30, 10 units", "next wave timer (4500 ticks) and expedition size")
 	t.eq(reinforce["tone"], "warn", "warn")
 	t.ok(not str(e).contains("est."), "no estimates")
 	t.ok(not str(e).contains("seen"), "no fog language")
@@ -141,7 +141,8 @@ func test_enemy_intel_counts_what_the_snapshot_holds(t) -> void:
 
 func test_enemy_intel_walls_and_short_timers(t) -> void:
 	var snap := _snap()
-	var wall: Dictionary = snap["entities"][8].duplicate()
+	# Copy an alien gun turret (index 8 is the player's harvester since the start base was added).
+	var wall: Dictionary = snap["entities"].filter(func(x): return x["owner"] == 1 and x["kind"] == "GunTurret")[0].duplicate()
 	wall["id"] = 99
 	wall["kind"] = "Wall"
 	snap["entities"].append(wall)
@@ -194,7 +195,8 @@ func test_combat_preview_needs_attackers_and_a_hostile_target(t) -> void:
 	t.eq(VM.combat_preview(snap, ground, [], [34, 6]), {}, "no selection")
 	t.eq(VM.combat_preview(snap, ground, [1], [20, 20]), {}, "empty hex")
 	t.eq(VM.combat_preview(snap, ground, [1], [7, 9]), {}, "own building is not a target")
-	t.eq(VM.combat_preview(snap, ground, [5], [34, 6]), {}, "an alien id is not an attacker")
+	t.eq(VM.combat_preview(snap, ground, [12], [34, 6]), {}, "an alien id (the alien Command Center) is not an attacker")
+	t.eq(VM.combat_preview(snap, ground, [9], [34, 6]), {}, "nor is an alien probe rifleman")
 
 
 func _with_ranks(snap: Dictionary, ranks: Dictionary) -> void:

@@ -816,8 +816,9 @@ fn main() -> std::io::Result<()> {
         } else {
             Vec::new()
         };
-        // Keep the beachhead garrison defensive during the authored 90-second
-        // build-up. Once wave one arrives, the enemy economy and tactics activate.
+        // Keep the beachhead garrison defensive during the authored build-up
+        // (Kestrel Reach: 150 s, broken only by its scripted probe below). Once
+        // wave one arrives, the enemy economy and tactics activate.
         if sim.waves_survived() > 0 {
             commands.extend(sim.ai_commands(PlayerId(1)));
         }

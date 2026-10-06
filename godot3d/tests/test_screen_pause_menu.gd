@@ -50,7 +50,7 @@ func test_snapshot_rows_are_the_kestrel_values(t) -> void:
 	t.eq(_row(vm, "Material")["value"], "840", "material")
 	t.eq(_row(vm, "Power")["value"], "160 / 168 kW", "generation over demand, as the top bar prints it")
 	t.eq(_row(vm, "Power")["tone"], "warn", "demand above generation is a warning")
-	t.eq(_row(vm, "Units alive")["value"], "4", "the four human units in the Kestrel start")
+	t.eq(_row(vm, "Units alive")["value"], "5", "the Kestrel start's four riflemen and its harvester")
 	t.eq(_row(vm, "Losses")["value"], "4", "the client's own loss count")
 
 

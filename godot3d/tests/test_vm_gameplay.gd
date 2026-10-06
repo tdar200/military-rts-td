@@ -100,7 +100,7 @@ func test_territory_thirds_still_total_one_hundred(t) -> void:
 func test_territory_on_the_kestrel_fixture(t) -> void:
 	var s := _snap()
 	var tv: Dictionary = VM.territory(s, _model(s))
-	t.eq(tv["tiles"], 343, "every construction_zone cell is on the map")
+	t.eq(tv["tiles"], 364, "every construction_zone cell is on the map (the prebuilt refinery's radius joins the Command Center's)")
 	var sum := 0
 	for row in tv["composition"]:
 		sum += int(row["pct"])
@@ -216,7 +216,7 @@ func test_next_alert_ticks_to_seconds_at_the_top_bar_rate(t) -> void:
 	t.eq(VM.next_alert({"next_wave_ticks": 0})["seconds"], 0, "zero is a real answer")
 	t.eq(VM.next_alert({"next_wave_ticks": 2700})["seconds"], ceili(2700.0 / tps), "uses the adapter's rate")
 	t.eq(VM.next_alert({"next_wave_ticks": 90, "waves_survived": 1})["label"], "Wave 02", "label counts survived waves")
-	t.eq(VM.next_alert(_snap())["seconds"], 90, "fixture: 2700 ticks")
+	t.eq(VM.next_alert(_snap())["seconds"], 150, "fixture: 4500 ticks, wave one now follows the 2:00 probe")
 	t.eq(VM.next_alert(_snap())["label"], "Wave 01", "fixture label")
 
 
@@ -235,7 +235,7 @@ func test_wave_inbound_carries_the_route_wave_and_eta(t) -> void:
 	var f: Dictionary = VM.wave_inbound(_snap())
 	t.eq(f["route"].size(), 30, "fixture route length")
 	t.eq(f["route"][0], [36, 8], "starts at the holdfast")
-	t.eq(f["eta_s"], 90, "fixture eta")
+	t.eq(f["eta_s"], 150, "fixture eta: 4500 ticks")
 	var no_timer: Dictionary = VM.wave_inbound({"wave_route": [[1, 1]]})
 	t.ok(not no_timer.has("eta_s"), "no timer, no invented eta")
 	t.eq(no_timer["route"], [[1, 1]], "route still reported")
@@ -349,16 +349,16 @@ func _kestrel_adapter() -> Array:
 func test_hud_vm_gets_slices_from_the_kestrel_snapshot(t) -> void:
 	var p := _kestrel_adapter()
 	var vm: Dictionary = p[1].hud_vm(0.0)
-	t.eq(vm["territory"]["tiles"], 343, "territory slice")
+	t.eq(vm["territory"]["tiles"], 364, "territory slice")
 	t.eq(vm["idle"], {"count": 4, "first_id": 1}, "idle slice")
-	t.eq(vm["alert"], {"label": "Wave 01", "seconds": 90}, "alert slice")
+	t.eq(vm["alert"], {"label": "Wave 01", "seconds": 150}, "alert slice: the snapshot's 4500 ticks")
 	t.eq(vm["regions"].size(), 8, "regions slice")
 	t.ok(not vm.has("veterans"), "nobody ranked: no veterans key")
 	t.ok(not vm.has("inspect"), "no hover, no inspect")
 	t.eq(vm["wave"]["route"].size(), 30, "route rides on the wave chip")
-	t.eq(vm["wave"]["eta_s"], 90, "eta")
+	t.eq(vm["wave"]["eta_s"], 150, "eta from the snapshot")
 	t.eq(vm["wave"]["label"], "Wave 01 Siege", "the chip's own label is untouched")
-	t.eq(vm["wave"]["timer"], "T-01:30", "the chip's own timer is untouched")
+	t.eq(vm["wave"]["timer"], "T-01:30", "the chip's own timer is untouched (it reads the stub's 2700, not the snapshot)")
 
 
 func test_hud_vm_inspect_follows_the_hovered_hex(t) -> void:
@@ -396,6 +396,6 @@ func test_hud_vm_build_layout_gets_the_slices_too(t) -> void:
 	p[1].tab = "build"
 	var vm: Dictionary = p[1].hud_vm(0.0)
 	t.ok(vm.has("build_top"), "still the build layout")
-	t.eq(vm["territory"]["tiles"], 343, "territory present")
+	t.eq(vm["territory"]["tiles"], 364, "territory present")
 	t.eq(vm["idle"]["count"], 4, "idle present")
 	t.ok(not vm.has("wave"), "the build layout has no wave chip to extend")

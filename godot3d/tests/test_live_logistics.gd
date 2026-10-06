@@ -1,6 +1,8 @@
 extends RefCounted
 ## live_adapter.gd wiring for board 8: when the Logistics tab shows, what its body holds, how a lens click is routed and when
 ## the overlay draws. Kestrel Reach's snapshot, plus entities the test adds (a reactor, a barracks at 30 percent, a refinery).
+## The snapshot itself starts with a working base: Power Plant 5 fully feeding Refinery 6 (on ore, so it carries the ore
+## bonus) and Barracks 7. Those add two healthy power links, one refinery ring and one +20% badge to every count below.
 const Adapter = preload("res://scripts/ui/live_adapter.gd")
 const Stub = preload("res://tests/stub_game.gd")
 const Hud = preload("res://scripts/ui/hud.gd")
@@ -83,7 +85,7 @@ func test_a_lens_click_sets_the_lens_client_side(t) -> void:
 	t.eq(body["lens"], "power", "the vm carries the active lens")
 	t.eq(body["lenses"][0]["on"], true, "its button is lit")
 	t.eq(body["legend"].size(), 3, "its legend")
-	t.eq(body["summary"], "2 links, 1 broken", "what it draws: the barracks at 300 is broken")
+	t.eq(body["summary"], "4 links, 1 broken", "what it draws: the start base's two healthy links plus the test's two; the barracks at 300 is broken")
 	p[1].on_action("world_lens", "")
 	t.eq(p[1].world_lens, "", "off")
 	p[1].on_action("world_lens", "bogus")
@@ -152,7 +154,7 @@ func test_overlay_draws_only_on_the_logistics_tab_and_computes_nothing_otherwise
 	t.ok(p[1]._overlay_snap == null, "and nothing was computed")
 	p[1].on_action("world_lens", "power")
 	var marks: Array = p[1].board_marks(_project)
-	t.eq(marks.size(), 2, "two power lines")
+	t.eq(marks.size(), 4, "four power lines: the start base's refinery and barracks plus the test's two")
 	t.eq(marks[0]["kind"], "link", "link marks in world_marks' schema")
 	t.ok(marks[0].has("c1") and marks[0].has("to"), "a drawable curve")
 	var broken := marks.filter(func(m): return m["broken"])
@@ -160,7 +162,7 @@ func test_overlay_draws_only_on_the_logistics_tab_and_computes_nothing_otherwise
 	p[1].tab = "units"
 	t.eq(p[1].board_marks(_project), [], "leaving the tab hides the overlay")
 	p[1].tab = "logistics"
-	t.eq(p[1].board_marks(_project).size(), 2, "and coming back shows it again")
+	t.eq(p[1].board_marks(_project).size(), 4, "and coming back shows it again")
 
 
 func test_overlay_marks_are_cached_per_snapshot(t) -> void:
@@ -182,9 +184,9 @@ func test_yield_lens_reads_real_flags(t) -> void:
 	p[1].on_action("world_lens", "yield")
 	var texts: Array = p[1].board_marks(_project).filter(func(m): return m["kind"] == "badge").map(func(m): return m["text"])
 	texts.sort()
-	t.eq(texts, ["+20%", "river +12"], "ore bonus and river_kw badges")
+	t.eq(texts, ["+20%", "+20%", "river +12"], "ore bonus badges (the start refinery and the test's) and the river_kw badge")
 	var body: Dictionary = p[1].hud_vm(0.0)["deck"]["body"]
-	t.ok(str(body["summary"]).contains("1 refinery ring") and str(body["summary"]).contains("1 river plant"), "summary " + str(body["summary"]))
+	t.ok(str(body["summary"]).contains("2 refinery rings, 2 with ore bonus") and str(body["summary"]).contains("1 river plant"), "summary " + str(body["summary"]))
 
 
 func test_empty_lens_says_why(t) -> void:
