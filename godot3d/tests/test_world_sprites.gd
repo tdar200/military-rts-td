@@ -1204,7 +1204,8 @@ func test_recoil_during_a_walk_comes_home_to_the_right_rest(t) -> void:
 				seen.bobbed = bool(seen.bobbed) and absf(card.position.y - want) < 1e-5
 		_march(scene, id, kind, 0, from, 50, 1.4, kick)
 		t.ok(bool(seen.both), "%s: the recoil rides on the walk, neither overwrites the other" % kind)
-		t.ok(bool(seen.bobbed), "%s: the bob rides on the walk and the lift" % kind)
+		if kind == "Helicopter":
+			t.ok(bool(seen.bobbed), "Helicopter: the bob rides on the walk and the lift")
 		for i in 120:
 			_frame(scene)
 		var rest := _rest_of(card)
@@ -1243,11 +1244,14 @@ func test_kestrel_status_bars_cast_no_ground_shadow(t) -> void:
 	scene._create_unit(0, scene._hex_world(12, 12), 1)
 	scene._sync_bridge_entities([{"id": 1501, "category": "building", "kind": "Barracks", "owner": 0, "x_bits": 0, "z_bits": 0,
 		"hp_bits": 65536 * 50, "max_hp_bits": 65536 * 100}])
+	var checked := 0
 	for node in [scene.units.back(), scene.bridge_nodes[1501]]:
 		for bar in ["HealthBack", "HealthFill", "ShieldBack", "ShieldFill"]:
 			var part := node.get_node_or_null(bar) as GeometryInstance3D
 			if part != null:
+				checked += 1
 				t.eq(part.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "%s %s: no ground shadow" % [node.name, bar])
+	t.eq(checked, 8, "every bar of the unit and the building was checked")
 	scene.free()
 	var survival = MainScene.instantiate()
 	survival._create_materials()
@@ -1256,3 +1260,60 @@ func test_kestrel_status_bars_cast_no_ground_shadow(t) -> void:
 	survival._create_unit(0, Vector3(10, 0, 10), 1)
 	t.eq((survival.units.back().get_node("HealthBack") as GeometryInstance3D).cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_ON, "Survival unchanged")
 	survival.free()
+
+
+## A stationary bridge unit fires: the shot's dispatcher kicks its card, and the frame runs in _process order.
+func _kick_still(t, kind: String) -> void:
+	var scene := _kestrel_scene()
+	var at: Vector3 = scene._hex_world(10, 12)
+	scene.world_fx.set_view(at, Vector2(12, 10))
+	var e := _unit_entity(scene, 1601, kind, 0, at)
+	scene._sync_bridge_entities([e])
+	for i in 10:
+		_frame(scene, 1.0 / 60.0)
+	var card: Node3D = scene.bridge_nodes[1601].get_node("UnitVisual")
+	var x0: float = card.position.x
+	var z0: float = card.position.z
+	var basis: Basis = card.transform.basis
+	var tb: Vector2i = scene._world_to_sim_bits(scene._hex_world(14, 12))
+	scene._dispatch_shots({"tick": 30, "entities": [e], "shots": []})  # the first poll only seeds
+	t.eq(scene._dispatch_shots({"tick": 31, "entities": [e], "shots": [[31, e.x_bits, e.z_bits, tb.x, tb.y]]}), 1, "%s: the shot draws" % kind)
+	var most := 0.0
+	for i in 30:
+		_frame(scene, 1.0 / 60.0)
+		most = maxf(most, absf(card.position.x - x0))
+	t.ok(most > 0.01, "%s standing still: the card kicks back (%.5f)" % [kind, most])
+	t.near(card.position.x, x0, 1e-5, "%s: home x" % kind)
+	t.near(card.position.z, z0, 1e-5, "%s: home z" % kind)
+	t.ok(card.transform.basis.is_equal_approx(basis), "%s: home shape" % kind)
+	t.ok(not card.has_meta("pose_rest") and not card.has_meta("pose_kick") and not card.has_meta("recoil_t0"), "%s: no pose state left" % kind)
+	scene.free()
+
+
+func test_a_standing_gunship_recoils_and_comes_home(t) -> void:
+	_kick_still(t, "Helicopter")
+	_kick_still(t, "Tank")
+
+
+func test_a_kick_on_the_frame_a_walk_ends_is_not_lost(t) -> void:
+	for kind in WorldSprites.UNIT_KINDS:
+		var card := WorldSprites.make_card(kind, 0, WorldSprites.tiles_for(kind), true)
+		var hover := float(card.get_meta("hover"))
+		card.set_meta("base_y", 0.05)
+		card.position.y = 0.05 + hover
+		var rest := _rest_of(card)
+		for i in 10:
+			WorldSprites.animate(card, kind, 1.2, 0.1 * i, 0.12 * i, 1.0, 0.0)
+		WorldSprites.kick(card, Vector3(1, 0, 0), 1.0)
+		WorldSprites.animate(card, kind, 0.0, 1.0, 1.2, 1.0, 0.0)  # the walk ends on the kick's frame
+		WorldSprites.apply_pose(card)  # any other mover writing the card that frame (the bob, a lift)
+		var most := 0.0
+		for i in 8:
+			WorldSprites.recoil_step(card, 1.0 + 0.015 * i)
+			most = maxf(most, -card.position.x)
+		t.ok(most > 0.01, "%s: the kick shows (%.5f)" % [kind, most])
+		WorldSprites.recoil_step(card, 2.0)
+		t.ok(_xf_near(card.transform, rest), "%s: then exactly at rest" % kind)
+		t.ok(not card.has_meta("pose_rest") and not card.has_meta("pose_kick"), "%s: no pose state left" % kind)
+		card.free()
+

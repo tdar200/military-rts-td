@@ -858,6 +858,10 @@ static func kick(card: Node3D, toward: Vector3, start: float) -> void:
 	var amount := float(RECOIL.get(String(card.get_meta("sprite_kind", "")), RECOIL_DEFAULT))
 	card.set_meta("recoil_dir", away.normalized() * amount)
 	card.set_meta("recoil_t0", start)
+	# The kick is a live layer from this moment: a bob, a lift or a walk ending before the first recoil_step must
+	# not drop the pose (that lost every kick of a standing gunship).
+	if not card.get_meta("pose_kick", false) is Vector2:
+		card.set_meta("pose_kick", Vector2.ZERO)
 
 
 ## Places a kicking card for time `now`; true while the kick runs (or waits on its start), false once the card is home
