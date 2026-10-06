@@ -21,7 +21,7 @@ extends RefCounted
 ##
 ## Dust (Task 4): `dust(pos, size)` is a soft puff of the ground's own colour rising where a moving unit's tracks or boots
 ## meet the ground, `wash(pos, size)` a moving gunship's rotor wash (a ring spreading on the ground, two puffs blown
-## aside). Both are the smoke and dust-ring sprites of the human band tinted DUST_TINT: dust belongs to the ground.
+## aside). Both are the smoke and dust-ring sprites of the human band tinted KICKED_TINT, a pale sandy tan.
 ##
 ## Shots (Task 3): `shot(from, to, attacker_kind, owner)` draws one round of the bridge's shots window on the same cards:
 ## a muzzle flash, a tracer, shell or plasma bolt (row 3 of the band: a vertical streak, head up) stretched along the
@@ -74,6 +74,8 @@ const LAYER_PRIORITY := [-1, 2, 3]
 ## Tints (times the atlas colour; over 1 brightens the emissive texels).
 const SMOKE_TINT := [Color(0.42, 0.40, 0.38), Color(0.40, 0.36, 0.44)]
 const DUST_TINT := Color(0.95, 0.86, 0.68)
+## Kicked-up dust (dust, wash): over 1, so the grey smoke and ring sprites come out a pale sandy tan over the grass.
+const KICKED_TINT := Color(1.8, 1.6, 1.25)
 const FIRE_TINT := Color(1.0, 1.0, 1.0)
 ## The Kestrel post chain halves saturation (WorldArt.ENVIRONMENT) and its filmic shoulder whitens bright fire, so the cards
 ## pre-grade their colour about its luminance, as WorldSprites.GRADE does for the sprite cards.
@@ -369,7 +371,7 @@ func dust(pos: Vector3, size: float, drift := Vector2.ZERO, alpha := 0.45) -> in
 	if _layers.is_empty() or _live >= DUST_ROOM or not _in_view(pos):
 		return 0
 	_card(SMOKE, 0, pos, {"life": DUST_LIFE, "size": [size * 0.55, size], "off": Vector2(0.0, size * 0.32), "vel": drift + Vector2(0.0, 0.1),
-		"tint": DUST_TINT, "alpha": alpha, "fade_in": 0.12, "fade_out": 0.3, "nudge": DUST_NUDGE})
+		"tint": KICKED_TINT, "alpha": alpha, "fade_in": 0.12, "fade_out": 0.3, "nudge": DUST_NUDGE})
 	return 1
 
 
@@ -378,11 +380,11 @@ func dust(pos: Vector3, size: float, drift := Vector2.ZERO, alpha := 0.45) -> in
 func wash(pos: Vector3, size: float) -> int:
 	if _layers.is_empty() or _live >= DUST_ROOM or not _in_view(pos):
 		return 0
-	_card(RING, 0, pos, {"life": 0.6, "size": [size * 0.9, size * 2.2], "ground": 0.55, "tint": DUST_TINT, "alpha": 0.35, "fade_in": 0.1,
+	_card(RING, 0, pos, {"life": 0.6, "size": [size * 0.9, size * 2.2], "ground": 0.55, "tint": KICKED_TINT, "alpha": 0.35, "fade_in": 0.1,
 		"fade_out": 0.3})
 	for side in [-1.0, 1.0]:
 		_card(SMOKE, 0, pos, {"life": DUST_LIFE, "size": [size * 0.4, size * 0.8], "off": Vector2(side * size * 0.35, size * 0.25),
-			"vel": Vector2(side * 0.45, 0.06), "tint": DUST_TINT, "alpha": 0.3, "fade_in": 0.12, "fade_out": 0.3, "nudge": DUST_NUDGE})
+			"vel": Vector2(side * 0.45, 0.06), "tint": KICKED_TINT, "alpha": 0.3, "fade_in": 0.12, "fade_out": 0.3, "nudge": DUST_NUDGE})
 	return 3
 
 

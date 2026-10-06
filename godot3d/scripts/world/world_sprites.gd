@@ -886,8 +886,8 @@ static func recoil_step(card: Node3D, now: float) -> bool:
 ## squash or stretch (its width, and its standing height on screen). Amplitudes are shares of the card on screen, at
 ## full speed (ANIM_FULL); a unit standing still is never touched. One row per unit kind:
 ##   lean   the top's lean into the motion (share of the standing height); the gunship's is its forward tilt
-##   stride, bounce, rock (on foot): world units walked per two footfalls; the height's swing over a footfall; the
-##          alternating side-to-side rock of each step
+##   stride, bounce, rock (on foot): world units walked per footfall; the height's swing over a footfall; the
+##          side-to-side rock, to the other side each footfall
 ##   rumble, rumble_hz (tracks, wheels): the height's jitter on the ground and its rate
 ##   lurch  (vehicles): the stretch along the motion (and the lean back) as it pulls away, the squash (and the dip
 ##          forward) as it brakes, at a full lurch (LURCH_ACCEL)
@@ -895,18 +895,19 @@ static func recoil_step(card: Node3D, now: float) -> bool:
 ##   dust, dust_size, dust_back, dust_alpha: world units travelled per dust puff, its width, how far behind the root it
 ##          rises, its opacity (WorldFx.dust); wash (the gunship): seconds between rotor-wash rings (WorldFx.wash)
 const ANIM := {
-	"Infantry": {"lean": 0.035, "stride": 0.62, "bounce": 0.07, "rock": 0.05,
-		"dust": 0.55, "dust_size": 0.26, "dust_back": 0.12, "dust_alpha": 0.32},
-	"Tank": {"lean": 0.0, "rumble": 0.022, "rumble_hz": 11.0, "lurch": 0.045,
-		"dust": 0.2, "dust_size": 0.42, "dust_back": 0.42, "dust_alpha": 0.5},
-	"AntiArmor": {"lean": 0.0, "rumble": 0.018, "rumble_hz": 9.0, "lurch": 0.04,
-		"dust": 0.28, "dust_size": 0.34, "dust_back": 0.26, "dust_alpha": 0.45},
-	"Harvester": {"lean": 0.01, "rumble": 0.012, "rumble_hz": 7.0, "lurch": 0.05, "sway": 0.035, "sway_hz": 1.3,
-		"dust": 0.24, "dust_size": 0.4, "dust_back": 0.32, "dust_alpha": 0.5},
+	"Infantry": {"lean": 0.035, "stride": 0.62, "bounce": 0.11, "rock": 0.08,
+		"dust": 0.55, "dust_size": 0.26, "dust_back": 0.12, "dust_alpha": 0.4},
+	"Tank": {"lean": 0.0, "rumble": 0.03, "rumble_hz": 11.0, "lurch": 0.045,
+		"dust": 0.2, "dust_size": 0.42, "dust_back": 0.42, "dust_alpha": 0.6},
+	# an anti-armour team is painted on foot: it walks (a longer, heavier step than a rifle squad) and lurches as it sets off
+	"AntiArmor": {"lean": 0.03, "stride": 0.7, "bounce": 0.09, "rock": 0.06, "lurch": 0.04,
+		"dust": 0.5, "dust_size": 0.28, "dust_back": 0.14, "dust_alpha": 0.4},
+	"Harvester": {"lean": 0.01, "rumble": 0.016, "rumble_hz": 7.0, "lurch": 0.05, "sway": 0.035, "sway_hz": 1.3,
+		"dust": 0.24, "dust_size": 0.4, "dust_back": 0.32, "dust_alpha": 0.6},
 	"Helicopter": {"lean": 0.065, "sway": 0.02, "sway_hz": 0.8,
-		"dust": 0.45, "dust_size": 0.5, "dust_back": 0.0, "dust_alpha": 0.3, "wash": 0.42},
-	"Capital": {"lean": 0.0, "sway": 0.022, "sway_hz": 0.45, "rumble": 0.006, "rumble_hz": 5.0, "lurch": 0.03,
-		"dust": 0.3, "dust_size": 0.7, "dust_back": 0.6, "dust_alpha": 0.45},
+		"dust": 0.45, "dust_size": 0.5, "dust_back": 0.0, "dust_alpha": 0.35, "wash": 0.42},
+	"Capital": {"lean": 0.0, "sway": 0.022, "sway_hz": 0.45, "rumble": 0.008, "rumble_hz": 5.0, "lurch": 0.03,
+		"dust": 0.3, "dust_size": 0.7, "dust_back": 0.6, "dust_alpha": 0.55},
 }
 const ANIM_STILL := 0.05  # world units per s: slower is standing (the glide's last creep), the card at rest
 const ANIM_FULL := 0.6  # world units per s: full amplitude from here (units march at about 0.7 to 2)
