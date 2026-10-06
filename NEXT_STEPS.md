@@ -145,7 +145,6 @@ Still owed, in rough order of value:
   airfield layout and the labs (CC plus a dome) still read as recolours (Task 9's measured list).
 - Long-hitch death silence: after a poll gap over about 20 ticks a unit killed near the sight rim with no drawn shot may
   vanish without an explosion (the fog silence heuristic's reach caps at 2.0 world units).
-- "Hold the ford" ticks done when wave one spawns (the sim's `waves_survived` counts spawned waves), not when it is beaten.
 - Idle riflemen do not defend a structure under attack (the alert only informs); the probe ids 9 to 11 are fixed
   constants; only the bridge calls `Scenario::scripted_commands`, so another Kestrel host must add that call.
 

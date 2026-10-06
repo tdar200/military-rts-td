@@ -136,16 +136,118 @@ func test_harvesters_aliens_and_sites_do_not_make_a_squad(t) -> void:
 	t.ok(KO.evaluate(snap)["objectives"][2]["done"], "a finished one does")
 
 
-func test_surviving_wave_one_points_at_the_core_node(t) -> void:
+## An alien rifle squad standing on cell (col, row) of the snapshot (x_bits / z_bits as the bridge writes them).
+func _alien_at(snap: Dictionary, col: int, row: int) -> Dictionary:
+	var e := _add(snap, "Infantry", ALIEN)
+	e["x_bits"] = roundi((col * 0.75 + 0.5) * 65536.0)
+	e["z_bits"] = roundi((row + 0.5 + (0.5 if col % 2 != 0 else 0.0)) * 65536.0)
+	return e
+
+
+## The wave-one snapshots in order: `steps` is [[tick, waves_survived, [[col, row], ...] of aliens in sight], ...]; each
+## evaluation gets the last result as its latch, as earthfront_3d does once per snapshot tick. Returns every result.
+func _run(steps: Array) -> Array:
+	var out: Array = []
+	var previous := {}
+	for s in steps:
+		var snap := _squad(_hauling(_snap()))
+		snap["tick"] = int(s[0])
+		snap["waves_survived"] = int(s[1])
+		for c in s[2]:
+			_alien_at(snap, int(c[0]), int(c[1]))
+		previous = KO.evaluate(snap, previous)
+		out.append(previous)
+	return out
+
+
+func test_wave_one_spawning_is_not_the_ford_held(t) -> void:
 	var snap := _squad(_hauling(_snap()))
-	snap["waves_survived"] = 1
+	snap["tick"] = 4500
+	snap["waves_survived"] = 1  # the sim's wave_count: wave one has SPAWNED on the far bank
 	var r: Dictionary = KO.evaluate(snap)
+	t.eq(_done(r), [true, true, true, false, false], "the setup phase is over, but the ford is not held yet")
+	t.eq(r["stage"], 4, "still holding the ford")
+	t.eq(r["detail"], "Wave one crossing at Wyllow Ford", "the detail while the wave is on its way")
+	t.eq(r["ford_spawn_tick"], 4500, "the spawn tick is latched")
+	_alien_at(snap, 22, 11)  # at the ford itself
+	var at_ford: Dictionary = KO.evaluate(snap, r)
+	t.ok(not at_ford["objectives"][3]["done"], "an alien unit at the ford: objective 4 is still open")
+
+
+func test_the_ford_is_held_after_a_quiet_spell_with_the_base_standing(t) -> void:
+	var rs := _run([
+		[4500, 1, []],
+		[4800, 1, [[20, 10], [21, 10]]],  # the wave in sight on the home bank
+		[5000, 1, [[17, 8]]],
+		[5150, 1, []],  # 150 ticks after the last attacker was seen: not quiet long enough
+		[5299, 1, []],
+		[5300, 1, []],  # 300 quiet ticks and 800 since the spawn
+	])
+	for i in 5:
+		t.ok(not rs[i]["objectives"][3]["done"], "step %d: wave one is not beaten yet" % i)
+		t.eq(rs[i]["stage"], 4, "step %d: the card stays on the ford" % i)
+	t.eq(rs[2]["ford_threat_tick"], 5000, "the last tick an attacker was seen on the home side is latched")
+	t.eq(_done(rs[5]), [true, true, true, true, false], "quiet for QUIET_TICKS with the base alive: the ford is held")
+	t.eq(rs[5]["stage"], 5, "on to the Core Node")
+	t.eq(rs[5]["objectives"][3]["detail"], "Wave one held at Wyllow Ford", "the done ford line")
+	t.eq(rs[5]["detail"], "Destroy the Core Node at (37, 8)", "the core node's cell from the snapshot")
+
+
+func test_the_ford_needs_time_for_the_wave_to_arrive(t) -> void:
+	var rs := _run([[4500, 1, []], [4900, 1, []], [5099, 1, []], [5100, 1, []]])
+	t.ok(not rs[2]["objectives"][3]["done"], "no attacker seen yet, but the wave has had under MIN_TICKS to cross")
+	t.ok(rs[3]["objectives"][3]["done"], "after MIN_TICKS with nothing on the home side the ford is held")
+
+
+func test_aliens_beyond_the_ford_do_not_hold_the_objective_open(t) -> void:
+	var rs := _run([[4500, 1, []], [5000, 1, [[30, 8], [36, 8]]], [5200, 1, [[27, 9]]]])
+	t.ok(rs[2]["objectives"][3]["done"], "the alien base and the far bank are not the home side (fog off shows them all)")
+	var lingering := _run([[4500, 1, []], [5000, 1, [[24, 10]]], [5200, 1, [[24, 11]]]])
+	t.ok(not lingering[2]["objectives"][3]["done"], "an attacker still on the ford keeps it open")
+
+
+func test_the_ford_latch_holds_and_wave_two_settles_it(t) -> void:
+	var rs := _run([[4500, 1, []], [5100, 1, []], [5200, 1, [[20, 10]]]])
+	t.ok(rs[1]["objectives"][3]["done"], "held")
+	t.ok(rs[2]["objectives"][3]["done"], "a held ford stays held when a straggler shows up later (latched)")
+	t.eq(rs[2]["stage"], 5, "the card does not fall back to the ford")
+	var fresh := _snap()
+	fresh["waves_survived"] = 2
+	t.ok(KO.evaluate(fresh)["objectives"][3]["done"], "a second wave spawned means the first was outlasted")
+	var lost := _snap()
+	lost["tick"] = 6000
+	lost["waves_survived"] = 1
+	lost["winner"] = ALIEN
+	var prev: Dictionary = _run([[4500, 1, []]])[0]
+	var r: Dictionary = KO.evaluate(lost, prev)
+	t.ok(not r["objectives"][3]["done"], "a lost base holds no ford")
+
+
+func test_a_restart_drops_the_ford_latch(t) -> void:
+	var held: Dictionary = _run([[4500, 1, []], [5100, 1, []]])[1]
+	t.ok(held["objectives"][3]["done"], "held before the restart")
+	var restarted := _squad(_hauling(_snap()))  # tick 0, no wave: earthfront_3d passes {} once the tick goes back
+	var r: Dictionary = KO.evaluate(restarted, {})
+	t.eq(r["ford_spawn_tick"], -1, "no spawn tick")
+	t.ok(not r["objectives"][3]["done"], "the ford is open again")
+
+
+func test_surviving_wave_one_points_at_the_core_node(t) -> void:
+	var r: Dictionary = _run([[4500, 1, []], [5100, 1, []]])[1]
 	t.eq(_done(r), [true, true, true, true, false], "the ford is held")
 	t.eq(r["stage"], 5, "last objective")
 	t.eq(r["objectives"][3]["detail"], "Wave one held at Wyllow Ford", "the done ford line")
 	t.eq(r["detail"], "Destroy the Core Node at (37, 8)", "the core node's cell from the snapshot")
+	var snap := _squad(_hauling(_snap()))
+	snap["tick"] = 5200
+	snap["waves_survived"] = 1
 	snap.erase("core_node")
-	t.eq(KO.evaluate(snap)["detail"], "Destroy the alien Core Node", "no cell in the snapshot, none invented")
+	t.eq(KO.evaluate(snap, r)["detail"], "Destroy the alien Core Node", "no cell in the snapshot, none invented")
+	var won := _squad(_hauling(_snap()))
+	won["tick"] = 9000
+	won["waves_survived"] = 1
+	won["winner"] = HUMAN
+	t.ok(KO.evaluate(won, r)["objectives"][4]["done"], "Break the Core Node: still done on a human win")
 
 
 # ------------------------------------------------------------------ evaluator: the edge cases
@@ -176,8 +278,8 @@ func test_after_wave_one_the_setup_stays_done(t) -> void:
 	_remove(snap, 8)
 	snap["power_generation"] = 10
 	var r: Dictionary = KO.evaluate(snap)
-	t.eq(_done(r), [true, true, true, true, false], "once the ford is held the setup phase is over: no regression")
-	t.eq(r["stage"], 5, "the card keeps pointing at the Core Node")
+	t.eq(_done(r), [true, true, true, false, false], "once wave one has spawned the setup phase is over: no regression")
+	t.eq(r["stage"], 4, "the card points at the ford until the wave is beaten")
 
 
 func test_a_mid_game_load_jumps_to_the_core_node(t) -> void:

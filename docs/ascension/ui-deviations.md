@@ -831,11 +831,17 @@ the golden hash are unchanged.
   falls or demand outgrows generation before wave one, and its line then names the shortfall ("Build a Reactor (P): 10 of
   30 kW", "Power short: 90 of 120 kW, build a Reactor (P)").
 - Before wave one the setup objectives are judged live (a lost Reactor, Refinery, Harvester or rifle squad reopens its line,
-  toast "Objective reopened"); once wave one is held they stay done and the card points at the Core Node.
-- Known limit (found in the Task 10 playthrough): "Hold the ford" reads the sim's `waves_survived`, which counts waves
-  that have spawned (`Sim::waves_survived`, "the survival-mode score"). So the objective ticks done when wave one spawns at
-  2:30, before it reaches the ford, as long as the sim has not named another winner. A stricter "wave one destroyed"
-  needs a signal the snapshot does not carry (under fog the client cannot count the wave's survivors).
+  toast "Objective reopened"); once wave one has spawned they stay done.
+- "Hold the ford" (fix round after the final review, I2): the sim's `waves_survived` counts waves that have spawned
+  (`Sim::waves_survived`), so on its own it only says wave one is on its way; the Task 10 playthrough saw the objective
+  tick done at 2:30 with the wave still on the far bank. The objective now needs wave one beaten: spawned at least 600
+  ticks (20 s) ago, no visible non-human unit on the home side of the ford (cell column at or west of the ford region's
+  `x1`) for 300 ticks (10 s), the base alive (no other winner); or a second wave has spawned. Attackers that reach the base
+  are inside human sight, so they are in the snapshot's `entities` even under fog, and the alien side beyond the ford never
+  counts (fog off shows it all). The spawn tick, the last tick an attacker was seen and the held flag are latches carried
+  through the previous result, so a held ford stays held and a restart (the tick going back) clears them. While the wave
+  is on its way the line reads "Wave one crossing at Wyllow Ford". This is presentation only and reads only visible
+  entities.
 - The briefing (board 6 card) stays up for the first three objectives. Its paragraph is first-minutes intel: the ore beside
   the Command Centre, the ford wave one crosses and its mission time (2:30), the alien probe that may strike sooner, and the
   Core Node's cell. The gallery's board 6 keeps the tutorial's briefing (its mock draws that copy), so no pixel gate moved.
