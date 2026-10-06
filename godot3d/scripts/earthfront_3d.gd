@@ -21,6 +21,7 @@ const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const WorldFx := preload("res://scripts/world/world_fx.gd")
 const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
 const KestrelIntel := preload("res://scripts/world/kestrel_intel.gd")
+const LiveAdapter := preload("res://scripts/ui/live_adapter.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
@@ -2323,9 +2324,9 @@ func _write_bridge_train(kind_name: String) -> void:
 	for node in producers:
 		if is_instance_valid(node) and int(node.get_meta("team", -1)) == HUMAN and String(node.get_meta("kind_name", "")) == producer_kind and int(node.get_meta("construction", 0)) == 0:
 			_append_bridge_command("train,%d,%s" % [int(node.get_meta("bridge_id")), kind_name])
-			objective_label.text = "%s ORDER SENT TO %s" % [kind_name.to_upper(), producer_kind.to_upper()]
+			objective_label.text = "%s ORDER SENT TO %s" % [_kind_text(kind_name), _kind_text(producer_kind)]
 			return
-	objective_label.text = "BUILD %s BEFORE TRAINING THIS UNIT" % producer_kind.to_upper()
+	objective_label.text = "BUILD %s BEFORE TRAINING THIS UNIT" % _kind_text(producer_kind)
 
 
 func _write_bridge_rally(producer: Node3D, ground: Vector3) -> void:
@@ -2374,7 +2375,7 @@ func _write_bridge_build(kind_name: String, ground: Vector3) -> void:
 		return
 	var tile := _world_to_tile(ground)
 	_append_bridge_command("build,%s,%d,%d" % [kind_name, tile.x, tile.y])
-	objective_label.text = "%s FOUNDATION ORDERED" % kind_name.to_upper()
+	objective_label.text = "%s FOUNDATION ORDERED" % _kind_text(kind_name)
 	_show_move_marker(ground, false)
 
 
@@ -2821,7 +2822,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 				ui.session_log.unit_added(kind_name, owner, category)
 				_deploy_effect(destination, owner)
 				if owner == HUMAN and category == "unit":
-					_show_notification("UNIT READY", kind_name.to_upper() + " REPORTING FOR DUTY", Color("65e4da"))
+					_show_notification("UNIT READY", _kind_text(kind_name) + " REPORTING FOR DUTY", Color("65e4da"))
 					_cue(AudioDirector.ack_for(kind_name), 620.0, 0.1, 0.1, 90.0)
 		var bridge_motion := destination - entity_node.position
 		bridge_motion.y = 0.0
@@ -3913,7 +3914,14 @@ func _arm_build(kind_name: String) -> void:
 	rally_armed = false
 	_ensure_build_ghost(kind_name)
 	build_ghost.visible = true
-	objective_label.text = "PLACE %s — GREEN IS VALID • ESC CANCELS" % kind_name.to_upper()
+	objective_label.text = "PLACE %s \u2014 GREEN IS VALID • ESC CANCELS" % _kind_text(kind_name)
+
+
+## A kind's name for the ticker and toasts (review I5). The HUD's _sentence case-folds the ticker, so the raw enum name
+## read "Gunturret" or "Vehiclefactory"; on Kestrel the kind is spelled as the HUD cards spell it (LiveAdapter.KIND_NAMES,
+## "Gun turret"). Survival keeps the raw upper-cased name, so its ticker text is byte for byte what it was.
+func _kind_text(kind: String) -> String:
+	return String(LiveAdapter.KIND_NAMES.get(kind, kind) if world_art_on else kind).to_upper()
 
 
 ## The placement ghost for `kind_name`: on Kestrel a translucent card of the kind's painting for the player's side (one

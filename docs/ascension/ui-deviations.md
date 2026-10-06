@@ -421,7 +421,11 @@ GL (Xvfb, Dummy audio, 1920x1080, about 3 fps) and looked at every capture. What
 - Kestrel toasts still cover the territory card for their 9 s (by design since Task 3; the card's header shows through
   the toast backgrounds in captures).
 - Placement toasts read "Place gunturret" and "Gunturret foundation ordered" (the kind name is case-folded without its
-  word break). Seen in the Task 10 playthrough; not fixed.
+  word break), seen in the Task 10 playthrough. Fixed on Kestrel (fix round, review I5): `earthfront_3d._kind_text` spells
+  the kind by `LiveAdapter.KIND_NAMES` at the place, foundation, train (unit and producer) and unit-ready toasts ("Gun
+  turret foundation ordered", "Battle tank order sent to vehicle factory", "Rocket team reporting for duty"). The HUD's
+  `_sentence` still lowercases everything after the first letter, so "AA battery" reads "Aa battery". Survival keeps the
+  raw upper-cased name, so its ticker text is unchanged.
 
 ## 6. Installed files that differ from the bundle (deliberate, not drift)
 
