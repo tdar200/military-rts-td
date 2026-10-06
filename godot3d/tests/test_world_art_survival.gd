@@ -215,3 +215,27 @@ func test_survival_keeps_the_legacy_build_ghost(t) -> void:
 	scene._ensure_build_ghost("Refinery")
 	t.ok(scene.build_ghost == ghost, "one cylinder for every kind")
 	scene.free()
+
+
+## Kestrel sound (plan 2026-10-06-kestrel-next-level, Task 5) never touches Survival's audio: the tone generator, the two
+## Survival-only effects that sound it, the ambience and the deploy confirmation are pinned byte for byte as on d876bd2.
+func test_survival_keeps_its_tones_and_ambience_byte_identical(t) -> void:
+	var src := (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
+	var pins := {
+		"func _play_tone(frequency: float, duration: float, volume: float, sweep := 0.0) -> void:": "8330e0e4708333ee73e775b1e5cb174d263a28ae9cd74538fa68e33c126f721a",
+		"func _impact_effect(position: Vector3, human_hit: bool) -> void:": "feb474e3e8498ee4d93523d1688a6e9778b29fa20f14452010e4ebb604ddcf10",
+		"func _death_effect(position: Vector3, owner: int) -> void:": "459db2e00bf6687480fd46e12647fb6604b37178d3e25e0e0ae62effedbc6e8d",
+		"func _setup_audio() -> void:": "94cc67b0d4609e26e746b21199a0f30c9cd9d031b31c4d662b54e75822f747ed",
+		"func _play_deploy_sound() -> void:": "f3a088b68dd6b045002973e1d3aa92410873935e160a866fbe975362dae5d889",
+	}
+	for header in pins:
+		var at := src.find(header)
+		t.ok(at >= 0, "%s exists" % header)
+		var lines := src.substr(at).split("\n")
+		var keep := 1
+		for i in range(1, lines.size()):
+			if lines[i].begins_with("\t"):
+				keep = i + 1
+			elif lines[i] != "":
+				break
+		t.eq("\n".join(lines.slice(0, keep)).sha256_text(), pins[header], "%s unchanged" % header)

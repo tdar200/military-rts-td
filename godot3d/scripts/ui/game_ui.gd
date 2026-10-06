@@ -91,6 +91,7 @@ func setup(game) -> void:
 	BuildDeck.register(hud)
 	Assault.register(hud)
 	hud.action.connect(adapter.on_action)
+	hud.action.connect(_on_hud_sound)
 	hud.visible = false
 	layer.add_child(hud)
 	_mount_minimap()
@@ -116,6 +117,12 @@ func setup(game) -> void:
 	layer.add_child(title)
 	title.apply(LiveScreens.title_vm(true, game.bridge_technology_total))
 	title.focus_first()
+
+
+## Every HUD action is a button press: the game sounds its click (Kestrel only; the game decides).
+func _on_hud_sound(_name: String, _arg: Variant) -> void:
+	if g.has_method("hud_clicked"):
+		g.hud_clicked()
 
 
 func _full_rect_layer(layer_name: String) -> Control:

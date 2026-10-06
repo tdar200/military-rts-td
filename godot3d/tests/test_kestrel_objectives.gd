@@ -391,14 +391,15 @@ func test_structure_alerts_are_throttled_per_structure_and_overall(t) -> void:
 	t.eq(titles.count("Barracks under attack"), 1, "a repeat replaces the older toast instead of stacking")
 
 
-func test_the_structure_alert_is_kestrel_only_and_reuses_the_shake_and_tone(t) -> void:
+func test_the_structure_alert_is_kestrel_only_and_reuses_the_shake_and_sounds_the_alert(t) -> void:
 	var sync := _func_body(_source(), "func _sync_bridge_entities(entities: Array) -> void:")
 	var at := sync.find("if world_art_on and category == \"building\" and int(entity_data.get(\"owner\", 0)) == HUMAN:")
 	t.ok(at > 0, "only a human structure on Kestrel")
 	t.ok(sync.find("_structure_under_attack(", at) > at, "raises the alert")
 	var body := _func_body(_source(), "func _structure_under_attack(position: Vector3, entity_data: Dictionary) -> void:")
 	t.ok(body.contains("ui.structure_attacked("), "through the HUD's alert plumbing")
-	t.ok(body.contains("camera_shake = maxf(camera_shake, 0.42)") and body.contains("_play_tone(92.0, 0.09, 0.12, -25.0)"), "with the existing hit shake and tone")
+	t.ok(body.contains("camera_shake = maxf(camera_shake, 0.42)"), "with the existing hit shake")
+	t.ok(body.contains("_sfx(\"alert\")") and not body.contains("_play_tone("), "and the Kestrel alert sound in place of the generated tone (Task 5)")
 
 
 func test_kestrel_toasts_draw_over_the_left_card_stack(t) -> void:

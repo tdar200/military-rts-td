@@ -20,6 +20,8 @@ const WorldProps := preload("res://scripts/world/world_props.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const WorldFx := preload("res://scripts/world/world_fx.gd")
 const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
+const AudioDirector := preload("res://scripts/audio/audio_director.gd")
+const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -82,6 +84,13 @@ class UnitMotion:
 	var side := 1.0  # the side of the path the next puff rises on
 	var wash := 0.0  # seconds since the last rotor-wash ring
 var sim_paused := false  # set_sim_paused: the bridge holds the sim still, the effects hold their time
+## Kestrel sound (plan 2026-10-06-kestrel-next-level, Task 5): the AudioDirector deciding every cue (a test puts a
+## recording stub here) and the AudioPool playing them (made only in the tree). Both stay null in Survival, which keeps
+## its generated tones (_cue falls back to _play_tone with the legacy arguments).
+var audio: RefCounted
+var audio_pool: Node
+var _audio_sites: Dictionary = {}  # human building id -> true while it is a construction site (its completion sounds once)
+var _audio_hover_rect := Rect2()  # the HUD button under the pointer last frame (a rebuilt button in its place is the same)
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
 var _fit_parts: Dictionary = {}  # Kestrel only: model key -> each fitted mesh box in its root's space (picking)
 var _ground_deposits: Array = []  # deposits of the snapshot that carried the ground layer, for the prop scatter
@@ -522,6 +531,7 @@ func _sync_ground(snapshot: Dictionary) -> void:
 		world_fx = WorldFx.new()
 		world_fx.build(self)
 		world_fx.camera = camera
+		_setup_kestrel_audio()
 	_ground_deposits = snapshot.get("deposits", [])
 	_ground_route = snapshot.get("wave_route", [])
 	_build_terrain_dressing()
@@ -1289,6 +1299,8 @@ func _process(delta: float) -> void:
 	if world_fx != null:
 		world_fx.set_view(camera_view_target(), WorldArt.view_half_extent(camera_zoom, camera_aspect, camera_yaw))
 		_advance_fx(delta)
+	if _audio_on():
+		_update_audio()
 	for unit in units:
 		if not is_instance_valid(unit):
 			continue
@@ -1527,6 +1539,7 @@ func _unhandled_input(event: InputEvent) -> void:
 							unit.set_meta("manual_target", ground)
 					_show_move_marker(ground, attack_move_armed)
 					_show_order_path(selected_units, ground, attack_move_armed)
+					_order_ack()
 				attack_move_armed = false
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == Keybinds.SELECT_ARMY:
@@ -1820,6 +1833,7 @@ func _set_selection(selection: Array) -> void:
 		torus.ring_segments = 8
 		selection_ring = _mesh(torus, materials.glass, selected.position + Vector3.UP * 0.04)
 	selection_ring.visible = true
+	_sfx("select")
 	if world_art_on:  # the boards' selection ellipse round the painted base (_place_selection_ring)
 		_place_selection_ring(true)
 	var category := String(selected.get_meta("category", "unit"))
@@ -2342,11 +2356,11 @@ func _poll_bridge(delta: float) -> void:
 	if bridge_waves > previous_waves:
 		wave_warning_level = 0
 		_show_notification("ALIEN WAVE %02d INBOUND" % bridge_waves, "HOSTILE FORMATIONS ENTERING THE EARTHFRONT", Color("ff5968"))
-		_play_tone(165.0, 0.28, 0.17, -45.0)
+		_cue("wave_inbound", 165.0, 0.28, 0.17, -45.0)
 	elif bridge_next_wave_ticks > 0 and bridge_next_wave_ticks <= 300 and wave_warning_level < 2:
 		wave_warning_level = 2
 		_show_notification("TEN SECONDS", "ALIEN WAVE APPROACHING • FORM A DEFENSIVE LINE", Color("ff8b62"))
-		_play_tone(210.0, 0.18, 0.14, -30.0)
+		_cue("alert", 210.0, 0.18, 0.14, -30.0)
 	elif bridge_next_wave_ticks > 300 and bridge_next_wave_ticks <= 1350 and wave_warning_level < 1:
 		wave_warning_level = 1
 		_show_notification("ENEMY SIGNAL DETECTED", bridge_incoming_doctrine.to_upper() + " • ARRIVAL IN 45 SECONDS", Color("ffd071"))
@@ -2660,7 +2674,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 				_deploy_effect(destination, owner)
 				if owner == HUMAN and category == "unit":
 					_show_notification("UNIT READY", kind_name.to_upper() + " REPORTING FOR DUTY", Color("65e4da"))
-					_play_tone(620.0, 0.1, 0.1, 90.0)
+					_cue(AudioDirector.ack_for(kind_name), 620.0, 0.1, 0.1, 90.0)
 		var bridge_motion := destination - entity_node.position
 		bridge_motion.y = 0.0
 		var unit_card: MeshInstance3D = (entity_node.get_node_or_null("UnitVisual") as MeshInstance3D) if category == "unit" else null
@@ -2699,6 +2713,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 			"owner": int(entity_data.get("owner", 0)),
 			"kind": String(entity_data.get("kind", "")),
 		}
+		if category == "building":
+			_audio_site(bridge_id, int(entity_data.get("owner", 0)), int(entity_data.get("construction", 0)))
 		var relay_service: Dictionary = bridge_services.get(bridge_id, {})
 		var relay_marker := entity_node.get_node_or_null("RelayMarker") as Label3D
 		if bool(relay_service.get("alien_relay", false)):
@@ -2769,6 +2785,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 			continue
 		var stale := bridge_nodes[bridge_id] as Node3D
 		bridge_nodes.erase(bridge_id)
+		_audio_sites.erase(bridge_id)
 		units.erase(stale)
 		if is_instance_valid(stale):
 			if bridge_initialized:
@@ -3154,8 +3171,7 @@ func _structure_under_attack(position: Vector3, entity_data: Dictionary) -> void
 		return
 	alert_cooldown = 1.3
 	camera_shake = maxf(camera_shake, 0.42)
-	if is_inside_tree():
-		_play_tone(92.0, 0.09, 0.12, -25.0)
+	_sfx("alert")
 
 
 func _show_notification(title: String, body: String, color: Color) -> void:
@@ -3181,6 +3197,114 @@ func _play_tone(frequency: float, duration: float, volume: float, sweep := 0.0) 
 			var sample := sin(TAU * hz * t) * volume * envelope
 			playback.push_frame(Vector2(sample, sample))
 	get_tree().create_timer(duration + 0.12).timeout.connect(player.queue_free)
+
+
+## Kestrel sound: the director, and in the running game (in the tree) the player pool, which takes over the ambience
+## player on the Ambient bus so explosions and alerts can duck it.
+func _setup_kestrel_audio() -> void:
+	audio = AudioDirector.new()
+	audio.configure(AudioPool.load_manifest())
+	audio.set_paused(sim_paused)
+	if not is_inside_tree():
+		return  # a test's scene: decisions only, no players
+	audio_pool = AudioPool.new()
+	audio_pool.name = "AudioPool"
+	add_child(audio_pool)
+	audio_pool.setup(AudioPool.load_manifest())
+	audio_pool.adopt_ambient(get_node_or_null("EarthfrontAmbience") as AudioStreamPlayer)
+	audio_pool.set_paused(sim_paused)
+
+
+## Kestrel sound is on: a director exists and the world-art profile is active. Survival never has a director.
+func _audio_on() -> bool:
+	return audio != null and world_art_on
+
+
+## One cue through the director: `at` a ground point (Vector3.INF for a global cue), `delay` seconds from now (a shot
+## replayed at its own tick's rhythm). Nothing without Kestrel sound; the pool plays what the director lets through.
+func _sfx(id: String, at := Vector3.INF, delay := 0.0) -> void:
+	if id == "" or not _audio_on():
+		return
+	var r: Dictionary = audio.request(id, at, time_alive + delay)
+	if audio_pool != null and bool(r.get("play", false)):
+		audio_pool.play(r, delay)
+
+
+## A cue Survival also sounds: Kestrel plays `id`, Survival the legacy tone with exactly its old arguments.
+func _cue(id: String, frequency: float, duration: float, volume: float, sweep := 0.0) -> void:
+	if _audio_on():
+		_sfx(id)
+	else:
+		_play_tone(frequency, duration, volume, sweep)
+
+
+## Every Kestrel frame: the director gets the camera's ground rectangle; the pool the loop beds, the duck and the HUD hover.
+func _update_audio() -> void:
+	if not _audio_on():
+		return
+	if is_inside_tree() and camera != null:
+		audio.set_view(view_ground_rect())
+	var levels: Dictionary = audio.loops(_audio_moving())
+	if audio_pool == null:
+		return
+	audio_pool.set_loops(levels)
+	audio_pool.set_duck(audio.duck_db(time_alive))
+	_hover_control(get_viewport().gui_get_hovered_control())
+
+
+## The ground positions of the units moving now (UnitMotion at dust speed or faster), by the loop bed they add.
+func _audio_moving() -> Dictionary:
+	var moving := {}
+	for value in unit_motion.values():
+		var m: UnitMotion = value
+		if not is_instance_valid(m.node) or m.speed < DUST_SPEED:
+			continue
+		var id := AudioDirector.loop_for(m.kind)
+		if id == "":
+			continue
+		if not moving.has(id):
+			moving[id] = []
+		moving[id].append(m.node.position)
+	return moving
+
+
+## A move or attack order: one acknowledgement, by the class of the first selected unit (none for a building).
+func _order_ack() -> void:
+	for unit in selected_units:
+		if is_instance_valid(unit) and String(unit.get_meta("category", "unit")) == "unit":
+			_sfx(AudioDirector.ack_for(String(unit.get_meta("kind_name", ""))))
+			return
+
+
+## A human building's construction, per snapshot: a site is remembered, and its first complete reading after that
+## sounds build_complete once (a building first seen complete, an alien one, or a re-delivered snapshot never does).
+func _audio_site(id: int, owner: int, remaining: int) -> void:
+	if owner != HUMAN or not _audio_on():
+		return
+	if remaining > 0:
+		_audio_sites[id] = true
+	elif _audio_sites.erase(id) and bridge_initialized:
+		_sfx("build_complete")
+
+
+## Any HUD action (game_ui connects the HUD's action signal here): one click.
+func hud_clicked() -> void:
+	_sfx("ui_click")
+
+
+## The control under the pointer this frame: entering an enabled HUD button ticks once. The HUD rebuilds its buttons, so
+## a button is known by its screen rectangle, not its node.
+func _hover_control(control: Control) -> void:
+	var button := control as BaseButton
+	var hud: Control = ui.get("hud") if ui != null else null
+	if button == null or button.disabled or hud == null or not hud.is_ancestor_of(button):
+		_audio_hover_rect = Rect2()
+		return
+	var rect := button.get_global_rect() if button.is_inside_tree() else Rect2(button.position, button.size)
+	if rect == _audio_hover_rect:
+		return
+	_audio_hover_rect = rect
+	_sfx("ui_hover")
 
 
 func _impact_effect(position: Vector3, human_hit: bool) -> void:
@@ -3216,12 +3340,12 @@ func _kestrel_impact(position: Vector3, entity_data: Dictionary) -> void:
 		var kind := String(record.get("kind", ""))
 		if kind == "":
 			kind = String(entity_data.get("kind", ""))
-		world_fx.hit(position, WorldFx.weight_for(kind), ALIEN if owner == HUMAN else HUMAN)
+		var weight := WorldFx.weight_for(kind)
+		if world_fx.hit(position, weight, ALIEN if owner == HUMAN else HUMAN) > 0:
+			_sfx(AudioDirector.hit_sound(weight), position)
 	if owner == HUMAN and alert_cooldown <= 0.0:
 		alert_cooldown = 1.3
 		camera_shake = maxf(camera_shake, 0.42)
-		if is_inside_tree():
-			_play_tone(92.0, 0.09, 0.12, -25.0)
 
 
 ## Draws the new shots of a snapshot's `shots` window ([tick, ax, az, tx, tz] rows, positions as Fixed bits like
@@ -3299,6 +3423,7 @@ func _dispatch_shots(snapshot: Dictionary) -> int:
 		record.drew = true
 		drawn += 1
 		shots_drawn_total += 1
+		_sfx(AudioDirector.weapon_for(kind, owner), a, delay)
 		if String(shooter.get("category", "")) == "unit":
 			var node := bridge_nodes.get(int(shooter.get("id", -1))) as Node3D
 			var card: Node3D = node.get_node_or_null("UnitVisual") if is_instance_valid(node) else null
@@ -3494,11 +3619,13 @@ func _kestrel_death(entity: Node3D) -> void:
 		if card != null and card.has_meta("sprite_texture"):
 			at += WorldSprites.pad_spot(card.get_meta("sprite_texture"), card.scale.x)  # the painted footprint, north of the root
 			at.y = _height_world(at.x, at.z)
-		world_fx.collapse(at, tiles, owner)
+		if world_fx.collapse(at, tiles, owner) > 0:
+			_sfx(AudioDirector.death_sound(kind, "building"), at)
 	else:
 		var index := _bridge_kind_index(kind)
 		var tiles := float(WorldArt.UNIT_TILES[clampi(index, 0, WorldArt.UNIT_TILES.size() - 1)])
-		world_fx.explode(entity.position, tiles, owner)  # on the ground under the card: its scorch lies there
+		if world_fx.explode(entity.position, tiles, owner) > 0:  # on the ground under the card: its scorch lies there
+			_sfx(AudioDirector.death_sound(kind, "unit"), entity.position)
 	camera_shake = maxf(camera_shake, 0.78)
 
 
@@ -3560,14 +3687,14 @@ func _science_pulse() -> void:
 	for node in bridge_nodes.values():
 		if is_instance_valid(node) and int(node.get_meta("team", -1)) == HUMAN:
 			_deploy_effect(node.position, HUMAN)
-	_play_tone(430.0, 0.22, 0.14, 520.0)
+	_cue("build_complete", 430.0, 0.22, 0.14, 520.0)
 
 
 func _show_end_screen(winner: int) -> void:
 	if end_screen_shown:
 		return
 	end_screen_shown = true
-	_play_tone(360.0 if winner == HUMAN else 120.0, 0.34, 0.18, 420.0 if winner == HUMAN else -50.0)
+	_cue("build_complete" if winner == HUMAN else "wave_inbound", 360.0 if winner == HUMAN else 120.0, 0.34, 0.18, 420.0 if winner == HUMAN else -50.0)
 	ui.show_debrief()
 
 
@@ -3580,6 +3707,10 @@ func _orders_armed() -> bool:
 ## directory (godot-bridge.rs), the same file-flag channel as start.flag and restart.flag; removing it resumes the run.
 func set_sim_paused(on: bool) -> void:
 	sim_paused = on
+	if audio != null:
+		audio.set_paused(on)
+	if audio_pool != null:
+		audio_pool.set_paused(on)
 	var path := runtime_directory.path_join("pause.flag")
 	if on:
 		var flag := FileAccess.open(path, FileAccess.WRITE)
@@ -3651,7 +3782,7 @@ func _deploy_mission() -> void:
 	_kestrel_eval_tick = -1
 	_deploy_camera()
 	_play_deploy_sound()
-	_play_tone(520.0, 0.13, 0.16, 180.0)
+	_cue("select", 520.0, 0.13, 0.16, 180.0)
 	objective_label.text = "COMMAND LINK ESTABLISHED"
 	ui.begin_operation()
 
