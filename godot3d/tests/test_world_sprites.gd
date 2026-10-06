@@ -1356,3 +1356,204 @@ func test_survival_glide_is_untouched_by_the_pause(t) -> void:
 	t.ok(node.position.x > 0.0, "Survival keeps gliding to the last goal while paused, as before")
 	node.free()
 	scene.free()
+
+
+# --- Aim lean (plan 2026-10-06-kestrel-next-level, Task 9) -----------------------------------------------------------
+
+## The on-screen tilt (degrees, positive: the top to the right) of the card's standing axis as `xf` draws it.
+func _screen_tilt(xf: Transform3D) -> float:
+	var up := xf.basis * Vector3(0.0, _cos_pitch(), -WorldArt.PITCH_SIN)
+	var screen := Vector2(up.x, up.z * WorldArt.PITCH_SIN - up.y * _cos_pitch())  # screen y grows down
+	return rad_to_deg(atan2(screen.x, -screen.y))
+
+
+## The aim lean the spec asks for, built here independently of world_sprites.gd: a turn by `deg` (positive: the top to
+## the right) about the view axis through the card's root, lifted along the card's up by the painted base's reach on the
+## leaning side times sin(deg), so the base corner on that side stays on the contact line.
+func _expected_tilt(card: Node3D, deg: float) -> Transform3D:
+	var c := _cos_pitch()
+	var s := WorldArt.PITCH_SIN
+	var r := WorldSprites.opaque_bounds(card.get_meta("sprite_texture"))
+	var half := r.end.x - 0.5 if (deg > 0.0) != bool(card.get_meta("mirrored", false)) else 0.5 - r.position.x
+	var a := deg_to_rad(deg)
+	return Transform3D(Basis(Vector3(0.0, s, c), -a), Vector3(0.0, c, -s) * half * absf(sin(a)))
+
+
+## Steps an aim lean on `card` from `t0` to `t1` (s) in `n` frames; the largest |screen tilt| seen and its sign.
+func _lean_through(card: Node3D, t0: float, t1: float, n: int) -> Vector2:
+	var most := 0.0
+	var side := 0.0
+	for i in n + 1:
+		WorldSprites.aim_lean_step(card, lerpf(t0, t1, float(i) / float(n)))
+		var tilt := _screen_tilt(card.transform)
+		if absf(tilt) > most:
+			most = absf(tilt)
+			side = signf(tilt)
+	return Vector2(most, side)
+
+
+func _no_aim_state(card: Node3D) -> bool:
+	for key in ["pose_rest", "pose_aim", "aim_t0", "aim_peak", "aim_from", "aim_shadows"]:
+		if card.has_meta(key):
+			return false
+	return true
+
+
+func test_aim_lean_tilts_toward_the_target_side_and_returns_exactly(t) -> void:
+	for kind in ["Infantry", "Tank", "AntiArmor", "Helicopter", "Capital"]:
+		for owner in [0, 1]:
+			var card := WorldSprites.make_card(kind, owner, WorldSprites.tiles_for(kind), true)
+			var hover := float(card.get_meta("hover"))
+			card.set_meta("base_y", 0.05)
+			card.position.y = 0.05 + hover
+			var rest := card.transform
+			var label := "%s/%d" % [kind, owner]
+			var cap := float(WorldSprites.AIM_LEAN_DEG.get(kind, WorldSprites.AIM_LEAN_DEG_DEFAULT))
+			t.ok(cap >= 4.0 and cap <= WorldSprites.AIM_LEAN_MAX_DEG and WorldSprites.AIM_LEAN_MAX_DEG <= 6.0, "%s: 4 to 6 degrees (%.1f)" % [label, cap])
+			for side in [1.0, -1.0]:
+				WorldSprites.aim_lean(card, Vector3(side * 3.0, 0.0, 0.4), 1.0)
+				var seen := _lean_through(card, 1.0, 1.0 + WorldSprites.AIM_LEAN_S * 0.999, 30)
+				t.ok(seen.x > 0.6 * cap, "%s side %+d: it leans (%.2f deg)" % [label, int(side), seen.x])
+				t.ok(seen.x <= WorldSprites.AIM_LEAN_MAX_DEG + 1e-3, "%s side %+d: capped (%.2f deg)" % [label, int(side), seen.x])
+				t.eq(seen.y, side, "%s: toward the target's side of the screen" % label)
+				t.ok(not WorldSprites.aim_lean_step(card, 1.0 + WorldSprites.AIM_LEAN_S), "%s: over after AIM_LEAN_S" % label)
+				t.ok(card.transform == rest, "%s side %+d: exactly at rest, no residual (%s)" % [label, int(side), card.transform])
+				t.ok(_no_aim_state(card), "%s: no pose state left" % label)
+				for part in ["SpriteShadow", "SpriteContact"]:
+					var n := card.get_node(part) as Node3D
+					t.ok(n.transform == Transform3D(Basis(), Vector3(0.0, -hover / card.scale.y, 0.0)), "%s %s: home exactly" % [label, part])
+			card.free()
+
+
+func test_aim_lean_needs_a_horizontal_target_and_a_unit(t) -> void:
+	var card := WorldSprites.make_card("Tank", 0, 1.71, true)
+	card.set_meta("base_y", 0.05)
+	card.position.y = 0.05
+	var rest := card.transform
+	WorldSprites.aim_lean(card, Vector3(0.0, 0.0, -2.0), 0.0)  # straight up the screen: no side to lean to
+	t.ok(not WorldSprites.aim_lean_step(card, 0.1), "a target dead ahead: no lean")
+	WorldSprites.aim_lean(card, Vector3(0.0, 1.0, 0.0), 0.0)
+	t.ok(not WorldSprites.aim_lean_step(card, 0.1), "no ground direction: no lean")
+	t.ok(card.transform == rest and _no_aim_state(card), "untouched")
+	for i in 10:
+		WorldSprites.aim_lean_step(card, 0.1 * i)
+	t.ok(card.transform == rest and _no_aim_state(card), "stepping without a shot does nothing")
+	card.free()
+	var building := WorldSprites.make_card("GunTurret", 0, 1.4)
+	var at := building.transform
+	WorldSprites.aim_lean(building, Vector3(3.0, 0.0, 0.0), 0.0)
+	t.ok(not WorldSprites.aim_lean_step(building, 0.08), "a building never leans")
+	t.ok(building.transform == at and _no_aim_state(building), "the turret card is untouched")
+	building.free()
+
+
+func test_aim_lean_amplitude_is_the_horizontal_share(t) -> void:
+	var card := WorldSprites.make_card("Infantry", 0, WorldSprites.tiles_for("Infantry"), true)
+	card.set_meta("base_y", 0.0)
+	var full := 0.0
+	for spec in [[Vector3(4, 0, 0), "east"], [Vector3(2, 0, -2), "north east"]]:
+		WorldSprites.aim_lean(card, spec[0], 0.0)
+		var seen := _lean_through(card, 0.0, WorldSprites.AIM_LEAN_S * 0.999, 40)
+		if full == 0.0:
+			full = seen.x
+		else:
+			t.near(seen.x / full, sqrt(0.5), 0.05, "a target up and to the right leans by its sideways share (%.2f of %.2f)" % [seen.x, full])
+		WorldSprites.aim_lean_step(card, 10.0)
+	card.free()
+
+
+func test_aim_lean_composes_with_the_walk_and_the_kick(t) -> void:
+	var card := WorldSprites.make_card("Tank", 1, 1.71, true)
+	card.set_meta("base_y", 0.05)
+	card.position.y = 0.05
+	var rest := _rest_of(card)
+	WorldSprites.animate(card, "Tank", 1.0, 0.40, 0.5, 1.0, 0.7)
+	WorldSprites.kick(card, Vector3(-1, 0, 0.3), 0.40)
+	WorldSprites.aim_lean(card, Vector3(-1, 0, 0.3), 0.40)
+	for now in [0.43, 0.46, 0.52, 0.58]:
+		WorldSprites.recoil_step(card, now)
+		WorldSprites.aim_lean_step(card, now)
+		var shape: Vector3 = card.get_meta("pose_anim")
+		var kick = card.get_meta("pose_kick", Vector2.ZERO)
+		var deg := rad_to_deg(float(card.get_meta("pose_aim")))
+		var origin := rest.origin + Vector3((kick as Vector2).x, 0.0, (kick as Vector2).y)
+		var walk := Transform3D(rest.basis * Basis(Vector3(shape.y, 0, 0), Vector3(shape.x, shape.z, 0), Vector3(0, 0, 1)), origin)
+		var want := walk * _expected_tilt(card, deg)
+		t.ok(_xf_near(card.transform, want, 1e-5), "t %.2f: rest x walk x kick x lean (%.2f deg)" % [now, deg])
+		t.ok(deg < -0.5 or now > 0.6, "t %.2f: leaning left, toward a target to the west (%.2f)" % [now, deg])
+		# the shadows keep the walk's shape and ignore the lean
+		for part in ["SpriteShadow", "SpriteContact"]:
+			var n := card.get_node(part) as Node3D
+			t.ok(_xf_near(card.transform * n.transform, walk, 1e-5), "t %.2f %s: as without the lean" % [now, part])
+	WorldSprites.recoil_step(card, 0.7)
+	WorldSprites.aim_lean_step(card, 0.7)
+	t.ok(not card.has_meta("pose_aim"), "the lean is over")
+	WorldSprites.animate(card, "Tank", 0.0, 0.8, 0.9, 1.0, 0.0)
+	t.ok(card.transform == rest, "walk, kick and lean over: exactly the rest (%s)" % card.transform)
+	t.ok(_no_aim_state(card), "no pose state left")
+	card.free()
+
+
+func test_aim_lean_keeps_the_base_on_the_ground(t) -> void:
+	# a turn about the root would push the base corner on the leaning side into the terrain: the lift keeps it on the line
+	var card := WorldSprites.make_card("Tank", 0, 1.71, true)
+	card.set_meta("base_y", 0.0)
+	var rest := card.transform
+	var r := WorldSprites.opaque_bounds(card.get_meta("sprite_texture"))
+	WorldSprites.aim_lean(card, Vector3(5, 0, 0), 0.0)
+	WorldSprites.aim_lean_step(card, WorldSprites.AIM_LEAN_S * WorldSprites.AIM_LEAN_RISE)
+	var lowest := INF
+	for u in [r.position.x, r.end.x]:
+		var p := Vector3(u - 0.5, 0.0, 0.0)
+		lowest = minf(lowest, (card.transform * p).y - (rest * p).y)
+	t.near(lowest, 0.0, 1e-5, "the painted base's lower corner stays on the contact line")
+	card.free()
+
+
+func test_a_bridge_shot_leans_its_shooter_and_freezes_with_the_pause(t) -> void:
+	var scene := _kestrel_scene()
+	var dir := OS.get_cache_dir().path_join("rts_aim_pause_test")
+	DirAccess.make_dir_recursive_absolute(dir)
+	scene.runtime_directory = dir
+	var at: Vector3 = scene._hex_world(10, 12)
+	scene.world_fx.set_view(at, Vector2(12, 10))
+	var e := _unit_entity(scene, 1901, "Infantry", 0, at)
+	scene._sync_bridge_entities([e])
+	for i in 10:
+		_frame(scene, 1.0 / 60.0)
+	var unit: Node3D = scene.bridge_nodes[1901]
+	var card := unit.get_node("UnitVisual") as MeshInstance3D
+	var rest := card.transform
+	var pick: Array = (unit.get_meta("pick_parts") as Array).duplicate(true)
+	var ring: Dictionary = scene._ring_shape(unit)
+	var bar := (unit.get_node("HealthBack") as Node3D).position
+	scene._dispatch_shots({"tick": 30, "entities": [e], "shots": []})  # the first poll only seeds
+	for i in 20:
+		_frame(scene, 1.0 / 60.0)
+	t.ok(card.transform == rest and not card.has_meta("pose_aim"), "no shot: no lean")
+	var west: Vector2i = scene._world_to_sim_bits(scene._hex_world(6, 12))
+	t.eq(scene._dispatch_shots({"tick": 31, "entities": [e], "shots": [[31, e.x_bits, e.z_bits, west.x, west.y]]}), 1, "the shot draws")
+	for i in 4:
+		_frame(scene, 1.0 / 60.0)
+	var tilt := _screen_tilt(card.transform)
+	t.ok(tilt < -1.0, "leaning toward the target to the west (%.2f deg)" % tilt)
+	t.eq(unit.get_meta("pick_parts"), pick, "the pick box stays")
+	t.eq(scene._ring_shape(unit), ring, "the selection ellipse stays")
+	t.ok((unit.get_node("HealthBack") as Node3D).position == bar, "the bars stay")
+	var shadow_now := card.transform * (card.get_node("SpriteShadow") as Node3D).transform
+	var kick = card.get_meta("pose_kick", Vector2.ZERO)
+	t.ok(_xf_near(shadow_now, Transform3D(rest.basis, rest.origin + Vector3((kick as Vector2).x, 0.0, (kick as Vector2).y)), 1e-5), "the shadow ignores the lean")
+	scene.set_sim_paused(true)
+	var held := card.transform
+	for i in 60:
+		_frame(scene, 1.0 / 30.0)
+	t.ok(card.transform == held, "paused: the lean holds")
+	scene.set_sim_paused(false)
+	for i in 30:
+		_frame(scene, 1.0 / 60.0)
+	t.ok(card.transform == rest, "resumed and done: exactly at rest (%s)" % card.transform)
+	t.ok(_no_aim_state(card) and not card.has_meta("pose_kick"), "no pose state left")
+	t.ok((card.get_node("SpriteShadow") as Node3D).transform == Transform3D.IDENTITY, "the shadow back at identity")
+	t.eq(scene.recoiling.size(), 0, "nothing left to step")
+	DirAccess.remove_absolute(dir)
+	scene.free()

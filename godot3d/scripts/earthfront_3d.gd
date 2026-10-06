@@ -3512,7 +3512,8 @@ func _kestrel_impact(position: Vector3, entity_data: Dictionary) -> void:
 ## it. Rows that are short, non-numeric or out of the window are skipped. A shot with neither end in view is skipped;
 ## past SHOTS_PER_POLL the oldest new shots are dropped. The attacker is the nearest entity within SHOT_KIND_RADIUS of the
 ## shot's start among this snapshot's entities, then bridge_nodes (the last poll's, so a shooter killed this tick); none
-## gives the infantry look on the target's enemy side. A unit attacker's card kicks back. Returns the shots drawn.
+## gives the infantry look on the target's enemy side. A unit attacker's card kicks back and leans toward its target.
+## Returns the shots drawn.
 func _dispatch_shots(snapshot: Dictionary) -> int:
 	if world_fx == null:
 		return 0
@@ -3586,6 +3587,7 @@ func _dispatch_shots(snapshot: Dictionary) -> int:
 			var card: Node3D = node.get_node_or_null("UnitVisual") if is_instance_valid(node) else null
 			if card != null and card.has_meta("sprite_kind"):
 				WorldSprites.kick(card, b - a, world_fx.time + delay)
+				WorldSprites.aim_lean(card, b - a, world_fx.time + delay)  # the same shot: toward its real target
 				recoiling[card.get_instance_id()] = card
 	return drawn
 
@@ -3676,14 +3678,18 @@ func _prune_shot_records() -> void:
 
 
 ## Steps the effects (frozen while the game is paused, so nothing burns out or flies on behind the pause menu) and the
-## recoiling unit cards on the effects clock.
+## recoiling and aim-leaning unit cards on the effects clock.
 func _advance_fx(delta: float) -> void:
 	if world_fx == null:
 		return
 	world_fx.advance(0.0 if sim_paused else delta)
 	for id in recoiling.keys():
 		var card = recoiling[id]
-		if not is_instance_valid(card) or not WorldSprites.recoil_step(card, world_fx.time):
+		if not is_instance_valid(card):
+			recoiling.erase(id)
+			continue
+		var kicking := WorldSprites.recoil_step(card, world_fx.time)
+		if not WorldSprites.aim_lean_step(card, world_fx.time) and not kicking:
 			recoiling.erase(id)
 
 

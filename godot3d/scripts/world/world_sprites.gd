@@ -832,32 +832,45 @@ static func apply_pose(card: Node3D) -> void:
 		origin.x += (kick as Vector2).x
 		origin.z += (kick as Vector2).y
 	var posed = card.get_meta("pose_anim", false)
-	if not posed is Vector3:
+	var aim = card.get_meta("pose_aim", false)
+	if not posed is Vector3 and not aim is float:
 		card.transform = Transform3D(rest.basis, origin)
 		_place_shadows(card, Vector3(0.0, 1.0, 1.0))
 		if not kick is Vector2:
 			card.remove_meta("pose_rest")
 			card.remove_meta("pose_bob")
 		return
-	var shape: Vector3 = posed  # lean (a shear of local y into x), x scale, local y scale
-	card.transform = Transform3D(rest.basis * Basis(Vector3(shape.y, 0.0, 0.0), Vector3(shape.x, shape.z, 0.0), Vector3(0.0, 0.0, 1.0)), origin)
-	_place_shadows(card, shape)
+	var shape := Vector3(0.0, 1.0, 1.0)  # lean (a shear of local y into x), x scale, local y scale
+	if posed is Vector3:
+		shape = posed
+	var xf := Transform3D(rest.basis * Basis(Vector3(shape.y, 0.0, 0.0), Vector3(shape.x, shape.z, 0.0), Vector3(0.0, 0.0, 1.0)), origin)
+	var tilt := aim_transform(card, float(aim)) if aim is float else Transform3D.IDENTITY
+	card.transform = xf * tilt
+	_place_shadows(card, shape, tilt)
 
 
 ## A hovering card's shadows hang under it (shadow_drop, in card units); under a reshape they are placed so that they
-## still land straight under the root on the ground.
-static func _place_shadows(card: Node3D, shape: Vector3) -> void:
-	if not card.has_meta("shadow_drop"):
+## still land straight under the root on the ground. Under an aim lean (`tilt`, in the card's own space) both shadows
+## take its inverse, so they lie exactly where they would without it; once the lean is over they are written back.
+static func _place_shadows(card: Node3D, shape: Vector3, tilt := Transform3D.IDENTITY) -> void:
+	var tilted := tilt != Transform3D.IDENTITY
+	if not card.has_meta("shadow_drop") and not tilted and not card.has_meta("aim_shadows"):
 		return
-	var drop := float(card.get_meta("shadow_drop"))
+	var drop := float(card.get_meta("shadow_drop", 0.0))
 	var at := Vector3(0.0, drop, 0.0)
 	if shape != Vector3(0.0, 1.0, 1.0):
 		at.y = drop / shape.z
 		at.x = -shape.x * at.y / shape.y
+	var xf := Transform3D(Basis(), at)
+	if tilted:
+		xf = tilt.affine_inverse() * xf
+		card.set_meta("aim_shadows", true)
+	elif card.has_meta("aim_shadows"):
+		card.remove_meta("aim_shadows")
 	for part in ["SpriteShadow", "SpriteContact"]:
 		var n := card.get_node_or_null(part) as Node3D
 		if n != null:
-			n.position = at
+			n.transform = xf
 
 
 ## Recoil (Task 3, a pose layer since Task 4): a unit card that fires kicks back along the ground, away from its target,
@@ -905,6 +918,81 @@ static func recoil_step(card: Node3D, now: float) -> bool:
 	card.set_meta("pose_kick", Vector2(d.x * p, d.z * p))
 	apply_pose(card)
 	return true
+
+
+## Aim lean (plan 2026-10-06-kestrel-next-level, Task 9): a unit card that fires leans toward its target's side of the
+## screen, a turn in the card's own plane (about the view axis) of at most AIM_LEAN_DEG over AIM_LEAN_S, eased in over
+## AIM_LEAN_RISE of it and eased back out, then exactly its rest again. It pivots on the painted base: the turn is about
+## the root and the card rides up along its own up by the painted base's reach on the leaning side times sin(angle), so
+## the base corner on that side stays on the contact line and the other lifts a little. The dispatcher starts it beside the recoil kick
+## from the same shot (its direction and its muzzle time), so it faces the real target and never moves without a shot. A
+## target straight up or down the screen leans by its sideways share only: none at all. The card alone turns: the pick
+## box, the bars and the selection ellipse read the rest, and the shadows take the lean's inverse (_place_shadows). It
+## runs on the effects clock, so the pause holds it. Buildings never lean (only UNIT_KINDS).
+const AIM_LEAN_S := 0.25
+const AIM_LEAN_RISE := 0.35
+const AIM_LEAN_DEG := {"Infantry": 5.0, "AntiArmor": 5.0, "Tank": 4.0, "Helicopter": 6.0, "Capital": 4.0}
+const AIM_LEAN_DEG_DEFAULT := 5.0
+const AIM_LEAN_MAX_DEG := 6.0
+
+
+## Starts an aim lean on `card` toward `toward` (the shot's world direction; only its ground part counts) at time `start`
+## (the effects clock). A lean on a lean starts from the angle the card shows now, so it never jumps.
+static func aim_lean(card: Node3D, toward: Vector3, start: float) -> void:
+	if not UNIT_KINDS.has(String(card.get_meta("sprite_kind", ""))):
+		return
+	var ground := Vector2(toward.x, toward.z)
+	if ground.length_squared() < 1e-10:
+		return
+	var deg := minf(float(AIM_LEAN_DEG.get(String(card.get_meta("sprite_kind")), AIM_LEAN_DEG_DEFAULT)), AIM_LEAN_MAX_DEG)
+	var peak := deg_to_rad(deg) * ground.x / ground.length()
+	var from := float(card.get_meta("pose_aim", 0.0))
+	if absf(peak) < 1e-4 and absf(from) < 1e-9:
+		return
+	pose_begin(card)
+	card.set_meta("aim_t0", start)
+	card.set_meta("aim_peak", peak)
+	card.set_meta("aim_from", from)
+	card.set_meta("pose_aim", from)  # a live layer from now, as the kick is
+
+
+## Places a leaning card for time `now`; true while the lean runs (or waits on its shot), false once it is over (the card
+## exactly at its rest, or on its other layers, and the lean's state gone).
+static func aim_lean_step(card: Node3D, now: float) -> bool:
+	if not card.has_meta("aim_t0"):
+		return false
+	var f := (now - float(card.get_meta("aim_t0"))) / AIM_LEAN_S
+	if f >= 1.0:
+		for key in ["aim_t0", "aim_peak", "aim_from", "pose_aim"]:
+			card.remove_meta(key)
+		apply_pose(card)
+		return false
+	var peak := float(card.get_meta("aim_peak"))
+	var angle := float(card.get_meta("aim_from"))
+	if f >= AIM_LEAN_RISE:
+		angle = peak * smoothstep(0.0, 1.0, (1.0 - f) / (1.0 - AIM_LEAN_RISE))
+	elif f > 0.0:
+		angle = lerpf(angle, peak, smoothstep(0.0, 1.0, f / AIM_LEAN_RISE))
+	card.set_meta("pose_aim", angle)
+	apply_pose(card)
+	return true
+
+
+## The aim lean by `angle` (radians, positive: the top to the right on screen) in the card's own space: a turn about the
+## view axis through the root, lifted along the card's up so the painted base's corner on the leaning side (the lower one)
+## stays on the contact line.
+static func aim_transform(card: Node3D, angle: float) -> Transform3D:
+	if angle == 0.0:
+		return Transform3D.IDENTITY
+	var c := cos_pitch()
+	var s := WorldArt.PITCH_SIN
+	var half := 0.5  # the painted base's reach from the root toward the leaning side (card widths)
+	var tex = card.get_meta("sprite_texture", null)
+	if tex is Texture2D:
+		var r := opaque_bounds(tex)
+		var right := (angle > 0.0) != bool(card.get_meta("mirrored", false))
+		half = r.end.x - 0.5 if right else 0.5 - r.position.x
+	return Transform3D(Basis(Vector3(0.0, s, c), -angle), Vector3(0.0, c, -s) * half * absf(sin(angle)))
 
 
 ## Movement animation (Task 4): a moving unit's card is reshaped about its contact line, so the painted ground (the
