@@ -703,3 +703,47 @@ Firing used to show nothing but the target's hit flash. On Kestrel every round i
   every board within 0.15 (gp01 80.88, gp03 82.62, gp04 77.84, gp05 80.70, gp06 80.57, gp07 80.31, gp08 74.38),
   `tools/ui/world_scores.json` left as it is. The GPU firefight budget was not measured (no window on the user's
   display).
+
+### Movement animation (combat and motion plan Task 4, 2026-10-06)
+
+A Kestrel unit used to slide between its 8 Hz positions as a still painting. A moving unit's card now moves as its kind
+moves, and the ground under it answers.
+
+- Looks (`WorldSprites.animate`, one table `WorldSprites.ANIM`, one row per kind): infantry a stride bob (the card's
+  height swings once a footfall, a step every 0.62 world units) with a slight lean into the motion and a side-to-side
+  rock; anti-armour teams walk the same way with a longer, heavier step and a small lurch as they set off (the plan said
+  rumble, but the painting is a team on foot, and an engine rumble on it read wrong); tanks an engine rumble (two
+  mixed sines near 11 Hz) and a start/stop lurch (stretched along the motion and leaning back as they pull away,
+  squashed and dipping forward as they brake); harvesters a heavy sway with a softer rumble and lurch; gunships a forward
+  tilt into the motion with a slow sway; capitals a slow, heavy sway, a faint rumble and a lurch. At normal zoom
+  (infantry about 40 px) the amplitudes are a few pixels: an infantry top swings about 3 px either way, a tank rumbles
+  about 2.5 px, a gunship tilts 7 to 12 px forward, a capital sways about 6 px. Amplitude grows with ground speed and is
+  zero at a standstill.
+- How: the card is reshaped about its contact line (a shear of its height into x, and a scale of its width and its
+  standing height), so the painted feet and tracks and the ground strip never leave the terrain. No per-unit material,
+  no extra node. A gunship's shadow and contact band are moved under the tilt so they stay on the ground under it.
+- One rest, layered movers: the first mover to start (a firing kick, the walk) records the card's rest transform; the
+  walk, the recoil kick and the gunship bob are layers over it, and `_lift_unit_card` moves the rest itself. A unit
+  that stops returns to exactly that rest (within 1e-5) and drops all pose state; a kick during a walk comes home to the
+  walk, not to a mid-stride frame. Picking, the selection ellipse, the bars, the badge and the crown read the rest
+  (`card_width`, `rest_lift`), never the reshaped card.
+- Driving it: `_glide_bridge_nodes` starts tracking a unit only when its root actually moved this frame;
+  `_animate_unit_cards` smooths each tracked root's own per-frame step (0.18 s) into a ground speed, a heading and an
+  acceleration, and drops the unit once it is still and settled. Idle frames cost one emptiness check.
+- Dust (`WorldFx.dust`, `WorldFx.wash`): a moving unit raises small soft puffs of pale sandy dust (the smoke sprite at
+  `KICKED_TINT`) behind it at the ground, alternating either side of its path, at a spacing by kind: a tank every 0.2
+  world units and wide, a harvester and anti-armour close behind, infantry light and sparse. A moving gunship leaves a
+  rotor-wash ring spreading flat on the ground under it and two puffs blown aside. Dust is the lowest priority card: it
+  spawns only while fewer than 80 of the 128 cards are live, so it never takes a combat effect's slot. Survival keeps its
+  grey sphere puff.
+- Pause: the walk runs on the effects clock, so the pause menu freezes it mid-stride with the effects; no dust rises
+  while paused. Every pause in the game goes through `set_sim_paused` (the pause menu and the controls page over play);
+  the HUD speed buttons do nothing on the bridge, and nothing sets the tree's pause or the engine time scale.
+- Status bars: on Kestrel the health and shield bars cast no real shadow. Each shown bar used to throw a dark stripe far
+  across the ground, nowhere near its owner (the dark bars in the Task 3 captures were the alien squad's and the CC's
+  bars).
+- Cost: idle unchanged (home 25 draw calls / 156,776 primitives, max 78 / 209,766); twelve units marching in the
+  software capture added 2 draw calls and 512 primitives (the dust layers). 60 units of every kind marching at 60 fps
+  with 8 Hz polls, headless on the loaded machine: `_animate_unit_cards` (poses and dust) about 0.27 ms p50 and
+  0.46 to 0.50 ms p95 per frame (load average 4 to 16), live cards held at the 80-card dust room; idle 0 ms. Idle boards against the previous
+  scores: every board within 0.15 (unchanged from Task 3); Survival pair 99.41.
