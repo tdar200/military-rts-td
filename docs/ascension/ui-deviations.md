@@ -888,7 +888,8 @@ there; its world SHA pins are unchanged.
   `WorldArt.clamp_focus` as panning (current zoom limits, aspect, yaw, art bounds). A press in the letterbox outside the
   map rect (`map_world_rect`, the hex extent) does nothing. Holding the button and dragging keeps jumping, clamped to the
   map edge. The drag clears on release, on any motion with the button up, on window focus loss, on pause and when the
-  screen blocks the world (research, scrim, menus).
+  screen blocks the world (research, scrim, menus). A release the viewport saw but the minimap never got (live QA: the
+  click that also focuses the window loses the GUI's mouse focus) ends the drag on the next frame.
 - Clicks never fall through: the minimap control accepts every button event over it (left, right, middle, wheel), so the
   world never selects, orders or zooms from a minimap click. A right click issues no order. A stray release with no drag
   in progress passes on.
@@ -910,5 +911,6 @@ there; its world SHA pins are unchanged.
 - Fog: rings come only from human-owned entities, which are always in sight, so they say nothing about hidden enemies.
 - Controls screen: Kestrel lists "Jump to alert" (Space) and "Jump on minimap" (Click map) under Camera. The gallery gp10
   board and Survival keep the old rows, so their pixel gates are unchanged.
-- Not unit-tested: GUI routing of a real click to the minimap control (the test runner's tree is not live); it was checked
-  live in the Task 8 QA capture.
+- Not unit-tested: GUI routing of a real click to the minimap control (the test runner's tree is not live). It was checked
+  live on a private Xvfb with real X pointer events (xdotool): press, drag, release, right click, a second click and Space
+  with no alert, the army selected throughout and no bridge command written.

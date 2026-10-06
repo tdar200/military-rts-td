@@ -228,6 +228,22 @@ func test_a_release_that_never_came_does_not_leave_the_drag_stuck(t) -> void:
 	g.world_art_on = false
 	ui.process(0.2)
 	t.ok(not ui._minimap_drag, "turning the feature off clears it")
+	g.world_art_on = true
+	ui.process(0.2)
+	# Live QA: a click that focuses the window loses the GUI's mouse focus, so the release reaches the viewport (_input)
+	# but never the minimap. The next frame ends the drag anyway.
+	ui._minimap_event(_press(_local_of(ui, 12.0, 8.0)))
+	ui._input(_press(_local_of(ui, 12.0, 8.0), MOUSE_BUTTON_LEFT, false))
+	t.ok(ui._minimap_drag, "the release seen by the viewport leaves the drag for the minimap's own release this frame")
+	ui.process(0.05)
+	t.ok(not ui._minimap_drag, "a release the minimap never got ends the drag on the next frame")
+	ui._minimap_event(_press(_local_of(ui, 12.0, 8.0)))
+	ui._input(_press(_local_of(ui, 12.0, 8.0), MOUSE_BUTTON_LEFT, false))
+	t.ok(ui._minimap_event(_press(_local_of(ui, 12.0, 8.0), MOUSE_BUTTON_LEFT, false)), "the minimap's own release is still ours")
+	ui.process(0.05)
+	ui._minimap_event(_press(_local_of(ui, 12.0, 8.0)))
+	ui.process(0.05)
+	t.ok(ui._minimap_drag, "a later drag is not ended by the earlier release")
 	_drop(p)
 
 

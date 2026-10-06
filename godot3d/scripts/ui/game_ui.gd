@@ -77,6 +77,7 @@ var _since_vm := VM_INTERVAL
 var _left_down := false
 var _marks_drawn := false
 var _minimap_drag := false  # Kestrel: the left button went down on the map inside the minimap and is still held
+var _minimap_release_due := false  # the viewport saw the left release during a drag; the next frame ends it if the minimap did not
 var _title_fogged := false  # the title already shows the Kestrel fog copy
 
 
@@ -198,6 +199,8 @@ func minimap_point(local: Vector2, clamp_to_map := false) -> Vector3:
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_left_down = event.pressed
+		# A click that focuses the window can lose the GUI's mouse focus, so the minimap may never get this release.
+		_minimap_release_due = _minimap_drag and not event.pressed
 
 
 func _notification(what: int) -> void:
@@ -240,6 +243,7 @@ func _minimap_event(event: InputEvent) -> bool:
 		if not event.pressed:
 			var ours := _minimap_drag
 			_minimap_drag = false
+			_minimap_release_due = false
 			return ours
 		var at := minimap_point(event.position)
 		if at.is_finite():
@@ -268,6 +272,9 @@ func process(delta: float) -> void:
 			_since_vm = 0.0
 			_refresh_pause()
 		return
+	if _minimap_release_due:
+		_minimap_release_due = false
+		_minimap_drag = false
 	_sync_minimap_input()
 	_refresh_hud(delta)
 	_pulse_pings()
