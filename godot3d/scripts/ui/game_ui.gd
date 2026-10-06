@@ -76,6 +76,7 @@ var _clock := 0.0
 var _since_vm := VM_INTERVAL
 var _left_down := false
 var _marks_drawn := false
+var _minimap_drag := false  # Kestrel: the left button went down on the map inside the minimap and is still held
 var _title_fogged := false  # the title already shows the Kestrel fog copy
 
 
@@ -155,20 +156,103 @@ func _mount_minimap() -> void:
 	cam.current = true
 	view.add_child(cam)
 	minimap_view.size = hud.map_slot.size
+	minimap_view.gui_input.connect(_on_minimap_input)
 
 
 ## World-space rectangle (x, z) the minimap camera shows, for the current slot shape. Empty until the slot has a size.
 func minimap_world_rect() -> Rect2:
-	var s: Vector2 = hud.map_slot.size
+	return _world_rect_for(hud.map_slot.size)
+
+
+## The orthographic camera keeps its MINIMAP_SPAN height and the SubViewport (stretched to its container) takes the slot's
+## aspect, so the view is MINIMAP_SPAN tall and as wide as the slot's shape asks: the map sits letterboxed inside it.
+static func _world_rect_for(s: Vector2) -> Rect2:
 	if s.x < 1.0 or s.y < 1.0:
 		return Rect2()
 	var w := MINIMAP_SPAN * s.x / s.y
 	return Rect2(MINIMAP_CENTER.x - w * 0.5, MINIMAP_CENTER.z - MINIMAP_SPAN * 0.5, w, MINIMAP_SPAN)
 
 
+## A pixel of the minimap (local to its container, `size` pixels) as the world point (x, z) the camera draws there: the
+## camera looks straight down, screen right is +x and screen down is +z (the marks use the same mapping).
+static func slot_to_world(local: Vector2, size: Vector2, world: Rect2) -> Vector2:
+	return Vector2(world.position.x + local.x / size.x * world.size.x, world.position.y + local.y / size.y * world.size.y)
+
+
+## Kestrel: the ground point under a minimap pixel, or Vector3.INF when it is past the map (the sea the letterbox shows).
+## `clamp_to_map` (a drag) pulls such a point to the nearest map edge instead.
+func minimap_point(local: Vector2, clamp_to_map := false) -> Vector3:
+	var size: Vector2 = minimap_view.size
+	var world := _world_rect_for(size)
+	if world.size.x <= 0.0 or not g.has_method("map_world_rect"):
+		return Vector3.INF
+	var at := slot_to_world(local, size, world)
+	var map: Rect2 = g.map_world_rect()
+	if clamp_to_map:
+		at = Vector2(clampf(at.x, map.position.x, map.end.x), clampf(at.y, map.position.y, map.end.y))
+	elif at.x < map.position.x or at.x > map.end.x or at.y < map.position.y or at.y > map.end.y:
+		return Vector3.INF
+	return Vector3(at.x, 0.0, at.y)
+
+
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_left_down = event.pressed
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_minimap_drag = false  # the release may never arrive: the next press starts afresh
+
+
+# ---------------------------------------------------------------- minimap: click and drag to move the camera (Kestrel)
+
+## Kestrel only (world art on, and the game can jump): Survival's minimap keeps ignoring the pointer as before.
+func _minimap_jumps() -> bool:
+	return bool(g.get("world_art_on")) and g.has_method("minimap_jump")
+
+
+## Kestrel's minimap passes the pointer to _on_minimap_input; Survival's ignores it. Called every frame the HUD runs.
+func _sync_minimap_input() -> void:
+	var want := Control.MOUSE_FILTER_PASS if _minimap_jumps() else Control.MOUSE_FILTER_IGNORE
+	if minimap_view.mouse_filter != want:
+		minimap_view.mouse_filter = want
+		_minimap_drag = false
+
+
+func _on_minimap_input(event: InputEvent) -> void:
+	if _minimap_event(event):
+		minimap_view.accept_event()
+
+
+## One pointer event on the minimap (local to it). True when it is used here, so it never reaches the world's selection,
+## orders or zoom. A left press on the map jumps the camera there and starts a drag that follows the pointer (clamped to
+## the map) until the release. A press past the map, a right or middle click and the wheel do nothing but are still kept
+## from the world. An armed placement or order stays armed: the minimap only moves the camera. A release with no drag of
+## ours (a box select that ended over the minimap) is passed on, so the world closes its box.
+func _minimap_event(event: InputEvent) -> bool:
+	if not _minimap_jumps() or world_blocked() or research.visible or scrim != null:
+		_minimap_drag = false
+		return false
+	if event is InputEventMouseButton:
+		if event.button_index != MOUSE_BUTTON_LEFT:
+			return true
+		if not event.pressed:
+			var ours := _minimap_drag
+			_minimap_drag = false
+			return ours
+		var at := minimap_point(event.position)
+		if at.is_finite():
+			_minimap_drag = true
+			g.minimap_jump(at)
+		return true
+	if event is InputEventMouseMotion and _minimap_drag:
+		if not (event.button_mask & MOUSE_BUTTON_MASK_LEFT):
+			_minimap_drag = false  # released somewhere we never heard of
+			return false
+		g.minimap_jump(minimap_point(event.position, true))
+		return true
+	return false
 
 
 ## Called every frame by the game. The view model is rebuilt about ten times a second, and never while a click is
@@ -177,12 +261,30 @@ func process(delta: float) -> void:
 	_refresh_title()
 	if paused():
 		# Frozen: no HUD rebuild, no ticker, no log samples, and the alert clock stands still. Only the pause screens refresh.
+		_minimap_drag = false
 		_watch_stop(delta)
 		_since_vm += delta
 		if _since_vm >= VM_INTERVAL:
 			_since_vm = 0.0
 			_refresh_pause()
 		return
+	_sync_minimap_input()
+	_refresh_hud(delta)
+	_pulse_pings()
+
+
+## Kestrel: the alert ping rings pulse from the game's alert clock every frame (after any HUD rebuild, so a new marks
+## control gets the time before it draws). Nothing while paused: process returns before this, and the clock stops anyway.
+func _pulse_pings() -> void:
+	if not hud.visible or g.get("alert_pings") == null:
+		return
+	var now := float(g.alert_clock())
+	for child in hud.get_node("minimap_marks").get_children():
+		if child.has_method("set_clock"):
+			child.set_clock(now)
+
+
+func _refresh_hud(delta: float) -> void:
 	_clock += delta
 	_refresh_minimap(delta)
 	session_log.observe(g)
@@ -513,6 +615,7 @@ func _watch_stop(delta: float) -> void:
 
 
 func _enter_pause() -> void:
+	_minimap_drag = false  # a drag held into the pause must not resume on its own after it
 	_pause_tick = int(g.bridge_tick)
 	_pause_seen_tick = _pause_tick
 	_pause_still_s = 0.0
@@ -616,7 +719,7 @@ func _refresh_pause(force := false) -> void:
 		return
 	var vm: Dictionary
 	if controls_open:
-		vm = Keybinds.vm(not _controls_over_play)
+		vm = Keybinds.vm(not _controls_over_play, bool(g.get("world_art_on")))
 	elif guide_open:
 		vm = _guide_vm()
 	else:

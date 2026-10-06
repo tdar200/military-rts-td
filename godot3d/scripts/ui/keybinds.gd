@@ -19,6 +19,12 @@ const SCIENCE := KEY_Y
 const REGION_MAP := KEY_M
 const FOCUS := KEY_F
 const HOME := KEY_HOME
+## Kestrel only: frames the latest alert ping, a quick second press the one before (alert_pings.gd). Space was bound to
+## nothing before (no project action, no constant here; the HUD's buttons take no keyboard focus, so Godot's ui_accept
+## never fires on them in play).
+const JUMP_ALERT := KEY_SPACE
+## Keys that do something only on Kestrel (world art on): the controls screen lists them there and nowhere else.
+const KESTREL_ONLY := [JUMP_ALERT]
 ## Number keys 1..4 recall a control group; Ctrl with one assigns it.
 const GROUPS := [KEY_1, KEY_2, KEY_3, KEY_4]
 ## Train hotkeys: key -> bridge unit kind.
@@ -34,7 +40,7 @@ const CAMERA_ACTIONS := {
 ## Row separators on the screen; every other string in a row's keys is a key cap.
 const THEN := "then"
 const PLUS := "+"
-const CAPS := {KEY_ESCAPE: "Esc", KEY_DELETE: "Del", KEY_PERIOD: ".", KEY_HOME: "Home"}
+const CAPS := {KEY_ESCAPE: "Esc", KEY_DELETE: "Del", KEY_PERIOD: ".", KEY_HOME: "Home", KEY_SPACE: "Space"}
 
 
 ## The text drawn on a key cap.
@@ -59,7 +65,8 @@ static func _row(label: String, keys: Array, proof := "", note := "") -> Diction
 ## keycodes (GROUPS, shown "1-4"), THEN / PLUS separators and literal caps for the mouse and modifiers. `proof` is a
 ## source needle for rows with no keycode (the mouse): the test looks for it in the handler sources, so a mouse row
 ## cannot describe something the handler does not do. A row with a keycode is proven by its constant instead.
-static func groups() -> Array:
+## `kestrel` (world art on) adds the minimap and alert jumps, which exist only there.
+static func groups(kestrel := false) -> Array:
 	var build_rows: Array = []
 	for code in BUILD:
 		build_rows.append(_row(_kind(BUILD[code]), [code]))
@@ -68,15 +75,19 @@ static func groups() -> Array:
 	for code in TRAIN:
 		train_rows.append(_row("Train " + _lower_first(_kind(TRAIN[code])), [code]))
 	train_rows.append(_row("Queue from the deck", ["Click card"], "_deck_card("))
+	var camera_rows: Array = [
+		_row("Pan", [KEY_W, KEY_A, KEY_S, KEY_D], "camera_up"),
+		_row("Edge pan", [], "viewport_size.x - 10.0", "Cursor at screen edge"),
+		_row("Rotate", [KEY_Z, KEY_E], "camera_rotate_left"),
+		_row("Zoom", ["Wheel"], "MOUSE_BUTTON_WHEEL_UP"),
+		_row("Focus selection", [FOCUS]),
+		_row("Jump to base", [HOME]),
+	]
+	if kestrel:
+		camera_rows.append(_row("Jump to alert", [JUMP_ALERT]))  # pressed again soon after: the alert before
+		camera_rows.append(_row("Jump on minimap", ["Click map"], "g.minimap_jump("))  # a drag follows the pointer
 	return [
-		{"name": "Camera", "rows": [
-			_row("Pan", [KEY_W, KEY_A, KEY_S, KEY_D], "camera_up"),
-			_row("Edge pan", [], "viewport_size.x - 10.0", "Cursor at screen edge"),
-			_row("Rotate", [KEY_Z, KEY_E], "camera_rotate_left"),
-			_row("Zoom", ["Wheel"], "MOUSE_BUTTON_WHEEL_UP"),
-			_row("Focus selection", [FOCUS]),
-			_row("Jump to base", [HOME]),
-		]},
+		{"name": "Camera", "rows": camera_rows},
 		{"name": "System", "rows": [
 			_row("Pause menu", [PAUSE]),
 			_row("This screen", [CONTROLS]),
@@ -107,9 +118,9 @@ static func groups() -> Array:
 
 
 ## Every keycode a row shows, ranges expanded.
-static func shown_codes() -> Array:
+static func shown_codes(kestrel := false) -> Array:
 	var out: Array = []
-	for g in groups():
+	for g in groups(kestrel):
 		for row in g["rows"]:
 			for k in row["keys"]:
 				if k is int:
@@ -121,9 +132,9 @@ static func shown_codes() -> Array:
 
 
 ## The view model of the controls screen: three columns of groups, every key already turned into its cap text.
-static func vm(from_pause := true) -> Dictionary:
+static func vm(from_pause := true, kestrel := false) -> Dictionary:
 	var by_name := {}
-	for g in groups():
+	for g in groups(kestrel):
 		var rows: Array = []
 		for r in g["rows"]:
 			var keys: Array = []

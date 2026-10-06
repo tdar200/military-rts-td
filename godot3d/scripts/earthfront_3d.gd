@@ -23,6 +23,7 @@ const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
+const AlertPings := preload("res://scripts/ui/alert_pings.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -98,6 +99,9 @@ var fog_view := FogView.new()
 var fog_seen_ids: Dictionary = {}
 var fog_tick := -1
 var fog_tick_gap := 0
+## Kestrel only (Task 8): where the player's own units and buildings were hit, for the minimap rings and the Space jump.
+## Null in Survival. Its clock is alert_clock() (the effects clock, frozen while the sim is paused).
+var alert_pings: RefCounted
 var _audio_sites: Dictionary = {}  # human building id -> true while it is a construction site (its completion sounds once)
 var _audio_hover_rect := Rect2()  # the HUD button under the pointer last frame (a rebuilt button in its place is the same)
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
@@ -542,6 +546,7 @@ func _sync_ground(snapshot: Dictionary) -> void:
 		world_fx.camera = camera
 		world_fx.fog = fog_view
 		_setup_kestrel_audio()
+		alert_pings = AlertPings.new()
 	_ground_deposits = snapshot.get("deposits", [])
 	_ground_route = snapshot.get("wave_route", [])
 	_build_terrain_dressing()
@@ -1683,6 +1688,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == Keybinds.HOME:
 			camera_focus_target = home_focus()
 			camera_focus_zoom = _zoom_default()
+		elif event.keycode == Keybinds.JUMP_ALERT:
+			jump_to_alert()  # Kestrel only; an armed placement or order stays armed
 
 
 ## A left click in build mode. A point past the map edge (Kestrel) is ignored: no order, build mode stays armed.
@@ -2004,6 +2011,46 @@ func _input(event: InputEvent) -> void:
 ## World rectangle (x, z) shown by the minimap.
 func minimap_world_rect() -> Rect2:
 	return ui.minimap_world_rect()
+
+
+## The map's ground (x, z): every hex centre plus half a cell on each side (odd columns sit half a row lower). A minimap
+## click outside it is on the sea around the map and does nothing.
+func map_world_rect() -> Rect2:
+	return Rect2(MAP_ORIGIN_X - HEX_X * 0.5, MAP_ORIGIN_Z - HEX_Z * 0.5, float(MAP_W) * HEX_X, (float(MAP_H) + 0.5) * HEX_Z)
+
+
+## Kestrel: a minimap click or drag (game_ui.gd) or the Space jump. The camera looks at `point` at once, under the same
+## clamp a pan gets and at the current zoom; an armed placement or order stays armed. Survival's camera never moves here.
+func minimap_jump(point: Vector3) -> void:
+	if not world_art_on or not point.is_finite():
+		return
+	var focus := WorldArt.clamp_focus(Vector3(point.x, 0.0, point.z), _zoom_limits().x, camera_aspect, float(WorldArt.CAMERA.yaw), _art_bounds())
+	camera_focus_target = focus
+	camera_target = focus
+	camera_cinematic = 0.0
+
+
+## Space (Kestrel): frames the latest alert ping, a press soon after the one before it (AlertPings.jump, on the frame
+## clock). With no alert it does nothing and says nothing. False when there was nowhere to go.
+func jump_to_alert() -> bool:
+	if not world_art_on or alert_pings == null:
+		return false
+	var at: Vector3 = alert_pings.jump(time_alive)
+	if not at.is_finite():
+		return false
+	minimap_jump(at)
+	return true
+
+
+## The clock alert pings live on: the effects clock, which stands still while the sim is paused (_advance_fx).
+func alert_clock() -> float:
+	return float(world_fx.time) if world_fx != null else time_alive
+
+
+## Kestrel: one of the player's units or buildings lost HP at `position` (merged with a recent ring nearby, AlertPings).
+func _alert_ping(position: Vector3) -> void:
+	if alert_pings != null:
+		alert_pings.hit(position, alert_clock())
 
 
 ## Bounding rectangle (x, z) of the ground the main camera sees; empty when a corner looks past the horizon.
@@ -2800,6 +2847,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 		if bridge_initialized and previous_data is Dictionary and int(previous_data.get("hp_bits", 0)) > int(entity_data.get("hp_bits", 0)) and not previous_data.has("remembered"):
 			if world_art_on and category == "building" and int(entity_data.get("owner", 0)) == HUMAN:
 				_structure_under_attack(destination, entity_data)  # first, so its shake and tone stand for this hit's
+			if world_art_on and int(entity_data.get("owner", 0)) == HUMAN:
+				_alert_ping(destination)  # the player's own entity: always in sight, so the ring tells nothing of the fog
 			if world_fx != null:
 				_kestrel_impact(destination, entity_data)
 			else:

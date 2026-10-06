@@ -3,7 +3,7 @@ extends RefCounted
 ## level: the sources are read as text. Three guarantees: every key the screen shows is a constant the handler compares
 ## against, no handler compares against a literal KEY_, and every constant is on the screen.
 const KB := preload("res://scripts/ui/keybinds.gd")
-const NOT_KEYS := ["THEN", "PLUS", "CAPS", "CAMERA_ACTIONS"]
+const NOT_KEYS := ["THEN", "PLUS", "CAPS", "CAMERA_ACTIONS", "KESTREL_ONLY"]
 
 
 func _handler_sources() -> String:
@@ -38,7 +38,7 @@ func _camera_codes() -> Array:
 func test_every_key_shown_is_a_constant_the_handler_reads(t) -> void:
 	var src := _handler_sources()
 	var consts := _constants()
-	for code in KB.shown_codes():
+	for code in KB.shown_codes() + KB.shown_codes(true):
 		if code in _camera_codes():
 			continue
 		var read := false
@@ -52,8 +52,12 @@ func test_every_key_shown_is_a_constant_the_handler_reads(t) -> void:
 		t.ok(read, "key %s is shown but no handler reads Keybinds.<its constant>" % KB.cap(code))
 
 
+## Kestrel's screen (world art on) lists every binding; Survival's leaves out only Kestrel's own keys (Space).
 func test_every_constant_is_on_the_screen(t) -> void:
-	var shown := KB.shown_codes()
+	var shown := KB.shown_codes(true)
+	var survival := KB.shown_codes()
+	for code in shown:
+		t.ok(code in survival or code in KB.KESTREL_ONLY, "%s is on the Kestrel screen only, but is no Kestrel-only key" % KB.cap(code))
 	var consts := _constants()
 	for name in consts:
 		for code in consts[name]:
@@ -85,7 +89,7 @@ func test_camera_keys_are_the_real_input_map(t) -> void:
 
 func test_rows_without_a_key_are_proved_by_a_source_needle(t) -> void:
 	var src := _handler_sources()
-	for g in KB.groups():
+	for g in KB.groups() + KB.groups(true):
 		for row in g["rows"]:
 			var has_code := false
 			for k in row["keys"]:
@@ -133,7 +137,7 @@ func test_deck_card_hotkeys_agree_with_the_bindings(t) -> void:
 
 
 func test_screen_text_has_no_dashes_and_rows_are_unique(t) -> void:
-	for g in KB.groups():
+	for g in KB.groups() + KB.groups(true):
 		var seen := {}
 		for row in g["rows"]:
 			var label: String = row["label"]
