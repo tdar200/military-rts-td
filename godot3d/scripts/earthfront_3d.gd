@@ -201,6 +201,9 @@ var kestrel_objectives: Dictionary = {}
 var _kestrel_eval_tick := -1
 ## Kestrel: the probe warning (KestrelIntel) was given this run; a tick back before the probe's stage tick re-arms it.
 var probe_intel_given := false
+## Set by _restart_mission for its 0.35 s wait: the bridge restarts at once, and the old scene must not read the new sim's
+## tick-0 snapshot (every unit missing from the fresh start would die with an explosion and a sound). Review M3.
+var _restarting := false
 var end_screen_shown := false
 var camera_shake := 0.0
 var alert_cooldown := 0.0
@@ -2414,6 +2417,8 @@ func _science_status() -> String:
 
 
 func _poll_bridge(delta: float) -> void:
+	if _restarting:
+		return
 	bridge_poll_elapsed += delta
 	if bridge_poll_elapsed < BRIDGE_POLL:
 		return
@@ -3414,7 +3419,7 @@ func _cue(id: String, frequency: float, duration: float, volume: float, sweep :=
 
 ## Every Kestrel frame: the director gets the camera's ground rectangle; the pool the loop beds, the duck and the HUD hover.
 func _update_audio() -> void:
-	if not _audio_on():
+	if not _audio_on() or _restarting:
 		return
 	if is_inside_tree() and camera != null:
 		audio.set_view(view_ground_rect())
@@ -3901,6 +3906,7 @@ func set_sim_paused(on: bool) -> void:
 
 
 func _restart_mission() -> void:
+	_restarting = true
 	var restart_file := FileAccess.open(runtime_directory.path_join("restart.flag"), FileAccess.WRITE)
 	if restart_file:
 		restart_file.store_line("restart")
