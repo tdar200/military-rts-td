@@ -797,3 +797,35 @@ moves, and the ground under it answers.
   the left card stack ends once the six-line objectives card and the wave panel are up, and the first QA capture showed
   "Barracks under attack" and "Enemy signal detected" hidden under the wave panel and the territory card. A toast now
   covers those cards for its 9 s instead. Survival keeps the fixed section order.
+
+### Kestrel sound (Kestrel next-level plan Task 5, 2026-10-06)
+
+Nothing below was listened to. Every Godot run (tests, captures, QA) used `--headless` or `--audio-driver Dummy`; the
+decisions are checked by tests and by the pool's `[audio]` log (`EARTHFRONT_AUDIO_LOG=1`), not by ear.
+
+- On Kestrel (`world_art_on`) the game asks `scripts/audio/audio_director.gd` (pure logic) for every sound, and
+  `scripts/audio/audio_pool.gd` plays what it allows, using Task 4's generated set (`assets/audio/sfx/`). Survival has no
+  director and keeps `_play_tone`, `_impact_effect`, `_death_effect`, `_setup_audio` and `_play_deploy_sound` byte for byte
+  (SHA pins in `test_world_art_survival.gd`).
+- Pan: `AudioStreamPlayer` has no pan, and the camera is orthographic, so there are no 3D players. The director's pan
+  (-0.8 to 0.8 from the camera's ground rectangle, yaw 0 so world x is screen x) picks one of five SFX buses, `SFX_L2`,
+  `SFX_L1`, `SFX`, `SFX_R1`, `SFX_R2`, each with an AudioEffectPanner at -0.8, -0.4, 0, 0.4, 0.8. The layout is
+  `godot3d/default_bus_layout.tres` (also `UI`, `Ambient`, `Music`); Godot loads it by name, so `project.godot` is unchanged.
+- Players: 16 SFX, 1 UI, and one per loop bed (rotor, tread, foot), 3 more than the plan's 16 plus ambient plus UI, so a
+  loop never steals a one-shot's voice. The scene's existing ambience player moves onto the `Ambient` bus, which the
+  director ducks by 9 dB under large explosions, collapses, alerts and wave calls, recovering over 1.5 s.
+- Off-screen: a sound more than 2.5 world units outside the view (WorldFx's margin) is skipped. Inside the view it falls
+  to 3 dB down at the edge; past the edge it goes from 6 dB down to 15 dB down at the margin's outer edge. Zooming out
+  trims world sounds by up to 6 dB. Announcements (wave, alert, unit ready, build complete, UI) are global and centred.
+- Light hits (WorldFx weight under 2) are silent; the shot already sounded. The legacy human-unit-hit tone (section 9,
+  combat effects) is dropped on Kestrel, and the structure alert (Task 3) now sounds `alert` instead of a tone; its shake
+  and cooldowns are unchanged.
+- Sounds that come with an effect (hits, deaths, collapses, shots) are asked for only when WorldFx actually drew the effect,
+  so they share its view culling and caps, and a snapshot delivered twice does not sound twice.
+- The cues Survival also has map to the nearest new sound: deploy to `select`, science complete to `build_complete`, a
+  win to `build_complete`, a loss to `wave_inbound`, the ten-second wave warning to `alert`.
+- UI click and hover cover the HUD's own buttons (`hud.action` and the hovered `BaseButton` inside the HUD), not the pause
+  and research menus. UI sounds still play while the sim is paused; effects and loops pause and resume.
+- `tools/ui/run_cap.sh` now passes `--audio-driver Dummy` (`launch_ui.py` already did), pinned by
+  `tools/audio/test_quiet_launchers.py`. The three loop imports use `compress/mode=0` (lossless) so the forward loop has no
+  codec seam.

@@ -92,6 +92,8 @@ func set_loops(levels: Dictionary) -> void:
 				p.volume_db = float(lv["volume_db"]) - LOOP_FADE_FROM
 				p.stream_paused = false
 				p.play()
+				if log_plays:
+					print("[audio] %s loop start %.1f dB %s (moving %d)" % [id, float(lv["volume_db"]), p.bus, int(lv.get("count", 0))])
 		else:
 			_loop_level[id] = LOOP_OFF_DB
 
