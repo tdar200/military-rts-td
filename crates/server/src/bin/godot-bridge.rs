@@ -821,6 +821,8 @@ fn main() -> std::io::Result<()> {
         if sim.waves_survived() > 0 {
             commands.extend(sim.ai_commands(PlayerId(1)));
         }
+        // The scenario's scripted orders (Kestrel Reach: the pre-wave probe); empty elsewhere.
+        commands.extend(scenario.scripted_commands(&sim));
         commands.extend(player_commands);
         sim.step(&commands);
         shots.record(sim.tick(), sim.recent_attacks());
@@ -974,7 +976,8 @@ mod tests {
         let g = extract_str(&json, "ground");
         assert_eq!(g.len(), 44 * 26);
         assert!(g.contains('r') && g.contains('w') && g.contains('h'));
-        // Additive and last: the lone Command Center has nothing to serve at the start.
+        // Additive and last: at tick 0 the Command Center holds no stock yet, so the
+        // three prebuilt structures beside it are not served until the first supply beat.
         assert!(json.ends_with("\"core_node\":[37,8],\"supply_links\":[],\"shots\":[]}"));
         assert!(json.starts_with("{\"schema\":5,"));
     }
@@ -996,8 +999,18 @@ mod tests {
         let json = snapshot_json(&sim);
         let link = format!("{{\"depot\":0,\"target\":{},\"state\":\"ok\"}}", turret.0);
         assert!(json.contains(&link), "{link} missing");
+        // The Kestrel start also has the Power Plant (1), Refinery (2) and Barracks (3)
+        // standing beside the Command Center, so the CC serves them too, listed before
+        // the turret in ascending entity order.
+        let served: Vec<String> = [1, 2, 3, turret.0]
+            .iter()
+            .map(|t| format!("{{\"depot\":0,\"target\":{t},\"state\":\"ok\"}}"))
+            .collect();
         assert!(
-            json.ends_with(&format!("\"supply_links\":[{link}],\"shots\":[]}}")),
+            json.ends_with(&format!(
+                "\"supply_links\":[{}],\"shots\":[]}}",
+                served.join(",")
+            )),
             "supply_links precedes the trailing shots key"
         );
         // Pure and deterministic for a given sim state.

@@ -9,9 +9,10 @@ use crate::fixed::Fixed;
 use crate::game::kestrel;
 use crate::game::map::{Deposit, DepositKind, Map, Tile};
 use crate::game::procgen;
-use crate::game::sim::{PlayerId, Sim, WaveConfig};
+use crate::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim, WaveConfig};
 use crate::game::stats::{BuildingKind, UnitKind};
 use crate::vec::Vec2;
+use alloc::vec::Vec;
 
 const HUMAN: PlayerId = PlayerId(0);
 const ENEMY: PlayerId = PlayerId(1);
@@ -296,18 +297,80 @@ pub fn survival(seed: u64) -> Sim {
     sim
 }
 
+/// Kestrel Reach starting credits for the human side.
+///
+/// The base now opens with the Power Plant,
+/// Refinery, Barracks and Harvester already standing (100 + 150 + 200 + 140 =
+/// 590 credits of stock that every opening used to buy first), so the purse drops
+/// from 1800 to 1200: the opening's total value stays where it was (1800 - 590,
+/// rounded down), and the player now has to choose between a Research Lab (250),
+/// turrets (120 each), a supply depot (100) and a rifle squad (50 each) instead
+/// of affording all of them before the first fight.
+pub const KESTREL_START_CREDITS: i32 = 1200;
+
+/// Tick (55 s) at which the alien probe leaves the holdfast.
+///
+/// It takes up a picket on the east bank opposite the Wyllow Ford, in plain
+/// sight of the river: the first-minute warning that something is coming.
+pub const KESTREL_PROBE_STAGE_TICK: u64 = 1650;
+
+/// Tick (1:50) at which the probe crosses the ford.
+///
+/// It attack-moves on the nearest human structure. The march from the picket takes about 200 ticks, so
+/// first contact lands just before the 2:00 mark (measured: see
+/// `kestrel_probe_makes_first_contact_near_two_minutes_before_wave_one`).
+pub const KESTREL_PROBE_STRIKE_TICK: u64 = 3300;
+
+/// Ticks before the first Kestrel expedition (2:30).
+///
+/// Wave one used to spawn at
+/// 2700 (1:30) and reach the base at about tick 3030 (1:41), which would beat
+/// the 2:00 probe; it now spawns 60 s later so the probe is the first contact
+/// and the player gets a clear 40-odd seconds to reinforce before the real wave.
+/// The three-minute interval and the expedition sizes are unchanged.
+pub const KESTREL_FIRST_WAVE_TICKS: u64 = 4_500;
+
+/// The human start beside the Command Center at [`kestrel::HOME_CC`]: a plant
+/// behind it (west), the refinery on the home ore's west side (within one hex
+/// of `(7, 11)`, so it earns the ore bonus) and the barracks forward (north-east,
+/// toward the ford). All on authored grass, clear of the CC's six neighbours (so
+/// the CC stays reachable from every side) and of the tiles the founding rifle
+/// squads stand on (column 8, rows 9 to 13).
+const KESTREL_HOME_BASE: [(BuildingKind, (u16, u16)); 3] = [
+    (BuildingKind::PowerPlant, (5, 8)),
+    (BuildingKind::Refinery, (6, 11)),
+    (BuildingKind::Barracks, (9, 7)),
+];
+
+/// Where the starting Harvester waits: beside the refinery and the home ore.
+const KESTREL_HARVESTER_AT: (u16, u16) = (6, 12);
+
+/// The probe's picket tiles on the east bank of the Wyllow Ford (flats).
+const KESTREL_PROBE_PICKET: [(u16, u16); 3] = [(25, 9), (25, 10), (26, 10)];
+
+/// Entity ids of the three probe rifle squads. [`kestrel_reach`] allocates them
+/// straight after the human start (Command Center, the three
+/// [`KESTREL_HOME_BASE`] structures, the Harvester and four rifle squads = ids
+/// 0..=8), before any alien entity, so they are the same for every seed.
+const KESTREL_PROBE_IDS: [u32; 3] = [9, 10, 11];
+
 /// Kestrel Reach: the fixed, hand-authored Earthfront map ([`kestrel`]).
 ///
 /// The same mission as [`survival`] (Earthfront rules, the alien Core district,
 /// two defended relays, escalating waves, basic starting unlocks) on the
 /// authored river basin instead of a procgen field. The home base is already
-/// founded at [`kestrel::HOME_CC`] (no survey phase), exactly as a `FoundBase`
-/// there would found it; the alien district is re-anchored on
-/// [`kestrel::CORE_NODE`] with `survival`'s relative offsets, and waves muster at
-/// [`kestrel::HOLDFAST`] and must cross the Wyllow Ford.
+/// founded at [`kestrel::HOME_CC`] (no survey phase) and running: Command
+/// Center, Power Plant, Refinery, Barracks, one Harvester and four rifle squads.
+/// The alien district is re-anchored on [`kestrel::CORE_NODE`] with
+/// `survival`'s relative offsets, waves muster at [`kestrel::HOLDFAST`] and must
+/// cross the Wyllow Ford, and a three-squad probe (see
+/// [`kestrel_probe_commands`]) makes first contact just before 2:00.
 #[must_use]
 pub fn kestrel_reach(seed: u64) -> Sim {
+    // Both sides are created with Earthfront's usual 1800; only the human purse
+    // shrinks to `KESTREL_START_CREDITS` (the alien economy is left as it was).
     let mut sim = Sim::new(kestrel::build_map(), seed, Fixed::from_int(1800));
+    sim.grant_money(HUMAN, Fixed::from_int(KESTREL_START_CREDITS - 1800));
     let at = |(x, y): (u16, u16)| crate::game::hex::center(x, y);
 
     sim.set_starting_unlocks(
@@ -332,18 +395,35 @@ pub fn kestrel_reach(seed: u64) -> Sim {
         }
     }
 
-    // Home colony, founded as `Command::FoundBase` founds it: the Command Center,
-    // a manual (autonomy 0) colony and four Earthfront rifle squads. The home ore
-    // is two hexes away, so no founding ore bonus applies (as in `survival`).
+    // Home colony, founded as `Command::FoundBase` founds it: the Command Center
+    // (id 0), a manual (autonomy 0) colony and four Earthfront rifle squads, plus
+    // the working core of a base placed fully built with `add_building` (as the
+    // alien district below is). The home ore is two hexes from the CC, so no
+    // founding ore bonus applies (as in `survival`).
     let (hx, hy) = kestrel::HOME_CC;
     let cc = sim.add_building(HUMAN, BuildingKind::CommandCenter, hx, hy);
     sim.add_colony(HUMAN, cc, 0);
+    for (kind, (x, y)) in KESTREL_HOME_BASE {
+        sim.add_building(HUMAN, kind, x, y);
+    }
+    sim.add_unit(HUMAN, UnitKind::Harvester, at(KESTREL_HARVESTER_AT));
     for i in 0..4 {
         sim.add_unit(
             HUMAN,
             UnitKind::Infantry,
             at(kestrel::HOME_CC) + Vec2::new(Fixed::ONE, Fixed::from_int(i)),
         );
+    }
+
+    // The probe: three rifle squads mustered on the holdfast hex. They hold
+    // there until the scenario script moves them (`kestrel_probe_commands`).
+    for i in 0..3 {
+        let id = sim.add_unit(
+            ENEMY,
+            UnitKind::Infantry,
+            at(kestrel::HOLDFAST) + Vec2::new(Fixed::ZERO, Fixed::from_ratio(i - 1, 2)),
+        );
+        debug_assert_eq!(id.0, KESTREL_PROBE_IDS[usize::try_from(i).unwrap_or(0)]);
     }
 
     // Alien holdfast on the east flats: `survival`'s Core district, re-anchored on
@@ -375,9 +455,10 @@ pub fn kestrel_reach(seed: u64) -> Sim {
     }
     sim.add_building(ENEMY, BuildingKind::PowerPlant, cx + 2, cy + 4);
 
-    // Escalating waves from the holdfast toward the player (`survival`'s config).
+    // Escalating waves from the holdfast toward the player (`survival`'s config,
+    // with the first wave moved behind the probe).
     sim.set_waves(WaveConfig {
-        first_delay: 2_700,
+        first_delay: KESTREL_FIRST_WAVE_TICKS,
         interval: 5_400,
         base_size: 6,
         growth: 2,
@@ -389,6 +470,74 @@ pub fn kestrel_reach(seed: u64) -> Sim {
     });
 
     sim
+}
+
+/// The surviving probe squads of a [`kestrel_reach`] world.
+///
+/// They are the alien rifle squads at [`KESTREL_PROBE_IDS`]. A slot freed by a dead probe squad can only
+/// be reused by a later entity; the owner and kind check keeps a human unit from
+/// ever being picked, and before wave one no other alien infantry is created.
+#[must_use]
+pub fn kestrel_probe_units(sim: &Sim) -> Vec<EntityId> {
+    let views = sim.views();
+    KESTREL_PROBE_IDS
+        .iter()
+        .map(|&i| EntityId(i))
+        .filter(|&id| {
+            views.iter().any(|v| {
+                v.id == id && v.owner == ENEMY && v.kind == EntityKindView::Unit(UnitKind::Infantry)
+            })
+        })
+        .collect()
+}
+
+/// Kestrel Reach's scenario script: the alien probe, issued as ordinary input
+/// commands so it replays from the command log like the AI's orders do.
+///
+/// At [`KESTREL_PROBE_STAGE_TICK`] the probe squads move from the holdfast to
+/// the ford picket; at [`KESTREL_PROBE_STRIKE_TICK`] they attack-move on the
+/// human structure nearest the first surviving squad (ties by entity id), so
+/// they fight whatever meets them on the way. Every other tick it returns
+/// nothing. The host calls it every tick through [`Scenario::scripted_commands`]
+/// (the core sim has no scheduled-order mechanism, so the schedule lives here).
+#[must_use]
+pub fn kestrel_probe_commands(sim: &Sim) -> Vec<Command> {
+    let tick = sim.tick();
+    if tick != KESTREL_PROBE_STAGE_TICK && tick != KESTREL_PROBE_STRIKE_TICK {
+        return Vec::new();
+    }
+    let probe = kestrel_probe_units(sim);
+    if tick == KESTREL_PROBE_STAGE_TICK {
+        return probe
+            .iter()
+            .zip(KESTREL_PROBE_PICKET)
+            .map(|(&unit, (x, y))| Command::Move {
+                owner: ENEMY,
+                unit,
+                target: crate::game::hex::center(x, y),
+            })
+            .collect();
+    }
+    let Some(lead) = probe.first().and_then(|&id| sim.position(id)) else {
+        return Vec::new();
+    };
+    let Some(target) = sim
+        .views()
+        .into_iter()
+        .filter(|v| v.owner == HUMAN && matches!(v.kind, EntityKindView::Building(_)))
+        .min_by_key(|v| ((v.pos - lead).length_squared().to_bits(), v.id.0))
+        .map(|v| v.pos)
+    else {
+        return Vec::new();
+    };
+    probe
+        .iter()
+        .map(|&unit| Command::AttackMove {
+            owner: ENEMY,
+            unit,
+            target,
+        })
+        .collect()
 }
 
 /// An N-civ conquest map.
@@ -762,6 +911,18 @@ impl Scenario {
             Self::Crossroads => "Flank a central wreck under pressure",
             Self::Survival => "Build, command, defend Earth, and counterattack in real time",
             Self::KestrelReach => "A coastal river basin. Hold the ford.",
+        }
+    }
+
+    /// This tick's scripted scenario orders (input commands, replayed from the
+    /// log like any other). Only Kestrel Reach has a script (its pre-wave probe,
+    /// [`kestrel_probe_commands`]); every other scenario returns nothing. Hosts
+    /// call it once per tick, before stepping.
+    #[must_use]
+    pub fn scripted_commands(self, sim: &Sim) -> Vec<Command> {
+        match self {
+            Self::KestrelReach => kestrel_probe_commands(sim),
+            _ => Vec::new(),
         }
     }
 
@@ -1760,23 +1921,254 @@ mod tests {
         );
     }
 
+    /// One host tick's non-player commands on Kestrel Reach, exactly as
+    /// `godot-bridge` builds them: the alien AI once wave one has spawned, then the
+    /// scenario script (the pre-wave probe).
+    fn kestrel_shell_commands(s: &crate::game::sim::Sim) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        if s.waves_survived() > 0 {
+            cmds.extend(s.ai_commands(PlayerId(1)));
+        }
+        cmds.extend(Scenario::KestrelReach.scripted_commands(s));
+        cmds
+    }
+
+    /// The first alien unit standing within its own weapon range of a human
+    /// structure this tick, if any (center distance, as combat measures it).
+    fn kestrel_hostile_in_range_of_a_structure(
+        s: &crate::game::sim::Sim,
+    ) -> Option<crate::game::sim::EntityId> {
+        use crate::game::sim::EntityKindView;
+        let views = s.views();
+        views
+            .iter()
+            .filter(|v| v.owner == PlayerId(1))
+            .find(|a| {
+                let EntityKindView::Unit(kind) = a.kind else {
+                    return false;
+                };
+                let r = kind.stats().attack.range;
+                views.iter().any(|h| {
+                    h.owner == PlayerId(0)
+                        && matches!(h.kind, EntityKindView::Building(_))
+                        && (h.pos - a.pos).length_squared() <= r * r
+                })
+            })
+            .map(|a| a.id)
+    }
+
+    #[test]
+    fn kestrel_human_starts_with_a_working_base_on_buildable_ground() {
+        use crate::game::kestrel::{DEPOSITS, HOME_CC, ROWS};
+        use crate::game::map::{DepositKind, Ground};
+        use crate::game::sim::EntityKindView;
+        let sim = kestrel_reach(2026);
+        let human: Vec<_> = sim
+            .views()
+            .into_iter()
+            .filter(|v| v.owner == PlayerId(0))
+            .collect();
+        let count = |kind: EntityKindView| human.iter().filter(|v| v.kind == kind).count();
+        for kind in [
+            BuildingKind::CommandCenter,
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Barracks,
+        ] {
+            assert_eq!(count(EntityKindView::Building(kind)), 1, "{kind:?}");
+        }
+        assert_eq!(
+            sim.buildings_owned_by(PlayerId(0)),
+            4,
+            "no turrets or walls"
+        );
+        assert_eq!(count(EntityKindView::Unit(UnitKind::Harvester)), 1);
+        assert_eq!(count(EntityKindView::Unit(UnitKind::Infantry)), 4);
+        assert_eq!(sim.unit_count(PlayerId(0)), 5);
+        // The Command Center keeps id 0 (the bridge's supply-depot tests rely on it).
+        assert_eq!(
+            human[0].kind,
+            EntityKindView::Building(BuildingKind::CommandCenter)
+        );
+        let (width, height) = (sim.map().width(), sim.map().height());
+        for v in human
+            .iter()
+            .filter(|v| matches!(v.kind, EntityKindView::Building(_)))
+        {
+            assert_eq!(v.construction_remaining, 0, "{:?} fully built", v.kind);
+            let (x, y) = crate::game::hex::from_world(v.pos, width, height);
+            // Authored ground under every structure is buildable, passable land.
+            let g = Ground::from_glyph(ROWS[usize::from(y)].as_bytes()[usize::from(x)].into())
+                .expect("known glyph");
+            assert!(
+                g.props().buildable && g.props().passable,
+                "{:?} on {g:?}",
+                v.kind
+            );
+            assert!(
+                crate::game::hex::distance((x, y), HOME_CC) <= 3,
+                "{:?} at ({x},{y}) is not beside the Command Center",
+                v.kind
+            );
+            assert!(
+                !DEPOSITS.iter().any(|&(dx, dy, _)| (dx, dy) == (x, y)),
+                "{:?} buries a deposit",
+                v.kind
+            );
+        }
+        // The plant powers the base with headroom; the refinery earns the ore bonus.
+        let economy = sim.economy_view(PlayerId(0));
+        assert!(economy.generation >= economy.demand + 35, "{economy:?}");
+        let refinery = human
+            .iter()
+            .find(|v| v.kind == EntityKindView::Building(BuildingKind::Refinery))
+            .unwrap();
+        assert_eq!(sim.ore_bonus_pct_of(refinery.id), 20);
+        assert!(DEPOSITS.iter().any(|&(_, _, d)| d.kind == DepositKind::Ore));
+        assert_eq!(
+            sim.money(PlayerId(0)),
+            crate::fixed::Fixed::from_int(super::KESTREL_START_CREDITS)
+        );
+    }
+
+    #[test]
+    fn kestrel_starting_harvester_delivers_ore_into_money() {
+        // The prebuilt economy is live from the first minute: the truck mines the
+        // home ore and the powered refinery turns it into money with no orders.
+        let mut sim = kestrel_reach(2026);
+        let start = sim.money(PlayerId(0));
+        for _ in 0..1800 {
+            sim.step(&[]);
+        }
+        assert!(
+            sim.money(PlayerId(0)) > start,
+            "money {:?} -> {:?}",
+            start,
+            sim.money(PlayerId(0))
+        );
+    }
+
+    #[test]
+    fn kestrel_probe_makes_first_contact_near_two_minutes_before_wave_one() {
+        use crate::game::kestrel::HOLDFAST;
+        // An undefended run hosted exactly as godot-bridge hosts it.
+        let mut s = kestrel_reach(3);
+        let probe = super::kestrel_probe_units(&s);
+        assert_eq!(probe.len(), 3, "the probe is three rifle squads");
+        let holdfast = crate::game::hex::center(HOLDFAST.0, HOLDFAST.1);
+        let start: Vec<_> = probe.iter().map(|&id| s.position(id).unwrap()).collect();
+        for &p in &start {
+            assert!((p - holdfast).length_squared() <= crate::fixed::Fixed::from_int(4));
+        }
+        let mut contact = None;
+        while s.tick() < 4200 && contact.is_none() {
+            let cmds = kestrel_shell_commands(&s);
+            s.step(&cmds);
+            if s.tick() == 1500 {
+                let now: Vec<_> = probe.iter().map(|&id| s.position(id).unwrap()).collect();
+                assert_eq!(
+                    now, start,
+                    "the probe holds at the holdfast for the first minute"
+                );
+            }
+            if s.tick() == 1800 {
+                assert!(
+                    probe
+                        .iter()
+                        .zip(&start)
+                        .all(|(&id, &p)| s.position(id).unwrap() != p),
+                    "the probe leaves the holdfast by tick 1800"
+                );
+            }
+            contact = kestrel_hostile_in_range_of_a_structure(&s).map(|id| (s.tick(), id));
+        }
+        let (tick, unit) = contact.expect("no hostile reached a human structure by tick 4200");
+        assert!(
+            (3000..=4200).contains(&tick),
+            "first contact at tick {tick} ({}s)",
+            tick / 30
+        );
+        assert!(probe.contains(&unit), "first contact is the probe");
+        assert_eq!(s.waves_survived(), 0, "the probe lands before wave one");
+    }
+
+    #[test]
+    fn kestrel_probe_is_scripted_deterministically_and_replays() {
+        let run = |seed| {
+            let mut s = kestrel_reach(seed);
+            let mut log = Vec::new();
+            for _ in 0..4200 {
+                let cmds = kestrel_shell_commands(&s);
+                s.step(&cmds);
+                log.push(cmds);
+            }
+            (s, log)
+        };
+        let (a, log) = run(5);
+        let (b, _) = run(5);
+        assert_eq!(a.state_hash(), b.state_hash());
+        let mut replay = kestrel_reach(5);
+        for batch in &log {
+            replay.step(batch);
+        }
+        assert_eq!(replay.state_hash(), a.state_hash(), "probe replay diverged");
+        // The script issues exactly two orders per probe squad (stage, strike),
+        // at the two authored ticks, and nothing for any other scenario.
+        let probe = super::kestrel_probe_units(&kestrel_reach(5));
+        let scripted: Vec<(usize, &Command)> = log
+            .iter()
+            .enumerate()
+            .flat_map(|(t, cmds)| cmds.iter().map(move |c| (t, c)))
+            .filter(|(_, c)| match c {
+                Command::Move { unit, .. } | Command::AttackMove { unit, .. } => {
+                    probe.contains(unit)
+                }
+                _ => false,
+            })
+            .collect();
+        assert_eq!(scripted.len(), 2 * probe.len(), "{scripted:?}");
+        for (t, c) in scripted {
+            let t = u64::try_from(t).unwrap();
+            match c {
+                Command::Move { .. } => assert_eq!(t, super::KESTREL_PROBE_STAGE_TICK),
+                _ => assert_eq!(t, super::KESTREL_PROBE_STRIKE_TICK),
+            }
+        }
+        let mut survival = survival(5);
+        for _ in 0..4200 {
+            assert!(Scenario::Survival.scripted_commands(&survival).is_empty());
+            survival.step(&[]);
+        }
+    }
+
     /// Waves the AI-defended Kestrel base must hold: the ported playtest's one
     /// tunable threshold. `survival_balance_playtest` (seed 3) holds 3 waves and
-    /// falls at t=14489; Kestrel Reach (seed 3) also holds 3, falling at t=13917.
+    /// falls at t=14489; Kestrel Reach (seed 3) also held 3, falling at t=13917,
+    /// before the opening rework. Since the rework (prebuilt plant, refinery,
+    /// barracks and Harvester, the probe, wave one at 4500) the same playtest AI
+    /// is never overrun: it destroys the Core Node at t=12688 with 2 waves
+    /// spawned. The cause is the gifted Harvester: the playtest AI never trains
+    /// one itself, so before the rework it fought with no ore income at all
+    /// (removing the truck at tick 0 makes it fall at t=5318 after 1 wave).
+    /// "Holds 3 waves" therefore means the base is never overrun before the
+    /// third wave: the run sees that wave, or ends earlier in a human victory.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
     fn kestrel_reach_overruns_an_undefended_base_and_holds_with_the_playtest_defence() {
         // Port of `survival_overruns_an_undefended_base`: the player does nothing;
-        // the enemy AI (+ escalating waves once the grace period expires) must take
-        // the base so the run resolves with no soft-lock. Kestrel Reach opens with
-        // the base already founded at HOME_CC, so there is no founding step.
+        // the enemy AI (+ the scripted probe and escalating waves once the grace
+        // period expires) must take the base so the run resolves with no
+        // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
+        // so there is no founding step. Measured: it falls at t=4959 (wave one
+        // spawns at 4500; before the rework it fell at t=3159).
         let mut s = kestrel_reach(3);
         assert!(!s.surveying());
         let mut winner = None;
         let mut undefended_fell_at = 0;
         for t in 0..40000u64 {
-            let enemy = s.ai_commands(PlayerId(1));
+            let mut enemy = s.ai_commands(PlayerId(1));
+            enemy.extend(Scenario::KestrelReach.scripted_commands(&s));
             s.step(&enemy);
             if let Some(w) = s.winner() {
                 winner = Some(w);
@@ -1791,16 +2183,15 @@ mod tests {
         );
 
         // Port of `survival_balance_playtest`: a competent AI plays the PLAYER side
-        // against the waves; the beachhead AI acts once the first wave has spawned,
-        // mirroring the shell. The defence must hold several waves and outlast the
+        // against the waves; the beachhead AI acts once the first wave has spawned
+        // and the scenario script runs the probe, mirroring the shell. The defence
+        // must not be overrun before the third wave and must outlast the
         // undefended base.
         let mut s = kestrel_reach(3);
         let mut resolved_at = None;
         for t in 0..140_000u64 {
             let mut cmds = s.ai_commands(PlayerId(0));
-            if s.waves_survived() > 0 {
-                cmds.extend(s.ai_commands(PlayerId(1)));
-            }
+            cmds.extend(kestrel_shell_commands(&s));
             s.step(&cmds);
             if s.winner().is_some() {
                 resolved_at = Some(t);
@@ -1808,13 +2199,70 @@ mod tests {
             }
         }
         assert!(
-            s.waves_survived() >= KESTREL_DEFENDED_WAVES,
-            "defended Kestrel base held only {} waves",
+            s.waves_survived() >= KESTREL_DEFENDED_WAVES || s.winner() == Some(PlayerId(0)),
+            "defended Kestrel base was overrun after only {} waves",
             s.waves_survived()
         );
         assert!(
             resolved_at.is_none_or(|t| t > undefended_fell_at),
             "the playtest defence must outlast an undefended base"
+        );
+    }
+
+    #[test]
+    #[ignore = "opening playtest: run with --ignored --nocapture to read the curve"]
+    fn kestrel_opening_playtest() {
+        // Undefended, hosted as godot-bridge hosts it: first contact, the money and
+        // power curve, and when the base falls. Then the AI-defended curve.
+        let mut s = kestrel_reach(3);
+        let mut contact = None;
+        while s.winner().is_none() && s.tick() < 9000 {
+            let cmds = kestrel_shell_commands(&s);
+            s.step(&cmds);
+            if contact.is_none() {
+                contact = kestrel_hostile_in_range_of_a_structure(&s).map(|id| (s.tick(), id));
+            }
+            if s.tick().is_multiple_of(600) {
+                let e = s.economy_view(PlayerId(0));
+                std::eprintln!(
+                    "t={} money={} kW={}/{} units P0={} P1={} structures P0={}",
+                    s.tick(),
+                    s.money(PlayerId(0)).to_int_floor(),
+                    e.generation,
+                    e.demand,
+                    s.unit_count(PlayerId(0)),
+                    s.unit_count(PlayerId(1)),
+                    s.buildings_owned_by(PlayerId(0)),
+                );
+            }
+        }
+        std::eprintln!(
+            "undefended: first contact {contact:?}, resolved at {} winner {:?}",
+            s.tick(),
+            s.winner()
+        );
+        let mut s = kestrel_reach(3);
+        let mut last = 0;
+        while s.winner().is_none() && s.tick() < 140_000 {
+            let mut cmds = s.ai_commands(PlayerId(0));
+            cmds.extend(kestrel_shell_commands(&s));
+            s.step(&cmds);
+            if s.waves_survived() != last {
+                last = s.waves_survived();
+                std::eprintln!(
+                    "defended: wave {last} at t={} money={} units P0={} P1={}",
+                    s.tick(),
+                    s.money(PlayerId(0)).to_int_floor(),
+                    s.unit_count(PlayerId(0)),
+                    s.unit_count(PlayerId(1)),
+                );
+            }
+        }
+        std::eprintln!(
+            "defended: resolved at t={} winner {:?} waves {}",
+            s.tick(),
+            s.winner(),
+            s.waves_survived()
         );
     }
 
