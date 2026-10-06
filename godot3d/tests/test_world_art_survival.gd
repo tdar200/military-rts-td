@@ -183,6 +183,8 @@ func test_survival_era_crown_keeps_its_height(t) -> void:
 	scene.bridge_era = 1
 	scene._apply_era_visuals()
 	t.near((site.get_node("EraCrown") as Node3D).position.y, 0.78, 1e-6, "legacy crown height")
+	var rod := (site.get_node("EraCrown") as Node3D).get_child(1) as GeometryInstance3D
+	t.eq(rod.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_ON, "the Survival crown rod still casts")
 	scene.free()
 
 

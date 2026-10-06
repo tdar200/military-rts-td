@@ -491,4 +491,11 @@ func test_kestrel_era_crown_sits_above_the_fitted_model(t) -> void:
 	var model := cc.get_node("Visual") as Node3D
 	if crown != null:
 		t.ok(crown.position.y > WorldArt.merged_aabb(model).end.y * model.scale.y, "the crown clears the fitted roof")
+		var parts := 0
+		for part in crown.get_children():
+			if part is GeometryInstance3D:
+				parts += 1
+				t.eq((part as GeometryInstance3D).cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+					"the crown's %s throws no stray ground stripe" % part.name)
+		t.eq(parts, 2, "the ring and the rod were both checked")
 	scene.free()

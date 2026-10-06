@@ -743,7 +743,9 @@ moves, and the ground under it answers.
   the HUD speed buttons do nothing on the bridge, and nothing sets the tree's pause or the engine time scale.
 - Status bars: on Kestrel the health and shield bars cast no real shadow. Each shown bar used to throw a dark stripe far
   across the ground, nowhere near its owner (the dark bars in the Task 3 captures were the alien squad's and the CC's
-  bars).
+  bars). The era crown's rod (era 1 and up) did the same: a software capture with every rod casting shows a thin dark
+  stripe on open grass with no caster near it, gone with the rod's shadow off. It casts none on Kestrel now (the ring
+  already cast none); Survival's crown rod still casts.
 - Cost: idle unchanged (home 25 draw calls / 156,776 primitives, max 78 / 209,766); twelve units marching in the
   software capture added 2 draw calls and 512 primitives (the dust layers). 60 units of every kind marching at 60 fps
   with 8 Hz polls, headless on the loaded machine: `_animate_unit_cards` (poses and dust) about 0.27 ms p50 and

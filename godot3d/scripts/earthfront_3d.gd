@@ -2790,7 +2790,9 @@ func _apply_era_visuals() -> void:
 			crown_mesh.ring_segments = 7
 			var ring := _mesh(crown_mesh, materials.glass if owner == HUMAN else materials.plasma, Vector3.ZERO, crown)
 			ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			_cylinder(crown, 0.026, 0.62, Vector3(0, 0.28, 0), materials.glass if owner == HUMAN else materials.plasma, 8)
+			var rod := _cylinder(crown, 0.026, 0.62, Vector3(0, 0.28, 0), materials.glass if owner == HUMAN else materials.plasma, 8)
+			if world_art_on:
+				rod.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF  # the low sun threw it as a stray stripe
 		crown.visible = bridge_era > 0
 		crown.scale = Vector3.ONE * (0.86 + float(bridge_era) * 0.055)
 		crown.rotation.y = time_alive * (0.16 if owner == HUMAN else -0.19)
