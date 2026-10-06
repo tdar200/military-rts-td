@@ -634,12 +634,12 @@ The user read the hit flash and the death shard ring as blobs. On Kestrel (`worl
 cards (`godot3d/scripts/world/world_fx.gd`); Survival keeps `_impact_effect` and `_death_effect` untouched. No board draws
 combat, so every look here is ours.
 
-- Atlas: `tools/ui/build_fx_atlas.py` writes `godot3d/assets/world/fx/fx_atlas.png` (1024 x 768, 128 px cells) from
+- Atlas: `tools/ui/build_fx_atlas.py` writes `godot3d/assets/world/fx/fx_atlas.png` (1024 x 768, 128 px cells; 1024 x 1024 since Task 3 added a shot row) from
   hashed value noise and fixed seeds: fireball (8 frames, a turbulent white-yellow core cooling through orange to a dark
   smoke edge), smoke puff (8 frames), muzzle star, sparks, debris, ember, ground glow, dust ring and a burning-rubble decal.
   Band 0 is human amber fire, band 1 alien teal and magenta plasma. Texels are premultiplied and the import keeps the
   colour of transparent texels (`fix_alpha_border=false`); `test_build_fx_atlas` holds the committed PNG to the script.
-- Cards: 64 slots at most over three MultiMeshes (ground decals, smoke, fire), one shared material each: the frame, tint
+- Cards: 64 slots (128 since Task 3) at most over three MultiMeshes (ground decals, smoke, fire), one shared material each: the frame, tint
   and fade travel in the instance data, so a firefight adds three draw calls and no node or material per card. The shader
   blends premultiplied (ONE, ONE_MINUS_SRC_ALPHA): fire, flash and sparks add light, smoke, debris and rubble cover. Fire
   cards also cover a little of what is behind them and pre-grade their saturation by 1.9, or the Kestrel grade (saturation
@@ -649,7 +649,8 @@ combat, so every look here is ours.
   frames draw nothing; an effect outside the view plus 2.5 world units is not drawn.
 - Hit (an HP drop): flash and sparks, a small fireball from weight 1, a smoke puff from weight 2 (weight by the struck
   kind: 0 infantry, 1 anti-armour and guns, 2 tanks and harvesters, 3 gunships, capitals, buildings), in the firing side's
-  colours. The struck side is known, the shooter is not, so the hit sizes by the target until the shots window (Task 3).
+  colours. The struck side is known, the shooter is not, so the hit sizes by the target until the shots window (Task 3:
+  a shooter the window names now sizes it, and a shot whose impact already landed there draws no second flash).
 - Unit death: ground glow, two fireballs, sparks, spinning debris, a two-puff smoke plume, embers and a scorch that
   smoulders 4 s, in the dying side's colours, over the ground point under the card.
 - Building death: the painting is hidden the moment the sim drops the building (the node frees at the end of the frame);
@@ -663,3 +664,42 @@ combat, so every look here is ours.
   machine; spawning a collapse 0.55 ms. Idle boards against the previous scores: every board within 0.15 (gp01 80.88,
   gp03 82.62, gp04 77.85, gp05 80.68, gp06 80.56, gp07 80.30, gp08 74.38), `tools/ui/world_scores.json` left as it is.
   The GPU firefight budget (10 ms p50) was not measured here: QA never opens a window on the user's display.
+
+### Firing effects (combat and motion plan Task 3, 2026-10-06)
+
+Firing used to show nothing but the target's hit flash. On Kestrel every round in the bridge's `shots` window (Task 1:
+`[tick, ax, az, tx, tz]` rows, Fixed bits, the last 18 ticks) is drawn from its real shooter to its real target.
+
+- Look per shooter (`WorldFx.shot`): a muzzle flash, then a stretched card turned along the shot's screen direction that
+  flies muzzle to target, then an impact flash and sparks when it lands. Infantry, gun and AA turrets and any unknown
+  shooter fire a short bright tracer (pale yellow core, amber halo); tanks, anti-armour and capitals a slower glowing
+  shell with a short trail, a muzzle puff and a small impact fireball; gunships paired short bursts side by side; aliens
+  fire plasma bolts (a teal core in a magenta rim) in each of those styles. Flight times follow the distance (rifle about
+  26 world units a second, shell 10) within fixed bounds. Muzzle and impact sit a share of the card width over the
+  ground point (a gunship adds its hover). The three shot sprites are a fourth atlas row per band (tracer, shell, bolt,
+  vertical streaks with the head up). Streak and flash tints run over 1 so they read on sunlit grass.
+- Dispatch (`earthfront_3d._dispatch_shots`, on the poll, before the entity sync): each row is drawn once. The dedup set
+  is keyed by the row plus its repeat count in the poll (two shooters on one spot in one tick both draw) and pruned to
+  the 18-tick window; a paused game re-sends the same window and draws nothing; a fresh scene's first poll only seeds the
+  set (that window is history, possibly of a sim about to restart); a tick lower than the last clears it. Short,
+  non-numeric or out-of-window rows are skipped; a snapshot without `shots` (Survival, an old bridge) draws nothing. A
+  shot with neither end in view is skipped; past 24 new shots in one poll the oldest are dropped, never drawn late. A
+  poll's shots replay at their ticks' rhythm (delays up to 0.6 s), so a 30 Hz fight read at 8 Hz does not flash in
+  bursts.
+- Shooter: the nearest unit or building within 0.6 tiles of the shot's start, among the snapshot's entities and then the
+  `bridge_nodes` it no longer lists (a shooter killed this tick); none gives the infantry look on the target's enemy
+  side. The impact sits over the target the same way when one is found.
+- Recoil: a unit shooter's card kicks back along the ground, away from its target (0.02 to 0.055 world units by kind),
+  over 0.1 s and comes home exactly. Only the card moves (x and z: the gunship bob owns y), never the root, so the pick
+  box, the bars and the selection ellipse stay put. Buildings do not recoil.
+- Pause: while the pause menu holds the sim (`set_sim_paused`) the effects clock stands still, so a round in flight
+  hangs where it was and flies on from there on resume; recoil runs on the same clock.
+- Everything here is cosmetic: no gameplay state, selection or HUD value is read back from it.
+- Cost: idle frames unchanged (home 25 draw calls / 156,776 primitives, max 78 / 209,766); a volley of nine shots in the
+  software capture added 2 draw calls and 512 primitives over the same frame before it. A 30-shots-a-second firefight
+  through the real dispatcher (8 Hz polls of the 18-tick window, 60 entities, headless on the loaded machine):
+  `_dispatch_shots` about 0.68 ms per poll (p50, about 0.09 ms a frame amortised), `_advance_fx` 0.16 ms p50 and 0.21 ms
+  p95 per frame, peaking at 87 live cards, which is why the pool doubled to 128. Idle boards against the previous scores:
+  every board within 0.15 (gp01 80.88, gp03 82.62, gp04 77.84, gp05 80.70, gp06 80.57, gp07 80.31, gp08 74.38),
+  `tools/ui/world_scores.json` left as it is. The GPU firefight budget was not measured (no window on the user's
+  display).
