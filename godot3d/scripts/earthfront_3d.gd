@@ -20,6 +20,7 @@ const WorldProps := preload("res://scripts/world/world_props.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const WorldFx := preload("res://scripts/world/world_fx.gd")
 const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
+const KestrelIntel := preload("res://scripts/world/kestrel_intel.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
@@ -197,6 +198,8 @@ var tutorial_stage := -1
 ## it) and the snapshot tick it was evaluated at.
 var kestrel_objectives: Dictionary = {}
 var _kestrel_eval_tick := -1
+## Kestrel: the probe warning (KestrelIntel) was given this run; a tick back before the probe's stage tick re-arms it.
+var probe_intel_given := false
 var end_screen_shown := false
 var camera_shake := 0.0
 var alert_cooldown := 0.0
@@ -2509,6 +2512,8 @@ func _poll_bridge(delta: float) -> void:
 		_show_notification("ENEMY SIGNAL DETECTED", bridge_incoming_doctrine.to_upper() + " • ARRIVAL IN 45 SECONDS", Color("ffd071"))
 	if bridge_next_wave_ticks > 1350:
 		wave_warning_level = 0
+	if world_art_on:
+		_probe_intel()
 	if bridge_winner >= 0 and previous_winner < 0:
 		_show_end_screen(bridge_winner)
 
@@ -3315,6 +3320,17 @@ func _update_kestrel_objectives() -> void:
 			_set_command_tab("UNITS")
 		4, 5:
 			_set_command_tab("ORDERS")
+
+
+## Kestrel briefing intel (KestrelIntel, review I1): the fog hides the probe's picket, so at its scripted stage tick the
+## player gets one scouting toast and the existing alert sound, placeless (no fog gate, no pan). Deliberately no
+## _alert_ping, no structure alert and no camera move: nothing tells where the probe stands.
+func _probe_intel() -> void:
+	var r: Dictionary = KestrelIntel.probe_warning(bridge_tick, probe_intel_given)
+	probe_intel_given = bool(r["given"])
+	if bool(r["fire"]) and bridge_winner < 0:
+		_show_notification(KestrelIntel.PROBE_TITLE, KestrelIntel.PROBE_BODY, Color("ff8b62"))
+		_sfx("alert")
 
 
 ## Kestrel: a human structure lost HP. Task 2 found that idle riflemen never react to a structure under fire, so the player

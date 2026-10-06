@@ -808,6 +808,14 @@ the golden hash are unchanged.
   0:55 (tick 1650) and attack-moves on the human building nearest it at 1:50 (tick 3300). First contact is about tick 3412
   and the first structure hit about tick 3461 (1:55), usually the Barracks. The orders are ordinary commands, so they
   replay from the command log; only the bridge calls `scripted_commands` today, so another host must add that call.
+- Probe warning under fog (fix round after the final review, I1): the picket cells (25,9), (25,10) and (26,10) lie
+  beyond human sight (about column 19 at the start), so with the Task 6 fog the probe was never seen before it struck and
+  the staged "first-minute warning" was lost. The client now gives it as scouting intel at the stage tick
+  (`godot3d/scripts/world/kestrel_intel.gd`, `PROBE_STAGE_TICK` 1650, pinned to `scenario.rs` by
+  `test_kestrel_intel.gd`): one toast "Scouts report movement near the ford" with the existing `alert` sound, placeless,
+  once per run, re-armed when the tick goes back on a restart, never repeated on a re-delivered snapshot, and silent if
+  the first poll is already past the strike tick. It adds no minimap ring, no alert ping for Space and no camera move,
+  so it reveals nothing the fog hides (the briefing already names the ford and the probe). Kestrel only.
 - The alien AI stays asleep until wave one (the bridge gate `waves_survived() > 0` is unchanged); the probe is the only
   pre-wave pressure.
 - An idle player loses: the probe takes the Barracks, then wave one plus the probe take the Command Center at about 2:45
