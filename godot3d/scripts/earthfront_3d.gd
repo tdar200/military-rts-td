@@ -3187,7 +3187,7 @@ func _dispatch_shots(snapshot: Dictionary) -> int:
 		shot_seen.clear()
 		shot_impacts.clear()
 	shot_tick = tick
-	_shot_record_near(Vector3.INF)  # drops the records of shots landed more than SHOT_HIT_WINDOW ago
+	_prune_shot_records()
 	for key in shot_seen.keys():
 		if int(shot_seen[key]) < tick - SHOT_WINDOW:
 			shot_seen.erase(key)
@@ -3311,25 +3311,33 @@ func _shot_entity_near(index: Dictionary, at: Vector3) -> Dictionary:
 
 
 ## The shot landing nearest `position` (within SHOT_KIND_RADIUS) that lands no earlier than SHOT_HIT_WINDOW ago, or {};
-## older records are dropped.
+## older records are skipped here and dropped by the next poll.
 func _shot_record_near(position: Vector3) -> Dictionary:
 	if world_fx == null:
 		return {}
 	var now: float = world_fx.time
-	var keep: Array = []
 	var best := {}
 	var best_d := SHOT_KIND_RADIUS * SHOT_KIND_RADIUS
-	for r in shot_impacts:
+	for r in shot_impacts:  # read-only: the poll prunes (_prune_shot_records), so an HP drop allocates nothing
 		if float(r.t) < now - SHOT_HIT_WINDOW:
 			continue
-		keep.append(r)
 		var at: Vector3 = r.at
 		var d := (at.x - position.x) * (at.x - position.x) + (at.z - position.z) * (at.z - position.z)
 		if d <= best_d:
 			best_d = d
 			best = r
-	shot_impacts = keep
 	return best
+
+
+## Drops the records of shots landed more than SHOT_HIT_WINDOW ago, once per poll.
+func _prune_shot_records() -> void:
+	var now: float = world_fx.time
+	var keep: Array = []
+	for r in shot_impacts:
+		if float(r.t) >= now - SHOT_HIT_WINDOW:
+			keep.append(r)
+	if keep.size() != shot_impacts.size():
+		shot_impacts = keep
 
 
 ## Steps the effects (frozen while the game is paused, so nothing burns out or flies on behind the pause menu) and the

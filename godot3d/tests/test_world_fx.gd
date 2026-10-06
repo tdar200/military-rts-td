@@ -652,3 +652,18 @@ func test_landed_shot_records_do_not_pile_up(t) -> void:
 	scene._dispatch_shots({"tick": 70, "shots": [_row(scene, 70, Vector2i(10, 12), Vector2i(14, 13))]})
 	t.eq(scene.shot_impacts.size(), 1, "a poll drops the records of shots long landed, HP drop or not")
 	scene.free()
+
+
+func test_the_hp_drop_query_is_read_only(t) -> void:
+	var scene := _fight_scene([])
+	scene._dispatch_shots({"tick": 4, "shots": [_row(scene, 4, Vector2i(10, 12), Vector2i(13, 13))]})
+	var at: Vector3 = scene._hex_world(13, 13)
+	var records: Array = scene.shot_impacts
+	t.eq(scene._shot_record_near(at).get("at"), scene.shot_impacts[0].at, "a fresh record is found")
+	for i in 20:
+		scene._advance_fx(0.1)
+	t.eq(scene._shot_record_near(at), {}, "a long-landed record is not matched")
+	t.ok(is_same(scene.shot_impacts, records) and records.size() == 1, "the query neither prunes nor rebuilds the records")
+	scene._dispatch_shots({"tick": 70, "shots": []})
+	t.eq(scene.shot_impacts.size(), 0, "the next poll prunes them")
+	scene.free()
