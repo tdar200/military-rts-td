@@ -349,9 +349,9 @@ const KESTREL_HARVESTER_AT: (u16, u16) = (6, 12);
 const KESTREL_PROBE_PICKET: [(u16, u16); 3] = [(25, 9), (25, 10), (26, 10)];
 
 /// Entity ids of the three probe rifle squads. [`kestrel_reach`] allocates them
-/// straight after the human start (Command Center, the three
-/// [`KESTREL_HOME_BASE`] structures, the Harvester and four rifle squads = ids
-/// 0..=8), before any alien entity, so they are the same for every seed.
+/// straight after the human start (Command Center 0, four rifle squads 1 to 4,
+/// the three [`KESTREL_HOME_BASE`] structures 5 to 7 and the Harvester 8),
+/// before any alien entity, so they are the same for every seed.
 const KESTREL_PROBE_IDS: [u32; 3] = [9, 10, 11];
 
 /// Kestrel Reach: the fixed, hand-authored Earthfront map ([`kestrel`]).
@@ -396,17 +396,14 @@ pub fn kestrel_reach(seed: u64) -> Sim {
     }
 
     // Home colony, founded as `Command::FoundBase` founds it: the Command Center
-    // (id 0), a manual (autonomy 0) colony and four Earthfront rifle squads, plus
-    // the working core of a base placed fully built with `add_building` (as the
-    // alien district below is). The home ore is two hexes from the CC, so no
+    // (id 0), a manual (autonomy 0) colony and four Earthfront rifle squads (ids
+    // 1 to 4, as before the opening rework), then the working core of a base
+    // placed fully built with `add_building` (as the alien district below is) and
+    // its Harvester (ids 5 to 8). The home ore is two hexes from the CC, so no
     // founding ore bonus applies (as in `survival`).
     let (hx, hy) = kestrel::HOME_CC;
     let cc = sim.add_building(HUMAN, BuildingKind::CommandCenter, hx, hy);
     sim.add_colony(HUMAN, cc, 0);
-    for (kind, (x, y)) in KESTREL_HOME_BASE {
-        sim.add_building(HUMAN, kind, x, y);
-    }
-    sim.add_unit(HUMAN, UnitKind::Harvester, at(KESTREL_HARVESTER_AT));
     for i in 0..4 {
         sim.add_unit(
             HUMAN,
@@ -414,6 +411,10 @@ pub fn kestrel_reach(seed: u64) -> Sim {
             at(kestrel::HOME_CC) + Vec2::new(Fixed::ONE, Fixed::from_int(i)),
         );
     }
+    for (kind, (x, y)) in KESTREL_HOME_BASE {
+        sim.add_building(HUMAN, kind, x, y);
+    }
+    sim.add_unit(HUMAN, UnitKind::Harvester, at(KESTREL_HARVESTER_AT));
 
     // The probe: three rifle squads mustered on the holdfast hex. They hold
     // there until the scenario script moves them (`kestrel_probe_commands`).
@@ -1985,11 +1986,15 @@ mod tests {
         assert_eq!(count(EntityKindView::Unit(UnitKind::Harvester)), 1);
         assert_eq!(count(EntityKindView::Unit(UnitKind::Infantry)), 4);
         assert_eq!(sim.unit_count(PlayerId(0)), 5);
-        // The Command Center keeps id 0 (the bridge's supply-depot tests rely on it).
+        // The Command Center keeps id 0 (the bridge's supply-depot tests rely on it)
+        // and the founding rifle squads keep ids 1 to 4 (client tests select them).
         assert_eq!(
             human[0].kind,
             EntityKindView::Building(BuildingKind::CommandCenter)
         );
+        for squad in &human[1..=4] {
+            assert_eq!(squad.kind, EntityKindView::Unit(UnitKind::Infantry));
+        }
         let (width, height) = (sim.map().width(), sim.map().height());
         for v in human
             .iter()
@@ -2146,10 +2151,10 @@ mod tests {
     /// falls at t=14489; Kestrel Reach (seed 3) also held 3, falling at t=13917,
     /// before the opening rework. Since the rework (prebuilt plant, refinery,
     /// barracks and Harvester, the probe, wave one at 4500) the same playtest AI
-    /// is never overrun: it destroys the Core Node at t=12688 with 2 waves
+    /// is never overrun: it destroys the Core Node at t=13622 with 2 waves
     /// spawned. The cause is the gifted Harvester: the playtest AI never trains
     /// one itself, so before the rework it fought with no ore income at all
-    /// (removing the truck at tick 0 makes it fall at t=5318 after 1 wave).
+    /// (removing the truck at tick 0 makes it fall at t=5410 after 1 wave).
     /// "Holds 3 waves" therefore means the base is never overrun before the
     /// third wave: the run sees that wave, or ends earlier in a human victory.
     const KESTREL_DEFENDED_WAVES: u32 = 3;

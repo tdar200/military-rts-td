@@ -999,10 +999,10 @@ mod tests {
         let json = snapshot_json(&sim);
         let link = format!("{{\"depot\":0,\"target\":{},\"state\":\"ok\"}}", turret.0);
         assert!(json.contains(&link), "{link} missing");
-        // The Kestrel start also has the Power Plant (1), Refinery (2) and Barracks (3)
+        // The Kestrel start also has the Power Plant (5), Refinery (6) and Barracks (7)
         // standing beside the Command Center, so the CC serves them too, listed before
         // the turret in ascending entity order.
-        let served: Vec<String> = [1, 2, 3, turret.0]
+        let served: Vec<String> = [5, 6, 7, turret.0]
             .iter()
             .map(|t| format!("{{\"depot\":0,\"target\":{t},\"state\":\"ok\"}}"))
             .collect();
