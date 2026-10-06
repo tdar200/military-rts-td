@@ -18,8 +18,24 @@ func test_card_lists_the_snapshot_counts(t) -> void:
 	t.ok(U.has_text(root, "6 units"), "garrison")
 	t.ok(U.has_text(root, "Dry flats, Highland"), "terrain")
 	t.ok(U.has_text(root, "1:30, 10 units"), "reinforcements")
-	t.ok(not U.has_text(root, "partly seen") and not U.has_text(root, "est."), "no fog or estimate language")
+	t.ok(not U.has_text(root, "partly seen") and not U.has_text(root, "est."), "no estimate language: the counts are what the snapshot holds")
 	t.eq(U.buttons(root).size(), 0, "read-only")
+	root.free()
+
+
+## Kestrel fog of war (Task 7): the card states what is known, in sight and last seen, and how much is scouted. It still
+## never estimates what is hidden.
+func test_card_under_fog_names_what_is_known(t) -> void:
+	var root := Control.new()
+	Section.build(root, {"enemy": {"y": 262, "rows": [
+		{"label": "Defences", "value": "2 gun", "tone": ""},
+		{"label": "Garrison", "value": "1 unit in sight", "tone": ""},
+		{"label": "Memory", "value": "1 last seen", "tone": ""},
+		{"label": "Scouted", "value": "18% of the map", "tone": ""},
+	]}})
+	for want in ["2 gun", "1 unit in sight", "1 last seen", "18% of the map"]:
+		t.ok(U.has_text(root, want), "shows '%s'" % want)
+	t.ok(not U.has_text(root, "partly seen") and not U.has_text(root, "est."), "no estimate of the hidden side")
 	root.free()
 
 

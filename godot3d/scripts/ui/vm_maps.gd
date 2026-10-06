@@ -56,7 +56,10 @@ static func region_map(snap: Dictionary, ground) -> Dictionary:
 		if str(e.get("category", "")) != "building":
 			continue
 		if int(e.get("owner", HUMAN)) != HUMAN:
-			hostile.append({"cell": VM.entity_cell(e), "kind": VM.kind_label(str(e.get("kind", "")))})
+			var site := {"cell": VM.entity_cell(e), "kind": VM.kind_label(str(e.get("kind", "")))}
+			if bool(e.get("remembered", false)):
+				site["remembered"] = true  # last seen there; drawn dimmed
+			hostile.append(site)
 		elif str(e.get("kind", "")) == "CommandCenter":
 			own_cc.append(VM.entity_cell(e))
 	if known:
@@ -72,6 +75,20 @@ static func region_map(snap: Dictionary, ground) -> Dictionary:
 		pin["cell"] = [pin["x"], pin["y"]]
 	if not pins.is_empty():
 		out["pins"] = pins
+	if VM.fogged(snap):
+		# Kestrel fog: the unseen hexes are shrouded and the explored ones dimmed, as on the battlefield
+		var mask: String = snap["fog"]
+		var unseen: Array = []
+		var explored: Array = []
+		for i in mask.length():
+			var cell := [i % int(ground.width), i / int(ground.width)]
+			if mask[i] == "0":
+				unseen.append(cell)
+			elif mask[i] == "1":
+				explored.append(cell)
+		out["unseen"] = unseen
+		out["explored"] = explored
+		out["explored_pct"] = VM.scouted_pct(snap)
 	return out
 
 
@@ -391,7 +408,8 @@ static func briefing(stage: int, snap: Dictionary, winner := -1) -> Dictionary:
 ## as the title, the done, current and next objective lines (the current one by its detail, as the HUD card shows it), and
 ## one paragraph of first-minutes intel: the ore beside the Command Centre, the ford wave one crosses and the mission time it
 ## is due (tick + next_wave_ticks, so it reads 2:30 whenever it is opened), the alien probe that may strike before it, and
-## the Core Node's cell. A place, time or cell the snapshot lacks is left out, never invented. {} past
+## the Core Node's cell, and under Kestrel fog of war that their side stays dark until scouted. A place, time or cell the
+## snapshot lacks is left out, never invented. {} past
 ## KESTREL_BRIEFING_LAST_STAGE, once the match is decided (the game's `winner` or the snapshot's), or without objectives.
 static func kestrel_briefing(objectives: Dictionary, snap: Dictionary, winner := -1) -> Dictionary:
 	var stage := int(objectives.get("stage", 0))
@@ -422,4 +440,6 @@ static func kestrel_briefing(objectives: Dictionary, snap: Dictionary, winner :=
 	var core = snap.get("core_node", null)
 	if core is Array and core.size() >= 2:
 		body += " Their Core Node is at (%d, %d)." % [int(core[0]), int(core[1])]
+	if VM.fogged(snap):
+		body += " Their side stays dark until your units scout it."
 	return {"tag": "Step %d of %d" % [stage, list.size()], "title": str(objectives.get("title", "")), "body": body, "items": items, "ratio": float(done) / float(list.size())}

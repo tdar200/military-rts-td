@@ -76,6 +76,7 @@ var _clock := 0.0
 var _since_vm := VM_INTERVAL
 var _left_down := false
 var _marks_drawn := false
+var _title_fogged := false  # the title already shows the Kestrel fog copy
 
 
 ## The game adds this node to its tree first, then calls setup.
@@ -173,6 +174,7 @@ func _input(event: InputEvent) -> void:
 ## Called every frame by the game. The view model is rebuilt about ten times a second, and never while a click is
 ## in flight over the HUD, so a button is not replaced between its press and its release.
 func process(delta: float) -> void:
+	_refresh_title()
 	if paused():
 		# Frozen: no HUD rebuild, no ticker, no log samples, and the alert clock stands still. Only the pause screens refresh.
 		_watch_stop(delta)
@@ -213,6 +215,17 @@ func process(delta: float) -> void:
 	if minimap_view.get_parent() != hud.map_slot:
 		minimap_view.reparent(hud.map_slot, false)  # the assault layout draws its own slot
 	minimap_view.size = hud.map_slot.size  # the Build layout reshapes the slot
+
+
+## Kestrel fog of war: the title's Visibility fact says "fog of war" once the bridge sends a fogged snapshot (it is built
+## before any snapshot, with Survival's whole-battlefield copy). Applied once.
+func _refresh_title() -> void:
+	if _title_fogged or title == null or not title.visible:
+		return
+	var snap = g.get("bridge_snapshot")
+	if snap is Dictionary and VmGameplay.fogged(snap):
+		_title_fogged = true
+		title.apply(LiveScreens.title_vm(true, int(g.bridge_technology_total), true))
 
 
 ## Asks the minimap viewport for one more frame every MINIMAP_INTERVAL while the HUD is up (UPDATE_ONCE falls back to

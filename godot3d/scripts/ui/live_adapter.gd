@@ -456,7 +456,7 @@ func _hostile_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
 	vm["combat"] = combat
 	var kind := ""
 	for e in snap.get("entities", []):
-		if e is Dictionary and int(e.get("owner", 0)) != VmGameplay.HUMAN:
+		if e is Dictionary and int(e.get("owner", 0)) != VmGameplay.HUMAN and not bool(e.get("remembered", false)):
 			var c := VmGameplay.entity_cell(e)
 			if int(c[0]) == hovered.x and int(c[1]) == hovered.y:
 				kind = str(KIND_NAMES.get(str(e.get("kind", "")), str(e.get("kind", ""))))
@@ -595,9 +595,18 @@ func _wave_card() -> Dictionary:
 		return {}
 	var seconds := ceili(float(ticks) / TICKS_PER_SECOND)
 	var body := "Up to %d units expected." % g.bridge_expedition_size
-	if g.bridge_active_relays > 0:
+	if _fogged():
+		if g.bridge_relays > 0:  # fog of war: the relays are known from the briefing, their power is not
+			body += " Support: %d relay%s known." % [g.bridge_relays, "" if g.bridge_relays == 1 else "s"]
+	elif g.bridge_active_relays > 0:
 		body += " Support: %d relay%s operating." % [g.bridge_active_relays, "" if g.bridge_active_relays == 1 else "s"]
 	return {"tag": "Doctrine committed" if ticks <= 1350 else "Wave forming", "eta": "Arrives in %02d:%02d" % [seconds / 60, seconds % 60], "title": str(g.bridge_incoming_doctrine), "body": body}
+
+
+## Kestrel fog of war: the snapshot's mask hides something (VmGameplay.fogged). Panels then show only what the player knows.
+func _fogged() -> bool:
+	var snap = g.get("bridge_snapshot")
+	return snap is Dictionary and VmGameplay.fogged(snap)
 
 
 func _power_tip(deficit: int, now: float) -> Dictionary:
@@ -663,7 +672,9 @@ func _kestrel_card() -> Dictionary:
 		elif stage == items.size() + 1:
 			state = "active"
 		items.append({"t": str(o["detail"]) if state == "active" else str(o["title"]), "state": state})
-	if g.bridge_relays > 0:
+	if g.bridge_relays > 0 and _fogged():  # fog of war: how many still stand, never how many are powered
+		items.append({"t": "Optional: destroy alien relays (%d left)" % g.bridge_relays, "state": "done" if complete else ("active" if stage >= 4 else "todo")})
+	elif g.bridge_relays > 0:
 		items.append({"t": "Optional: disable alien relays (%d active)" % g.bridge_active_relays, "state": "done" if g.bridge_active_relays == 0 or complete else ("active" if stage >= 4 else "todo")})
 	var snap = g.get("bridge_snapshot")
 	var cap := str(snap.get("map_name", "")) if snap is Dictionary else ""

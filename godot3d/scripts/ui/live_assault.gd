@@ -9,6 +9,7 @@ const HQ_ALERT_SECONDS := 12.0
 const AMMO_CAPACITY := 90.0
 const HUMAN := 0
 const MAX_MARKS := 24
+const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 
 var g
 var engaged := false  # latched: once the alien core has been reached or hurt, the assault layout stays available
@@ -102,9 +103,13 @@ func _top(core: Node3D) -> Dictionary:
 		{"icon": "crew_alt", "tone": "cyan_hi", "text": "CREW %d / %d" % [g.bridge_supply_used, g.bridge_supply_cap]},
 	]
 	var status: Array = []
-	if core != null:
+	if core != null and bool(core.get_meta("remembered", false)):
+		status.append({"icon": "target", "tone": "bad", "border": "bad", "text": "CORE LAST SEEN"})  # fog: no live HP
+	elif core != null:
 		status.append({"icon": "target", "tone": "bad", "border": "bad", "text": "CORE %s / %s HP" % [_num(float(core.get_meta("hp", 0.0))), _num(float(core.get_meta("max_hp", 0.0)))]})
-	if g.bridge_relays > 0:
+	if g.bridge_relays > 0 and _fogged():
+		status.append({"icon": "relay", "tone": "warn", "text": "RELAYS %d known" % g.bridge_relays})
+	elif g.bridge_relays > 0:
 		status.append({"icon": "relay", "tone": "warn" if g.bridge_active_relays > 0 else "good", "text": "RELAYS %d / %d active" % [g.bridge_active_relays, g.bridge_relays]})
 	var hq := hq_node()
 	if hq != null:
@@ -120,11 +125,19 @@ func _top(core: Node3D) -> Dictionary:
 
 func _relays() -> Dictionary:
 	var items: Array = []
+	var fog := _fogged()
 	for i in g.bridge_relays:
-		items.append({"name": "Relay %s" % char(65 + i % 26), "state": "powered" if i < g.bridge_active_relays else "destroyed"})
+		var state := "known" if fog else ("powered" if i < g.bridge_active_relays else "destroyed")  # fog: power unseen
+		items.append({"name": "Relay %s" % char(65 + i % 26), "state": state})
 	if items.is_empty():
 		return {}
 	return {"items": items, "note": "Powered relays reinforce every expedition."}
+
+
+## Kestrel fog of war: the snapshot's mask hides something. The relays' power state is then never shown.
+func _fogged() -> bool:
+	var snap = g.get("bridge_snapshot")
+	return snap is Dictionary and VmGameplay.fogged(snap)
 
 
 func _edge(now: float) -> Dictionary:
@@ -179,8 +192,8 @@ func marks(project: Callable, visible_rect: Rect2, behind: Callable) -> Array:
 	for n in g.bridge_nodes.values():
 		if out.size() >= MAX_MARKS:
 			break
-		if not is_instance_valid(n) or int(n.get_meta("team", HUMAN)) == HUMAN:
-			continue
+		if not is_instance_valid(n) or int(n.get_meta("team", HUMAN)) == HUMAN or bool(n.get_meta("remembered", false)):
+			continue  # a remembered building (fog of war) has no live HP to show
 		var p: Vector3 = n.global_position if n.is_inside_tree() else n.position
 		if behind.call(p):
 			continue

@@ -1,7 +1,8 @@
 extends RefCounted
 ## Enemy territory card (board 3, left): what the snapshot holds of the alien side. Driven by vm["enemy"]: {y?, rows}.
-## The board's "partly seen" caption and "~14 est." garrison need a fog of war the sim does not have, so the caption is
-## plain "Enemy territory" (R6) and every count is exact. Read-only; builds nothing without rows.
+## The caption is plain "Enemy territory" (R6) and nothing is estimated: without fog every count is exact; under Kestrel's
+## presentation fog the rows count what the player knows (in sight, last seen, share scouted). Read-only; builds nothing
+## without rows.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const Rows = preload("res://scripts/ui/sections/rows.gd")

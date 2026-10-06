@@ -22,6 +22,7 @@ const WorldFx := preload("res://scripts/world/world_fx.gd")
 const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
+const FogView := preload("res://scripts/world/fog_view.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -89,6 +90,14 @@ var sim_paused := false  # set_sim_paused: the bridge holds the sim still, the e
 ## its generated tones (_cue falls back to _play_tone with the legacy arguments).
 var audio: RefCounted
 var audio_pool: Node
+## Kestrel fog of war (plan 2026-10-06-kestrel-next-level, Task 7), presentation only: the sim and its AI stay omniscient.
+## The bridge's `fog` mask (FogView) shades the ground and the props and gates effects and world sounds; entities the bridge
+## omits are out of sight. `fog_seen_ids` holds every enemy id seen this sim, so one walking back into sight is revived
+## silently (never re-announced); `fog_tick` and `fog_tick_gap` are the last mask's tick and the ticks since the one before.
+var fog_view := FogView.new()
+var fog_seen_ids: Dictionary = {}
+var fog_tick := -1
+var fog_tick_gap := 0
 var _audio_sites: Dictionary = {}  # human building id -> true while it is a construction site (its completion sounds once)
 var _audio_hover_rect := Rect2()  # the HUD button under the pointer last frame (a rebuilt button in its place is the same)
 var _fit_cache: Dictionary = {}  # Kestrel only: model key -> Vector2(fit scale, fitted top), one AABB walk per model
@@ -531,10 +540,96 @@ func _sync_ground(snapshot: Dictionary) -> void:
 		world_fx = WorldFx.new()
 		world_fx.build(self)
 		world_fx.camera = camera
+		world_fx.fog = fog_view
 		_setup_kestrel_audio()
 	_ground_deposits = snapshot.get("deposits", [])
 	_ground_route = snapshot.get("wave_route", [])
 	_build_terrain_dressing()
+
+
+## Kestrel fog of war: reads the snapshot's mask (Kestrel only; Survival never has one) and, when it changed, hands the
+## ground and the props the mask texture and switches their shroud on or off. A tick going back is a new sim: nothing in
+## it has been seen yet. No new shader is compiled: the fog lives in a branch of the ground and prop shaders already drawn
+## from deploy, so there is nothing more to warm.
+func _sync_fog(snapshot: Dictionary) -> void:
+	if not world_art_on:
+		return
+	var tick := int(snapshot.get("tick", 0))
+	if tick < fog_tick:
+		fog_seen_ids.clear()
+	fog_tick_gap = maxi(0, tick - fog_tick) if fog_tick >= 0 else 0
+	fog_tick = tick
+	var was_active := fog_view.active()
+	fog_view.configure(MAP_ORIGIN_X, MAP_ORIGIN_Z, HEX_X, HEX_Z)
+	var mask = snapshot.get("fog", "")
+	var changed: bool = fog_view.parse(mask if mask is String else "", MAP_W, MAP_H)
+	if not changed and was_active == fog_view.active():
+		return
+	var on := fog_view.active()
+	var tex: Texture2D = fog_view.texture() if on else null
+	if terrain_renderer != null and terrain_renderer.has_method("set_fog"):
+		terrain_renderer.set_fog(tex, on)
+	if world_props != null:
+		world_props.set_fog(tex, on, Vector4(MAP_ORIGIN_X, MAP_ORIGIN_Z, HEX_X, HEX_Z), Vector2(MAP_W, MAP_H))
+
+
+## How far an enemy unit can have moved since the last poll (world units; the fastest moves about 0.09 a tick), plus a
+## margin: one this far inside sight cannot have stepped out of it, so its vanishing is a death.
+func _fog_reach() -> float:
+	return clampf(0.09 * float(fog_tick_gap) + 0.2, 0.35, 2.0)
+
+
+## Under fog, an enemy that appears without a word: a remembered building, one already seen this sim (back in sight), a
+## building first seen on ground the player could not see on the last poll (scouted, not built), or a unit not deep inside
+## ground seen on both polls (it walked in). Everything else (and everything without fog, and the player's own) is new.
+func _fog_quiet_arrival(entity_data: Dictionary, destination: Vector3, bridge_id: int) -> bool:
+	if not fog_view.active() or int(entity_data.get("owner", HUMAN)) == HUMAN:
+		return false
+	if bool(entity_data.get("remembered", false)) or fog_seen_ids.has(bridge_id):
+		return true
+	if not fog_view.was_visible(destination):
+		return true
+	if String(entity_data.get("category", "")) == "building":
+		return false
+	return not fog_view.deep_visible(destination, _fog_reach())
+
+
+## Under fog, an enemy whose node goes without a death: a memory dropped, a building on ground out of sight, or a unit that
+## was not deep inside sight (it can have walked out) unless a shot the player saw landed on it.
+func _fog_quiet_departure(node: Node3D) -> bool:
+	if not fog_view.active() or int(node.get_meta("team", ALIEN)) == HUMAN:
+		return false
+	if bool(node.get_meta("remembered", false)):
+		return true
+	var at: Vector3 = node.get_meta("glide_to", node.position)
+	if String(node.get_meta("category", "")) == "building":
+		return not fog_view.is_visible(at)
+	if fog_view.deep_visible(at, _fog_reach()):
+		return false
+	return not (fog_view.is_visible(at) and bool(_shot_record_near(at).get("drew", false)))
+
+
+## Kestrel fog of war: a remembered building (the bridge's `remembered`: seen once, its cell out of sight now) is drawn
+## dimmed (WorldSprites.MEMORY_SHADE) with no bars, crown or relay status, and cannot be picked or targeted. Seen again,
+## it is live as before.
+## Runs after the poll's bars and progress fit, every poll the building is (or was) a memory, so it always wins.
+func _set_remembered(node: Node3D, on: bool) -> void:
+	node.set_meta("remembered", on)
+	var card := node.get_node_or_null("Visual") as MeshInstance3D
+	if card != null and card.has_meta("sprite_texture"):
+		var tex: Texture2D = card.get_meta("sprite_texture")
+		var site := card.material_override as ShaderMaterial
+		if site != null and site.has_meta("site_of"):
+			site.set_shader_parameter("shade", WorldSprites.MEMORY_SHADE if on else 1.0)
+		elif on:
+			card.material_override = WorldSprites.memory_material_for(tex)
+		elif card.material_override is StandardMaterial3D and (card.material_override as StandardMaterial3D).has_meta("memory"):
+			card.material_override = WorldSprites.material_for(tex)
+	if on:
+		for bar in ["HealthBack", "HealthFill", "ShieldBack", "ShieldFill", "EraCrown"]:
+			var part := node.get_node_or_null(bar) as Node3D
+			if part != null:
+				part.visible = false
 
 
 ## Kestrel: draws one throwaway card with the site shader and one with the ghost shader for a few frames, just past the
@@ -1652,7 +1747,7 @@ func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
 	if world_art_on:
 		var best := Vector2(INF, INF)  # (visual tiles, distance to the root)
 		for candidate in bridge_nodes.values():
-			if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN:
+			if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN or bool(candidate.get_meta("remembered", false)):
 				continue
 			if not _parts_hold(candidate, screen_position, to_screen):
 				continue
@@ -1668,7 +1763,7 @@ func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
 			return nearest
 	var nearest_distance := 32.0
 	for candidate in bridge_nodes.values():
-		if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN:
+		if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN or bool(candidate.get_meta("remembered", false)):
 			continue
 		var distance: float = (to_screen.call(candidate, Vector3.UP * 0.15) as Vector2).distance_to(screen_position)
 		if distance < nearest_distance:
@@ -2340,6 +2435,7 @@ func _poll_bridge(delta: float) -> void:
 		bridge_research_options = next_options
 	bridge_winner = int(parsed.get("winner", -1))
 	_sync_ground(parsed)
+	_sync_fog(parsed)  # before the shots and the entities: both read what the player sees
 	_sync_bridge_map(parsed)
 	_sync_spent_deposits(parsed)
 	if world_art_on and world_fx != null:
@@ -2669,7 +2765,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 				entity_node = _create_bridge_building(owner, kind_name, destination, bridge_id)
 			entity_node.set_meta("kind_name", incoming_kind)
 			bridge_nodes[bridge_id] = entity_node
-			if bridge_initialized:
+			if bridge_initialized and not _fog_quiet_arrival(entity_data, destination, bridge_id):
 				ui.session_log.unit_added(kind_name, owner, category)
 				_deploy_effect(destination, owner)
 				if owner == HUMAN and category == "unit":
@@ -2701,7 +2797,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 		var shield: float = float(entity_data.get("shield_bits", 0)) / 65536.0
 		var max_shield: float = float(entity_data.get("max_shield_bits", 0)) / 65536.0
 		var previous_data = bridge_frame_entities.get(bridge_id)
-		if bridge_initialized and previous_data is Dictionary and int(previous_data.get("hp_bits", 0)) > int(entity_data.get("hp_bits", 0)):
+		if bridge_initialized and previous_data is Dictionary and int(previous_data.get("hp_bits", 0)) > int(entity_data.get("hp_bits", 0)) and not previous_data.has("remembered"):
 			if world_art_on and category == "building" and int(entity_data.get("owner", 0)) == HUMAN:
 				_structure_under_attack(destination, entity_data)  # first, so its shake and tone stand for this hit's
 			if world_fx != null:
@@ -2713,6 +2809,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 			"owner": int(entity_data.get("owner", 0)),
 			"kind": String(entity_data.get("kind", "")),
 		}
+		if bool(entity_data.get("remembered", false)):
+			next_frame_entities[bridge_id]["remembered"] = true  # damage it took unseen is no hit the player saw
 		if category == "building":
 			_audio_site(bridge_id, int(entity_data.get("owner", 0)), int(entity_data.get("construction", 0)))
 		var relay_service: Dictionary = bridge_services.get(bridge_id, {})
@@ -2728,6 +2826,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 				relay_marker.modulate = Color("ffac83")
 				entity_node.add_child(relay_marker)
 			relay_marker.text = "INVASION RELAY +2 / WAVE" if int(relay_service.get("power", 0)) >= 500 else "INVASION RELAY — OFFLINE"
+			if bool(entity_data.get("remembered", false)):
+				relay_marker.text = "INVASION RELAY"  # a memory carries no live status
 		elif relay_marker:
 			relay_marker.queue_free()
 		entity_node.set_meta("hp", hp)
@@ -2779,6 +2879,12 @@ func _sync_bridge_entities(entities: Array) -> void:
 			var build_progress := clampf(1.0 - float(remaining) / float(total), 0.08, 1.0)
 			visual.visible = true
 			visual.scale = Vector3(authored_scale.x, authored_scale.y * build_progress, authored_scale.z)
+		if world_art_on:
+			var remembered := bool(entity_data.get("remembered", false))
+			if remembered or entity_node.has_meta("remembered"):
+				_set_remembered(entity_node, remembered)
+			if fog_view.active() and int(entity_data.get("owner", HUMAN)) != HUMAN and not remembered:
+				fog_seen_ids[bridge_id] = true
 
 	for bridge_id in bridge_nodes.keys():
 		if seen.has(bridge_id):
@@ -2788,7 +2894,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 		_audio_sites.erase(bridge_id)
 		units.erase(stale)
 		if is_instance_valid(stale):
-			if bridge_initialized:
+			if bridge_initialized and not _fog_quiet_departure(stale):
 				ui.session_log.unit_removed(String(stale.get_meta("kind_name", "")), int(stale.get_meta("team", ALIEN)), String(stale.get_meta("category", "")))
 				if world_fx != null:
 					_kestrel_death(stale)
@@ -2820,7 +2926,7 @@ func _apply_era_visuals() -> void:
 			var rod := _cylinder(crown, 0.026, 0.62, Vector3(0, 0.28, 0), materials.glass if owner == HUMAN else materials.plasma, 8)
 			if world_art_on:
 				rod.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF  # the low sun threw it as a stray stripe
-		crown.visible = bridge_era > 0
+		crown.visible = bridge_era > 0 and not bool(entity.get_meta("remembered", false))
 		crown.scale = Vector3.ONE * (0.86 + float(bridge_era) * 0.055)
 		crown.rotation.y = time_alive * (0.16 if owner == HUMAN else -0.19)
 
@@ -3225,6 +3331,8 @@ func _audio_on() -> bool:
 func _sfx(id: String, at := Vector3.INF, delay := 0.0) -> void:
 	if id == "" or not _audio_on():
 		return
+	if at.is_finite() and not fog_view.seen_recently(at):
+		return  # Kestrel fog: a sound placed where the player cannot see is never heard
 	var r: Dictionary = audio.request(id, at, time_alive + delay)
 	if audio_pool != null and bool(r.get("play", false)):
 		audio_pool.play(r, delay)
@@ -3257,7 +3365,7 @@ func _audio_moving() -> Dictionary:
 	var moving := {}
 	for value in unit_motion.values():
 		var m: UnitMotion = value
-		if not is_instance_valid(m.node) or m.speed < DUST_SPEED:
+		if not is_instance_valid(m.node) or m.speed < DUST_SPEED or not fog_view.is_visible(m.node.position):
 			continue
 		var id := AudioDirector.loop_for(m.kind)
 		if id == "":
@@ -3423,7 +3531,7 @@ func _dispatch_shots(snapshot: Dictionary) -> int:
 		record.drew = true
 		drawn += 1
 		shots_drawn_total += 1
-		_sfx(AudioDirector.weapon_for(kind, owner), a, delay)
+		_sfx(AudioDirector.weapon_for(kind, owner), a if fog_view.seen_recently(a) else b, delay)
 		if String(shooter.get("category", "")) == "unit":
 			var node := bridge_nodes.get(int(shooter.get("id", -1))) as Node3D
 			var card: Node3D = node.get_node_or_null("UnitVisual") if is_instance_valid(node) else null

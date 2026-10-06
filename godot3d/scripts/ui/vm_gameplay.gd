@@ -108,7 +108,7 @@ static func tile_inspect(snap: Dictionary, ground_model, x: int, y: int) -> Dict
 
 static func _bonus_text(snap: Dictionary, x: int, y: int) -> String:
 	for e in _entities(snap):
-		if not (e is Dictionary) or str(e.get("category", "")) != "building":
+		if not (e is Dictionary) or str(e.get("category", "")) != "building" or bool(e.get("remembered", false)):
 			continue
 		var cell := entity_cell(e)
 		if int(cell[0]) != x or int(cell[1]) != y:
@@ -554,19 +554,46 @@ static func _mmss(seconds: int) -> String:
 	return "%02d:%02d" % [seconds / 60, seconds % 60]
 
 
-## Enemy territory card (board 3): what the snapshot holds of the alien side. There is no fog in the sim, so the board's
-## "partly seen" and "~14 est." are not built; counts are exact. {} when no alien entity exists.
+## Whether the snapshot carries a Kestrel fog mask that hides something (the bridge's `fog`: one digit per cell, 0
+## unseen, 1 explored, 2 visible). Without one (Survival, EARTHFRONT_FOG=0) every panel reads as before fog.
+static func fogged(snap: Dictionary) -> bool:
+	var mask = snap.get("fog", "")
+	if not (mask is String) or mask == "":
+		return false
+	var w := int(snap.get("map_width", 0))
+	var h := int(snap.get("map_height", 0))
+	if w > 0 and h > 0 and mask.length() != w * h:
+		return false
+	return mask.count("2") != mask.length()
+
+
+## Percent of the map explored or visible under the fog mask (100 without fog).
+static func scouted_pct(snap: Dictionary) -> int:
+	if not fogged(snap):
+		return 100
+	var mask: String = snap["fog"]
+	return roundi(100.0 * float(mask.length() - mask.count("0")) / float(mask.length()))
+
+
+## Enemy territory card (board 3): what the snapshot holds of the alien side. Without fog the counts are exact (the
+## board's "partly seen" and "~14 est." are not built). Under Kestrel fog the snapshot holds only what the player knows:
+## structures in sight or remembered (named as last seen), units in sight, and how much of the map is scouted; the card
+## then shows before contact ("Not scouted"). {} without fog when no alien entity exists.
 static func enemy_intel(snap: Dictionary, ground_model) -> Dictionary:
+	var fog := fogged(snap)
 	var guns := 0
 	var aa := 0
 	var walls := 0
 	var units := 0
+	var memories := 0
 	for e in _entities(snap):
 		if not (e is Dictionary) or int(e.get("owner", HUMAN)) == HUMAN:
 			continue
 		if str(e.get("category", "")) == "unit":
 			units += 1
 		else:
+			if bool(e.get("remembered", false)):
+				memories += 1
 			match str(e.get("kind", "")):
 				"GunTurret": guns += 1
 				"AaTurret": aa += 1
@@ -576,7 +603,7 @@ static func enemy_intel(snap: Dictionary, ground_model) -> Dictionary:
 		if e is Dictionary and int(e.get("owner", HUMAN)) != HUMAN:
 			hostile = true
 			break
-	if not hostile:
+	if not hostile and not fog:
 		return {}
 	var rows: Array = []
 	var defences: Array = []
@@ -586,8 +613,15 @@ static func enemy_intel(snap: Dictionary, ground_model) -> Dictionary:
 		defences.append("%d AA" % aa)
 	if walls > 0:
 		defences.append("%d wall%s" % [walls, "" if walls == 1 else "s"])
-	rows.append({"label": "Defences", "value": ", ".join(defences) if not defences.is_empty() else "None", "tone": ""})
-	rows.append({"label": "Garrison", "value": "%d unit%s" % [units, "" if units == 1 else "s"], "tone": ""})
+	if fog:
+		rows.append({"label": "Defences", "value": ", ".join(defences) if not defences.is_empty() else ("Not scouted" if not hostile else "None seen"), "tone": ""})
+		rows.append({"label": "Garrison", "value": "%d unit%s in sight" % [units, "" if units == 1 else "s"], "tone": ""})
+		if memories > 0:
+			rows.append({"label": "Memory", "value": "%d last seen" % memories, "tone": ""})
+		rows.append({"label": "Scouted", "value": "%d%% of the map" % scouted_pct(snap), "tone": ""})
+	else:
+		rows.append({"label": "Defences", "value": ", ".join(defences) if not defences.is_empty() else "None", "tone": ""})
+		rows.append({"label": "Garrison", "value": "%d unit%s" % [units, "" if units == 1 else "s"], "tone": ""})
 	if ground_model != null:
 		var counts := {}
 		for c in enemy_border(snap):
@@ -634,7 +668,7 @@ static func combat_preview(snap: Dictionary, ground_model, attacker_ids: Array, 
 		return {}
 	var foe: Dictionary = {}
 	for e in _entities(snap):
-		if e is Dictionary and int(e.get("owner", HUMAN)) != HUMAN:
+		if e is Dictionary and int(e.get("owner", HUMAN)) != HUMAN and not bool(e.get("remembered", false)):  # a memory carries no live intel
 			var c := entity_cell(e)
 			if int(c[0]) == int(target[0]) and int(c[1]) == int(target[1]):
 				foe = e
@@ -1030,7 +1064,11 @@ static func wave_panel(snap: Dictionary, ground_model) -> Dictionary:
 							break
 					out["title"] = "Fortify %s" % region if region != "" else "Fortify tile %d,%d" % [int(before[0]), int(before[1])]
 				break
-	if int(snap.get("active_alien_relays", 0)) > 0:
+	if fogged(snap):
+		# under fog the player knows the relays exist (briefing intel), not how many are powered
+		if int(snap.get("alien_relays", 0)) > 0:
+			rows.append({"label": "Relays", "value": "%d known" % int(snap["alien_relays"]), "tone": "warn"})
+	elif int(snap.get("active_alien_relays", 0)) > 0:
 		rows.append({"label": "Relays", "value": "%d operating" % int(snap["active_alien_relays"]), "tone": "warn"})
 	return out
 

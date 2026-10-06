@@ -12,8 +12,12 @@ const FixturesChapters := [
 ]
 
 
-## Title and campaign. `deploy_enabled` is false while the bridge is down.
-static func title_vm(deploy_enabled: bool, research_projects: int) -> Dictionary:
+const FOG_COPY := "Fog of war, scout the alien side"
+
+
+## Title and campaign. `deploy_enabled` is false while the bridge is down. `fogged`: the bridge runs Kestrel Reach with its
+## fog of war (game_ui re-applies the title once a fogged snapshot arrives); Survival shows the whole battlefield.
+static func title_vm(deploy_enabled: bool, research_projects: int, fogged := false) -> Dictionary:
 	var primary := {"label": "Deploy forces", "action": "deploy", "disabled": not deploy_enabled}
 	return {
 		"eyebrow": "Earthfront / Era 1",
@@ -33,7 +37,7 @@ static func title_vm(deploy_enabled: bool, research_projects: int) -> Dictionary
 				"name": "Operation Dawnshield",
 				"blurb": "Earthfront. Contemporary Humanity to Advanced Industrial Civilization.",
 				"tags": [{"t": "Playable", "tone": "good"}, {"t": "Era 1-2", "tone": "dim"}],
-				"facts": [{"k": "Objective", "v": "Destroy the alien Core Node"}, {"k": "Visibility", "v": "Full battlefield, no fog of war"}],
+				"facts": [{"k": "Objective", "v": "Destroy the alien Core Node"}, {"k": "Visibility", "v": FOG_COPY if fogged else "Full battlefield, no fog of war"}],
 				"primary": primary,
 			},
 			"later_title": "Later chapters", "later_note": "Design only",

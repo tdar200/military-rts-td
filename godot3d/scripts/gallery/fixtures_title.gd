@@ -48,7 +48,7 @@ static func featured() -> Dictionary:
 		"facts": [
 			{"k": "Objective", "v": "Destroy the alien Core Node"},
 			{"k": "Target length", "v": "25 to 40 minutes"},
-			{"k": "Visibility", "v": "Full battlefield, no fog of war"},
+			{"k": "Visibility", "v": "Fog of war, scout the alien side"},
 			{"k": "Tempo", "v": "Pause and speed control"},
 		],
 		"primary": {"label": "Continue operation", "action": "operation_continue"},

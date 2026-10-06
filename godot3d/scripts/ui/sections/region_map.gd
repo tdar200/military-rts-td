@@ -5,8 +5,10 @@ extends RefCounted
 ## Borders, Threat, Hex grid) that toggle the layers on this screen only. Driven by vm_maps.region_map() plus
 ## vm["lens_on"] ({terrain, res, bdr, thr, hex} booleans); `emit` is Callable(name, arg) and receives region_lens (id),
 ## region_close and focus_deposit (cell). Builds nothing without a vm.
-## Not built, because the sim has no such data: fog and explored percent, the Unexplored and Islet pins, "Resources seen",
-## Yields per minute, Next goals, the scale bar, the compass (see docs/ascension/ui-deviations.md).
+## Kestrel fog of war: with the snapshot's mask the unseen hexes are shrouded and the explored ones dimmed (vm `unseen`,
+## `explored`), a remembered hostile site is drawn dimmed, and the panel adds an "Explored" percent row.
+## Not built, because the sim has no such data: the Unexplored and Islet pins, "Resources seen", Yields per minute, Next
+## goals, the scale bar, the compass (see docs/ascension/ui-deviations.md).
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const ResourcePins = preload("res://scripts/ui/sections/resource_pins.gd")
@@ -24,6 +26,8 @@ const DEFAULT_LENSES := {"terrain": true, "res": false, "bdr": true, "thr": true
 const PANEL_BG := Color("08101a")
 const LABEL_SIZE := {"sea": 26, "flats": 24, "highland": 22, "grassland": 20, "forest": 18, "river": 18, "ford": 12, "colony": 15}
 const ROUTE_WIDTH := 3.0
+const SHROUD := Color(0.02, 0.03, 0.05, 0.88)  # an unseen hex (the battlefield's near-black blue shroud)
+const MEMORY := Color(0.02, 0.03, 0.05, 0.45)  # an explored hex, seen once, out of sight now
 
 
 
@@ -33,14 +37,27 @@ const ROUTE_WIDTH := 3.0
 class Ground extends Control:
 	var vm: Dictionary = {}
 	var lenses: Dictionary = {}
+	var _keep: Array = []  # the shroud meshes (the canvas keeps only their RIDs)
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_STOP
 
 	func _draw() -> void:
+		_keep.clear()
 		draw_rect(Rect2(Vector2.ZERO, size), Hex.ground_color("o") if lenses.get("terrain", true) else T.BG1)
 		if lenses.get("terrain", true):
 			draw_mesh(Hex.ground_mesh(vm), null)
+		var l := Hex.layout(int(vm["width"]), int(vm["height"]))
+		for layer in [["unseen", SHROUD], ["explored", MEMORY]]:
+			var cells: Array = vm.get(layer[0], [])
+			if cells.is_empty():
+				continue
+			var colors: Array = []
+			colors.resize(cells.size())
+			colors.fill(layer[1])
+			var m := Hex.hex_mesh(l, cells, colors)
+			_keep.append(m)
+			draw_mesh(m, null)
 		if lenses.get("hex", false):
 			draw_multiline(Hex.grid_lines(vm), Color(1, 1, 1, 0.12), 1.0)
 
@@ -79,7 +96,8 @@ class Overlay extends Control:
 				for i in pts.size() - 1:
 					draw_dashed_line(pts[i], pts[i + 1], T.BAD, ROUTE_WIDTH, 9.0, true)
 			for h in vm.get("hostile", []):
-				_diamond(Hex.center(l, int(h["cell"][0]), int(h["cell"][1])), float(l["u"]) * 0.3, T.BAD)
+				var tone: Color = T.BAD.darkened(0.45) if bool(h.get("remembered", false)) else T.BAD  # last seen: dimmed
+				_diamond(Hex.center(l, int(h["cell"][0]), int(h["cell"][1])), float(l["u"]) * 0.3, tone)
 		for c in vm.get("own_cc", []):
 			_diamond(Hex.center(l, int(c[0]), int(c[1])), float(l["u"]) * 0.3, T.CYAN_HI)
 
@@ -263,6 +281,8 @@ static func _composition(parent: Control, vm: Dictionary, x: float, top: float, 
 	if vm.has("hostile"):
 		var count: int = (vm["hostile"] as Array).size()
 		y = _row(parent, "Hostile sites", str(count), "bad" if count > 0 else "", cx, y, cw)
+	if vm.has("explored_pct"):
+		y = _row(parent, "Explored", "%d%%" % int(vm["explored_pct"]), "", cx, y, cw)
 	panel.size.y = roundf(y + 12.0 + 1.0 - top)
 	panel.queue_redraw()
 	return panel.size.y

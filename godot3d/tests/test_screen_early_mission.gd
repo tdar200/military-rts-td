@@ -46,12 +46,16 @@ func test_region_copy_needs_its_region(t) -> void:
 	t.ok(Maps.briefing(1, {})["body"] != "", "without a snapshot the region-free copy still stands")
 
 
-func test_no_fog_or_survey_wording(t) -> void:
-	for stage in [0, 1, 2]:
-		var vm := Maps.briefing(stage, _snapshot())
-		var text := JSON.stringify(vm).to_lower()
-		for banned in ["fog", "survey", "explor", "scout", "sight"]:
-			t.ok(not text.contains(banned), "stage %d never says '%s'" % [stage, banned])
+## This is Survival's briefing (Kestrel has its own, vm_maps.kestrel_briefing, which names the fog: test_kestrel_objectives).
+## Survival has no fog of war, so whatever snapshot it is given, fogged or not, it never speaks of fog or scouting.
+func test_survival_briefing_has_no_fog_or_survey_wording(t) -> void:
+	var off := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text()) as Dictionary
+	for snap in [_snapshot(), off]:
+		for stage in [0, 1, 2]:
+			var vm := Maps.briefing(stage, snap)
+			var text := JSON.stringify(vm).to_lower()
+			for banned in ["fog", "survey", "explor", "scout", "sight"]:
+				t.ok(not text.contains(banned), "stage %d never says '%s'" % [stage, banned])
 
 
 func test_card_shows_title_items_and_a_hide_button(t) -> void:

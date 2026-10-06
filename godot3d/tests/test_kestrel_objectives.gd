@@ -244,7 +244,11 @@ func test_the_kestrel_card_shows_the_kestrel_stage_text(t) -> void:
 	var texts: Array = items.map(func(i): return i["t"])
 	t.eq(texts.slice(0, 5), ["Power the base", "Harvester heading for the ore beside the base", "Raise a squad", "Hold the ford", "Break the Core Node"], "titles, and the active objective's detail")
 	t.eq(items.slice(0, 5).map(func(i): return i["state"]), ["done", "active", "todo", "todo", "todo"], "states")
-	t.eq(items[5], {"t": "Optional: disable alien relays (2 active)", "state": "todo"}, "the relay line after the Core Node, todo before the ford")
+	t.eq(items[5], {"t": "Optional: destroy alien relays (2 left)", "state": "todo"}, "the relay line after the Core Node, todo before the ford; under fog of war it counts the relays standing, never the powered ones")
+	var off: Array = _adapter(true)
+	off[0].use_kestrel(true)
+	var plain: Dictionary = off[1].hud_vm(0.0)["objectives"]["items"][5]
+	t.eq(plain["t"], "Optional: disable alien relays (%d active)" % off[0].bridge_active_relays, "fog off: the powered count as before")
 	for legacy in Adapter.STAGE_DETAIL:
 		t.ok(not texts.has(legacy), "no Survival stage text on Kestrel: %s" % legacy)
 	t.ok(not texts.has("Establish a supplied base"), "no Survival group title either")
@@ -285,8 +289,12 @@ func test_the_kestrel_briefing_names_the_ore_the_ford_the_wave_the_probe_and_the
 	var body: String = vm["body"]
 	for want in ["Ore", "Command Centre", "Wyllow Ford", "2:30", "probe", "(37, 8)"]:
 		t.ok(body.contains(want), "the body mentions '%s': %s" % [want, body])
-	for banned in ["fog", "survey", "explor", "scout", "sight", "\u2013", "\u2014"]:
+	t.ok(body.contains("dark until your units scout it"), "the fogged start says their side is unscouted: %s" % body)
+	for banned in ["fog", "survey", "explor", "sight", "\u2013", "\u2014"]:
 		t.ok(not body.to_lower().contains(banned), "the body never says '%s'" % banned)
+	var off := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text()) as Dictionary
+	var plain: String = Maps.kestrel_briefing(KO.evaluate(_hauling(off)), off)["body"]
+	t.ok(not plain.to_lower().contains("scout"), "fog off: no scouting line")
 
 
 func test_the_kestrel_briefing_runs_to_the_squad_and_ends_with_the_match(t) -> void:

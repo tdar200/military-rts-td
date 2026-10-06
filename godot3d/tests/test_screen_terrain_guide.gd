@@ -109,13 +109,18 @@ func test_no_table_builds_nothing(t) -> void:
 	p[0].free()
 
 
+## Kestrel has a fog of war now (Task 7), but sight is a disc per viewer that no ground blocks or hides in; only the
+## Highland range bonus also reaches further, and the guide's Highland rule already names that range. So the ground guide
+## still makes no fog or sight rule of its own, fogged snapshot or not.
 func test_no_invented_rules(t) -> void:
-	var vm := _vm()
-	var p := _screen(vm)
-	var text := _all_text(p[0]) + " " + JSON.stringify(vm).to_lower()
-	for banned in ["-25%", "25% across", "fog", "sight", "river penalty", "survey", "unexplored"]:
-		t.ok(not text.contains(banned), "the guide never says '%s'" % banned)
-	p[0].free()
+	var off := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text()) as Dictionary
+	for snap in [_snapshot(), off]:
+		var vm := _vm(snap)
+		var p := _screen(vm)
+		var text := _all_text(p[0]) + " " + JSON.stringify(vm).to_lower()
+		for banned in ["-25%", "25% across", "fog", "sight", "river penalty", "survey", "unexplored"]:
+			t.ok(not text.contains(banned), "the guide never says '%s'" % banned)
+		p[0].free()
 
 
 func test_the_footer_rules_come_from_the_table(t) -> void:

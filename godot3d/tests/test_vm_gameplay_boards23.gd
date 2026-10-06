@@ -137,7 +137,19 @@ func test_enemy_intel_counts_what_the_snapshot_holds(t) -> void:
 	t.eq(reinforce["value"], "2:30, 10 units", "next wave timer (4500 ticks) and expedition size")
 	t.eq(reinforce["tone"], "warn", "warn")
 	t.ok(not str(e).contains("est."), "no estimates")
-	t.ok(not str(e).contains("seen"), "no fog language")
+	t.ok(not str(e).contains("seen") and not str(e).contains("Scouted"), "fog off (the EARTHFRONT_FOG=0 twin): the exact counts, no fog rows")
+
+
+func test_enemy_intel_under_fog_reports_only_what_is_known(t) -> void:
+	var snap := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text()) as Dictionary
+	var e := VM.enemy_intel(snap, GroundModel.from_snapshot(snap))
+	var known := 0
+	for x in snap["entities"]:
+		if int(x["owner"]) != 0 and str(x["category"]) == "unit":
+			known += 1
+	t.eq(_row(e["rows"], "Garrison")["value"], "%d unit%s in sight" % [known, "" if known == 1 else "s"], "units counted in sight only")
+	t.ok(str(_row(e["rows"], "Scouted")["value"]).ends_with("% of the map"), "the scouted share is stated")
+	t.ok(not str(e).contains("est."), "never an estimate of the hidden side")
 
 
 func test_enemy_intel_walls_and_short_timers(t) -> void:

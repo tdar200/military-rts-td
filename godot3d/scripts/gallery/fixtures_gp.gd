@@ -186,9 +186,10 @@ static func wave_board() -> Dictionary:
 ## Board 8 (MapOverlays): the Logistics tab on the Supply lens, whose list the board shows in the deck. The data is the
 ## committed Kestrel snapshot with the player's base laid out where the board draws it plus a supply_links array in the
 ## bridge's shape; legend, summary, rows and marks come from overlay_feed.gd, the same code the live game runs. Not built
-## (no data): the board's route names and ETAs, the grid ledger, node pins, tile-yield numbers, alert rows.
+## (no data): the board's route names and ETAs, the grid ledger, node pins, tile-yield numbers, alert rows. The board draws
+## the alien base's borders, so it reads the EARTHFRONT_FOG=0 twin of the snapshot (the fogged start hides that base).
 static func logistics_snapshot() -> Dictionary:
-	var snap: Dictionary = JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
+	var snap := _kestrel_fog_off()
 	var base := [
 		[1, "PowerPlant", 4, 6, 1000, {"river_kw": 0}], [2, "PowerPlant", 3, 9, 1000, {"river_kw": 12}], [3, "ResearchLab", 15, 4, 750, {}],
 		[4, "Refinery", 14, 9, 1000, {"ore_bonus": true}], [5, "Barracks", 10, 11, 300, {}], [6, "GunTurret", 17, 6, 1000, {}],
@@ -277,11 +278,17 @@ static func _kestrel() -> Dictionary:
 	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
 
 
+## The same start with the bridge's fog off (EARTHFRONT_FOG=0): the whole alien base, an all-visible mask.
+static func _kestrel_fog_off() -> Dictionary:
+	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text())
+
+
 ## Board 11 (RegionMap): the committed Kestrel snapshot at the board's clock (wave 03 due in 01:52), through the same
-## vm_maps.region_map() the live game runs. Not built (no data): fog and explored percent, Unexplored and Islet pins, Resources
-## seen, Yields per minute, Next goals, scale bar and compass.
+## vm_maps.region_map() the live game runs, from the EARTHFRONT_FOG=0 twin: the board shows the whole alien side, which the
+## fogged start hides (the live map shrouds unseen hexes and adds an Explored row; test_fog covers that). Not built (no
+## data): Unexplored and Islet pins, Resources seen, Yields per minute, Next goals, scale bar and compass.
 static func region_board() -> Dictionary:
-	var snap := _kestrel()
+	var snap := _kestrel_fog_off()
 	var tps: int = load("res://scripts/ui/live_adapter.gd").TICKS_PER_SECOND
 	snap["waves_survived"] = 2
 	snap["next_wave_ticks"] = (60 + 52) * tps

@@ -113,9 +113,29 @@ func test_no_invented_panels(t) -> void:
 	var vm := _vm()
 	var p := _screen(vm)
 	var text := _all_text(p[0]) + " " + JSON.stringify(vm).to_lower()
-	for banned in ["fog", "explored", "unexplored", "islet", "resources seen", "next goals", "yields per minute", "coastal river basin"]:
+	for banned in ["unexplored", "islet", "resources seen", "next goals", "yields per minute", "coastal river basin"]:
 		t.ok(not text.contains(banned), "the map never says '%s'" % banned)
 	p[0].free()
+
+
+## Kestrel fog of war (plan 2026-10-06-kestrel-next-level, Task 7): the fogged start shrouds what the player has not
+## scouted, dims what was explored, and says how much is known; the EARTHFRONT_FOG=0 twin shows the map as before fog.
+func test_kestrel_fog_shrouds_unscouted_hexes_and_states_the_explored_share(t) -> void:
+	var snap := _snapshot()
+	var vm := _vm(snap)
+	var mask: String = snap["fog"]
+	t.eq((vm["unseen"] as Array).size(), mask.count("0"), "every unseen hex is shrouded")
+	t.eq((vm["explored"] as Array).size(), mask.count("1"), "every explored hex is dimmed")
+	t.eq(int(vm["explored_pct"]), roundi(100.0 * float(mask.length() - mask.count("0")) / float(mask.length())), "the explored share")
+	var p := _screen(vm)
+	t.ok(U.has_text(p[0], "Explored") and U.has_text(p[0], "%d%%" % int(vm["explored_pct"])), "the panel states it")
+	p[0].free()
+	var off := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text()) as Dictionary
+	var plain := _vm(off)
+	t.ok(not plain.has("unseen") and not plain.has("explored") and not plain.has("explored_pct"), "fog off: no shroud and no Explored row")
+	var q := _screen(plain)
+	t.ok(not _all_text(q[0]).contains("explored"), "and the panel never says explored")
+	q[0].free()
 
 
 func test_ground_mesh_is_cached_per_ground(t) -> void:
