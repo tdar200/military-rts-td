@@ -9,6 +9,12 @@ func _snap() -> Dictionary:
 	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
 
 
+## The same Kestrel start frame dumped with EARTHFRONT_FOG=0: every alien entity present and an all-visible fog mask.
+## The default fixture is fogged, so the alien base is withheld until scouted; tests about the alien entities use this one.
+func _snap_fog_off() -> Dictionary:
+	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text())
+
+
 ## A hand-built snapshot: `rows` is the ground string row by row, the ground_table is the real one from the fixture.
 func _mini(rows: Array, entities := [], extra := {}) -> Dictionary:
 	var snap := {"map_width": String(rows[0]).length(), "map_height": rows.size(), "ground": "".join(rows), "ground_table": _snap()["ground_table"], "entities": entities}
@@ -45,7 +51,8 @@ func test_hex_distance_hand_checked_pairs(t) -> void:
 
 
 func test_entity_cell_matches_the_fixtures_own_coordinates(t) -> void:
-	var s := _snap()
+	# The alien Command Center is out of sight on the fogged start frame, so read the fog-off twin.
+	var s := _snap_fog_off()
 	var human_cc := {}
 	var alien_cc := {}
 	for e in s["entities"]:
@@ -292,7 +299,8 @@ func test_enemy_border_falls_back_to_the_core_node(t) -> void:
 
 
 func test_enemy_border_on_the_kestrel_fixture(t) -> void:
-	var s := _snap()
+	# The holdfast structures are out of sight on the fogged start frame, so read the fog-off twin.
+	var s := _snap_fog_off()
 	var cells: Array = VM.enemy_border(s)
 	t.ok(cells.size() > 37, "the holdfast has several structures, so more than one disc")
 	t.ok(cells.has([37, 8]), "core node is inside")
@@ -308,6 +316,32 @@ func test_enemy_border_on_the_kestrel_fixture(t) -> void:
 					break
 		near_alien += 1 if ok else 0
 	t.eq(near_alien, cells.size(), "every border cell is within 3 of an alien building")
+
+
+func test_kestrel_fixture_is_fogged_and_its_fog_off_twin_differs_only_in_what_fog_withholds(t) -> void:
+	var fogged := _snap()
+	var open := _snap_fog_off()
+	var cells: int = int(fogged["map_width"]) * int(fogged["map_height"])
+	var mask: String = fogged["fog"]
+	t.eq(mask.length(), cells, "one fog digit per cell")
+	var digits_ok := true
+	for ch in mask:
+		digits_ok = digits_ok and ch in ["0", "2"]
+	t.ok(digits_ok, "the first frame has only unseen and visible cells")
+	t.ok(mask.contains("0") and mask.contains("2"), "the base is in sight, the alien base is not")
+	var humans_only := true
+	for e in fogged["entities"]:
+		humans_only = humans_only and int(e["owner"]) == 0
+	t.ok(humans_only, "no alien is in sight of the start base")
+	t.eq(fogged["services"].size(), fogged["entities"].size(), "services follow the shown entities")
+	t.eq(String(open["fog"]), "2".repeat(cells), "fog off sends an all-visible mask")
+	var aliens: int = open["entities"].filter(func(e): return int(e["owner"]) != 0).size()
+	t.ok(aliens > 15, "fog off shows the whole alien base")
+	t.eq(fogged.keys(), open.keys(), "same keys in the same order")
+	var withheld := ["entities", "services", "blocked", "fog"]
+	for k in fogged.keys():
+		if not k in withheld:
+			t.eq(fogged[k], open[k], "%s is not touched by the fog" % k)
 
 
 # ------------------------------------------------------------------ regions and veterans

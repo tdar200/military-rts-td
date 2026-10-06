@@ -1,7 +1,8 @@
 extends RefCounted
 ## Boards 2 and 3 (BuildDeck, CoreAssault): slice functions in vm_gameplay.gd and their wiring through live_adapter.gd.
 ## Cells below are Kestrel Reach's (the committed snapshot): zone ground is grass, an Ore deposit sits at (7,11) and the
-## river runs down columns 15-16.
+## river runs down columns 15-16. Board 3 describes the alien base, so these slices read the fog-off twin of the start
+## frame (kestrel_snapshot_fog_off.json, dumped with EARTHFRONT_FOG=0): the fogged fixture withholds every alien entity.
 const VM := preload("res://scripts/ui/vm_gameplay.gd")
 const GroundModel := preload("res://scripts/terrain/ground_model.gd")
 const Adapter := preload("res://scripts/ui/live_adapter.gd")
@@ -9,7 +10,7 @@ const Stub := preload("res://tests/stub_game.gd")
 
 
 func _snap() -> Dictionary:
-	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ).get_as_text())
+	return JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text())
 
 
 func _row(rows: Array, label: String) -> Dictionary:
@@ -315,7 +316,7 @@ class Cam extends Stub:
 
 func _live() -> Array:
 	var g := Cam.new()
-	g.use_kestrel()
+	g.use_kestrel(true)  # the fog-off twin: these HUD tests hover and count the alien base
 	g.bridge_next_wave_ticks = 2700
 	g.bridge_waves = 0
 	g.bridge_power_generation = 168

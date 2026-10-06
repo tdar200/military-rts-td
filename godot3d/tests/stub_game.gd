@@ -61,8 +61,10 @@ var ground_model: RefCounted = null
 var hover_cell = null
 
 
-func use_kestrel() -> void:
-	var f := FileAccess.open("res://tests/fixtures/kestrel_snapshot.json", FileAccess.READ)
+## `fog_off` loads the EARTHFRONT_FOG=0 twin of the start frame (every alien entity present) for tests about the alien base.
+func use_kestrel(fog_off := false) -> void:
+	var path := "res://tests/fixtures/kestrel_snapshot_fog_off.json" if fog_off else "res://tests/fixtures/kestrel_snapshot.json"
+	var f := FileAccess.open(path, FileAccess.READ)
 	bridge_snapshot = JSON.parse_string(f.get_as_text())
 	ground_model = preload("res://scripts/terrain/ground_model.gd").from_snapshot(bridge_snapshot)
 	kestrel = true
