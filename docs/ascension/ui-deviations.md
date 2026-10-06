@@ -859,11 +859,13 @@ the golden hash are unchanged.
   entities.
 - The briefing (board 6 card) stays up for the first three objectives. Its paragraph is first-minutes intel: the ore beside
   the Command Centre, the ford wave one crosses and its mission time (2:30) and the alien probe that may strike sooner
-  (the Core Node's cell was cut in the fix round so the paragraph fits its three lines). The gallery's board 6 keeps the tutorial's briefing (its mock draws that copy), so no pixel gate moved.
+  (the Core Node's cell was cut in the fix round so the paragraph fits its three lines). The gallery's board 6 keeps the
+  tutorial's briefing (its mock draws that copy), so no pixel gate moved.
 - Command tabs follow a new objective as the tutorial's did: Raise a squad opens Units, Hold the ford and Break the Core
   Node open Orders. A reopened objective leaves the tab alone.
 - New on Kestrel: "<structure> under attack" (a hostile toast) when a human building loses HP, at most one every 5 s over
-  all structures and one every 15 s per structure, with the hit's existing shake and tone. Task 2 found that idle riflemen
+  all structures and one every 15 s per structure, with the hit's existing shake and the alert sound (`_sfx("alert")`,
+  Task 5 replaced the generated tone). Task 2 found that idle riflemen
   never react to a structure under fire. The latest hit's position and cell are kept (`live_adapter.last_structure_attack`)
   for the minimap work in a later task.
 - On Kestrel the alert toasts are the HUD's top layer (`Hud.raise_alerts`). Their column (x 12 to 312 from y 520) is where

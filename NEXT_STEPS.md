@@ -117,8 +117,9 @@ Open items, in rough order of value:
 - Show "River +12 kW" on the selected structure's terrain card. Today it appears on the hover inspector (nothing selected),
   the Yield lens and the briefing only.
 - Yield lens legend swatches render as empty boxes.
-- Missing sim mechanics the mocks assumed, deliberately not faked: fog, "across the river -25%", multi-hex footprints,
-  Cancel last, Resupply, Focus fire, per-minute yields, a wave composition list, a campaign or checkpoint.
+- Missing sim mechanics the mocks assumed, deliberately not faked: fog (fog added for Kestrel 2026-10-06, see above),
+  "across the river -25%", multi-hex footprints, Cancel last, Resupply, Focus fire, per-minute yields, a wave composition
+  list, a campaign or checkpoint.
 - Make `run-3d.sh` pass a scenario to the bridge (today it passes its arguments to Godot only), so Kestrel starts with one
   command.
 - Supply lens needs a stocked depot with a building in reach; with none it is hidden by design.
@@ -147,6 +148,14 @@ Still owed, in rough order of value:
   vanish without an explosion (the fog silence heuristic's reach caps at 2.0 world units).
 - Idle riflemen do not defend a structure under attack (the alert only informs); the probe ids 9 to 11 are fixed
   constants; only the bridge calls `Scenario::scripted_commands`, so another Kestrel host must add that call.
+- Accepted fog leaks from the final review, behaviour unchanged (fix round 2026-10-06):
+  - M1: `wave_route` is pathed by `find_path` over the real map, so a hidden alien structure (`Tile::BLOCKED`) can bend
+    the drawn route although its cell is withheld from `blocked`. Fix later by pathing over hidden cells as ground, or by
+    caching the tick-0 route in `FogState`.
+  - M2: an incoming tracer from an attacker in a dark cell starts at the attacker's true position, which shows its
+    direction and rough range. Arguably intended (fire shows where it comes from); otherwise start it at the sight edge.
+  - M4: a non-empty fog mask of the wrong length (bridge and client version skew) is read as no fog with no warning, so
+    the whole alien side shows. Fix later with one latched `push_warning`, like the ground-layer check.
 
 How to:
 - Regenerate the audio: `python3 tools/audio/build_sfx.py` (writes `godot3d/assets/audio/sfx/`, byte-identical on a

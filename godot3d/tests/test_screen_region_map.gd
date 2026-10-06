@@ -129,12 +129,15 @@ func test_kestrel_fog_shrouds_unscouted_hexes_and_states_the_explored_share(t) -
 	t.eq(int(vm["explored_pct"]), roundi(100.0 * float(mask.length() - mask.count("0")) / float(mask.length())), "the explored share")
 	var p := _screen(vm)
 	t.ok(U.has_text(p[0], "Explored") and U.has_text(p[0], "%d%%" % int(vm["explored_pct"])), "the panel states it")
+	t.ok(not _all_text(p[0]).contains("fog"), "fogged: the panel shows the shroud and the Explored share, it never prints the word fog (review M10)")
 	p[0].free()
 	var off := JSON.parse_string(FileAccess.open("res://tests/fixtures/kestrel_snapshot_fog_off.json", FileAccess.READ).get_as_text()) as Dictionary
 	var plain := _vm(off)
 	t.ok(not plain.has("unseen") and not plain.has("explored") and not plain.has("explored_pct"), "fog off: no shroud and no Explored row")
 	var q := _screen(plain)
-	t.ok(not _all_text(q[0]).contains("explored"), "and the panel never says explored")
+	var plain_text := _all_text(q[0]) + " " + JSON.stringify(plain).to_lower()
+	t.ok(not plain_text.contains("explored"), "and the panel never says explored")
+	t.ok(not plain_text.contains("fog"), "nor fog, in the panel or its view model (review M10: the banned word the fog branch dropped)")
 	q[0].free()
 
 
