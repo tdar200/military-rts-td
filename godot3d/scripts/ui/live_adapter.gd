@@ -142,7 +142,7 @@ func poll_ticker(text: String, now: float) -> void:
 	_ticker = text
 	if text == "":
 		return
-	var parts := text.split(" — ", false, 1)
+	var parts := text.split(" \u2014 ", false, 1)
 	var title := parts[0]
 	var body := parts[1] if parts.size() > 1 else ""
 	_push({"tone": "cyan", "icon": "wave", "title": _sentence(title), "body": _sentence(body.replace(" • ", ", "))}, now)

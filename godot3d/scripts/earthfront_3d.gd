@@ -1658,7 +1658,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			attack_move_armed = true
 			rally_armed = false
 			build_mode = ""
-			objective_label.text = "ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION"
+			objective_label.text = "ATTACK-MOVE ARMED \u2014 RIGHT-CLICK A DESTINATION"
 		elif event.keycode == Keybinds.CANCEL:
 			# Only reached while something is armed: with nothing armed game_ui.route_key opened the pause menu above.
 			attack_move_armed = false
@@ -1708,7 +1708,7 @@ func _try_place_build(build_ground: Vector3) -> void:
 		_write_bridge_build(build_mode, build_ground)
 		build_mode = ""
 	else:
-		objective_label.text = "INVALID FOUNDATION — CHOOSE OPEN TERRAIN"
+		objective_label.text = "INVALID FOUNDATION \u2014 CHOOSE OPEN TERRAIN"
 
 
 func _update_selection_box(current: Vector2) -> void:
@@ -2306,19 +2306,19 @@ func _append_bridge_command(line: String) -> void:
 
 func _write_bridge_move(unit: Node3D, ground: Vector3, attack_move := false) -> void:
 	if int(unit.get_meta("team")) != HUMAN:
-		objective_label.text = "ENEMY TELEMETRY ONLY — SELECT AN EARTH DEFENCE UNIT"
+		objective_label.text = "ENEMY TELEMETRY ONLY \u2014 SELECT AN EARTH DEFENCE UNIT"
 		return
 	var simulation_bits := _world_to_sim_bits(ground)
 	var simulation_x_bits := simulation_bits.x
 	var simulation_z_bits := simulation_bits.y
 	var verb := "attack" if attack_move else "move"
 	_append_bridge_command("%s,%d,%d,%d" % [verb, int(unit.get_meta("bridge_id")), simulation_x_bits, simulation_z_bits])
-	objective_label.text = "%s ORDER TRANSMITTED — %d UNIT%s" % ["ATTACK-MOVE" if attack_move else "MOVE", selected_units.size(), "" if selected_units.size() == 1 else "S"]
+	objective_label.text = "%s ORDER TRANSMITTED \u2014 %d UNIT%s" % ["ATTACK-MOVE" if attack_move else "MOVE", selected_units.size(), "" if selected_units.size() == 1 else "S"]
 
 
 func _write_bridge_train(kind_name: String) -> void:
 	if not bridge_active:
-		objective_label.text = "SIMULATION CORE OFFLINE — PRODUCTION UNAVAILABLE"
+		objective_label.text = "SIMULATION CORE OFFLINE \u2014 PRODUCTION UNAVAILABLE"
 		return
 	var producer_kind := "Refinery" if kind_name == "Harvester" else ("VehicleFactory" if kind_name == "Tank" else ("Airfield" if kind_name == "Helicopter" else "Barracks"))
 	var producers: Array = bridge_nodes.values()
@@ -2384,14 +2384,14 @@ func _write_bridge_build(kind_name: String, ground: Vector3) -> void:
 
 func _write_bridge_research(tech_id := -1) -> void:
 	if not bridge_active:
-		objective_label.text = "SIMULATION CORE OFFLINE — SCIENCE UNAVAILABLE"
+		objective_label.text = "SIMULATION CORE OFFLINE \u2014 SCIENCE UNAVAILABLE"
 		return
 	if bridge_active_research_id >= 0:
-		objective_label.text = "RESEARCH IN PROGRESS — %s" % bridge_active_research_name.to_upper()
+		objective_label.text = "RESEARCH IN PROGRESS \u2014 %s" % bridge_active_research_name.to_upper()
 		return
 	var chosen_id: int = bridge_suggested_research_id if tech_id < 0 else int(tech_id)
 	if chosen_id < 0:
-		objective_label.text = "NO AFFORDABLE RESEARCH — EXPAND POWER, LABOUR, OR MINERALS"
+		objective_label.text = "NO AFFORDABLE RESEARCH \u2014 EXPAND POWER, LABOUR, OR MINERALS"
 		return
 	var chosen_name := bridge_suggested_research_name
 	for option in bridge_research_options:
@@ -2399,7 +2399,7 @@ func _write_bridge_research(tech_id := -1) -> void:
 			chosen_name = String(option.get("name", chosen_name))
 			break
 	_append_bridge_command("research,%d" % chosen_id)
-	objective_label.text = "RESEARCH ORDERED — %s" % chosen_name.to_upper()
+	objective_label.text = "RESEARCH ORDERED \u2014 %s" % chosen_name.to_upper()
 	if science_overlay:
 		science_overlay.visible = false
 
@@ -2885,7 +2885,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 				relay_marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 				relay_marker.modulate = Color("ffac83")
 				entity_node.add_child(relay_marker)
-			relay_marker.text = "INVASION RELAY +2 / WAVE" if int(relay_service.get("power", 0)) >= 500 else "INVASION RELAY — OFFLINE"
+			relay_marker.text = "INVASION RELAY +2 / WAVE" if int(relay_service.get("power", 0)) >= 500 else "INVASION RELAY \u2014 OFFLINE"
 			if bool(entity_data.get("remembered", false)):
 				relay_marker.text = "INVASION RELAY"  # a memory carries no live status
 		elif relay_marker:
@@ -3032,7 +3032,7 @@ func _on_command_button(action: String) -> void:
 			attack_move_armed = true
 			rally_armed = false
 			build_mode = ""
-			objective_label.text = "ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION"
+			objective_label.text = "ATTACK-MOVE ARMED \u2014 RIGHT-CLICK A DESTINATION"
 		"cancel_orders":
 			attack_move_armed = false
 			rally_armed = false

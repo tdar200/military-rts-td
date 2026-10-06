@@ -153,13 +153,13 @@ func test_alerts_expire_and_cap(t) -> void:
 
 func test_ticker_text_becomes_a_toast(t) -> void:
 	var p := _make()
-	p[1].poll_ticker("ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION", 0.0)
-	p[1].poll_ticker("ATTACK-MOVE ARMED — RIGHT-CLICK A DESTINATION", 0.1)
+	p[1].poll_ticker("ATTACK-MOVE ARMED \u2014 RIGHT-CLICK A DESTINATION", 0.0)
+	p[1].poll_ticker("ATTACK-MOVE ARMED \u2014 RIGHT-CLICK A DESTINATION", 0.1)
 	var alerts: Array = p[1].hud_vm(0.2)["alerts"]
 	t.eq(alerts.size(), 1, "an unchanged ticker adds nothing")
 	t.eq(alerts[0]["title"], "Attack-move armed", "title")
 	t.eq(alerts[0]["body"], "Right-click a destination", "body")
-	t.ok(not alerts[0]["title"].contains("—") and not alerts[0]["body"].contains("—"), "no em dash reaches the screen")
+	t.ok(not alerts[0]["title"].contains("\u2014") and not alerts[0]["body"].contains("\u2014"), "no em dash reaches the screen")
 
 
 func test_minimap_marks_and_view(t) -> void:
