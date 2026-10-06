@@ -751,3 +751,20 @@ moves, and the ground under it answers.
   with 8 Hz polls, headless on the loaded machine: `_animate_unit_cards` (poses and dust) about 0.27 ms p50 and
   0.46 to 0.50 ms p95 per frame (load average 4 to 16), live cards held at the 80-card dust room; idle 0 ms. Idle boards against the previous
   scores: every board within 0.15 (unchanged from Task 3); Survival pair 99.41.
+
+### HUD icon truth (Kestrel next-level plan Task 1, 2026-10-06)
+
+- On Kestrel (`world_art_on`) every building and unit icon in the HUD is the kind's own painted world sprite, one mapping
+  (`LiveAdapter.icon_path_for_building` / `icon_path_for_unit`, reading `WorldSprites.SPRITES` and falling back to the
+  generic icon only when no sprite file exists). It feeds the build deck cards, the placement preview, the queue card, the
+  strike-group chips and the selected-structure, roster and queue cells (`vm_gameplay._sprite_path`). Before this the deck
+  showed stand-ins: vehicle factory = barracks, airfield = gunship, supply depot = foundation slab, research lab = capital,
+  battery = reactor; the group chips covered four unit kinds and the capital and harvester got a generic icon.
+- The queue card shows what the selected structure is producing (its `production_name` is a unit kind), not a foundation slab.
+- Survival keeps the legacy table (`BUILD_CARDS` field 7, `GROUP_SPRITES`, `foundation_v1` on the queue card) byte for byte:
+  the adapter reads the game's `world_art_on`, which is false there.
+- Gallery fixtures: `fixtures_build.gd` (the Build board and the gp boards that reuse it) shows the world sprites for the five
+  stand-in kinds, the placement preview and the queue card. `fixtures_gp.gd` already used each kind's own sprite. The mock
+  itself still draws the old stand-ins, so the Build board's rectangles that contain those icons moved toward the mock's
+  worse side by a little: placement panel 6.38 to 8.47 (limit 9.53), deck cards 6.21 to 7.31 (9.21), deck queue 6.39 to 7.09
+  (9.39). No limit was loosened and no other rectangle of any screen changed.
