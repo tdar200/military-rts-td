@@ -415,6 +415,13 @@ GL (Xvfb, Dummy audio, 1920x1080, about 3 fps) and looked at every capture. What
 - The minimap shows the whole map letterboxed in its slot. On Kestrel a click or drag inside the map moves the camera
   there; a click in the letterbox does nothing (see "Kestrel minimap interaction").
 - Hostile diamonds appear only while alien units are on screen (covered by `test_live_assault.gd`).
+- Kestrel briefing card (seen in the Task 10 playthrough, 1920x1080): with the fog sentence the intel paragraph runs to
+  five lines, and its last line ("side stays dark until your units scout it.") draws over the first objective row
+  ("Start the economy"). The card height does not grow with the paragraph. Not fixed.
+- Kestrel toasts still cover the territory card for their 9 s (by design since Task 3; the card's header shows through
+  the toast backgrounds in captures).
+- Placement toasts read "Place gunturret" and "Gunturret foundation ordered" (the kind name is case-folded without its
+  word break). Seen in the Task 10 playthrough; not fixed.
 
 ## 6. Installed files that differ from the bundle (deliberate, not drift)
 
@@ -486,6 +493,12 @@ writes `<qa dir>/states/*.png`. It actually writes `<qa dir>/state-*.png`. It wa
   (stops and turns) to quote.
 - Nothing played to the end: the Kestrel colony fell within the first three waves in every run, and the live win path is unseen.
 - No sound was played (Godot ran with the Dummy audio driver), so audio was not judged.
+- Kestrel next-level playthrough (Task 10, 2026-10-06, real bridge and client on a private Xvfb, software, Dummy audio,
+  driven only by viewport input): the economy ran from the first tick (the Harvester mines in place), the first three
+  objectives were done by about 0:33 (tick 998, 7 riflemen), the probe was first in sight at 1:54 and died to two gun turrets and a 12-rifle
+  squad, and wave one (10 rifles) was held at the cost of one gun turret and two riflemen; the run stopped at 4:02
+  with the base whole. Numbers, captures and the audio log counts are in the Task 10 report
+  (`.superpowers/sdd/2026-10-06-kestrel-next-level/task-10-report.md`). The win path is still unseen.
 - The live win path was not exercised. The full campaign QA bot ended in a recorded loss at tick 19975 with 0 script
   errors.
 - A real victory debrief casualty table was not seen live. The table was rendered only through a throwaway driver
