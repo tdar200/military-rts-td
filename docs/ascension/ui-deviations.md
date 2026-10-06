@@ -534,7 +534,8 @@ every legacy path. What still differs from the boards, and why:
   pods; the airfield is a landing pad with a hangar; the battery a bank of lime cells on a plinth; the antimatter plant
   the power plant recoloured violet with a taller column (2.32 tiles); the depot an apron of tanks and crates; the lab a
   low block under a glass dome. The dome reads a little CG next to the painted sprites, and the alien depot and battery
-  decks are flatter than the boards' alien buildings.
+  decks are flatter than the boards' alien buildings. (Task 9 of the Kestrel next-level plan redrew the human factory,
+  the alien depot and the alien battery; see "Building art honesty" below.)
 - Placement ghost: on Kestrel the ghost is a translucent card of the armed kind's painting for your side on the hovered
   hex (60 % opacity), tinted 62 % toward the legacy validity colours (green valid, red invalid; the post chain mutes the
   red toward terracotta), with no cast shadow; it draws without a depth test, so a tall building in front never hides
@@ -914,3 +915,61 @@ there; its world SHA pins are unchanged.
 - Not unit-tested: GUI routing of a real click to the minimap control (the test runner's tree is not live). It was checked
   live on a private Xvfb with real X pointer events (xdotool): press, drag, release, right click, a second click and Space
   with no alert, the army selected throughout and no bridge command written.
+
+### Building art honesty (Kestrel next-level plan Task 9, 2026-10-06)
+
+The six composite kinds per side are ours, built by `tools/ui/build_building_variants.py` from crops of the boards' own
+sprites plus PIL drawing, deterministic, no outside art. Task 9 measured how far each one really is from the sprite it
+was built on, with a hue free structure distance (`structure_distance` in `tools/ui/test_build_building_variants.py`):
+each sprite is cropped to its opaque box and stretched to 128 x 128; silhouette is 1 minus the intersection over union of
+the masks; edges compares the blurred Sobel maps of the value channel max(R, G, B). A copy with every hue turned half the
+wheel scores 0 on both, so a recolour cannot pass. Over the 42 same-side pairs of genuinely different board buildings the
+10th percentile is 0.31 silhouette and 0.30 edges; the closest pair (human command centre and barracks) is 0.19 / 0.27.
+
+- Redrawn (they read as recolours before):
+  - Human vehicle factory: was the barracks hall widened (0.24 / 0.29 to the barracks). Now a long saw-tooth roofed hall
+    with smoked glass, a bay door with a tank in the opening, hazard striped posts and sill, a yellow gantry lifting a
+    crate, an amber tank sign and a ramp: 0.35 / 0.37 to the barracks, 0.33 / 0.37 to the alien factory.
+  - Alien supply depot: was the human depot's slab relaid in alien plate (0.08 silhouette to the human depot). Now a relay
+    yard: three tall cylindrical stores with a gold glyph beacon, a hoist mast whose claw jib swings a crystal cage,
+    carapace cargo cells stacked two high, a gold guide line on the apron: 0.42 / 0.39 to the alien refinery, 0.34 / 0.39
+    to the human depot.
+  - Alien battery: was the human battery's cell bank in alien plate (0.07 silhouette). Now a clawed drum with twin
+    capacitor coils (stacked fins, lime orbs, an arc between them) whose charge slots glow lime: 0.45 / 0.38 to the alien
+    power plant, 0.47 / 0.38 to the human battery.
+  - The three differ from each other by 0.41 to 0.53 silhouette. Their opaque ground boxes keep the old bottom row (within
+    1 px), width (within 16 px) and centre (within 4 px), so `WorldSprites.MOCK_PX`, `WorldArt.BUILDING_TILES`, the anchor,
+    picking, the pad and the bars are unchanged and no pin moved. The factory glass is a smoked steel blue (kept under the
+    accent saturation) so amber stays the factory's only accent and cyan stays the labs'.
+- Still read as recolours (not fixed in Task 9, honest list):
+  - Both antimatter plants: the power plant recoloured violet with a taller column (human 0.22 / 0.25, alien 0.14 / 0.17
+    to their power plants). At board scale they read as violet reactors.
+  - Alien vehicle factory: the alien barracks flanked by refinery pods (0.25 / 0.29 to the alien barracks).
+  - Human supply depot and human battery: one apron layout with different props (0.18 / 0.30 between them).
+  - The two airfields share one layout across the sides (0.13 silhouette between them), though each is far from the
+    barracks it was cropped from. Both research labs are their side's command centre body under a glass dome (0.23 / 0.22
+    to the CC).
+- Scoreboard (fog off, private Xvfb software capture): every board within 0.09 of the Task 2 scores; the boards hold no
+  factory or battery, and the alien depots of the fog-off start are at board scale in the enemy shots.
+
+### Unit aim lean (Kestrel next-level plan Task 9, 2026-10-06)
+
+- A Kestrel unit that fires leans toward its target's side for 0.25 s (`WorldSprites.aim_lean`, `aim_lean_step`): a
+  rotation in the card's own plane about the painted base, rising over the first 35 % and settling back, both eased.
+  Peak by kind (`AIM_LEAN_DEG`): infantry and anti-armour 5 degrees, tanks and capitals 4, gunships 6, capped at 6
+  (`AIM_LEAN_MAX_DEG`). The peak scales with the horizontal share of the shot (a target straight north or south, or
+  straight below, gives no lean), and its sign follows the target's side of the screen. At normal zoom an infantry
+  top moves about 3 to 4 px.
+- It is driven by the same shot as the recoil kick: `_dispatch_shots` calls `aim_lean` beside `kick` with the same
+  vector and start time, so a lean faces the real target and never happens without a drawn shot. `_advance_fx` steps it
+  with the kick on the effects clock, which stops while the sim is paused (`set_sim_paused`), so the lean freezes with
+  the game and resumes where it was.
+- It is one more pose layer (`pose_aim`) over the shared rest: the final transform is the walk shape times the lean, plus
+  the kick and bob. The base lifts by the painted base's half width times the sine of the angle on the leaning side, so
+  the near corner stays on the ground. At the end every lean meta is dropped and the card returns to exactly its rest
+  (or the walk's shape), with no residual.
+- Shadow and contact band are counter-moved so they stay where the unleaned card puts them; picking, the selection
+  ellipse, the bars, the badge and the crown read the rest, never the leaned card. Buildings (turrets included) never
+  lean; harvesters have no weapon, so they draw no shot and never lean. Survival is untouched (no shots go through this path there; its SHA pins are unchanged).
+- Cost: idle frames unchanged (all nine scoreboard shots have Task 8's draw calls and primitives, except enemy +1 / +256,
+  an effect card caught in flight); the lean adds one basis product per recoiling card per frame.
