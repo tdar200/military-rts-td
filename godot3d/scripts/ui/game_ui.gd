@@ -200,6 +200,8 @@ func process(delta: float) -> void:
 	if _left_down and hud.blocks_point(g.mouse_position()):
 		return
 	_since_vm = 0.0
+	if bool(g.get("world_art_on")):
+		hud.raise_alerts()  # Kestrel: toasts over the left card stack (a structure under attack must be seen)
 	hud.apply(adapter.hud_vm(_clock))
 	if minimap_view.get_parent() != hud.map_slot:
 		minimap_view.reparent(hud.map_slot, false)  # the assault layout draws its own slot

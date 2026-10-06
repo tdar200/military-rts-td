@@ -778,8 +778,10 @@ moves, and the ground under it answers.
   the Core Node. The HUD objectives card (cap "Kestrel Reach"), the first-minutes briefing and the "Mission updated" toasts
   read it. Survival keeps `_advance_tutorial` / `_update_tutorial`, `OBJECTIVE_GROUPS`, `STAGE_DETAIL` and the
   "Operation Dawnshield" card byte for byte; `_process` calls the tutorial only when world art is off.
-- The first objective is already met at the start (the prebuilt Reactor gives 90 kW for 30 kW of demand). The card shows it
-  as done with the real numbers, so the player learns where power is read; it reopens if the Reactor falls before wave one.
+- The first objective is already met at the start (the prebuilt Reactor gives 90 kW for 30 kW of demand), so the card and
+  the briefing show it done from the first frame (the top bar's Power chip carries the numbers). It reopens if the Reactor
+  falls or demand outgrows generation before wave one, and its line then names the shortfall ("Build a Reactor (P): 10 of
+  30 kW", "Power short: 90 of 120 kW, build a Reactor (P)").
 - Before wave one the setup objectives are judged live (a lost Reactor, Refinery, Harvester or rifle squad reopens its line,
   toast "Objective reopened"); once wave one is held they stay done and the card points at the Core Node.
 - The briefing (board 6 card) stays up for the first three objectives. Its paragraph is first-minutes intel: the ore beside
@@ -791,3 +793,7 @@ moves, and the ground under it answers.
   all structures and one every 15 s per structure, with the hit's existing shake and tone. Task 2 found that idle riflemen
   never react to a structure under fire. The latest hit's position and cell are kept (`live_adapter.last_structure_attack`)
   for the minimap work in a later task.
+- On Kestrel the alert toasts are the HUD's top layer (`Hud.raise_alerts`). Their column (x 12 to 312 from y 520) is where
+  the left card stack ends once the six-line objectives card and the wave panel are up, and the first QA capture showed
+  "Barracks under attack" and "Enemy signal detected" hidden under the wave panel and the territory card. A toast now
+  covers those cards for its 9 s instead. Survival keeps the fixed section order.

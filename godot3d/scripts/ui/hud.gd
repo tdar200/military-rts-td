@@ -147,6 +147,15 @@ func register_section(key: String, builder: Callable, before := "") -> void:
 		move_child(layer, (_layers[before] as Control).get_index())
 
 
+## Kestrel (game_ui.gd calls it while world art is on): the alert toasts become the top layer, so a toast is never hidden
+## under the left card stack (objectives, wave panel, territory card) that grows down into their column. The only z-order
+## change after _init; Survival never calls it and keeps the section order.
+func raise_alerts() -> void:
+	var layer: Control = _layers["alerts"]
+	if layer.get_index() != get_child_count() - 1:
+		move_child(layer, get_child_count() - 1)
+
+
 ## Add a deck body kind: vm.deck.body.kind == kind is drawn by Callable(layer: Control, body: Dictionary).
 func register_body(kind: String, builder: Callable) -> void:
 	_body_builders[kind] = builder

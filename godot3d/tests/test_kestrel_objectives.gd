@@ -399,3 +399,26 @@ func test_the_structure_alert_is_kestrel_only_and_reuses_the_shake_and_tone(t) -
 	var body := _func_body(_source(), "func _structure_under_attack(position: Vector3, entity_data: Dictionary) -> void:")
 	t.ok(body.contains("ui.structure_attacked("), "through the HUD's alert plumbing")
 	t.ok(body.contains("camera_shake = maxf(camera_shake, 0.42)") and body.contains("_play_tone(92.0, 0.09, 0.12, -25.0)"), "with the existing hit shake and tone")
+
+
+func test_kestrel_toasts_draw_over_the_left_card_stack(t) -> void:
+	for kestrel in [true, false]:
+		var g := Stub.new()
+		g.viewport = t.root
+		if kestrel:
+			g.use_kestrel()
+		var ui := GameUI.new()
+		t.root.add_child(ui)
+		ui.setup(g)
+		ui.begin_operation()
+		ui.adapter.tab = "units"
+		ui.process(0.2)
+		var layers: Array = ui.hud.get_children()
+		var alerts: Control = ui.hud.get_node("alerts")
+		var territory: Control = ui.hud.get_node("territory_card")
+		if kestrel:
+			t.eq(alerts.get_index(), layers.size() - 1, "Kestrel: the toasts are the top layer (the wave panel and territory card grow into their column)")
+		else:
+			t.ok(alerts.get_index() < territory.get_index(), "Survival keeps the fixed section order")
+		ui.free()
+

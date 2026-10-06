@@ -5,8 +5,8 @@ extends RefCounted
 ## Survival never calls this: it keeps the legacy tutorial (_update_tutorial) byte for byte.
 ##
 ## The five objectives fit the Task 2 opening (CC, Reactor, Refinery, Barracks, one Harvester and 4 riflemen built):
-##   1 Power the base:      a finished human PowerPlant and generation >= demand. True at the start; shown done with the
-##                          real kW so the player learns where power is read, and it reopens if the Reactor falls.
+##   1 Power the base:      a finished human PowerPlant and generation >= demand. True at the start, so it shows done from
+##                          the first frame; it reopens (naming the kW shortfall) if the Reactor falls or is overdrawn.
 ##   2 Start the economy:   a finished human Refinery, a living human Harvester, and ore moving: a Harvester with cargo or
 ##                          ore in the refinery buffer (ore_buffer). Once seen, the previous result latches it, so the gap
 ##                          between two loads (empty truck, buffer processed) does not flicker it; losing the Refinery or
