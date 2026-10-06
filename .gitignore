@@ -20,3 +20,4 @@
 # Python bytecode from the QA and UI tools
 tools/qa/__pycache__/
 tools/ui/__pycache__/
+tools/audio/__pycache__/
