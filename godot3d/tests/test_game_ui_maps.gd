@@ -246,6 +246,7 @@ func test_the_briefing_shows_in_the_first_stages_and_hides_for_good(t) -> void:
 	var p := _make(t)
 	var g = p[0]
 	var ui = p[1]
+	g.world_art_on = false  # the tutorial's briefing; with world art on Kestrel has its own (test_kestrel_objectives.gd)
 	g.tutorial_stage = 1
 	ui._refresh_briefing()
 	t.ok(U.has_text(ui.briefing_layer, "Power the beachhead"), "the briefing is up at stage 1")
@@ -264,6 +265,7 @@ func test_the_briefing_follows_the_stage_and_ends_with_the_first_group(t) -> voi
 	var p := _make(t)
 	var g = p[0]
 	var ui = p[1]
+	g.world_art_on = false  # the tutorial's briefing; with world art on Kestrel has its own (test_kestrel_objectives.gd)
 	g.tutorial_stage = 0
 	ui._refresh_briefing()
 	t.ok(U.has_text(ui.briefing_layer, "Secure the landing zone"), "stage 0")

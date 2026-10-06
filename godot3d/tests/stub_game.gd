@@ -53,6 +53,8 @@ var cursor_valid := true
 var kestrel := false
 ## Mirrors earthfront_3d.world_art_on: the HUD draws world sprites as its icons only when this is true.
 var world_art_on := false
+## Mirrors earthfront_3d.kestrel_objectives (the last KestrelObjectives result); empty here, so the HUD evaluates the snapshot.
+var kestrel_objectives: Dictionary = {}
 var bridge_snapshot: Dictionary = {}
 var ground_model: RefCounted = null
 ## Hex under the cursor as a Vector2i, null when the pointer is off the map. The real game has no such member yet.

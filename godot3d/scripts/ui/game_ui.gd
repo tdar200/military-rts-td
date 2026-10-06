@@ -254,6 +254,11 @@ func notify(heading: String, body: String, color: Color) -> void:
 	adapter.push_notification(heading, body, color, _clock)
 
 
+## Kestrel: a human structure lost HP (see live_adapter.structure_attacked). True when its throttled toast went up.
+func structure_attacked(id: int, kind: String, pos: Vector3, cell: Array) -> bool:
+	return adapter.structure_attacked(id, kind, pos, cell, _clock)
+
+
 ## "build", "units" or "orders". Science is a full screen the game opens itself, so it is not a deck tab.
 func set_tab(name: String) -> void:
 	if name in ["build", "units", "orders"]:
@@ -700,13 +705,17 @@ func _on_region_action(name: String, arg: Variant = null) -> void:
 
 # ---------------------------------------------------------------- first-minutes briefing (board 6)
 
-## Up while the first objective group is being worked (tutorial stages 0 to 2), until the player hides it. It only exists as
+## Up while the first objective group is being worked (tutorial stages 0 to 2; on Kestrel the first three objectives,
+## vm_maps.KESTREL_BRIEFING_LAST_STAGE), until the player hides it. It only exists as
 ## a card at the top left: once hidden or out of range its nodes are freed, so it can never block input afterwards.
 func _refresh_briefing() -> void:
 	var vm := {}
 	if hud.visible and not briefing_dismissed and scrim == null and _has_real_ground():
 		var snap = g.get("bridge_snapshot")
-		vm = VmMaps.briefing(int(g.tutorial_stage), snap if snap is Dictionary else {}, int(g.bridge_winner))
+		if bool(g.get("world_art_on")):  # Kestrel: its own objectives (kestrel_objectives.gd); Survival keeps the tutorial's
+			vm = VmMaps.kestrel_briefing(adapter.kestrel_objectives(), snap if snap is Dictionary else {}, int(g.bridge_winner))
+		else:
+			vm = VmMaps.briefing(int(g.tutorial_stage), snap if snap is Dictionary else {}, int(g.bridge_winner))
 	adapter.briefing_up = not vm.is_empty()
 	var h := hash(vm)
 	if h == _briefing_hash and (briefing_layer.get_child_count() > 0) == not vm.is_empty():

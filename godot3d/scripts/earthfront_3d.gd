@@ -19,6 +19,7 @@ const WorldArt := preload("res://scripts/world/world_art.gd")
 const WorldProps := preload("res://scripts/world/world_props.gd")
 const WorldSprites := preload("res://scripts/world/world_sprites.gd")
 const WorldFx := preload("res://scripts/world/world_fx.gd")
+const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -170,6 +171,10 @@ var bridge_frame_entities: Dictionary = {}
 var bridge_initialized := false
 var tutorial_label: Label
 var tutorial_stage := -1
+## Kestrel (world art on) replaces the tutorial with KestrelObjectives: its last result (the HUD card and the briefing read
+## it) and the snapshot tick it was evaluated at.
+var kestrel_objectives: Dictionary = {}
+var _kestrel_eval_tick := -1
 var end_screen_shown := false
 var camera_shake := 0.0
 var alert_cooldown := 0.0
@@ -1269,7 +1274,10 @@ func _process(delta: float) -> void:
 	camera_shake = maxf(0.0, camera_shake - delta * 2.8)
 	alert_cooldown = maxf(0.0, alert_cooldown - delta)
 	_poll_bridge(delta)
-	_update_tutorial()
+	if world_art_on:
+		_update_kestrel_objectives()
+	else:
+		_update_tutorial()
 	_update_hover_tile()
 	_update_build_ghost()
 	if not ui.world_blocked():
@@ -2680,6 +2688,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 		var max_shield: float = float(entity_data.get("max_shield_bits", 0)) / 65536.0
 		var previous_data = bridge_frame_entities.get(bridge_id)
 		if bridge_initialized and previous_data is Dictionary and int(previous_data.get("hp_bits", 0)) > int(entity_data.get("hp_bits", 0)):
+			if world_art_on and category == "building" and int(entity_data.get("owner", 0)) == HUMAN:
+				_structure_under_attack(destination, entity_data)  # first, so its shake and tone stand for this hit's
 			if world_fx != null:
 				_kestrel_impact(destination, entity_data)
 			else:
@@ -3105,6 +3115,47 @@ func _update_tutorial() -> void:
 			tutorial_label.text = "09  HOLD THE EARTHFRONT  •  FIRST WAVE IN %ds" % ceili(float(maxi(0, bridge_next_wave_ticks)) / TICKS_PER_SECOND)
 		9:
 			tutorial_label.text = "10  COUNTERATTACK  •  DESTROY THE HOSTILE CORE NODE"
+
+
+## Kestrel's objectives in place of _update_tutorial (Survival runs only that): KestrelObjectives' reading of the latest
+## snapshot, evaluated once per snapshot tick with the last result as its latch (a tick going back, a restarted sim, drops
+## it). A new current objective raises the tutorial's "Mission updated" toast and its command tab; one the player fell back
+## to (a lost Reactor, Harvester or riflemen before wave one) says it was reopened and leaves the tab alone. Nothing is
+## announced once the match is decided.
+func _update_kestrel_objectives() -> void:
+	if not mission_deployed or bridge_snapshot.is_empty() or bridge_tick == _kestrel_eval_tick:
+		return
+	var previous: Dictionary = kestrel_objectives if bridge_tick > _kestrel_eval_tick else {}
+	_kestrel_eval_tick = bridge_tick
+	var before := int(previous.get("stage", 0))
+	kestrel_objectives = KestrelObjectives.evaluate(bridge_snapshot, previous)
+	var stage := int(kestrel_objectives["stage"])
+	if stage == before or bridge_winner >= 0:
+		return
+	if stage < before:
+		_show_notification("OBJECTIVE REOPENED", String(kestrel_objectives["title"]), Color("ffd071"))
+		return
+	_show_notification("MISSION UPDATED", String(kestrel_objectives["title"]), Color("65e4da"))
+	match stage:
+		1, 2:
+			_set_command_tab("BUILD")
+		3:
+			_set_command_tab("UNITS")
+		4, 5:
+			_set_command_tab("ORDERS")
+
+
+## Kestrel: a human structure lost HP. Task 2 found that idle riflemen never react to a structure under fire, so the player
+## is told: a throttled "<kind> under attack" toast (live_adapter.structure_attacked, which also keeps the position and cell
+## for the minimap) and, with it, the hit alert's shake and tone (which then holds alert_cooldown like any human hit).
+func _structure_under_attack(position: Vector3, entity_data: Dictionary) -> void:
+	var cell: Array = preload("res://scripts/ui/vm_gameplay.gd").cell_of_bits(int(entity_data.get("x_bits", 0)), int(entity_data.get("z_bits", 0)))
+	if ui == null or not ui.structure_attacked(int(entity_data.get("id", -1)), String(entity_data.get("kind", "")), position, cell):
+		return
+	alert_cooldown = 1.3
+	camera_shake = maxf(camera_shake, 0.42)
+	if is_inside_tree():
+		_play_tone(92.0, 0.09, 0.12, -25.0)
 
 
 func _show_notification(title: String, body: String, color: Color) -> void:
@@ -3596,6 +3647,8 @@ func _deploy_mission() -> void:
 		start_file.store_line("deploy")
 	mission_deployed = true
 	tutorial_stage = 0
+	kestrel_objectives = {}
+	_kestrel_eval_tick = -1
 	_deploy_camera()
 	_play_deploy_sound()
 	_play_tone(520.0, 0.13, 0.16, 180.0)

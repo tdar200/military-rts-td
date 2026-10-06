@@ -355,6 +355,8 @@ static func rules(rows: Array, regions: Array) -> Array:
 ## the snapshot carries no objective text). {} outside stages 0 to BRIEFING_LAST_STAGE, after the match ended, or without a
 ## stage. Copy that names a place uses a region of the snapshot and is left out when that region does not exist.
 const TITLES := ["Secure the landing zone", "Power the beachhead", "Establish income"]
+## Kestrel's briefing (kestrel_briefing) is up while one of the first three objectives is current (power, economy, squad).
+const KESTREL_BRIEFING_LAST_STAGE := 3
 
 
 static func briefing(stage: int, snap: Dictionary, winner := -1) -> Dictionary:
@@ -383,3 +385,41 @@ static func briefing(stage: int, snap: Dictionary, winner := -1) -> Dictionary:
 		2:
 			body = "A Refinery beside an ore deposit hauls %d%% more. Haulers carry it to your stock." % VM.ORE_BONUS_PCT
 	return {"tag": "Step %d of %d" % [stage + 1, details.size()], "title": TITLES[stage], "body": body, "items": items, "ratio": float(stage) / float(details.size())}
+
+
+## Kestrel's briefing card, from the game's KestrelObjectives result (`objectives`) and the snapshot: the current objective
+## as the title, the done, current and next objective lines (the current one by its detail, as the HUD card shows it), and
+## one paragraph of first-minutes intel: the ore beside the Command Centre, the ford wave one crosses and the mission time it
+## is due (tick + next_wave_ticks, so it reads 2:30 whenever it is opened), the alien probe that may strike before it, and
+## the Core Node's cell. A place, time or cell the snapshot lacks is left out, never invented. {} past
+## KESTREL_BRIEFING_LAST_STAGE, once the match is decided (the game's `winner` or the snapshot's), or without objectives.
+static func kestrel_briefing(objectives: Dictionary, snap: Dictionary, winner := -1) -> Dictionary:
+	var stage := int(objectives.get("stage", 0))
+	var list: Array = objectives.get("objectives", [])
+	if stage < 1 or stage > KESTREL_BRIEFING_LAST_STAGE or list.is_empty() or winner >= 0 or int(snap.get("winner", -1)) >= 0:
+		return {}
+	var items: Array = []
+	var first := clampi(stage - 2, 0, maxi(list.size() - 3, 0))
+	for i in range(first, mini(first + 3, list.size())):
+		var o: Dictionary = list[i]
+		var state := "done" if bool(o["done"]) else ("active" if i == stage - 1 else "todo")
+		items.append({"t": str(o["detail"]) if state == "active" else str(o["title"]), "state": state})
+	var done := list.filter(func(o): return bool(o["done"])).size()
+	var ford := ""
+	for r in VM.regions(snap):
+		if str(r["kind"]) == "ford":
+			ford = str(r["name"])
+			break
+	var body := "Ore lies beside your Command Centre."
+	var wave := ""
+	if int(snap.get("waves_survived", 0)) == 0 and int(snap.get("next_wave_ticks", -1)) >= 0:
+		var due := ceili(float(int(snap.get("tick", 0)) + int(snap["next_wave_ticks"])) / float(load("res://scripts/ui/live_adapter.gd").TICKS_PER_SECOND))
+		wave = "%d:%02d" % [due / 60, due % 60]
+	if ford != "" and wave != "":
+		body += " Wave one crosses %s at %s; an alien probe may strike sooner." % [ford, wave]
+	elif wave != "":
+		body += " Wave one lands at %s; an alien probe may strike sooner." % wave
+	var core = snap.get("core_node", null)
+	if core is Array and core.size() >= 2:
+		body += " Their Core Node is at (%d, %d)." % [int(core[0]), int(core[1])]
+	return {"tag": "Step %d of %d" % [stage, list.size()], "title": str(objectives.get("title", "")), "body": body, "items": items, "ratio": float(done) / float(list.size())}

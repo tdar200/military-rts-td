@@ -7,6 +7,9 @@ const SPR := "res://assets/ui/sprites/"
 const TICKS_PER_SECOND := 30.0
 const ALERT_TTL := 9.0
 const MAX_ALERTS := 3
+## Kestrel structure-under-attack toasts: seconds between two over all structures, and between two for the same structure.
+const STRUCTURE_ALERT_GAP := 5.0
+const STRUCTURE_ALERT_REPEAT := 15.0
 const AMMO_CAPACITY := 90.0
 
 ## id, display name, hotkey, bridge kind, material, crew, producing building, sprite ("" = icon card), icon
@@ -80,6 +83,7 @@ const LiveAssault = preload("res://scripts/ui/live_assault.gd")
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
 const OverlayFeed = preload("res://scripts/world/overlay_feed.gd")
 const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
+const KestrelObjectives = preload("res://scripts/world/kestrel_objectives.gd")
 
 var tab := "build"
 ## True while the first-minutes briefing card is up (game_ui.gd sets it): that card carries the objectives, so the objectives
@@ -101,6 +105,11 @@ var _deficit_since := -1.0
 var _territory_ground: Variant = null  # the territory slice and the ground model and zone it was computed from
 var _territory_zone: Variant = null
 var _territory_slice: Dictionary = {}
+## Kestrel only: the latest hit on a human structure, {id, kind, pos (world Vector3), cell [x, y], at (HUD clock)}, kept even
+## when its toast was throttled, so a later task can point the minimap at it. {} until the first hit.
+var last_structure_attack: Dictionary = {}
+var _structure_alert_at: Dictionary = {}  # structure id -> HUD clock of its last toast
+var _structure_alert_last := -INF  # HUD clock of the last structure toast, any structure
 
 
 func _init(game) -> void:
@@ -136,6 +145,20 @@ func poll_ticker(text: String, now: float) -> void:
 	var title := parts[0]
 	var body := parts[1] if parts.size() > 1 else ""
 	_push({"tone": "cyan", "icon": "wave", "title": _sentence(title), "body": _sentence(body.replace(" • ", ", "))}, now)
+
+
+## Kestrel only (earthfront_3d.gd calls it when a human structure loses HP): a hostile "<kind> under attack" toast, at most
+## one per STRUCTURE_ALERT_GAP seconds over all structures and one per STRUCTURE_ALERT_REPEAT seconds for the same one, so a
+## structure under steady fire does not flood the alert stack. The position is always recorded (last_structure_attack).
+## Returns true when a toast went up, so the game adds its shake and tone only then.
+func structure_attacked(id: int, kind: String, pos: Vector3, cell: Array, now: float) -> bool:
+	last_structure_attack = {"id": id, "kind": kind, "pos": pos, "cell": cell, "at": now}
+	if now - _structure_alert_last < STRUCTURE_ALERT_GAP or now - float(_structure_alert_at.get(id, -INF)) < STRUCTURE_ALERT_REPEAT:
+		return false
+	_structure_alert_last = now
+	_structure_alert_at[id] = now
+	_push({"tone": "bad", "hostile": true, "icon": "wave", "title": "%s under attack" % KIND_NAMES.get(kind, kind), "body": "Send units to defend it"}, now)
+	return true
 
 
 func _push(alert: Dictionary, now: float) -> void:
@@ -591,6 +614,8 @@ func _power_tip(deficit: int, now: float) -> Dictionary:
 
 
 func _objectives() -> Dictionary:
+	if _world_art():
+		return _kestrel_card()
 	var stage: int = g.tutorial_stage
 	var items: Array = []
 	for i in OBJECTIVE_GROUPS.size():
@@ -610,6 +635,39 @@ func _objectives() -> Dictionary:
 			items.append({"t": "Optional: disable alien relays (%d active)" % g.bridge_active_relays, "state": "done" if g.bridge_active_relays == 0 else ("active" if stage >= 8 else "todo")})
 		items.append({"t": text, "state": state})
 	return {"cap": "Operation Dawnshield", "items": items}
+
+
+## The Kestrel objectives (kestrel_objectives.gd) the game evaluated on its last poll; a game that holds none (a test stub)
+## gets them evaluated from its snapshot. {} without a snapshot.
+func kestrel_objectives() -> Dictionary:
+	var held = g.get("kestrel_objectives")
+	if held is Dictionary and not held.is_empty():
+		return held
+	var snap = g.get("bridge_snapshot")
+	if snap is Dictionary and not snap.is_empty():
+		return KestrelObjectives.evaluate(snap)
+	return {}
+
+
+## Kestrel's objectives card: the five objectives, the active one by its detail line and the others by title, then the
+## optional relay line (live from the ford on). Survival's card (_objectives) is untouched.
+func _kestrel_card() -> Dictionary:
+	var result := kestrel_objectives()
+	var stage := int(result.get("stage", 0))
+	var complete := bool(result.get("complete", false))
+	var items: Array = []
+	for o in result.get("objectives", []):
+		var state := "todo"
+		if bool(o["done"]):
+			state = "done"
+		elif stage == items.size() + 1:
+			state = "active"
+		items.append({"t": str(o["detail"]) if state == "active" else str(o["title"]), "state": state})
+	if g.bridge_relays > 0:
+		items.append({"t": "Optional: disable alien relays (%d active)" % g.bridge_active_relays, "state": "done" if g.bridge_active_relays == 0 or complete else ("active" if stage >= 4 else "todo")})
+	var snap = g.get("bridge_snapshot")
+	var cap := str(snap.get("map_name", "")) if snap is Dictionary else ""
+	return {"cap": cap if cap != "" else "Kestrel Reach", "items": items}
 
 
 # ------------------------------------------------------------------ minimap
