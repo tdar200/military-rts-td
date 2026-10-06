@@ -1317,3 +1317,42 @@ func test_a_kick_on_the_frame_a_walk_ends_is_not_lost(t) -> void:
 		t.ok(not card.has_meta("pose_rest") and not card.has_meta("pose_kick"), "%s: no pose state left" % kind)
 		card.free()
 
+
+func test_walkers_freeze_with_the_pause(t) -> void:
+	var scene := _kestrel_scene()
+	var from: Vector3 = scene._hex_world(10, 12)
+	scene.world_fx.set_view(from, Vector2(12, 10))
+	scene._sync_bridge_entities([_unit_entity(scene, 1701, "Infantry", 0, from)])
+	var unit: Node3D = scene.bridge_nodes[1701]
+	var card := unit.get_node("UnitVisual") as MeshInstance3D
+	_march(scene, 1701, "Infantry", 0, from, 30)
+	scene._sync_bridge_entities([_unit_entity(scene, 1701, "Infantry", 0, from + Vector3(3, 0, 0))])  # a goal far ahead
+	_frame(scene)
+	t.ok(card.has_meta("pose_anim"), "walking when the pause comes")
+	scene.sim_paused = true
+	var root := unit.position
+	var xf := card.transform
+	var spawned: int = scene.world_fx.spawned_total()
+	for i in 40:
+		_frame(scene)
+	t.ok(unit.position == root, "paused: the root holds its place")
+	t.ok(card.transform == xf, "paused: frozen mid-stride")
+	t.eq(scene.world_fx.spawned_total(), spawned, "paused: no dust")
+	scene.sim_paused = false
+	for i in 4:
+		_frame(scene)
+	t.ok(unit.position.x > root.x, "resumed: it walks on")
+	scene.free()
+
+
+func test_survival_glide_is_untouched_by_the_pause(t) -> void:
+	var scene = MainScene.instantiate()
+	t.ok(not scene.world_art_on, "a plain scene is Survival")
+	var node := Node3D.new()
+	node.set_meta("glide_to", Vector3(2, 0, 0))
+	scene.bridge_nodes[1801] = node
+	scene.sim_paused = true
+	scene._glide_bridge_nodes(1.0 / 30.0)
+	t.ok(node.position.x > 0.0, "Survival keeps gliding to the last goal while paused, as before")
+	node.free()
+	scene.free()

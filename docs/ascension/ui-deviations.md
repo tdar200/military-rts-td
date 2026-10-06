@@ -736,8 +736,10 @@ moves, and the ground under it answers.
   rotor-wash ring spreading flat on the ground under it and two puffs blown aside. Dust is the lowest priority card: it
   spawns only while fewer than 80 of the 128 cards are live, so it never takes a combat effect's slot. Survival keeps its
   grey sphere puff.
-- Pause: the walk runs on the effects clock, so the pause menu freezes it mid-stride with the effects; no dust rises
-  while paused. Every pause in the game goes through `set_sim_paused` (the pause menu and the controls page over play);
+- Pause: while the pause menu holds the sim, Kestrel stops the glide and the walk too (`_glide_bridge_nodes` and
+  `_animate_unit_cards` skip while `sim_paused`), so walkers freeze mid-stride with the rumble, sway, recoil and
+  effects; no dust rises while paused. The gunship's hover bob runs on the frame clock, as before, and keeps bobbing.
+  Survival is unchanged: its units still finish their last glide while paused. Every pause in the game goes through `set_sim_paused` (the pause menu and the controls page over play);
   the HUD speed buttons do nothing on the bridge, and nothing sets the tree's pause or the engine time scale.
 - Status bars: on Kestrel the health and shield bars cast no real shadow. Each shown bar used to throw a dark stripe far
   across the ground, nowhere near its owner (the dark bars in the Task 3 captures were the alien squad's and the CC's

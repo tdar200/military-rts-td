@@ -1332,6 +1332,8 @@ func _process(delta: float) -> void:
 ## Every frame: each bridge entity closes GLIDE_RATE of its gap to the last polled position (and turns toward its heading
 ## at TURN_RATE), so motion is as smooth as the frame rate while the snapshot is read only every BRIDGE_POLL seconds.
 func _glide_bridge_nodes(delta: float) -> void:
+	if sim_paused and world_art_on:
+		return  # Kestrel's pause holds walkers mid-stride with the effects (Survival keeps its glide)
 	var move := 1.0 - exp(-delta * GLIDE_RATE)
 	var turn := 1.0 - exp(-delta * TURN_RATE)
 	var still := WorldSprites.ANIM_STILL * delta
@@ -3363,7 +3365,7 @@ func _track_motion(node: Node3D, before: Vector3) -> void:
 ## moves in 8 Hz steps), is the ground speed that drives WorldSprites.animate on the effects clock (frozen while paused);
 ## a unit stopped and settled leaves the set with its card exactly at rest. A moving unit kicks up dust.
 func _animate_unit_cards(delta: float) -> void:
-	if unit_motion.is_empty() or delta <= 0.0:
+	if unit_motion.is_empty() or delta <= 0.0 or sim_paused:
 		return
 	var t: float = world_fx.time if world_fx != null else time_alive
 	var k := 1.0 - exp(-delta / MOTION_SMOOTH)
