@@ -69,6 +69,46 @@ func test_pool_cap_holds_and_recycles_the_oldest(t) -> void:
 	_done(pair)
 
 
+func test_a_full_pool_recycles_the_oldest_without_scanning(t) -> void:
+	var pair := _fx()
+	var fx = pair[0]
+	for i in WorldFx.POOL:
+		fx._card(WorldFx.SMOKE, 0, Vector3.ZERO, {"life": 30.0})
+	t.eq(fx.pool_count(), WorldFx.POOL, "the pool is full")
+	fx.advance(0.01)
+	var before: int = fx.slot_probes()
+	for i in 144:  # a capped poll's worst case: 24 shots x 6 cards, every one into a full pool
+		fx._card(WorldFx.SMOKE, 0, Vector3.ZERO, {"life": 30.0})
+	var probes: int = fx.slot_probes() - before
+	t.ok(probes <= 144 * 3, "144 spawns into a full pool examine %d slots, not 144 x %d" % [probes, WorldFx.POOL])
+	var serials: Array = fx.live_serials()
+	serials.sort()
+	t.eq(serials.size(), WorldFx.POOL, "still full")
+	t.eq(int(serials[0]), 144, "the 144 oldest were recycled, oldest first")
+	t.eq(int(serials.back()), WorldFx.POOL + 143, "the newest is live")
+	_done(pair)
+
+
+func test_the_oldest_live_card_is_recycled_after_out_of_order_expiry(t) -> void:
+	var pair := _fx()
+	var fx = pair[0]
+	for i in WorldFx.POOL:  # every other card short-lived: they expire out of spawn order
+		fx._card(WorldFx.SMOKE, 0, Vector3.ZERO, {"life": 0.05 if i % 2 == 1 else 30.0})
+	fx.advance(0.1)
+	t.eq(fx.pool_count(), WorldFx.POOL / 2, "the short cards went")
+	for round in 3:  # refill the holes, then overflow the pool a few times over
+		for i in WorldFx.POOL:
+			fx._card(WorldFx.SMOKE, 0, Vector3.ZERO, {"life": 0.05 if i % 3 == 0 else 30.0})
+		fx.advance(0.1)
+	for i in WorldFx.POOL + 10:
+		fx._card(WorldFx.SMOKE, 0, Vector3.ZERO, {"life": 30.0})
+	var serials: Array = fx.live_serials()
+	serials.sort()
+	t.eq(serials.size(), WorldFx.POOL, "full")
+	t.eq(int(serials[0]), fx.spawned_total() - WorldFx.POOL, "the live cards are exactly the newest %d" % WorldFx.POOL)
+	_done(pair)
+
+
 func test_effects_free_themselves_after_their_duration(t) -> void:
 	var pair := _fx()
 	var fx = pair[0]
@@ -312,7 +352,8 @@ func test_a_shot_draws_a_muzzle_flash_a_tracer_and_an_impact(t) -> void:
 	for s in WorldFx.POOL:
 		if fx.slot_live(s) and fx.find_slot(WorldFx.SPARKS) == s:
 			impact = s
-	t.ok(impact >= 0, "the impact waits for the round")
+	t.ok(impact >= 0, "the impact is spawned with the shot")
+	t.eq(fx.slot_transform(impact).basis.x.length(), 0.0, "the impact waits for the round: undrawn before it lands")
 	fx.advance(flight)
 	t.ok(fx.slot_transform(fx.find_slot(WorldFx.SPARKS)).basis.x.length() > 0.0, "and flashes when it lands")
 	_done(pair)

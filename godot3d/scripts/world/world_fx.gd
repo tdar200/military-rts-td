@@ -15,12 +15,12 @@ extends RefCounted
 ## Ground cards (glow, dust ring, rubble) lie flat on the ground instead: a camera-facing decal would be cut by the terrain
 ## in front of it.
 ##
-## Pool: POOL live cards at most; a spawn past the cap takes the oldest card's slot. Every card frees its slot when its
+## Pool: POOL live cards at most; a spawn past the cap takes the oldest card's slot (a free-slot stack and a spawn-order
+## ring keep both lookups O(1), so a saturated firefight never scans the pool). Every card frees its slot when its
 ## life ends; the layers hide when no card is live (idle frames draw nothing). An effect whose anchor is outside the view
 ## (set_view) plus VIEW_MARGIN spawns nothing.
 ##
-## Dust (Task 4): `dust(pos, size)` is a soft puff of the ground's own colour rising where a moving unit's tracks or boots
-## meet the ground, `wash(pos, size)` a moving gunship's rotor wash (a ring spreading on the ground, two puffs blown
+## Dust (Task 4): `dust(pos, size)` is a soft puff rising where a moving unit's tracks or boots meet the ground, `wash(pos, size)` a moving gunship's rotor wash (a ring spreading on the ground, two puffs blown
 ## aside). Both are the smoke and dust-ring sprites of the human band tinted KICKED_TINT, a pale sandy tan.
 ##
 ## Shots (Task 3): `shot(from, to, attacker_kind, owner)` draws one round of the bridge's shots window on the same cards:
@@ -37,6 +37,7 @@ const COLS := 8
 const BAND_ROWS := 4  # per band: fireball frames, smoke frames, single sprites, shot sprites
 const FRAMES := 8
 const POOL := 128  # Task 3 doubled it: a firefight's shots (up to 6 cards each) must not recycle a collapse's rubble
+const SPAWN_RING := POOL * 2  # the spawn-order ring (live cards plus the expired entries not yet dropped)
 const STRIDE := 20  # floats per instance in a MultiMesh buffer: a 3x4 transform, a colour, the custom data
 const NUDGE := 1.2  # world units toward the camera for smoke and glow cards
 ## Dust (Task 4) sits low: a moving unit's own card, drawn with a depth pre-pass, hides the dust rising behind it.
@@ -127,6 +128,14 @@ var _cards: Array[Dictionary] = []
 var _buffers: Array[PackedFloat32Array] = []
 var _serial := 0
 var _live := 0
+var _probes := 0  # slots examined to find a spawn its slot (tests: slot_probes)
+var _free := PackedInt32Array()  # the free slots, a stack
+## The live cards in spawn order, a ring of (slot, serial). A card that expires leaves its entry behind; an entry
+## counts only while its slot still holds that serial, live. A full pool takes the first live entry: O(1) amortised.
+var _ring_slot := PackedInt32Array()
+var _ring_serial := PackedInt32Array()
+var _ring_head := 0
+var _ring_len := 0
 var _view_focus := Vector3.ZERO
 var _view_half := Vector2(INF, INF)
 var _warm := 0
@@ -164,6 +173,13 @@ func build(parent: Node3D) -> void:
 	_cards.clear()
 	for i in POOL:
 		_cards.append({"live": false, "serial": -1})
+	_free.clear()
+	for i in range(POOL - 1, -1, -1):
+		_free.push_back(i)  # slot 0 first
+	_ring_slot.resize(SPAWN_RING)
+	_ring_serial.resize(SPAWN_RING)
+	_ring_head = 0
+	_ring_len = 0
 	_buffers.clear()
 	_layers.clear()
 	for layer in 3:
@@ -208,6 +224,11 @@ func pool_count() -> int:
 
 func spawned_total() -> int:
 	return _serial
+
+
+## Tests: how many pool slots the spawns have examined in all (the cost of finding a slot).
+func slot_probes() -> int:
+	return _probes
 
 
 func live_serials() -> Array:
@@ -485,17 +506,12 @@ static func _spin_of(serial: int) -> float:
 ## the slot.
 func _card(sprite: int, band: int, anchor: Vector3, opts: Dictionary) -> int:
 	var slot := -1
-	if _live < POOL:  # the first free slot (the oldest is only looked for when every slot is live)
-		for i in POOL:
-			if not _cards[i].live:
-				slot = i
-				break
-	if slot < 0:
-		var oldest := 0
-		for i in POOL:
-			if int(_cards[i].serial) < int(_cards[oldest].serial):
-				oldest = i
-		slot = oldest
+	if not _free.is_empty():  # a free slot (the oldest is only taken when every slot is live)
+		_probes += 1
+		slot = _free[_free.size() - 1]
+		_free.resize(_free.size() - 1)
+	else:
+		slot = _oldest_live()
 		_live -= 1
 		_clear_slot(slot)
 	var c := _cards[slot]
@@ -523,9 +539,48 @@ func _card(sprite: int, band: int, anchor: Vector3, opts: Dictionary) -> int:
 	c.aspect = float(opts.get("aspect", 1.0))
 	c.nudge = float(opts.get("nudge", NUDGE))
 	c.flip = sprite in [FIREBALL, SMOKE, DEBRIS, EMBER] and _serial % 2 == 1  # mirrored every other card: no two alike
+	_ring_push(slot, _serial)
 	_serial += 1
 	_live += 1
 	return slot
+
+
+## Pops the oldest live card's slot off the spawn ring (skipping the entries of cards that already expired).
+func _oldest_live() -> int:
+	while _ring_len > 0:
+		_probes += 1
+		var slot := _ring_slot[_ring_head]
+		var serial := _ring_serial[_ring_head]
+		_ring_head = (_ring_head + 1) % SPAWN_RING
+		_ring_len -= 1
+		if _cards[slot].live and int(_cards[slot].serial) == serial:
+			return slot
+	push_error("WorldFx: a full pool with no live card on the spawn ring")
+	return 0
+
+
+func _ring_push(slot: int, serial: int) -> void:
+	if _ring_len == SPAWN_RING:  # drop the expired entries: at most POOL stay, so this runs at most every POOL spawns
+		var slots := PackedInt32Array()
+		var serials := PackedInt32Array()
+		for k in _ring_len:
+			_probes += 1
+			var i := (_ring_head + k) % SPAWN_RING
+			var s := _ring_slot[i]
+			if _cards[s].live and int(_cards[s].serial) == _ring_serial[i]:
+				slots.push_back(s)
+				serials.push_back(_ring_serial[i])
+		var kept := slots.size()
+		slots.resize(SPAWN_RING)
+		serials.resize(SPAWN_RING)
+		_ring_slot = slots
+		_ring_serial = serials
+		_ring_head = 0
+		_ring_len = kept
+	var at := (_ring_head + _ring_len) % SPAWN_RING
+	_ring_slot[at] = slot
+	_ring_serial[at] = serial
+	_ring_len += 1
 
 
 func _clear_slot(slot: int) -> void:
@@ -589,6 +644,7 @@ func advance(delta: float) -> void:
 		if age >= life:
 			_clear_slot(slot)
 			_live -= 1
+			_free.push_back(slot)
 			continue
 		var layer := int(c.layer)
 		var buf := _buffers[layer]
