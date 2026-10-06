@@ -564,8 +564,11 @@ func _lens(snap: Dictionary) -> Dictionary:
 
 func _chips() -> Array:
 	var ore_capacity := 0
-	for service in g.bridge_services.values():
-		ore_capacity += int(service.get("ore_capacity", 0))
+	if g.world_art_on:
+		ore_capacity = _kestrel_ore_capacity()
+	else:
+		for service in g.bridge_services.values():
+			ore_capacity += int(service.get("ore_capacity", 0))
 	var chips: Array = [
 		{"icon": "material", "tone": "cyan", "label": "Material", "value": str(g.bridge_money)},
 		{"icon": "ore", "tone": "cyan", "label": "Ore buffer", "value": "%d / %d" % [g.bridge_ore, ore_capacity] if ore_capacity > 0 else str(g.bridge_ore)},
@@ -581,6 +584,20 @@ func _chips() -> Array:
 			chips.append({"icon": "flask", "tone": "violet", "label": "Reserved", "value": "PROTOTYPE"})
 			break
 	return chips
+
+
+## Kestrel's Ore buffer denominator (fix round, review I3): the bridge writes a service row with the sim's refinery
+## capacity (300) for every shown entity, units and enemies included, so summing them all gave 300 x shown entities, a
+## number that jumped as enemies entered and left sight and leaked a rough enemy count under fog. Only finished human
+## Refineries count. Survival keeps the old sum (its chip is unchanged).
+func _kestrel_ore_capacity() -> int:
+	var total := 0
+	for id in g.bridge_services:
+		var node = g.bridge_nodes.get(id)
+		if node != null and is_instance_valid(node) and int(node.get_meta("team", -1)) == 0 \
+				and String(node.get_meta("kind_name", "")) == "Refinery" and int(node.get_meta("construction", 0)) <= 0:
+			total += int(g.bridge_services[id].get("ore_capacity", 0))
+	return total
 
 
 func _wave_chip() -> Dictionary:

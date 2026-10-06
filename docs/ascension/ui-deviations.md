@@ -944,6 +944,11 @@ frame draws exactly as before (the fog branch in each shader is off).
   reported them and refreshes them only where the player can see (Task 6); amounts in the dark are the last known.
 - Gallery: gp08 (logistics) and gp11 (strategic map) read the EARTHFRONT_FOG=0 twin fixture, since their boards draw the
   alien base, which the fogged start hides.
+- Ore buffer chip (fix round, review I3): the bridge writes a service row carrying the sim's refinery capacity (300) for
+  every shown entity, units and enemies included, and the chip summed them all, so it read "300 / 2700" and worse, jumped
+  as enemies came in and out of sight (a rough enemy count under fog). On Kestrel the denominator now counts only
+  finished human Refineries (`live_adapter._kestrel_ore_capacity`), tested on the fogged and the fog-off fixtures (both
+  "/ 300"). Survival keeps the old sum.
 
 ### Kestrel minimap interaction (Kestrel next-level plan Task 8, 2026-10-06)
 

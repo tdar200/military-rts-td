@@ -32,6 +32,56 @@ func test_chips_use_live_numbers(t) -> void:
 	t.eq(_find(chips, "label", "Crew")["value"], "22 / 60", "crew")
 
 
+## Kestrel: the game's bridge_services and bridge_nodes as _poll_bridge / _sync_bridge_entities fill them from `fixture`.
+func _kestrel_from(fixture: String) -> Array:
+	var p := _make()
+	var g = p[0]
+	g.world_art_on = true
+	var snap: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://tests/fixtures/" + fixture))
+	g.bridge_snapshot = snap
+	for s in snap["services"]:
+		g.bridge_services[int(s["id"])] = s
+	for e in snap["entities"]:
+		var n: Node3D = g.add_node(int(e["id"]), str(e["kind"]), str(e["category"]), int(e["owner"]), Vector3.ZERO)
+		n.set_meta("construction", int(e.get("construction", 0)))
+	return p
+
+
+func _free_nodes(g) -> void:
+	for n in g.bridge_nodes.values():
+		n.free()
+
+
+func test_kestrel_ore_capacity_counts_only_finished_human_refineries(t) -> void:
+	for fixture in ["kestrel_snapshot.json", "kestrel_snapshot_fog_off.json"]:
+		var p := _kestrel_from(fixture)
+		var g = p[0]
+		t.ok(g.bridge_services.size() > 1, "%s: the bridge sends a service row (ore_capacity 300) for every shown entity" % fixture)
+		t.eq(_find(p[1].hud_vm(0.0)["chips"], "label", "Ore buffer")["value"], "210 / 300", "%s: one Refinery's 300, not 300 per shown entity" % fixture)
+		_free_nodes(g)
+	var p2 := _kestrel_from("kestrel_snapshot.json")
+	var g2 = p2[0]
+	g2.bridge_services[50] = {"id": 50, "ore_capacity": 300}
+	g2.add_node(50, "Refinery", "building", 0, Vector3.ZERO).set_meta("construction", 0)
+	g2.bridge_services[51] = {"id": 51, "ore_capacity": 300}
+	g2.add_node(51, "Refinery", "building", 0, Vector3.ZERO).set_meta("construction", 120)
+	g2.bridge_services[52] = {"id": 52, "ore_capacity": 300}
+	g2.add_node(52, "Refinery", "building", 1, Vector3.ZERO).set_meta("construction", 0)
+	t.eq(_find(p2[1].hud_vm(0.0)["chips"], "label", "Ore buffer")["value"], "210 / 600", "a second finished human Refinery adds 300; a site or an alien one does not")
+	g2.bridge_nodes[6].set_meta("construction", 10)
+	g2.bridge_nodes[50].set_meta("construction", 10)
+	t.eq(_find(p2[1].hud_vm(0.0)["chips"], "label", "Ore buffer")["value"], "210", "no finished human Refinery: the bare value")
+	_free_nodes(g2)
+
+
+func test_survival_ore_capacity_is_unchanged(t) -> void:
+	var p := _make()
+	p[0].bridge_services = {7: {"ore_capacity": 300}, 8: {"ore_capacity": 300}}
+	p[0].add_node(8, "Infantry", "unit", 0, Vector3.ZERO)
+	t.eq(_find(p[1].hud_vm(0.0)["chips"], "label", "Ore buffer")["value"], "210 / 600", "Survival keeps summing every service row, as before")
+	_free_nodes(p[0])
+
+
 func test_missing_data_hides_chips_instead_of_faking(t) -> void:
 	var p := _make()
 	p[0].bridge_storage_capacity = 0
