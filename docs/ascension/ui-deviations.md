@@ -292,7 +292,9 @@ left, key cap right, as the pause board's space-between buttons).
   (the game has no objective text and no saves), the Rebind keys button and the Alt footer tip on Controls. The snapshot rows
   that exist are Waves survived, Elapsed (tick / 30), Next wave, Material, Power (warning tone when demand exceeds generation),
   Units alive (the ledger) and Losses (the session log).
-- Controls rows dropped because the key does not exist: Orbit (middle drag), Jump to alert (Space), Jump on minimap,
+- Controls rows dropped because the key does not exist: Orbit (middle drag), Jump to alert (Space) and Jump on minimap
+  (both exist on Kestrel Reach since Task 8 of the next-level plan and its Controls screen lists them; Survival and the
+  gallery gp10 board still drop them),
   Pause simulation (P), Game speed, Quick save, Map overlays (Tab), Clear selection, Recall and centre, Open Build tab,
   Place several, Rotate ghost, Stop, Hold, Focus fire, Resupply, Spread out, Queue waypoint, Return to HQ, Set rally point
   key, Queue five, Cancel last queued. Rows added because the key exists and the board lacks it: Rotate (Z, E), Focus selection
@@ -405,7 +407,8 @@ GL (Xvfb, Dummy audio, 1920x1080, about 3 fps) and looked at every capture. What
 - The research screen has an empty band at the top where the era-gate block would sit.
 - "Attack-move" wraps to two lines in the narrow order tile; the mock wraps it too.
 - Godot logs an invalid-UID warning for a GLB in `_place_scene`. It predates this work.
-- The minimap shows the whole map letterboxed in its slot.
+- The minimap shows the whole map letterboxed in its slot. On Kestrel a click or drag inside the map moves the camera
+  there; a click in the letterbox does nothing (see "Kestrel minimap interaction").
 - Hostile diamonds appear only while alien units are on screen (covered by `test_live_assault.gd`).
 
 ## 6. Installed files that differ from the bundle (deliberate, not drift)
@@ -873,3 +876,39 @@ frame draws exactly as before (the fog branch in each shader is off).
   reported them and refreshes them only where the player can see (Task 6); amounts in the dark are the last known.
 - Gallery: gp08 (logistics) and gp11 (strategic map) read the EARTHFRONT_FOG=0 twin fixture, since their boards draw the
   alien base, which the fogged start hides.
+
+### Kestrel minimap interaction (Kestrel next-level plan Task 8, 2026-10-06)
+
+Kestrel Reach only (`world_art_on`). The Survival minimap keeps `MOUSE_FILTER_IGNORE`, has no rings, and Space does nothing
+there; its world SHA pins are unchanged.
+
+- Click to jump: a left press on the minimap (Main 288x250, Build 322x222, Core assault 216x192 slots) maps the pointer
+  through the minimap camera's own rect (`minimap_world_rect`, height MINIMAP_SPAN, width by the slot aspect, so the
+  letterbox is handled) to a ground point and moves the camera focus there at once, clamped by the same
+  `WorldArt.clamp_focus` as panning (current zoom limits, aspect, yaw, art bounds). A press in the letterbox outside the
+  map rect (`map_world_rect`, the hex extent) does nothing. Holding the button and dragging keeps jumping, clamped to the
+  map edge. The drag clears on release, on any motion with the button up, on window focus loss, on pause and when the
+  screen blocks the world (research, scrim, menus).
+- Clicks never fall through: the minimap control accepts every button event over it (left, right, middle, wheel), so the
+  world never selects, orders or zooms from a minimap click. A right click issues no order. A stray release with no drag
+  in progress passes on.
+- Armed orders: a left click on the minimap moves the camera only; a build ghost, attack-move or rally stays armed, so the
+  player can jump and then place or order on the main view.
+- Alert rings: when a human unit or building loses HP the client adds a ring at its ground point (`scripts/ui/alert_pings.gd`,
+  pure). A ring lives 3 s and pulses once a second (radius 3 to 15 px, alpha falling with each pulse, the last 0.6 s
+  fading), in `T.BAD` with a small `T.BAD_HI` core, drawn by `map_marks.gd` in its one `_draw` (no node or material per
+  ring). A hit within 1.5 s and 3 tiles (2.1 world units) of a live ring adds none; at most 6 rings at once (the oldest
+  goes). The clock is the effects clock (`WorldFx.time`), which stops while the sim is paused, so rings freeze with the
+  game; the pulse depends on the ring's age alone. The marks hash carries each ring's hit time, not its phase, so the HUD
+  section rebuilds only when rings come and go and `set_clock` redraws them per frame.
+- Space (`Keybinds.JUMP_ALERT`; it had no binding: no InputMap action, no Keybinds constant, and the HUD's buttons take no
+  focus, so `ui_accept` never sees it) frames the newest alert; pressing again within 2.5 s steps to older ones (5 kept,
+  no two within 3 tiles), wrapping round. With no alert it does nothing and shows no toast. Blocked like other world keys
+  while a screen is over the world.
+- The alert chip: `VmGameplay.next_alert` keeps the wave timer and adds a Space key cap once there is an alert to jump to;
+  its border turns red while a ring is live. With no timer it reads "Last alert".
+- Fog: rings come only from human-owned entities, which are always in sight, so they say nothing about hidden enemies.
+- Controls screen: Kestrel lists "Jump to alert" (Space) and "Jump on minimap" (Click map) under Camera. The gallery gp10
+  board and Survival keep the old rows, so their pixel gates are unchanged.
+- Not unit-tested: GUI routing of a real click to the minimap control (the test runner's tree is not live); it was checked
+  live in the Task 8 QA capture.
