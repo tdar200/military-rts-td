@@ -829,3 +829,42 @@ decisions are checked by tests and by the pool's `[audio]` log (`EARTHFRONT_AUDI
 - `tools/ui/run_cap.sh` now passes `--audio-driver Dummy` (`launch_ui.py` already did), pinned by
   `tools/audio/test_quiet_launchers.py`. The three loop imports use `compress/mode=0` (lossless) so the forward loop has no
   codec seam.
+
+### Kestrel fog of war in the client (Kestrel next-level plan Task 7, 2026-10-06)
+
+This reverses the "full battlefield, no fog" rule for Kestrel Reach only (NEXT_STEPS.md has the dated note). The fog is
+presentation only: the sim and the AI stay omniscient. Survival is untouched (no mask, no shroud, no fog node; its noise
+ground shader keeps its SHA pin). `EARTHFRONT_FOG=0` sends an all-visible mask, which the client treats as no fog, so the
+frame draws exactly as before (the fog branch in each shader is off).
+
+- The rule: the ground and the props are shaded by the mask; entities exist only when the bridge sends them (in sight, or
+  a remembered structure flagged `remembered`); effects and world sounds are skipped at spawn when their point is not seen
+  now or on the previous poll. An unseen enemy sprite is never drawn because it has no node.
+- `scripts/world/fog_view.gd` (pure) reads the mask (0 unseen, 1 explored, 2 visible). An empty or wrong-length mask is no
+  fog, without a warning. Points off the grid read the nearest edge cell. Its L8 texture (one texel per cell: 0, 128,
+  255) is rewritten only when the mask string changes, and the same texture object is shared by every material.
+- Shroud: the Kestrel ground shader and both prop shaders (cards by their foot, so a tree is shrouded whole; decals per
+  point) sample the mask through the shared `FogView.SHADER_FUNCTIONS`: the two nearest columns at their texel centres (an
+  odd column half a row lower), a linear blend along the rows and a smoothstep across, so edges are soft and clamped at
+  the map edge. Unseen is near black with a little blue, explored is about half brightness and slightly desaturated,
+  visible is untouched; water specular fades in the shroud. No new shader was added (the fog is a uniform branch in shaders
+  already drawn from deploy), so nothing new needs warming.
+- The minimap is a SubViewport of the same world, so it shows the same shroud; its marks come from the entity nodes, which
+  hold only what the player knows.
+- Sight changes are silent: an enemy that leaves sight vanishes with no death, log line or sound; one that comes back is
+  revived without a deploy ring or "unit added" (a seen-ids set, cleared when the tick goes back on a restart). An enemy
+  unit that vanishes deep inside sight (its possible step since the last poll stays visible), or where a drawn shot just
+  landed, died and explodes as before; an enemy building gone from a visible cell collapses. A first sighting is
+  announced only when the ground was already in sight and, for a unit, it stands deep inside it (it was made there).
+- Remembered structures: drawn at `WorldSprites.MEMORY_SHADE` (0.55) through one shared memory material per painting (a
+  site card darkens its own site material's new `shade` uniform), with no health or shield bar, no era crown, no relay
+  status ("INVASION RELAY" only), never picked or targeted, no combat preview or hostile pin, no HP diamond in the assault
+  marks, and "CORE LAST SEEN" instead of its HP. Damage it took while unseen draws no hit when it is seen again.
+- Panels under fog: Enemy territory shows Defences (known structures, "Not scouted" before any), Garrison "N units in
+  sight", Memory "N last seen", Scouted "N% of the map", and shows before contact. The wave panel, wave card, objectives
+  line and assault relay strip show the relay total (`alien_relays`, briefing intel), never `active_alien_relays`. The
+  strategic map shrouds unseen hexes, dims explored ones and remembered sites, and adds an Explored percent row. The
+  Kestrel briefing adds "Their side stays dark until your units scout it." The title's Visibility fact reads "Fog of war,
+  scout the alien side" once a fogged snapshot arrives (the gallery title board shows that copy). `hash` is never shown.
+- Gallery: gp08 (logistics) and gp11 (strategic map) read the EARTHFRONT_FOG=0 twin fixture, since their boards draw the
+  alien base, which the fogged start hides.

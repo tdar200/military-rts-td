@@ -59,6 +59,19 @@ strategy comes from economy, force composition, positioning, wave pressure, and
 real-time science choices rather than hidden information. Do not add a
 per-player visibility system.
 
+**Reversed 2026-10-06 for Kestrel Reach only (plan
+`docs/superpowers/plans/2026-10-06-kestrel-next-level.md`, Tasks 6 and 7; the
+user approved the spec that flagged this reversal).** Kestrel Reach now has a
+fog of war that is presentation only: the bridge computes the human side's
+sight per snapshot write and sends a per-cell mask plus only the enemies in
+sight (structures seen once stay as dimmed memories); the client shades the
+ground and props by the mask and gates effects and sounds by it. The sim, its
+combat and the AI stay omniscient and deterministic; nothing in `crates/core`
+reads the fog, and replays and hashes are unchanged. Survival keeps full
+visibility. Kill switch: `EARTHFRONT_FOG=0` (also `off` or `false`) when
+starting the bridge gives Kestrel an all-visible mask and the client draws
+exactly as before fog.
+
 ## Deferred (bigger / environment-bound)
 
 ### PvP netcode (lockstep) — ✅ CORE DONE
