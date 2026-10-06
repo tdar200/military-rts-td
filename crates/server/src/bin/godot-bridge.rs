@@ -1,19 +1,530 @@
 //! Live, dependency-free JSON snapshot bridge for the Godot presentation client.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rts_core::fixed::Fixed;
+use rts_core::game::hex;
 use rts_core::game::kestrel;
-use rts_core::game::map::Ground;
+use rts_core::game::map::{Deposit, Ground};
 use rts_core::game::scenario::Scenario;
-use rts_core::game::sim::{Command, EntityId, EntityKindView, PlayerId, SupplyState};
+use rts_core::game::sim::{Command, EntityId, EntityKindView, EntityView, PlayerId, SupplyState};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
 
+#[cfg(test)]
 fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
-    snapshot_json_with(sim, &supply_links_json(sim), &ShotWindow::new())
+    snapshot_json_with(
+        sim,
+        &supply_links_json(sim),
+        &mut ShotWindow::new(),
+        &mut FogState::new(true),
+    )
+}
+
+/// `EARTHFRONT_FOG` kill switch, read once at start: `0`, `off` or `false` (any
+/// case, surrounding spaces ignored) turns the presentation fog off; anything
+/// else, or unset, leaves it on.
+fn fog_enabled_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value.and_then(std::ffi::OsStr::to_str).is_none_or(|text| {
+        let text = text.trim();
+        !(text == "0" || text.eq_ignore_ascii_case("off") || text.eq_ignore_ascii_case("false"))
+    })
+}
+
+/// The player whose view the snapshot shows.
+const HUMAN: PlayerId = PlayerId(0);
+
+/// One world unit as raw 16.16 fixed-point bits: the fog works on raw bits, so
+/// every distance test is plain integer arithmetic.
+const FIX_ONE: i64 = 1 << Fixed::FRAC_BITS;
+
+/// Sight radius in world units (one unit is about one cell; see `hex::center`).
+///
+/// Units see `max(weapon reach, 6) + 1`, the Harvester 5 and the gunship 10;
+/// structures 7 and the Command Center 9, an armed structure never less than its
+/// reach + 1. The reach is the weapon range stretched by the viewer's ground
+/// (`range_pct`, Highland +25 percent), rounded up, so whatever a viewer can shoot
+/// it can see: nothing it fires on sits in fog.
+fn sight_radius(kind: EntityKindView, range_pct: u32) -> i64 {
+    let reach = |range: Fixed| {
+        let bits = range.to_bits() * (100 + i64::from(range_pct)) / 100;
+        (bits + FIX_ONE - 1).div_euclid(FIX_ONE)
+    };
+    match kind {
+        EntityKindView::Unit(UnitKind::Harvester) => 5,
+        EntityKindView::Unit(unit) => {
+            let sight = reach(unit.stats().attack.range).max(6) + 1;
+            if unit == UnitKind::Helicopter {
+                sight.max(10)
+            } else {
+                sight
+            }
+        }
+        EntityKindView::Building(building) => {
+            let base = if building == BuildingKind::CommandCenter {
+                9
+            } else {
+                7
+            };
+            building
+                .stats()
+                .attack
+                .map_or(base, |attack| base.max(reach(attack.range) + 1))
+        }
+    }
+}
+
+/// Row-major index of the cell holding world point `p`.
+fn cell_index(p: Vec2, width: u16, height: u16) -> usize {
+    let (col, row) = hex::from_world(p, width, height);
+    usize::from(row) * usize::from(width) + usize::from(col)
+}
+
+/// What the fogged snapshot shows of one living entity.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    /// Its current state (every human entity; enemies in sight).
+    Live,
+    /// The remembered structure that last held this id, as last seen.
+    Ghost,
+    /// Nothing: an enemy out of sight.
+    Hidden,
+}
+
+/// `FogState::withheld` cell marks: the placement grids must not reveal what sits there.
+const CELL_OPEN: u8 = 0;
+/// An unseen, never-remembered enemy structure: report the bare ground.
+const CELL_HIDDEN_STRUCTURE: u8 = 1;
+/// A remembered structure out of sight: report it as still standing.
+const CELL_REMEMBERED: u8 = 2;
+
+/// An enemy structure as the player last saw it.
+struct Remembered {
+    owner: PlayerId,
+    kind: BuildingKind,
+    cell: usize,
+    /// Its `entities` object as last emitted, closing brace included.
+    entity: String,
+    /// Its `services` object as last emitted.
+    service: String,
+}
+
+impl Remembered {
+    /// Whether `view` (standing on `cell`) is still this structure, not a new entity
+    /// that inherited its recycled id.
+    fn is(&self, view: &EntityView, cell: usize) -> bool {
+        view.owner == self.owner
+            && view.kind == EntityKindView::Building(self.kind)
+            && cell == self.cell
+    }
+}
+
+/// Presentation-only fog of war for Kestrel Reach, owned by the bridge and never
+/// read by the sim (which, like the AI and combat, stays omniscient).
+///
+/// Each snapshot write recomputes the human side's sight (an integer disc per
+/// living viewer), folds it into the explored set, and decides per entity what
+/// the frame may show: human entities always, enemies only on a visible cell,
+/// and enemy structures once seen as remembered ghosts until their cell is seen
+/// again. Scratch buffers keep their capacity, so a write allocates nothing new
+/// once warm. `reset` (scenario restart) forgets everything explored and remembered.
+struct FogState {
+    /// False under `EARTHFRONT_FOG=0`: Kestrel gets an all-visible mask and the
+    /// writer withholds nothing.
+    enabled: bool,
+    /// Set by `update`: Kestrel Reach with the fog enabled, so the writer filters.
+    active: bool,
+    width: u16,
+    height: u16,
+    /// World centre of every cell as raw (x, y) bits, row-major; built once.
+    centers: Vec<(i64, i64)>,
+    visible: Vec<bool>,
+    /// The previous write's visible set: a shot whose end was in sight a frame
+    /// ago (its only viewer killed by that very shot) is still drawn.
+    was_visible: Vec<bool>,
+    explored: Vec<bool>,
+    /// Deposits as last seen, by cell. The first frame is the briefing survey.
+    known_deposits: Vec<Option<Deposit>>,
+    surveyed: bool,
+    /// Enemy structures seen at least once, by entity id.
+    remembered: BTreeMap<u32, Remembered>,
+    /// Per write: what each view (by index) shows.
+    shown: Vec<Shown>,
+    /// Per write: view index + 1 by entity id (0 = no living entity holds the id).
+    holder: Vec<usize>,
+    /// Per write: `CELL_*` mark by cell.
+    withheld: Vec<u8>,
+    /// Per write: the human viewers as (position, sight).
+    viewers: Vec<(Vec2, i64)>,
+}
+
+impl FogState {
+    const fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            active: false,
+            width: 0,
+            height: 0,
+            centers: Vec::new(),
+            visible: Vec::new(),
+            was_visible: Vec::new(),
+            explored: Vec::new(),
+            known_deposits: Vec::new(),
+            surveyed: false,
+            remembered: BTreeMap::new(),
+            shown: Vec::new(),
+            holder: Vec::new(),
+            withheld: Vec::new(),
+            viewers: Vec::new(),
+        }
+    }
+
+    /// Scenario restart: explored ground, remembered structures and deposit
+    /// knowledge all belong to the old match.
+    fn reset(&mut self) {
+        self.visible.fill(false);
+        self.was_visible.fill(false);
+        self.explored.fill(false);
+        self.known_deposits.fill(None);
+        self.surveyed = false;
+        self.remembered.clear();
+    }
+
+    /// Sizes the grid buffers (once per map size; a resize forgets everything).
+    fn ensure_grid(&mut self, width: u16, height: u16) {
+        let cells = usize::from(width) * usize::from(height);
+        if (self.width, self.height) == (width, height) && self.centers.len() == cells {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        self.centers = (0..height)
+            .flat_map(|row| (0..width).map(move |col| hex::center(col, row)))
+            .map(|p| (p.x.to_bits(), p.y.to_bits()))
+            .collect();
+        self.visible = vec![false; cells];
+        self.was_visible = vec![false; cells];
+        self.explored = vec![false; cells];
+        self.known_deposits = vec![None; cells];
+        self.withheld = vec![CELL_OPEN; cells];
+        self.surveyed = false;
+        self.remembered.clear();
+    }
+
+    /// Recomputes the visible set from `viewers` (world position, sight radius in
+    /// world units) and folds it into the explored set. A cell is visible when its
+    /// centre lies within a viewer's radius (edge inclusive); integer maths only.
+    fn observe(&mut self, width: u16, height: u16, viewers: &[(Vec2, i64)]) {
+        self.ensure_grid(width, height);
+        std::mem::swap(&mut self.visible, &mut self.was_visible);
+        self.visible.fill(false);
+        let (w, h) = (usize::from(width), usize::from(height));
+        let half = FIX_ONE / 2;
+        // Bits to a clamped grid index (negative clamps to 0).
+        let clamp = |value: i64, len: usize| {
+            usize::try_from(value).map_or(0, |v| v.min(len.saturating_sub(1)))
+        };
+        for &(pos, sight) in viewers {
+            let (px, py) = (pos.x.to_bits(), pos.y.to_bits());
+            let radius = sight * FIX_ONE;
+            let radius_sq = radius * radius;
+            // Column centres sit at 3/4 col + 1/2; row centres at row + 1/2, plus
+            // 1/2 on odd columns. These bounds over-cover; the disc test decides.
+            let col0 = clamp(((px - radius - half) * 4).div_euclid(3 * FIX_ONE), w);
+            let col1 = clamp(((px + radius - half) * 4).div_euclid(3 * FIX_ONE) + 1, w);
+            let row0 = clamp((py - radius - FIX_ONE).div_euclid(FIX_ONE), h);
+            let row1 = clamp((py + radius).div_euclid(FIX_ONE), h);
+            for row in row0..=row1 {
+                for col in col0..=col1 {
+                    let index = row * w + col;
+                    let (cx, cy) = self.centers[index];
+                    let (dx, dy) = (cx - px, cy - py);
+                    if dx * dx + dy * dy <= radius_sq {
+                        self.visible[index] = true;
+                    }
+                }
+            }
+        }
+        for (explored, &visible) in self.explored.iter_mut().zip(&self.visible) {
+            *explored |= visible;
+        }
+    }
+
+    /// Recomputes sight and every per-entity decision for one snapshot write.
+    /// Survival, or the fog switched off, leaves the writer unfiltered.
+    fn update(&mut self, sim: &rts_core::game::sim::Sim, views: &[EntityView]) {
+        self.active = self.enabled && is_kestrel_map(sim);
+        self.shown.clear();
+        if !self.active {
+            return;
+        }
+        let map = sim.map();
+        let (width, height) = (map.width(), map.height());
+        let mut viewers = std::mem::take(&mut self.viewers);
+        viewers.clear();
+        // Living human entities see (a building under construction included: the
+        // player's own site). A viewer at zero HP is dying this tick and sees nothing.
+        viewers.extend(
+            views
+                .iter()
+                .filter(|v| v.owner == HUMAN && v.hp > Fixed::ZERO)
+                .map(|v| {
+                    let pct = if sim.is_earthfront() {
+                        let (x, y) = hex::from_world(v.pos, width, height);
+                        map.ground_at(i32::from(x), i32::from(y)).props().range_pct
+                    } else {
+                        0
+                    };
+                    (v.pos, sight_radius(v.kind, pct))
+                }),
+        );
+        self.observe(width, height, &viewers);
+        self.viewers = viewers;
+        self.survey(map);
+        self.classify(views);
+    }
+
+    /// Refreshes deposit knowledge: every deposit on the first frame (the
+    /// briefing survey), afterwards only those on visible cells.
+    fn survey(&mut self, map: &rts_core::game::map::Map) {
+        let all = !self.surveyed;
+        self.surveyed = true;
+        let width = usize::from(self.width);
+        for (index, known) in self.known_deposits.iter_mut().enumerate() {
+            if all || self.visible[index] {
+                let x = u16::try_from(index % width).unwrap_or(u16::MAX);
+                let y = u16::try_from(index / width).unwrap_or(u16::MAX);
+                *known = map.deposit(x, y);
+            }
+        }
+    }
+
+    /// Decides what each view shows, prunes the structure memory, and marks the
+    /// cells whose placement truth must be withheld.
+    fn classify(&mut self, views: &[EntityView]) {
+        let (width, height) = (self.width, self.height);
+        self.holder.clear();
+        let ids = views.iter().map(|v| v.id.0 as usize + 1).max().unwrap_or(0);
+        self.holder.resize(ids, 0);
+        for (index, view) in views.iter().enumerate() {
+            self.holder[view.id.0 as usize] = index + 1;
+        }
+        let visible = &self.visible;
+        self.shown.extend(views.iter().map(|v| {
+            if v.owner == HUMAN || visible[cell_index(v.pos, width, height)] {
+                Shown::Live
+            } else {
+                Shown::Hidden
+            }
+        }));
+        // A memory survives while its cell is out of sight, unless a shown entity
+        // now holds its id (ids must stay unique in a frame). Back in sight, it
+        // survives only if the structure still stands (and is then shown live).
+        let (holder, shown) = (&self.holder, &self.shown);
+        self.remembered.retain(|&id, memory| {
+            let held = holder
+                .get(id as usize)
+                .and_then(|&slot| slot.checked_sub(1))
+                .map(|index| (index, &views[index]));
+            let same = held.is_some_and(|(_, v)| memory.is(v, cell_index(v.pos, width, height)));
+            if visible[memory.cell] {
+                same
+            } else {
+                held.is_none_or(|(index, _)| shown[index] != Shown::Live || same)
+            }
+        });
+        self.withheld.fill(CELL_OPEN);
+        for (view, &shown) in views.iter().zip(&self.shown) {
+            if shown == Shown::Hidden && matches!(view.kind, EntityKindView::Building(_)) {
+                self.withheld[cell_index(view.pos, width, height)] = CELL_HIDDEN_STRUCTURE;
+            }
+        }
+        for memory in self.remembered.values() {
+            if !visible[memory.cell] {
+                self.withheld[memory.cell] = CELL_REMEMBERED;
+            }
+        }
+        for (view, shown) in views.iter().zip(self.shown.iter_mut()) {
+            if *shown == Shown::Hidden && self.remembered.contains_key(&view.id.0) {
+                *shown = Shown::Ghost;
+            }
+        }
+    }
+
+    /// What view `index` of this write shows (everything, when the fog is inactive).
+    fn shown(&self, index: usize) -> Shown {
+        self.shown.get(index).copied().unwrap_or(Shown::Live)
+    }
+
+    /// The `CELL_*` mark of `(x, y)` for this write.
+    fn withheld(&self, x: u16, y: u16) -> u8 {
+        if !self.active || x >= self.width || y >= self.height {
+            return CELL_OPEN;
+        }
+        self.withheld[usize::from(y) * usize::from(self.width) + usize::from(x)]
+    }
+
+    /// Stores what the player just saw of a live enemy structure.
+    fn remember_entity(&mut self, view: &EntityView, json: &str) {
+        let EntityKindView::Building(kind) = view.kind else {
+            return;
+        };
+        if !self.active || view.owner == HUMAN {
+            return;
+        }
+        let cell = cell_index(view.pos, self.width, self.height);
+        let memory = self
+            .remembered
+            .entry(view.id.0)
+            .or_insert_with(|| Remembered {
+                owner: view.owner,
+                kind,
+                cell,
+                entity: String::new(),
+                service: String::new(),
+            });
+        memory.owner = view.owner;
+        memory.kind = kind;
+        memory.cell = cell;
+        memory.entity.clear();
+        memory.entity.push_str(json);
+    }
+
+    /// Stores the services entry of a live enemy structure just remembered.
+    fn remember_service(&mut self, view: &EntityView, json: &str) {
+        if !self.active || view.owner == HUMAN {
+            return;
+        }
+        if let Some(memory) = self.remembered.get_mut(&view.id.0) {
+            memory.service.clear();
+            memory.service.push_str(json);
+        }
+    }
+
+    /// Writes the remembered entity object for `id`, flagged `"remembered":true`.
+    fn write_ghost_entity(&self, id: u32, out: &mut String) {
+        if let Some(open) = self
+            .remembered
+            .get(&id)
+            .and_then(|memory| memory.entity.strip_suffix('}'))
+        {
+            out.push_str(open);
+            out.push_str(",\"remembered\":true}");
+        }
+    }
+
+    /// Writes the remembered services entry for `id`.
+    fn write_ghost_service(&self, id: u32, out: &mut String) {
+        if let Some(memory) = self.remembered.get(&id) {
+            out.push_str(&memory.service);
+        }
+    }
+
+    /// Remembered structures no living entity holds the id of (destroyed out of
+    /// sight), in id order: written after the live entities.
+    fn dead_ghosts(&self) -> impl Iterator<Item = u32> + '_ {
+        self.remembered
+            .keys()
+            .copied()
+            .filter(|&id| self.holder.get(id as usize).copied().unwrap_or(0) == 0)
+    }
+
+    /// Whether a shot from `attacker` to `target` may be drawn: either end on a
+    /// cell in sight now or on the previous write.
+    fn sees_shot(&self, attacker: Vec2, target: Vec2) -> bool {
+        !self.active
+            || [attacker, target].into_iter().any(|p| {
+                let cell = cell_index(p, self.width, self.height);
+                self.visible[cell] || self.was_visible[cell]
+            })
+    }
+
+    /// Writes the `fog` mask: one digit per cell, row-major (0 unseen, 1 explored,
+    /// 2 visible); all `2` when the fog is switched off.
+    fn write_mask(&self, out: &mut String, cells: usize) {
+        if self.enabled && self.visible.len() == cells {
+            out.extend(
+                self.visible
+                    .iter()
+                    .zip(&self.explored)
+                    .map(|(&seen, &explored)| {
+                        if seen {
+                            '2'
+                        } else if explored {
+                            '1'
+                        } else {
+                            '0'
+                        }
+                    }),
+            );
+        } else {
+            out.extend(std::iter::repeat_n('2', cells));
+        }
+    }
+
+    /// Deposits as the player knows them, `(x, y, deposit)` in row-major order.
+    fn known_deposits(&self) -> impl Iterator<Item = (u16, u16, Deposit)> + '_ {
+        let width = usize::from(self.width);
+        self.known_deposits
+            .iter()
+            .enumerate()
+            .filter_map(move |(index, known)| {
+                let deposit = (*known)?;
+                let x = u16::try_from(index % width).ok()?;
+                let y = u16::try_from(index / width).ok()?;
+                Some((x, y, deposit))
+            })
+    }
+
+    #[cfg(test)]
+    fn mask_string(&self) -> String {
+        let mut out = String::new();
+        self.write_mask(&mut out, self.visible.len());
+        out
+    }
+
+    /// Capacities of every buffer the fog reuses (a growth check for tests).
+    #[cfg(test)]
+    fn buffer_capacities(&self) -> [usize; 10] {
+        [
+            self.centers.capacity(),
+            self.visible.capacity(),
+            self.was_visible.capacity(),
+            self.explored.capacity(),
+            self.known_deposits.capacity(),
+            self.shown.capacity(),
+            self.holder.capacity(),
+            self.withheld.capacity(),
+            self.viewers.capacity(),
+            self.remembered
+                .values()
+                .map(|m| m.entity.capacity() + m.service.capacity())
+                .sum(),
+        ]
+    }
+}
+
+/// Whether a completed human Command Center, Supply Depot or Refinery stands within
+/// 10 world units of cell `(x, y)`: the sim's Earthfront construction reach
+/// (`earthfront_build_reachable`), recomputed here because the sim keeps it private.
+fn human_build_reach(views: &[EntityView], x: u16, y: u16) -> bool {
+    let target = hex::center(x, y);
+    views.iter().any(|v| {
+        v.owner == HUMAN
+            && v.construction_remaining == 0
+            && matches!(
+                v.kind,
+                EntityKindView::Building(
+                    BuildingKind::CommandCenter
+                        | BuildingKind::SupplyDepot
+                        | BuildingKind::Refinery
+                )
+            )
+            && (v.pos - target).length_squared() <= Fixed::from_int(100)
+    })
 }
 
 /// How many ticks of shots the snapshot carries (0.6 s at 30 Hz). The sim steps at
@@ -21,8 +532,9 @@ fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
 /// miss most shots; the client dedups the overlapping windows by (tick, attacker, target).
 const SHOT_WINDOW_TICKS: u64 = 18;
 
-/// One shot: the tick it was fired on and the attacker and target positions.
-type Shot = (u64, Vec2, Vec2);
+/// One shot: the tick it was fired on, the attacker and target positions, and
+/// whether the fog has let it be drawn (latched on the first write that sees an end).
+type Shot = (u64, Vec2, Vec2, bool);
 
 /// Rolling window of the most recent shots, oldest first. Cosmetic only: it is never
 /// part of the sim state and never read back by it.
@@ -41,10 +553,18 @@ impl ShotWindow {
         self.shots.extend(
             attacks
                 .iter()
-                .map(|&(attacker, target)| (tick, attacker, target)),
+                .map(|&(attacker, target)| (tick, attacker, target, false)),
         );
         self.shots
-            .retain(|&(fired, _, _)| tick.saturating_sub(fired) < SHOT_WINDOW_TICKS);
+            .retain(|&(fired, _, _, _)| tick.saturating_sub(fired) < SHOT_WINDOW_TICKS);
+    }
+
+    /// Latches every shot the fog lets the player see (an end in sight now or a
+    /// frame ago); a latched shot stays drawn for the rest of its window.
+    fn reveal(&mut self, fog: &FogState) {
+        for shot in &mut self.shots {
+            shot.3 = shot.3 || fog.sees_shot(shot.1, shot.2);
+        }
     }
 
     /// Forgets every shot (scenario restart).
@@ -62,10 +582,12 @@ impl ShotWindow {
         self.shots.is_empty()
     }
 
-    /// `[[tick,ax_bits,az_bits,tx_bits,tz_bits],...]`, oldest first.
-    fn json_array(&self) -> String {
+    /// `[[tick,ax_bits,az_bits,tx_bits,tz_bits],...]`, oldest first; with
+    /// `revealed_only`, just the shots the fog has let through.
+    fn json_array(&self, revealed_only: bool) -> String {
         let mut out = String::from("[");
-        for (i, (tick, attacker, target)) in self.shots.iter().enumerate() {
+        let shots = self.shots.iter().filter(|shot| !revealed_only || shot.3);
+        for (i, (tick, attacker, target, _)) in shots.enumerate() {
             if i > 0 {
                 out.push(',');
             }
@@ -150,9 +672,11 @@ impl SupplyLinkCache {
 fn snapshot_json_with(
     sim: &rts_core::game::sim::Sim,
     supply_links: &str,
-    shots: &ShotWindow,
+    shots: &mut ShotWindow,
+    fog: &mut FogState,
 ) -> String {
     let views = sim.views();
+    fog.update(sim, &views);
     let mut out = String::with_capacity(512 + views.len() * 240);
     let human = PlayerId(0);
     let winner = sim.winner().map_or(-1, |PlayerId(id)| i32::from(id));
@@ -244,11 +768,22 @@ fn snapshot_json_with(
     let mut blocked_index = 0_usize;
     for y in 0..sim.map().height() {
         for x in 0..sim.map().width() {
-            if sim
-                .map()
-                .tile(i32::from(x), i32::from(y))
-                .is_some_and(|tile| !tile.buildable)
-            {
+            // Fog: an unseen enemy structure must not show as a blocked cell (its
+            // bare ground is reported); a remembered one stays blocked as last seen.
+            let blocked = match fog.withheld(x, y) {
+                CELL_HIDDEN_STRUCTURE => {
+                    !sim.map()
+                        .ground_at(i32::from(x), i32::from(y))
+                        .props()
+                        .buildable
+                }
+                CELL_REMEMBERED => true,
+                _ => sim
+                    .map()
+                    .tile(i32::from(x), i32::from(y))
+                    .is_some_and(|tile| !tile.buildable),
+            };
+            if blocked {
                 if blocked_index != 0 {
                     out.push(',');
                 }
@@ -258,7 +793,13 @@ fn snapshot_json_with(
         }
     }
     out.push_str("],\"deposits\":[");
-    for (index, (x, y, deposit)) in sim.map().deposits().enumerate() {
+    // Fog: deposits out of sight read as last seen, so enemy mining stays unseen.
+    let deposits: Box<dyn Iterator<Item = (u16, u16, Deposit)>> = if fog.active {
+        Box::new(fog.known_deposits())
+    } else {
+        Box::new(sim.map().deposits())
+    };
+    for (index, (x, y, deposit)) in deposits.enumerate() {
         if index != 0 {
             out.push(',');
         }
@@ -313,10 +854,23 @@ fn snapshot_json_with(
     }
     out.push_str("],\"entities\":[");
 
+    // Fog: enemies out of sight are left out and remembered structures are written
+    // as last seen (flagged `remembered`); with the fog inactive every entity is live.
+    let mut first_entity = true;
     for (index, entity) in views.iter().enumerate() {
-        if index != 0 {
+        let shown = fog.shown(index);
+        if shown == Shown::Hidden {
+            continue;
+        }
+        if !first_entity {
             out.push(',');
         }
+        first_entity = false;
+        if shown == Shown::Ghost {
+            fog.write_ghost_entity(entity.id.0, &mut out);
+            continue;
+        }
+        let start = out.len();
         let (category, kind) = match entity.kind {
             EntityKindView::Building(kind) => ("building", format!("{kind:?}")),
             EntityKindView::Unit(kind) => ("unit", format!("{kind:?}")),
@@ -373,16 +927,35 @@ fn snapshot_json_with(
         }
         .expect("writing to String cannot fail");
         out.push('}');
+        fog.remember_entity(entity, &out[start..]);
+    }
+    for id in fog.dead_ghosts() {
+        if !first_entity {
+            out.push(',');
+        }
+        first_entity = false;
+        fog.write_ghost_entity(id, &mut out);
     }
     let economy = sim.economy_view(human);
     write!(out, "],\"earthfront\":{},\"technology_total\":{},\"power_generation\":{},\"power_demand\":{},\"stored_energy\":{},\"storage_capacity\":{},\"ore_buffer\":{},\"depot_ammunition\":{},\"active_factories\":{},\"research_status\":{:?},\"incoming_doctrine\":{:?},\"services\":[",
         sim.is_earthfront(), sim.technology_count(), economy.generation, economy.demand,
         economy.stored_energy, economy.storage_capacity, economy.ore, economy.ammunition,
         economy.active_factories, economy.research_status, sim.incoming_doctrine()).expect("string write");
-    for (i, entity) in views.iter().enumerate() {
-        if i > 0 {
+    let mut first_service = true;
+    for (index, entity) in views.iter().enumerate() {
+        let shown = fog.shown(index);
+        if shown == Shown::Hidden {
+            continue;
+        }
+        if !first_service {
             out.push(',');
         }
+        first_service = false;
+        if shown == Shown::Ghost {
+            fog.write_ghost_service(entity.id.0, &mut out);
+            continue;
+        }
+        let start = out.len();
         let (power, ammo, stock, ore) = sim.earthfront_entity_status(entity.id);
         write!(
             out,
@@ -391,13 +964,34 @@ fn snapshot_json_with(
             sim.prototype_factory(entity.owner) == Some(entity.id), sim.is_alien_relay(entity.id)
         )
         .expect("string write");
+        fog.remember_service(entity, &out[start..]);
+    }
+    for id in fog.dead_ghosts() {
+        if !first_service {
+            out.push(',');
+        }
+        first_service = false;
+        fog.write_ghost_service(id, &mut out);
     }
     write!(out, "],\"alien_relays\":{},\"active_alien_relays\":{},\"next_expedition_size\":{},\"construction_zone\":[",
         sim.alien_relay_count(PlayerId(1), false), sim.alien_relay_count(PlayerId(1), true), sim.next_expedition_size()).expect("string write");
     let mut first_tile = true;
     for y in 0..sim.map().height() {
         for x in 0..sim.map().width() {
-            if sim.construction_allowed_at(human, x, y) {
+            // Fog: a hidden enemy structure's cell reads as its bare ground in reach
+            // of a human depot; a remembered one stays unbuildable as last seen.
+            let allowed = match fog.withheld(x, y) {
+                CELL_HIDDEN_STRUCTURE => {
+                    sim.map()
+                        .ground_at(i32::from(x), i32::from(y))
+                        .props()
+                        .buildable
+                        && human_build_reach(&views, x, y)
+                }
+                CELL_REMEMBERED => false,
+                _ => sim.construction_allowed_at(human, x, y),
+            };
+            if allowed {
                 if !first_tile {
                     out.push(',');
                 }
@@ -412,8 +1006,17 @@ fn snapshot_json_with(
     out.push_str(supply_links);
     // Kestrel only (the ground-layer scenario): Survival keeps its exact shape.
     if is_kestrel_map(sim) {
-        out.push_str(",\"shots\":");
-        out.push_str(&shots.json_array());
+        let map = sim.map();
+        out.push_str(",\"fog\":\"");
+        fog.write_mask(
+            &mut out,
+            usize::from(map.width()) * usize::from(map.height()),
+        );
+        out.push_str("\",\"shots\":");
+        if fog.active {
+            shots.reveal(fog);
+        }
+        out.push_str(&shots.json_array(fog.active));
     }
     out.push('}');
     out
@@ -746,11 +1349,19 @@ fn main() -> std::io::Result<()> {
         dump_snapshot,
     } = options;
 
+    // The presentation fog kill switch is read once, here; a running bridge never re-reads it.
+    let fog_enabled = fog_enabled_from(std::env::var_os("EARTHFRONT_FOG").as_deref());
     let mut sim = scenario.build(2026);
     sim.set_balance(rts_data::load_default());
     if let Some(path) = dump_snapshot {
         // One frame of the chosen scenario's initial snapshot, for Godot test fixtures.
-        return write_atomic(&path, &snapshot_json(&sim));
+        let snapshot = snapshot_json_with(
+            &sim,
+            &supply_links_json(&sim),
+            &mut ShotWindow::new(),
+            &mut FogState::new(fog_enabled),
+        );
+        return write_atomic(&path, &snapshot);
     }
     // Match the primary client: the deterministic simulation is authored at 30 Hz.
     // Godot renders between snapshots, but must not double the gameplay speed.
@@ -769,6 +1380,7 @@ fn main() -> std::io::Result<()> {
     let mut mission_started = false;
     let mut supply_cache = SupplyLinkCache::new();
     let mut shots = ShotWindow::new();
+    let mut fog = FogState::new(fog_enabled);
 
     for _ in 0..frame_limit {
         if restart_path.exists() {
@@ -783,6 +1395,8 @@ fn main() -> std::io::Result<()> {
             mission_started = false;
             supply_cache = SupplyLinkCache::new();
             shots.clear();
+            // Explored ground and remembered enemy structures belong to the old match.
+            fog.reset();
         }
         if !mission_started {
             if start_path.exists() {
@@ -791,7 +1405,7 @@ fn main() -> std::io::Result<()> {
             } else {
                 write_atomic(
                     &output,
-                    &snapshot_json_with(&sim, supply_cache.get(&sim), &shots),
+                    &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
                 )?;
                 std::thread::sleep(frame_time);
                 continue;
@@ -801,7 +1415,7 @@ fn main() -> std::io::Result<()> {
             // Paused: no step, no commands taken (they wait for the resume), the same snapshot stays current.
             write_atomic(
                 &output,
-                &snapshot_json_with(&sim, supply_cache.get(&sim), &shots),
+                &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
             )?;
             std::thread::sleep(frame_time);
             continue;
@@ -829,7 +1443,7 @@ fn main() -> std::io::Result<()> {
         shots.record(sim.tick(), sim.recent_attacks());
         write_atomic(
             &output,
-            &snapshot_json_with(&sim, supply_cache.get(&sim), &shots),
+            &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
         )?;
         std::thread::sleep(frame_time.saturating_sub(started.elapsed()));
     }
@@ -839,9 +1453,9 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_args, snapshot_json, snapshot_json_with, supply_links_json, take_commands,
-        BuildingKind, Command, EntityId, PlayerId, ShotWindow, SupplyLinkCache, UnitKind,
-        SHOT_WINDOW_TICKS,
+        fog_enabled_from, parse_args, sight_radius, snapshot_json, snapshot_json_with,
+        supply_links_json, take_commands, BuildingKind, Command, EntityId, FogState, PlayerId,
+        ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
 
@@ -979,7 +1593,11 @@ mod tests {
         assert!(g.contains('r') && g.contains('w') && g.contains('h'));
         // Additive and last: at tick 0 the Command Center holds no stock yet, so the
         // three prebuilt structures beside it are not served until the first supply beat.
-        assert!(json.ends_with("\"core_node\":[37,8],\"supply_links\":[],\"shots\":[]}"));
+        // The presentation fog mask (Task 6) sits between the supply links and the shots.
+        let fog = extract_str(&json, "fog");
+        assert!(json.ends_with(&format!(
+            "\"core_node\":[37,8],\"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
+        )));
         assert!(json.starts_with("{\"schema\":5,"));
     }
 
@@ -1007,12 +1625,13 @@ mod tests {
             .iter()
             .map(|t| format!("{{\"depot\":0,\"target\":{t},\"state\":\"ok\"}}"))
             .collect();
+        let fog = extract_str(&json, "fog");
         assert!(
             json.ends_with(&format!(
-                "\"supply_links\":[{}],\"shots\":[]}}",
+                "\"supply_links\":[{}],\"fog\":\"{fog}\",\"shots\":[]}}",
                 served.join(",")
             )),
-            "supply_links precedes the trailing shots key"
+            "supply_links precedes the fog mask and the trailing shots key"
         );
         // Pure and deterministic for a given sim state.
         assert_eq!(supply_links_json(&sim), supply_links_json(&sim));
@@ -1064,6 +1683,11 @@ mod tests {
         (sim, ours, theirs)
     }
 
+    /// One snapshot with the fog on (a fresh fog, as `--dump-snapshot` writes it).
+    fn snap(sim: &rts_core::game::sim::Sim, window: &mut ShotWindow) -> String {
+        snapshot_json_with(sim, "[]", window, &mut FogState::new(true))
+    }
+
     /// Steps once and feeds the window the way the main loop does.
     fn step_into(sim: &mut rts_core::game::sim::Sim, window: &mut ShotWindow) {
         sim.step(&[]);
@@ -1108,7 +1732,7 @@ mod tests {
                 .pos
         };
         let (a, t) = (pos(ours), pos(theirs));
-        let json = snapshot_json_with(&sim, "[]", &window);
+        let json = snap(&sim, &mut window);
         assert!(json.ends_with("]]}"), "shots is the final key: {json}");
         let shots = parse_shots(&json);
         assert!(!shots.is_empty());
@@ -1145,7 +1769,7 @@ mod tests {
         // Order is oldest first.
         window.record(100, &[(p(1), p(2))]);
         window.record(101, &[(p(3), p(4))]);
-        let json = window.json_array();
+        let json = window.json_array(false);
         assert!(
             json.starts_with("[[100,") && json.contains("],[101,"),
             "{json}"
@@ -1160,12 +1784,12 @@ mod tests {
             step_into(&mut sim, &mut window);
         }
         let fired = sim.tick();
-        assert!(!parse_shots(&snapshot_json_with(&sim, "[]", &window)).is_empty());
+        assert!(!parse_shots(&snap(&sim, &mut window)).is_empty());
         // The firefight ends (no further attacks fed in); the window runs out.
         window.record(fired + SHOT_WINDOW_TICKS - 1, &[]);
         assert!(!window.is_empty());
         window.record(fired + SHOT_WINDOW_TICKS, &[]);
-        assert!(parse_shots(&snapshot_json_with(&sim, "[]", &window)).is_empty());
+        assert!(parse_shots(&snap(&sim, &mut window)).is_empty());
     }
 
     #[test]
@@ -1176,12 +1800,9 @@ mod tests {
         let mut window = ShotWindow::new();
         let p = Vec2::new(Fixed::from_int(1), Fixed::from_int(1));
         window.record(sim.tick(), &[(p, p)]);
-        let with_window = snapshot_json_with(&sim, "[]", &window);
+        let with_window = snap(&sim, &mut window);
         assert!(!with_window.contains("\"shots\""));
-        assert_eq!(
-            with_window,
-            snapshot_json_with(&sim, "[]", &ShotWindow::new())
-        );
+        assert_eq!(with_window, snap(&sim, &mut ShotWindow::new()));
         assert!(with_window.ends_with("\"supply_links\":[]}"));
     }
 
@@ -1195,7 +1816,7 @@ mod tests {
         assert!(!window.is_empty());
         window.clear();
         assert!(window.is_empty());
-        let json = snapshot_json_with(&sim, "[]", &window);
+        let json = snap(&sim, &mut window);
         assert!(json.ends_with("\"shots\":[]}"));
     }
 
@@ -1206,7 +1827,7 @@ mod tests {
         while sim.recent_attacks().is_empty() {
             step_into(&mut sim, &mut window);
         }
-        let json = snapshot_json_with(&sim, "[]", &window);
+        let json = snap(&sim, &mut window);
         assert_eq!(json.matches('{').count(), json.matches('}').count());
         assert_eq!(json.matches('[').count(), json.matches(']').count());
         assert!(!json.contains(",]") && !json.contains(",}"));
@@ -1481,5 +2102,805 @@ mod tests {
             }
         ));
         assert!(!path.exists(), "bridge consumes the roster file atomically");
+    }
+
+    // ---- Presentation fog of war (Kestrel only) ----
+
+    const W: u16 = 44;
+    const H: u16 = 26;
+
+    /// FNV-1a 64 of a snapshot string: a compact, dependency-free byte fingerprint.
+    fn fnv1a(text: &str) -> u64 {
+        text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    // A tiny strict JSON parser for the fog tests (no serde in this crate).
+    fn ws(b: &[u8], i: &mut usize) {
+        while *i < b.len() && b" \t\n\r".contains(&b[*i]) {
+            *i += 1;
+        }
+    }
+    fn string(b: &[u8], i: &mut usize) -> bool {
+        if b.get(*i) != Some(&b'"') {
+            return false;
+        }
+        *i += 1;
+        while let Some(&c) = b.get(*i) {
+            *i += 1;
+            match c {
+                b'"' => return true,
+                b'\\' => *i += 1,
+                c if c < 0x20 => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+    fn digits(b: &[u8], i: &mut usize) -> bool {
+        let start = *i;
+        while b.get(*i).is_some_and(u8::is_ascii_digit) {
+            *i += 1;
+        }
+        *i > start
+    }
+    fn number(b: &[u8], i: &mut usize) -> bool {
+        if b.get(*i) == Some(&b'-') {
+            *i += 1;
+        }
+        if !digits(b, i) {
+            return false;
+        }
+        if b.get(*i) == Some(&b'.') {
+            *i += 1;
+            if !digits(b, i) {
+                return false;
+            }
+        }
+        if matches!(b.get(*i), Some(b'e' | b'E')) {
+            *i += 1;
+            if matches!(b.get(*i), Some(b'+' | b'-')) {
+                *i += 1;
+            }
+            return digits(b, i);
+        }
+        true
+    }
+    fn items(b: &[u8], i: &mut usize, close: u8, keyed: bool) -> bool {
+        *i += 1;
+        ws(b, i);
+        if b.get(*i) == Some(&close) {
+            *i += 1;
+            return true;
+        }
+        loop {
+            ws(b, i);
+            if keyed {
+                if !string(b, i) {
+                    return false;
+                }
+                ws(b, i);
+                if b.get(*i) != Some(&b':') {
+                    return false;
+                }
+                *i += 1;
+            }
+            if !value(b, i) {
+                return false;
+            }
+            ws(b, i);
+            match b.get(*i) {
+                Some(b',') => *i += 1,
+                Some(&c) if c == close => {
+                    *i += 1;
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+    }
+    fn value(b: &[u8], i: &mut usize) -> bool {
+        ws(b, i);
+        let literal = |word: &[u8], i: &mut usize| {
+            let ok = b[*i..].starts_with(word);
+            *i += word.len();
+            ok
+        };
+        match b.get(*i) {
+            Some(b'{') => items(b, i, b'}', true),
+            Some(b'[') => items(b, i, b']', false),
+            Some(b'"') => string(b, i),
+            Some(b't') => literal(b"true", i),
+            Some(b'f') => literal(b"false", i),
+            Some(b'n') => literal(b"null", i),
+            Some(c) if *c == b'-' || c.is_ascii_digit() => number(b, i),
+            _ => false,
+        }
+    }
+
+    /// Strict JSON check (RFC 8259 grammar, no extensions): the snapshot must stay
+    /// parseable by Godot's `JSON.parse` whatever the fog drops or adds.
+    fn json_ok(text: &str) -> bool {
+        let b = text.as_bytes();
+        let mut i = 0;
+        let ok = value(b, &mut i);
+        ws(b, &mut i);
+        ok && i == b.len()
+    }
+
+    #[test]
+    fn the_json_checker_rejects_what_godot_would_reject() {
+        assert!(json_ok("{\"a\":[1,-2.5e3,true,null,\"x\\\"y\"],\"b\":{}}"));
+        for bad in [
+            "{\"a\":1,}",
+            "[1,]",
+            "{\"a\" 1}",
+            "{\"a\":1}}",
+            "[01x]",
+            "{'a':1}",
+            "",
+        ] {
+            assert!(!json_ok(bad), "{bad}");
+        }
+    }
+
+    fn fog_of(json: &str) -> String {
+        extract_str(json, "fog")
+    }
+
+    fn cell(c: u16, r: u16) -> usize {
+        usize::from(r) * usize::from(W) + usize::from(c)
+    }
+
+    fn has_entity(json: &str, id: u32) -> bool {
+        json.contains(&format!("{{\"id\":{id},\"owner\""))
+    }
+
+    fn has_service(json: &str, id: u32) -> bool {
+        json.contains(&format!("{{\"id\":{id},\"power\""))
+    }
+
+    /// The `[x,y]` pairs listed under a top-level array key such as `blocked`.
+    fn cells_under(json: &str, key: &str) -> Vec<(u16, u16)> {
+        let needle = format!("\"{key}\":[");
+        let start = json.find(&needle).expect("key present") + needle.len();
+        let end = json[start..].find("]]").map_or(start, |e| start + e + 1);
+        if json[start..].starts_with(']') {
+            return Vec::new();
+        }
+        json[start..end]
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split("],[")
+            .map(|pair| {
+                let (x, y) = pair.split_once(',').expect("x,y");
+                (x.parse().expect("x"), y.parse().expect("y"))
+            })
+            .collect()
+    }
+
+    /// `remaining` of the deposit listed at `(x, y)`, if it is listed.
+    fn deposit_remaining(json: &str, x: u16, y: u16) -> Option<u32> {
+        let needle = format!("{{\"x\":{x},\"y\":{y},");
+        let start = json.find(&needle)?;
+        let object = &json[start..start + json[start..].find('}')?];
+        let value = object.split("\"remaining\":").nth(1)?;
+        value.parse().ok()
+    }
+
+    fn view_pos(sim: &rts_core::game::sim::Sim, id: EntityId) -> rts_core::vec::Vec2 {
+        sim.views()
+            .into_iter()
+            .find(|v| v.id == id)
+            .expect("entity alive")
+            .pos
+    }
+
+    #[test]
+    fn fog_sight_table_matches_the_brief() {
+        use rts_core::game::sim::EntityKindView::{Building, Unit};
+        for unit in [
+            UnitKind::Infantry,
+            UnitKind::Tank,
+            UnitKind::AntiArmor,
+            UnitKind::Capital,
+        ] {
+            assert_eq!(sight_radius(Unit(unit), 0), 7, "{unit:?}");
+        }
+        assert_eq!(sight_radius(Unit(UnitKind::Harvester), 0), 5);
+        assert_eq!(sight_radius(Unit(UnitKind::Helicopter), 0), 10);
+        assert_eq!(sight_radius(Building(BuildingKind::CommandCenter), 0), 9);
+        for building in [
+            BuildingKind::PowerPlant,
+            BuildingKind::Refinery,
+            BuildingKind::Barracks,
+            BuildingKind::GunTurret,
+            BuildingKind::AaTurret,
+            BuildingKind::Wall,
+            BuildingKind::ResearchLab,
+            BuildingKind::AntimatterPlant,
+            BuildingKind::VehicleFactory,
+            BuildingKind::Airfield,
+            BuildingKind::SupplyDepot,
+            BuildingKind::Battery,
+        ] {
+            assert_eq!(sight_radius(Building(building), 0), 7, "{building:?}");
+        }
+    }
+
+    #[test]
+    fn fog_sight_always_exceeds_the_weapon_range_even_on_high_ground() {
+        use rts_core::game::map::Ground;
+        use rts_core::game::sim::EntityKindView::{Building, Unit};
+        let mut kinds: Vec<_> = [
+            UnitKind::Infantry,
+            UnitKind::Tank,
+            UnitKind::AntiArmor,
+            UnitKind::Helicopter,
+            UnitKind::Capital,
+        ]
+        .into_iter()
+        .map(|u| (Unit(u), Some(u.stats().attack.range)))
+        .collect();
+        kinds.push((
+            Building(BuildingKind::GunTurret),
+            BuildingKind::GunTurret.stats().attack.map(|a| a.range),
+        ));
+        kinds.push((
+            Building(BuildingKind::AaTurret),
+            BuildingKind::AaTurret.stats().attack.map(|a| a.range),
+        ));
+        for ground in Ground::ALL {
+            let pct = ground.props().range_pct;
+            for (kind, range) in &kinds {
+                let reach = range.expect("armed").to_bits() * (100 + i64::from(pct)) / 100;
+                let sight = sight_radius(*kind, pct) << 16;
+                assert!(
+                    sight > reach,
+                    "{kind:?} on {ground:?}: sight {sight} must exceed reach {reach}"
+                );
+            }
+        }
+        // Highland's +25 percent pushes the Capital's 6 and the AA turret's 6 to 7.5.
+        assert_eq!(sight_radius(Unit(UnitKind::Capital), 25), 9);
+        assert_eq!(sight_radius(Building(BuildingKind::AaTurret), 25), 9);
+        assert_eq!(sight_radius(Unit(UnitKind::Infantry), 25), 7);
+    }
+
+    #[test]
+    fn fog_radius_fill_reveals_cells_within_sight_and_explored_persists() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        let mut fog = FogState::new(true);
+        let home = hex::center(10, 12);
+        fog.observe(W, H, &[(home, 7)]);
+        let mask = fog.mask_string();
+        assert_eq!(mask.len(), usize::from(W) * usize::from(H));
+        for r in 0..H {
+            for c in 0..W {
+                let inside = (hex::center(c, r) - home).length_squared() <= Fixed::from_int(49);
+                let want = if inside { b'2' } else { b'0' };
+                assert_eq!(mask.as_bytes()[cell(c, r)], want, "cell ({c},{r})");
+            }
+        }
+        // The edge is inclusive: (10,19) sits exactly 7 below the viewer, (10,20) is 8.
+        assert_eq!(mask.as_bytes()[cell(10, 19)], b'2');
+        assert_eq!(mask.as_bytes()[cell(10, 20)], b'0');
+        let first_disc = mask.matches('2').count();
+        // The viewer leaves: what it saw stays explored, the new ground is visible.
+        let away = hex::center(34, 12);
+        fog.observe(W, H, &[(away, 7)]);
+        let mask = fog.mask_string();
+        assert_eq!(mask.as_bytes()[cell(10, 12)], b'1');
+        assert_eq!(mask.as_bytes()[cell(34, 12)], b'2');
+        assert_eq!(mask.as_bytes()[cell(22, 0)], b'0');
+        assert_eq!(
+            mask.matches('1').count(),
+            first_disc,
+            "discs do not overlap"
+        );
+        // No viewer left at all: nothing is visible, everything seen stays explored.
+        fog.observe(W, H, &[]);
+        let mask = fog.mask_string();
+        assert!(!mask.contains('2'));
+        assert_eq!(mask.matches('1').count(), first_disc * 2);
+    }
+
+    #[test]
+    fn fog_reset_forgets_explored_ground() {
+        use rts_core::game::hex;
+        let mut fog = FogState::new(true);
+        fog.observe(W, H, &[(hex::center(10, 12), 7)]);
+        fog.observe(W, H, &[]);
+        assert!(fog.mask_string().contains('1'));
+        fog.reset();
+        fog.observe(W, H, &[]);
+        assert!(fog.mask_string().bytes().all(|b| b == b'0'));
+    }
+
+    #[test]
+    fn fog_kill_switch_is_zero_off_or_false() {
+        use std::ffi::OsStr;
+        assert!(fog_enabled_from(None));
+        for on in ["1", "", "on", "yes", "2"] {
+            assert!(fog_enabled_from(Some(OsStr::new(on))), "{on:?}");
+        }
+        for off in ["0", "off", "OFF", "false", "False", " 0 "] {
+            assert!(!fog_enabled_from(Some(OsStr::new(off))), "{off:?}");
+        }
+    }
+
+    #[test]
+    fn kestrel_fog_key_has_one_digit_per_cell_and_sits_before_shots() {
+        use rts_core::game::kestrel::{CORE_NODE, HOME_CC};
+        let sim = Scenario::KestrelReach.build(2026);
+        let json = snapshot_json(&sim);
+        let fog = fog_of(&json);
+        assert_eq!(
+            fog.len(),
+            usize::from(sim.map().width()) * usize::from(sim.map().height())
+        );
+        assert!(
+            fog.bytes().all(|b| matches!(b, b'0' | b'2')),
+            "nothing is merely explored on the first frame"
+        );
+        assert_eq!(fog.as_bytes()[cell(HOME_CC.0, HOME_CC.1)], b'2');
+        assert_eq!(fog.as_bytes()[cell(CORE_NODE.0, CORE_NODE.1)], b'0');
+        assert!(json.ends_with(&format!(
+            "\"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
+        )));
+        assert!(json_ok(&json));
+    }
+
+    #[test]
+    fn kestrel_fog_omits_alien_entities_out_of_sight_and_keeps_every_human_one() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        use rts_core::game::kestrel::HOME_CC;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let json = snapshot_json(&sim);
+        let mut aliens = 0;
+        for v in sim.views() {
+            let shown = has_entity(&json, v.id.0);
+            if v.owner == PlayerId(0) {
+                assert!(
+                    shown && has_service(&json, v.id.0),
+                    "human {} missing",
+                    v.id.0
+                );
+            } else {
+                aliens += 1;
+                assert!(!shown, "alien {} leaked into entities", v.id.0);
+                assert!(
+                    !has_service(&json, v.id.0),
+                    "alien {} leaked into services",
+                    v.id.0
+                );
+            }
+        }
+        assert!(aliens > 15, "the alien base is out of sight at the start");
+        // Their structures do not show through the placement grids either: a hidden
+        // building's cell is reported as its bare ground.
+        let blocked = cells_under(&json, "blocked");
+        for v in sim.views().into_iter().filter(|v| v.owner != PlayerId(0)) {
+            if let rts_core::game::sim::EntityKindView::Building(_) = v.kind {
+                let (x, y) = hex::from_world(v.pos, W, H);
+                let ground_blocks = !sim
+                    .map()
+                    .ground_at(i32::from(x), i32::from(y))
+                    .props()
+                    .buildable;
+                assert_eq!(
+                    blocked.contains(&(x, y)),
+                    ground_blocks,
+                    "hidden building at ({x},{y})"
+                );
+            }
+        }
+        // An alien squad that walks into sight of the Command Center appears; one
+        // far out in the dark does not.
+        let cc = hex::center(HOME_CC.0, HOME_CC.1);
+        let near = sim.add_unit(
+            PlayerId(1),
+            UnitKind::Infantry,
+            cc + Vec2::new(Fixed::from_int(3), Fixed::ZERO),
+        );
+        let far = sim.add_unit(PlayerId(1), UnitKind::Infantry, hex::center(30, 22));
+        let json = snapshot_json(&sim);
+        let seen = entity_object(&json, near.0);
+        assert!(seen.contains("\"owner\":1") && !seen.contains("remembered"));
+        assert!(has_service(&json, near.0));
+        assert!(!has_entity(&json, far.0) && !has_service(&json, far.0));
+        assert!(json_ok(&json));
+    }
+
+    #[test]
+    fn a_seen_alien_building_is_remembered_until_its_cell_is_seen_empty() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let mut fog = FogState::new(true);
+        let mut window = ShotWindow::new();
+        let mut write = |sim: &rts_core::game::sim::Sim, fog: &mut FogState| {
+            snapshot_json_with(sim, "[]", &mut window, fog)
+        };
+        // The east relay depot (id 25), scouted from five tiles west.
+        let depot = EntityId(25);
+        let depot_pos = view_pos(&sim, depot);
+        let depot_cell = hex::from_world(depot_pos, W, H);
+        let lookout = depot_pos - Vec2::new(Fixed::from_int(5), Fixed::ZERO);
+        let scout = sim.add_unit(PlayerId(0), UnitKind::Infantry, lookout);
+        let seen = write(&sim, &mut fog);
+        let live = entity_object(&seen, depot.0);
+        assert!(live.contains("\"kind\":\"SupplyDepot\"") && !live.contains("remembered"));
+        assert!(has_service(&seen, depot.0));
+        assert!(
+            has_entity(&seen, 28),
+            "the depot's anti-armour guard is in sight too"
+        );
+
+        // The scout falls: the depot leaves sight but stays as remembered intel,
+        // exactly as last seen; the guard (a unit) is not remembered.
+        sim.debug_set_hp(scout, Fixed::ZERO);
+        sim.step(&[]);
+        assert!(!sim.entity_alive(scout));
+        let dark = write(&sim, &mut fog);
+        let ghost = entity_object(&dark, depot.0);
+        assert_eq!(
+            ghost,
+            format!("{},\"remembered\":true}}", &live[..live.len() - 1])
+        );
+        assert!(has_service(&dark, depot.0));
+        assert!(!has_entity(&dark, 28));
+        assert_eq!(
+            fog_of(&dark).as_bytes()[cell(depot_cell.0, depot_cell.1)],
+            b'1'
+        );
+        assert!(json_ok(&dark));
+
+        // Destroyed while unseen: the player cannot know, so the ghost stays (and
+        // its cell stays blocked) even after an alien squatter takes its free slot.
+        sim.debug_set_hp(depot, Fixed::ZERO);
+        sim.step(&[]);
+        assert!(!sim.entity_alive(depot));
+        let squatter = sim.add_unit(PlayerId(1), UnitKind::Infantry, hex::center(36, 22));
+        assert_eq!(
+            squatter, depot,
+            "freed slots are recycled last-in first-out"
+        );
+        let unseen_death = write(&sim, &mut fog);
+        assert_eq!(
+            unseen_death
+                .matches(&format!("{{\"id\":{},\"owner\"", depot.0))
+                .count(),
+            1
+        );
+        assert_eq!(entity_object(&unseen_death, depot.0), ghost);
+        assert!(cells_under(&unseen_death, "blocked").contains(&depot_cell));
+        assert!(json_ok(&unseen_death));
+
+        // A second scout sees the empty cell: the ghost is dropped for good, and the
+        // squatter far away in the dark stays hidden.
+        let scout2 = sim.add_unit(PlayerId(0), UnitKind::Infantry, lookout);
+        let seen_again = write(&sim, &mut fog);
+        assert!(!seen_again.contains("remembered"));
+        assert!(!has_entity(&seen_again, depot.0));
+        sim.debug_set_hp(scout2, Fixed::ZERO);
+        sim.step(&[]);
+        let later = write(&sim, &mut fog);
+        assert!(!has_entity(&later, depot.0));
+        // The guard turret seen beside it is still remembered: only the gone depot went.
+        assert!(entity_object(&later, 26).ends_with(",\"remembered\":true}"));
+
+        // A restart forgets every remembered structure.
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let scout = sim.add_unit(PlayerId(0), UnitKind::Infantry, lookout);
+        assert!(has_entity(&write(&sim, &mut fog), depot.0));
+        fog.reset();
+        sim.debug_set_hp(scout, Fixed::ZERO);
+        sim.step(&[]);
+        let fresh = write(&sim, &mut fog);
+        assert!(!fresh.contains("remembered") && !has_entity(&fresh, depot.0));
+        assert!(
+            !fog_of(&fresh).contains('1'),
+            "explored ground is forgotten too"
+        );
+    }
+
+    #[test]
+    fn a_ghost_yields_its_id_when_a_shown_entity_reuses_the_slot() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        use rts_core::game::kestrel::HOME_CC;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let mut fog = FogState::new(true);
+        let mut window = ShotWindow::new();
+        let depot = EntityId(25);
+        let lookout = view_pos(&sim, depot) - Vec2::new(Fixed::from_int(5), Fixed::ZERO);
+        let scout = sim.add_unit(PlayerId(0), UnitKind::Infantry, lookout);
+        snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        sim.debug_set_hp(scout, Fixed::ZERO);
+        sim.step(&[]);
+        sim.debug_set_hp(depot, Fixed::ZERO);
+        sim.step(&[]);
+        // A fresh rifle squad at home takes the depot's slot: ids must stay unique,
+        // so the ghost gives way (an accepted, documented edge: see the task report).
+        let recruit = sim.add_unit(
+            PlayerId(0),
+            UnitKind::Infantry,
+            hex::center(HOME_CC.0, HOME_CC.1) + Vec2::new(Fixed::ONE, Fixed::ZERO),
+        );
+        assert_eq!(recruit, depot);
+        let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        assert_eq!(
+            json.matches(&format!("{{\"id\":{},\"owner\"", depot.0))
+                .count(),
+            1
+        );
+        let recruit_object = entity_object(&json, depot.0);
+        assert!(recruit_object.contains("\"owner\":0") && !recruit_object.contains("remembered"));
+        assert_eq!(
+            json.matches(&format!("{{\"id\":{},\"power\"", depot.0))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn fog_drops_shots_with_both_ends_in_the_dark_and_keeps_a_visible_end() {
+        use rts_core::game::hex;
+        use rts_core::game::kestrel::HOME_CC;
+        let sim = Scenario::KestrelReach.build(2026);
+        let cc = hex::center(HOME_CC.0, HOME_CC.1);
+        let (dark_a, dark_b) = (hex::center(36, 20), hex::center(38, 21));
+        let mut window = ShotWindow::new();
+        window.record(sim.tick(), &[(dark_a, dark_b), (dark_a, cc), (cc, dark_b)]);
+        let shots = parse_shots(&snap(&sim, &mut window));
+        assert_eq!(shots.len(), 2, "{shots:?}");
+        let dark = [
+            dark_a.x.to_bits(),
+            dark_a.y.to_bits(),
+            dark_b.x.to_bits(),
+            dark_b.y.to_bits(),
+        ];
+        assert!(shots.iter().all(|s| s[1..] != dark));
+        // With the fog off every shot is drawn, exactly as before.
+        let all = snapshot_json_with(&sim, "[]", &mut window, &mut FogState::new(false));
+        assert_eq!(parse_shots(&all).len(), 3);
+    }
+
+    #[test]
+    fn a_shot_at_a_viewer_killed_this_tick_stays_drawn_for_its_window() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let mut fog = FogState::new(true);
+        let mut window = ShotWindow::new();
+        let lonely_pos = hex::center(30, 22);
+        let lonely = sim.add_unit(PlayerId(0), UnitKind::Infantry, lonely_pos);
+        let killer = lonely_pos + Vec2::new(Fixed::from_int(9), Fixed::ZERO);
+        snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        // The only viewer dies on the tick the shot lands; its cell was in sight a
+        // frame ago, so the shot is drawn, and stays drawn while it is in the window.
+        sim.debug_set_hp(lonely, Fixed::ZERO);
+        sim.step(&[]);
+        window.record(sim.tick(), &[(killer, lonely_pos)]);
+        let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        assert_eq!(parse_shots(&json).len(), 1);
+        assert_eq!(fog_of(&json).as_bytes()[cell(30, 22)], b'1');
+        sim.step(&[]);
+        window.record(sim.tick(), &[(killer, hex::center(32, 23))]);
+        let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        assert_eq!(
+            parse_shots(&json).len(),
+            1,
+            "latched shot kept, dark shot dropped"
+        );
+    }
+
+    #[test]
+    fn survival_snapshots_are_byte_identical_to_the_pre_fog_bridge() {
+        // Fingerprints taken from the bridge at 8fbb7c9, before the fog existed.
+        let survival0 = snapshot_json(&Scenario::Survival.build(2026));
+        assert_eq!(
+            (survival0.len(), fnv1a(&survival0)),
+            (17354, 0x61af_c445_3163_1aa1)
+        );
+        assert!(!survival0.contains("\"fog\"") && !survival0.contains("remembered"));
+        let mut sim = Scenario::Survival.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let mut window = ShotWindow::new();
+        let mut fog = FogState::new(true);
+        let mut last = String::new();
+        for _ in 0..400 {
+            step_into(&mut sim, &mut window);
+            last = snapshot_json_with(&sim, &supply_links_json(&sim), &mut window, &mut fog);
+        }
+        assert_eq!((last.len(), fnv1a(&last)), (17356, 0x9aa3_dbac_e8aa_ccd9));
+        assert!(json_ok(&survival0) && json_ok(&last));
+    }
+
+    #[test]
+    fn fog_off_restores_the_pre_fog_kestrel_snapshot_exactly() {
+        let all_visible = format!(
+            ",\"fog\":\"{}\"",
+            "2".repeat(usize::from(W) * usize::from(H))
+        );
+        let strip = |json: &str| {
+            assert!(
+                json.contains(&all_visible),
+                "fog off still sends an all-visible mask"
+            );
+            json.replacen(&all_visible, "", 1)
+        };
+        let sim = Scenario::KestrelReach.build(2026);
+        let off = snapshot_json_with(
+            &sim,
+            &supply_links_json(&sim),
+            &mut ShotWindow::new(),
+            &mut FogState::new(false),
+        );
+        let off = strip(&off);
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x9a65_3391_e66d_8920));
+        // Mid-firefight, with shots in the window, the same holds.
+        let (mut sim, _, _) = kestrel_firefight();
+        let mut window = ShotWindow::new();
+        while sim.recent_attacks().is_empty() {
+            step_into(&mut sim, &mut window);
+        }
+        for _ in 0..5 {
+            step_into(&mut sim, &mut window);
+        }
+        let fight = snapshot_json_with(
+            &sim,
+            &supply_links_json(&sim),
+            &mut window,
+            &mut FogState::new(false),
+        );
+        let fight = strip(&fight);
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0x8f6a_ba55_027b_186e));
+    }
+
+    #[test]
+    fn hidden_alien_buildings_do_not_show_through_the_construction_zone() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let humans: Vec<_> = sim
+            .views()
+            .into_iter()
+            .filter(|v| v.owner == PlayerId(0))
+            .collect();
+        let free = |sim: &rts_core::game::sim::Sim, c: u16, r: u16| {
+            sim.map()
+                .tile(i32::from(c), i32::from(r))
+                .is_some_and(|t| t.buildable)
+        };
+        let far_from_home = |p: rts_core::vec::Vec2| {
+            humans
+                .iter()
+                .all(|h| (h.pos - p).length_squared() > Fixed::from_int(400))
+        };
+        // A forward human depot D, and a buildable cell T in its 10-tile construction
+        // ring but outside the depot's 7-tile sight.
+        let mut pick = None;
+        'search: for dr in 0..H {
+            for dc in 0..W {
+                let d = hex::center(dc, dr);
+                if !free(&sim, dc, dr) || !far_from_home(d) {
+                    continue;
+                }
+                for tr in 0..H {
+                    for tc in 0..W {
+                        let gap = (hex::center(tc, tr) - d).length_squared();
+                        if free(&sim, tc, tr)
+                            && gap > Fixed::from_int(64)
+                            && gap <= Fixed::from_int(100)
+                            && far_from_home(hex::center(tc, tr))
+                        {
+                            pick = Some(((dc, dr), (tc, tr)));
+                            break 'search;
+                        }
+                    }
+                }
+            }
+        }
+        let ((dc, dr), (tc, tr)) = pick.expect("a depot and ring cell exist");
+        sim.add_building(PlayerId(0), BuildingKind::SupplyDepot, dc, dr);
+        let turret = sim.add_building(PlayerId(1), BuildingKind::GunTurret, tc, tr);
+        let fogged = snapshot_json(&sim);
+        assert!(!has_entity(&fogged, turret.0));
+        assert!(!cells_under(&fogged, "blocked").contains(&(tc, tr)));
+        assert!(cells_under(&fogged, "construction_zone").contains(&(tc, tr)));
+        // With the fog off the truth shows, as it always did.
+        let open = snapshot_json_with(
+            &sim,
+            "[]",
+            &mut ShotWindow::new(),
+            &mut FogState::new(false),
+        );
+        assert!(has_entity(&open, turret.0));
+        assert!(cells_under(&open, "blocked").contains(&(tc, tr)));
+        assert!(!cells_under(&open, "construction_zone").contains(&(tc, tr)));
+        // And the zone the fogged frame shows equals the zone with no turret at all.
+        let mut bare = Scenario::KestrelReach.build(2026);
+        bare.set_balance(rts_data::load_default());
+        bare.add_building(PlayerId(0), BuildingKind::SupplyDepot, dc, dr);
+        let bare_json = snapshot_json(&bare);
+        assert_eq!(
+            cells_under(&fogged, "construction_zone"),
+            cells_under(&bare_json, "construction_zone")
+        );
+        assert_eq!(
+            cells_under(&fogged, "blocked"),
+            cells_under(&bare_json, "blocked")
+        );
+    }
+
+    #[test]
+    fn deposits_in_the_dark_report_the_last_known_amount() {
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let mut fog = FogState::new(true);
+        let mut window = ShotWindow::new();
+        let first = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        let hidden = deposit_remaining(&first, 31, 17).expect("east ore listed");
+        let home = deposit_remaining(&first, 7, 11).expect("home ore listed");
+        // Somebody mines both: the home seam is in sight, the east one is not.
+        sim.map_mut().mine(31, 17, 7);
+        sim.map_mut().mine(7, 11, 5);
+        let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        assert_eq!(deposit_remaining(&json, 31, 17), Some(hidden));
+        assert_eq!(deposit_remaining(&json, 7, 11), Some(home - 5));
+        // Even mined out, the dark seam stays listed as last known.
+        sim.map_mut().mine(31, 17, u32::MAX);
+        let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
+        assert_eq!(deposit_remaining(&json, 31, 17), Some(hidden));
+        assert!(json_ok(&json));
+        // With the fog off the truth shows.
+        let open = snapshot_json_with(&sim, "[]", &mut window, &mut FogState::new(false));
+        assert_eq!(deposit_remaining(&open, 31, 17), None);
+    }
+
+    #[test]
+    fn fog_update_is_cheap_and_its_buffers_stop_growing() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::hex;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        // A large late-game army: 80 human viewers spread over the west half.
+        for i in 0..80_u16 {
+            let p = hex::center(2 + i % 20, 2 + (i / 20) * 5);
+            sim.add_unit(
+                PlayerId(0),
+                UnitKind::Infantry,
+                p + Vec2::new(Fixed::ZERO, Fixed::ZERO),
+            );
+        }
+        let views = sim.views();
+        let mut fog = FogState::new(true);
+        fog.update(&sim, &views);
+        let warm = fog.buffer_capacities();
+        let started = std::time::Instant::now();
+        for _ in 0..300 {
+            fog.update(&sim, &views);
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(fog.buffer_capacities(), warm, "no per-write buffer growth");
+        // Unoptimised test build on a loaded machine: 300 updates well under 3 s
+        // (a release bridge does one per 33 ms frame).
+        assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
     }
 }
