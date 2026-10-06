@@ -1,0 +1,212 @@
+{
+  "generator": "tools/audio/build_sfx.py",
+  "license": "CC0-1.0",
+  "base_path": "res://assets/audio/sfx/",
+  "format": {
+    "sample_rate": 44100,
+    "channels": 1,
+    "bits": 16,
+    "container": "wav"
+  },
+  "loudness": "loudest 50 ms RMS window, 10 ms hop, dBFS",
+  "sounds": [
+    {
+      "id": "rifle",
+      "file": "rifle.wav",
+      "duration_s": 0.4,
+      "loop": false,
+      "base_volume_db": -3.0,
+      "category": "weapon",
+      "character": "sharp noise crack over a short low thump, fast decay and a faint wall slap",
+      "peak_dbfs": -2.1,
+      "loudness_dbfs": -12.06
+    },
+    {
+      "id": "cannon",
+      "file": "cannon.wav",
+      "duration_s": 1.1,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "weapon",
+      "character": "deep falling boom with a mid crack and a darkening noise tail",
+      "peak_dbfs": -2.58,
+      "loudness_dbfs": -10.0
+    },
+    {
+      "id": "plasma_bolt",
+      "file": "plasma_bolt.wav",
+      "duration_s": 0.6,
+      "loop": false,
+      "base_volume_db": -2.0,
+      "category": "weapon",
+      "character": "resonant saw zap falling in pitch with a sputtering fizz tail",
+      "peak_dbfs": -2.2,
+      "loudness_dbfs": -12.0
+    },
+    {
+      "id": "explosion_small",
+      "file": "explosion_small.wav",
+      "duration_s": 1.2,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "impact",
+      "character": "noise burst under a falling low-pass, sub thump and debris crackle",
+      "peak_dbfs": -2.33,
+      "loudness_dbfs": -10.0
+    },
+    {
+      "id": "explosion_large",
+      "file": "explosion_large.wav",
+      "duration_s": 2.5,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "impact",
+      "character": "big low-passed blast with two after-bursts, sub boom, rumble and long crackle",
+      "peak_dbfs": -1.99,
+      "loudness_dbfs": -9.0
+    },
+    {
+      "id": "collapse",
+      "file": "collapse.wav",
+      "duration_s": 3.2,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "impact",
+      "character": "slow rumble and groan with scattered crunches and a settling thud",
+      "peak_dbfs": -5.31,
+      "loudness_dbfs": -12.0
+    },
+    {
+      "id": "rotor_loop",
+      "file": "rotor_loop.wav",
+      "duration_s": 2.0,
+      "loop": true,
+      "base_volume_db": -6.0,
+      "category": "loop",
+      "character": "20 Hz blade thump with a noise whoosh, turbine whine and hum; seamless",
+      "peak_dbfs": -4.2,
+      "loudness_dbfs": -18.0
+    },
+    {
+      "id": "tread_loop",
+      "file": "tread_loop.wav",
+      "duration_s": 2.0,
+      "loop": true,
+      "base_volume_db": -6.0,
+      "category": "loop",
+      "character": "engine and ground rumble with 8 metal track clanks per second; seamless",
+      "peak_dbfs": -8.76,
+      "loudness_dbfs": -18.0
+    },
+    {
+      "id": "foot_loop",
+      "file": "foot_loop.wav",
+      "duration_s": 2.0,
+      "loop": true,
+      "base_volume_db": -6.0,
+      "category": "loop",
+      "character": "two soldiers' soft steps (thud, grit, kit rattle) at 3 steps per second; seamless",
+      "peak_dbfs": -10.65,
+      "loudness_dbfs": -20.0
+    },
+    {
+      "id": "ui_click",
+      "file": "ui_click.wav",
+      "duration_s": 0.06,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "ui",
+      "character": "short clean 2.2 kHz tick with a tiny transient",
+      "peak_dbfs": -9.85,
+      "loudness_dbfs": -26.05
+    },
+    {
+      "id": "ui_hover",
+      "file": "ui_hover.wav",
+      "duration_s": 0.045,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "ui",
+      "character": "very short soft 3 kHz tick, quieter than the click",
+      "peak_dbfs": -13.22,
+      "loudness_dbfs": -29.01
+    },
+    {
+      "id": "select",
+      "file": "select.wav",
+      "duration_s": 0.16,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "voice",
+      "character": "two-note rising blip, B5 to E6, soft sine timbre",
+      "peak_dbfs": -12.41,
+      "loudness_dbfs": -20.0
+    },
+    {
+      "id": "ack_infantry",
+      "file": "ack_infantry.wav",
+      "duration_s": 0.18,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "voice",
+      "character": "bright, short square blip G6 to C7",
+      "peak_dbfs": -13.65,
+      "loudness_dbfs": -19.0
+    },
+    {
+      "id": "ack_vehicle",
+      "file": "ack_vehicle.wav",
+      "duration_s": 0.32,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "voice",
+      "character": "low falling filtered-saw blip G4 to D4 framed by relay clicks",
+      "peak_dbfs": -11.3,
+      "loudness_dbfs": -19.0
+    },
+    {
+      "id": "ack_air",
+      "file": "ack_air.wav",
+      "duration_s": 0.34,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "voice",
+      "character": "E5 to A5 blip under a 22 Hz rotor-like tremolo",
+      "peak_dbfs": -11.22,
+      "loudness_dbfs": -19.0
+    },
+    {
+      "id": "alert",
+      "file": "alert.wav",
+      "duration_s": 0.9,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "two-tone hi-lo warning, C6 and G5, three cycles",
+      "peak_dbfs": -13.12,
+      "loudness_dbfs": -15.0
+    },
+    {
+      "id": "build_complete",
+      "file": "build_complete.wav",
+      "duration_s": 0.8,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "rising C major bell arpeggio ending on a held C6",
+      "peak_dbfs": -9.01,
+      "loudness_dbfs": -17.0
+    },
+    {
+      "id": "wave_inbound",
+      "file": "wave_inbound.wav",
+      "duration_s": 1.6,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "four low 55 Hz pulses under a tone rising from 220 Hz",
+      "peak_dbfs": -7.61,
+      "loudness_dbfs": -15.0
+    }
+  ]
+}
