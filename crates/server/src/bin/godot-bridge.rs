@@ -182,17 +182,6 @@ impl FogState {
         }
     }
 
-    /// Scenario restart: explored ground, remembered structures and deposit
-    /// knowledge all belong to the old match.
-    fn reset(&mut self) {
-        self.visible.fill(false);
-        self.was_visible.fill(false);
-        self.explored.fill(false);
-        self.known_deposits.fill(None);
-        self.surveyed = false;
-        self.remembered.clear();
-    }
-
     /// Sizes the grid buffers (once per map size; a resize forgets everything).
     fn ensure_grid(&mut self, width: u16, height: u16) {
         let cells = usize::from(width) * usize::from(height);
@@ -540,16 +529,28 @@ type Shot = (u64, Vec2, Vec2, bool);
 /// part of the sim state and never read back by it.
 struct ShotWindow {
     shots: Vec<Shot>,
+    /// The tick last recorded. A finished sim stops advancing its tick but keeps
+    /// reporting its final attacks, so a repeat must not be added again.
+    last_tick: Option<u64>,
 }
 
 impl ShotWindow {
     const fn new() -> Self {
-        Self { shots: Vec::new() }
+        Self {
+            shots: Vec::new(),
+            last_tick: None,
+        }
     }
 
     /// Adds the shots the sim fired on `tick` (its tick counter right after the step),
-    /// then drops everything `SHOT_WINDOW_TICKS` or more ticks old.
-    fn record(&mut self, tick: u64, attacks: &[(Vec2, Vec2)]) {
+    /// then drops everything `SHOT_WINDOW_TICKS` or more ticks old. Does nothing once
+    /// the sim is `finished` or when `tick` was already recorded: the window freezes
+    /// on the victory or defeat screen instead of growing every frame.
+    fn record(&mut self, tick: u64, attacks: &[(Vec2, Vec2)], finished: bool) {
+        if finished || self.last_tick == Some(tick) {
+            return;
+        }
+        self.last_tick = Some(tick);
         self.shots.extend(
             attacks
                 .iter()
@@ -570,6 +571,7 @@ impl ShotWindow {
     /// Forgets every shot (scenario restart).
     fn clear(&mut self) {
         self.shots.clear();
+        self.last_tick = None;
     }
 
     #[cfg(test)]
@@ -1270,6 +1272,106 @@ fn clear_command_packets(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Every file the bridge and the Godot client exchange, all beside the snapshot.
+#[derive(Debug)]
+struct RuntimePaths {
+    /// The snapshot the bridge rewrites every frame.
+    snapshot: PathBuf,
+    /// The legacy command file (packets live in the `commands` directory beside it).
+    commands: PathBuf,
+    /// Godot's Deploy click: the mission starts stepping.
+    start: PathBuf,
+    /// Godot's restart request: rebuild the match (reading `match_config`).
+    restart: PathBuf,
+    /// Godot's pause menu holds the world still by keeping this file in place;
+    /// removing it resumes the run.
+    pause: PathBuf,
+    /// The next match's settings, written by the client before a restart.
+    match_config: PathBuf,
+}
+
+impl RuntimePaths {
+    fn from_output(output: &Path) -> Self {
+        Self {
+            snapshot: output.to_path_buf(),
+            commands: output.with_file_name("commands.txt"),
+            start: output.with_file_name("start.flag"),
+            restart: output.with_file_name("restart.flag"),
+            pause: output.with_file_name("pause.flag"),
+            match_config: output.with_file_name("match.json"),
+        }
+    }
+}
+
+/// The match the client asked for in `match.json`. A key that is missing or
+/// malformed keeps its default (`fog: None` means "as the environment says").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct MatchConfig {
+    scenario: Scenario,
+    fog: Option<bool>,
+}
+
+/// One raw value of a flat JSON object: a quoted string (no escapes) or a bare token.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RawValue<'a> {
+    Quoted(&'a str),
+    Bare(&'a str),
+}
+
+/// The raw value of `"key":` in a flat JSON object (first occurrence used as a key).
+fn raw_json_value<'a>(text: &'a str, key: &str) -> Option<RawValue<'a>> {
+    let needle = format!("\"{key}\"");
+    let mut from = 0;
+    while let Some(found) = text[from..].find(&needle) {
+        let after = from + found + needle.len();
+        from = after;
+        let Some(rest) = text[after..].trim_start().strip_prefix(':') else {
+            continue; // the same text as a value, not a key
+        };
+        let rest = rest.trim_start();
+        if let Some(quoted) = rest.strip_prefix('"') {
+            return quoted.find('"').map(|end| RawValue::Quoted(&quoted[..end]));
+        }
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
+        return Some(RawValue::Bare(rest[..end].trim()));
+    }
+    None
+}
+
+/// Parses `match.json` (a flat JSON object written by the client). Unknown keys are
+/// ignored; a malformed value keeps that key's default; text that is not an object
+/// yields `fallback` with the environment's fog.
+fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
+    let mut config = MatchConfig {
+        scenario: fallback,
+        fog: None,
+    };
+    let text = text.trim();
+    if !(text.starts_with('{') && text.ends_with('}')) {
+        return config;
+    }
+    if let Some(RawValue::Quoted(name)) = raw_json_value(text, "scenario") {
+        config.scenario = parse_scenario(name).unwrap_or(fallback);
+    }
+    config.fog = match raw_json_value(text, "fog") {
+        Some(RawValue::Bare("true")) => Some(true),
+        Some(RawValue::Bare("false")) => Some(false),
+        _ => None,
+    };
+    config
+}
+
+/// Reads and parses `match.json`; a missing or unreadable file yields `fallback`.
+fn read_match_config(path: &Path, fallback: Scenario) -> MatchConfig {
+    std::fs::read_to_string(path).map_or(
+        MatchConfig {
+            scenario: fallback,
+            fog: None,
+        },
+        |text| parse_match_config(&text, fallback),
+    )
+}
+
 /// Parsed command line: the two historical positional arguments plus the flags.
 #[derive(Debug)]
 struct Options {
@@ -1279,7 +1381,7 @@ struct Options {
     dump_snapshot: Option<PathBuf>,
 }
 
-/// Maps a `--scenario` value to a scenario (Survival is the default).
+/// Maps a `--scenario` value to a scenario (Kestrel Reach is the default).
 fn parse_scenario(value: &str) -> Result<Scenario, String> {
     match value {
         "survival" => Ok(Scenario::Survival),
@@ -1295,7 +1397,7 @@ fn parse_scenario(value: &str) -> Result<Scenario, String> {
 /// arguments (arg 1 = output path, arg 2 = frame limit) are read.
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut positional = Vec::new();
-    let mut scenario = Scenario::Survival;
+    let mut scenario = Scenario::KestrelReach;
     let mut dump_snapshot = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -1345,7 +1447,7 @@ fn main() -> std::io::Result<()> {
     let Options {
         output,
         frame_limit,
-        scenario,
+        mut scenario,
         dump_snapshot,
     } = options;
 
@@ -1366,62 +1468,65 @@ fn main() -> std::io::Result<()> {
     // Match the primary client: the deterministic simulation is authored at 30 Hz.
     // Godot renders between snapshots, but must not double the gameplay speed.
     let frame_time = Duration::from_micros(33_333);
-    let command_path = output.with_file_name("commands.txt");
-    let start_path = output.with_file_name("start.flag");
-    let restart_path = output.with_file_name("restart.flag");
-    // Godot's pause menu holds the world still by keeping this file in place; removing it resumes the run.
-    let pause_path = output.with_file_name("pause.flag");
-    // Never let an order left by a previous closed match disable opening AI.
-    let _ = std::fs::remove_file(&command_path);
-    let _ = std::fs::remove_file(&start_path);
-    let _ = std::fs::remove_file(&restart_path);
-    let _ = std::fs::remove_file(&pause_path);
-    clear_command_packets(&command_path)?;
+    let paths = RuntimePaths::from_output(&output);
+    // Never let an order left by a previous closed match disable opening AI, and never
+    // let a previous session's match choice hijack this session's first restart.
+    let _ = std::fs::remove_file(&paths.commands);
+    let _ = std::fs::remove_file(&paths.start);
+    let _ = std::fs::remove_file(&paths.restart);
+    let _ = std::fs::remove_file(&paths.pause);
+    let _ = std::fs::remove_file(&paths.match_config);
+    clear_command_packets(&paths.commands)?;
     let mut mission_started = false;
     let mut supply_cache = SupplyLinkCache::new();
     let mut shots = ShotWindow::new();
     let mut fog = FogState::new(fog_enabled);
 
     for _ in 0..frame_limit {
-        if restart_path.exists() {
-            let _ = std::fs::remove_file(&restart_path);
+        if paths.restart.exists() {
+            let _ = std::fs::remove_file(&paths.restart);
             // A rapid second Deploy click must not auto-start the next mission.
-            let _ = std::fs::remove_file(&start_path);
-            let _ = std::fs::remove_file(&command_path);
-            let _ = std::fs::remove_file(&pause_path);
-            clear_command_packets(&command_path)?;
+            let _ = std::fs::remove_file(&paths.start);
+            let _ = std::fs::remove_file(&paths.commands);
+            let _ = std::fs::remove_file(&paths.pause);
+            clear_command_packets(&paths.commands)?;
+            // The client may switch the map (and the fog) for the next match; with no
+            // `match.json` the current scenario restarts as before.
+            let config = read_match_config(&paths.match_config, scenario);
+            scenario = config.scenario;
             sim = scenario.build(2026);
             sim.set_balance(rts_data::load_default());
             mission_started = false;
             supply_cache = SupplyLinkCache::new();
             shots.clear();
             // Explored ground and remembered enemy structures belong to the old match.
-            fog.reset();
+            // The environment kill switch always wins over the client's fog choice.
+            fog = FogState::new(fog_enabled && config.fog.unwrap_or(true));
         }
         if !mission_started {
-            if start_path.exists() {
-                let _ = std::fs::remove_file(&start_path);
+            if paths.start.exists() {
+                let _ = std::fs::remove_file(&paths.start);
                 mission_started = true;
             } else {
                 write_atomic(
-                    &output,
+                    &paths.snapshot,
                     &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
                 )?;
                 std::thread::sleep(frame_time);
                 continue;
             }
         }
-        if pause_path.exists() {
+        if paths.pause.exists() {
             // Paused: no step, no commands taken (they wait for the resume), the same snapshot stays current.
             write_atomic(
-                &output,
+                &paths.snapshot,
                 &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
             )?;
             std::thread::sleep(frame_time);
             continue;
         }
         let started = Instant::now();
-        let player_commands = take_commands(&command_path);
+        let player_commands = take_commands(&paths.commands);
         // The human-side AI exists only to resolve Survival's initial survey at
         // the deterministic premium site. From the first active tick onward the
         // player owns every economy, production, science, and tactical decision.
@@ -1440,9 +1545,9 @@ fn main() -> std::io::Result<()> {
         commands.extend(scenario.scripted_commands(&sim));
         commands.extend(player_commands);
         sim.step(&commands);
-        shots.record(sim.tick(), sim.recent_attacks());
+        shots.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
         write_atomic(
-            &output,
+            &paths.snapshot,
             &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
         )?;
         std::thread::sleep(frame_time.saturating_sub(started.elapsed()));
@@ -1453,9 +1558,10 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        fog_enabled_from, parse_args, sight_radius, snapshot_json, snapshot_json_with,
-        supply_links_json, take_commands, BuildingKind, Command, EntityId, FogState, PlayerId,
-        ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
+        fog_enabled_from, parse_args, parse_match_config, read_match_config, sight_radius,
+        snapshot_json, snapshot_json_with, supply_links_json, take_commands, BuildingKind, Command,
+        EntityId, FogState, PlayerId, RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind,
+        SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
 
@@ -1691,7 +1797,7 @@ mod tests {
     /// Steps once and feeds the window the way the main loop does.
     fn step_into(sim: &mut rts_core::game::sim::Sim, window: &mut ShotWindow) {
         sim.step(&[]);
-        window.record(sim.tick(), sim.recent_attacks());
+        window.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
     }
 
     /// Parses the `"shots":[[...],...]` value into rows of five integers.
@@ -1750,25 +1856,94 @@ mod tests {
     }
 
     #[test]
+    fn shot_window_does_not_grow_after_a_win() {
+        use rts_core::fixed::Fixed;
+        use rts_core::vec::Vec2;
+        let mut window = ShotWindow::new();
+        let a = (
+            Vec2::new(Fixed::ONE, Fixed::ONE),
+            Vec2::new(Fixed::from_int(2), Fixed::ONE),
+        );
+        window.record(100, &[a], false);
+        let len = window.len();
+        for _ in 0..100 {
+            window.record(100, &[a], false); // tick did not advance
+            window.record(100, &[a], true); // finished sim
+        }
+        assert_eq!(window.len(), len);
+    }
+
+    #[test]
+    fn won_sim_stepped_for_100_frames_keeps_the_window_length() {
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let mut window = ShotWindow::new();
+        // Drive to a winner the cheap way: the undefended run.
+        while sim.winner().is_none() {
+            let cmds = sim.ai_commands(PlayerId(1));
+            sim.step(&cmds);
+            window.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
+        }
+        let len = window.len();
+        let bytes = snap(&sim, &mut window).len();
+        for _ in 0..100 {
+            sim.step(&[]);
+            window.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
+        }
+        assert_eq!(window.len(), len);
+        // The bridge rewrites this snapshot every frame on the victory screen.
+        assert_eq!(snap(&sim, &mut window).len(), bytes);
+    }
+
+    #[test]
+    fn match_config_parses_and_falls_back() {
+        let c = parse_match_config(
+            r#"{"scenario":"survival","seed":7,"difficulty":"hard","fog":false}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!(c.scenario, Scenario::Survival);
+        assert_eq!(c.fog, Some(false));
+        let c = parse_match_config("not json", Scenario::KestrelReach);
+        assert_eq!((c.scenario, c.fog), (Scenario::KestrelReach, None));
+        let c = parse_match_config(
+            r#"{"scenario":"mars","fog":"maybe"}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!((c.scenario, c.fog), (Scenario::KestrelReach, None));
+        let c = read_match_config(
+            std::path::Path::new("/nonexistent/match.json"),
+            Scenario::Survival,
+        );
+        assert_eq!(c.scenario, Scenario::Survival);
+    }
+
+    #[test]
+    fn runtime_paths_sit_beside_the_snapshot() {
+        let p = RuntimePaths::from_output(std::path::Path::new("/r/snapshot.json"));
+        assert_eq!(p.restart, std::path::PathBuf::from("/r/restart.flag"));
+        assert_eq!(p.match_config, std::path::PathBuf::from("/r/match.json"));
+        assert_eq!(p.commands, std::path::PathBuf::from("/r/commands.txt"));
+    }
+
+    #[test]
     fn shots_older_than_the_window_are_pruned_oldest_first() {
         use rts_core::fixed::Fixed;
         use rts_core::vec::Vec2;
         let p = |n: i32| Vec2::new(Fixed::from_int(n), Fixed::from_int(n));
         let mut window = ShotWindow::new();
-        window.record(10, &[(p(1), p(2))]);
-        window.record(11, &[(p(3), p(4)), (p(5), p(6))]);
+        window.record(10, &[(p(1), p(2))], false);
+        window.record(11, &[(p(3), p(4)), (p(5), p(6))], false);
         assert_eq!(window.len(), 3);
         // Still inside: age 17 at tick 27.
-        window.record(10 + SHOT_WINDOW_TICKS - 1, &[]);
+        window.record(10 + SHOT_WINDOW_TICKS - 1, &[], false);
         assert_eq!(window.len(), 3);
         // Tick 10 falls out at age 18, tick 11 one tick later.
-        window.record(10 + SHOT_WINDOW_TICKS, &[]);
+        window.record(10 + SHOT_WINDOW_TICKS, &[], false);
         assert_eq!(window.len(), 2);
-        window.record(11 + SHOT_WINDOW_TICKS, &[]);
+        window.record(11 + SHOT_WINDOW_TICKS, &[], false);
         assert_eq!(window.len(), 0);
         // Order is oldest first.
-        window.record(100, &[(p(1), p(2))]);
-        window.record(101, &[(p(3), p(4))]);
+        window.record(100, &[(p(1), p(2))], false);
+        window.record(101, &[(p(3), p(4))], false);
         let json = window.json_array(false);
         assert!(
             json.starts_with("[[100,") && json.contains("],[101,"),
@@ -1786,9 +1961,9 @@ mod tests {
         let fired = sim.tick();
         assert!(!parse_shots(&snap(&sim, &mut window)).is_empty());
         // The firefight ends (no further attacks fed in); the window runs out.
-        window.record(fired + SHOT_WINDOW_TICKS - 1, &[]);
+        window.record(fired + SHOT_WINDOW_TICKS - 1, &[], false);
         assert!(!window.is_empty());
-        window.record(fired + SHOT_WINDOW_TICKS, &[]);
+        window.record(fired + SHOT_WINDOW_TICKS, &[], false);
         assert!(parse_shots(&snap(&sim, &mut window)).is_empty());
     }
 
@@ -1799,7 +1974,7 @@ mod tests {
         let sim = Scenario::Survival.build(2026);
         let mut window = ShotWindow::new();
         let p = Vec2::new(Fixed::from_int(1), Fixed::from_int(1));
-        window.record(sim.tick(), &[(p, p)]);
+        window.record(sim.tick(), &[(p, p)], false);
         let with_window = snap(&sim, &mut window);
         assert!(!with_window.contains("\"shots\""));
         assert_eq!(with_window, snap(&sim, &mut ShotWindow::new()));
@@ -1927,7 +2102,7 @@ mod tests {
     #[test]
     fn scenario_flag_parses_anywhere_without_breaking_positional_args() {
         let o = parse_args(args(&[])).unwrap();
-        assert_eq!(o.scenario, Scenario::Survival);
+        assert_eq!(o.scenario, Scenario::KestrelReach);
         assert_eq!(o.frame_limit, u64::MAX);
         assert_eq!(
             o.output,
@@ -2414,7 +2589,8 @@ mod tests {
         fog.observe(W, H, &[(hex::center(10, 12), 7)]);
         fog.observe(W, H, &[]);
         assert!(fog.mask_string().contains('1'));
-        fog.reset();
+        // A restart replaces the fog, exactly as `main` does.
+        fog = FogState::new(true);
         fog.observe(W, H, &[]);
         assert!(fog.mask_string().bytes().all(|b| b == b'0'));
     }
@@ -2602,7 +2778,8 @@ mod tests {
         sim.set_balance(rts_data::load_default());
         let scout = sim.add_unit(PlayerId(0), UnitKind::Infantry, lookout);
         assert!(has_entity(&write(&sim, &mut fog), depot.0));
-        fog.reset();
+        // A restart replaces the fog, exactly as `main` does.
+        fog = FogState::new(true);
         sim.debug_set_hp(scout, Fixed::ZERO);
         sim.step(&[]);
         let fresh = write(&sim, &mut fog);
@@ -2662,7 +2839,11 @@ mod tests {
         let cc = hex::center(HOME_CC.0, HOME_CC.1);
         let (dark_a, dark_b) = (hex::center(36, 20), hex::center(38, 21));
         let mut window = ShotWindow::new();
-        window.record(sim.tick(), &[(dark_a, dark_b), (dark_a, cc), (cc, dark_b)]);
+        window.record(
+            sim.tick(),
+            &[(dark_a, dark_b), (dark_a, cc), (cc, dark_b)],
+            false,
+        );
         let shots = parse_shots(&snap(&sim, &mut window));
         assert_eq!(shots.len(), 2, "{shots:?}");
         let dark = [
@@ -2694,12 +2875,12 @@ mod tests {
         // frame ago, so the shot is drawn, and stays drawn while it is in the window.
         sim.debug_set_hp(lonely, Fixed::ZERO);
         sim.step(&[]);
-        window.record(sim.tick(), &[(killer, lonely_pos)]);
+        window.record(sim.tick(), &[(killer, lonely_pos)], false);
         let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
         assert_eq!(parse_shots(&json).len(), 1);
         assert_eq!(fog_of(&json).as_bytes()[cell(30, 22)], b'1');
         sim.step(&[]);
-        window.record(sim.tick(), &[(killer, hex::center(32, 23))]);
+        window.record(sim.tick(), &[(killer, hex::center(32, 23))], false);
         let json = snapshot_json_with(&sim, "[]", &mut window, &mut fog);
         assert_eq!(
             parse_shots(&json).len(),

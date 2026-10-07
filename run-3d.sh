@@ -20,7 +20,8 @@ fi
 
 cargo build --release -p rts-server --bin godot-bridge --manifest-path "$GAME_ROOT/Cargo.toml"
 
-# SCENARIO=kestrel ./run-3d.sh starts the bridge on Kestrel Reach; unset (or "survival") is the default Survival map.
+# Kestrel Reach is the default map; SCENARIO=survival ./run-3d.sh starts the bridge on Survival instead
+# (SCENARIO=kestrel is accepted too). The client can switch maps between matches through runtime/match.json.
 BRIDGE_ARGS=()
 if [[ -n "${SCENARIO:-}" ]]; then
   BRIDGE_ARGS+=(--scenario "$SCENARIO")

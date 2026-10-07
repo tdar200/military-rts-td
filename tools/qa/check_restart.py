@@ -2,7 +2,7 @@
 import json,pathlib,subprocess,tempfile,time
 root=pathlib.Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix='earthfront-restart-') as name:
- q=pathlib.Path(name);p=subprocess.Popen([str(root/'target/release/godot-bridge'),str(q/'snapshot.json')],stdout=subprocess.DEVNULL)
+ q=pathlib.Path(name);p=subprocess.Popen([str(root/'target/release/godot-bridge'),'--scenario','survival',str(q/'snapshot.json')],stdout=subprocess.DEVNULL)
  def state():
   try:return json.loads((q/'snapshot.json').read_text())
   except (OSError,ValueError):return None

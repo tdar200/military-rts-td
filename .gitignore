@@ -9,6 +9,8 @@
 /godot3d/.godot/
 /godot3d/runtime/*.json
 /godot3d/runtime/*.txt
+/godot3d/runtime/*.flag
+/godot3d/runtime/commands/
 /tools/godot/
 /tools/blender/
 
