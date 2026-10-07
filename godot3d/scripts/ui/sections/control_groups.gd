@@ -1,9 +1,11 @@
 extends RefCounted
-## Control groups list (board 5, top left): the four bound slots with a key cap, the group's main unit and its size. Driven by
+## Control groups list (board 5, top left): slots 1 to 4, then any assigned 5 to 9, each with a key cap, the group's main unit
+## and its size (every row is ROW_STEP tall, so the adapter stacks the cards under it from the slot count). Driven by
 ## vm["control_groups"] ({slots: [{n, count, label, on}], y}); builds nothing without it. An assigned slot is a Button that
 ## emits ("recall_group", n), the same as pressing the number key; an empty slot reads "empty" and is not clickable.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
+const KeyCap = preload("res://scripts/ui/components/key_cap.gd")
 
 const X := 12.0
 const Y := 76.0
@@ -11,6 +13,8 @@ const W := 200.0
 const PAD_X := 12.0
 const PAD_Y := 10.0
 const ROW_GAP := 5.0
+## One slot row: the key cap's height plus the gap below it.
+const ROW_STEP: float = KeyCap.HEIGHT + ROW_GAP
 
 
 static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:

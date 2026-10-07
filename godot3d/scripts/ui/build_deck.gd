@@ -24,7 +24,7 @@ const GRID_BOTTOM := 962.0
 
 
 static func register(hud: Control) -> void:
-	hud.register_section("build_top", func(layer: Control, vm: Variant) -> void: _top(layer, vm))
+	hud.register_section("build_top", func(layer: Control, vm: Variant) -> void: _top(layer, vm, Callable(hud, "_emit")))
 	hud.register_section("build_power", func(layer: Control, vm: Variant) -> void: _power(hud, layer, vm))
 	hud.register_section("build_alerts", func(layer: Control, vm: Variant) -> void: _alerts(hud, layer, vm))
 	hud.register_section("build_minimap", func(layer: Control, vm: Variant) -> void: _minimap(hud, layer, vm), "minimap_slot")
@@ -163,8 +163,10 @@ static func _chip(parent: Control, x: float, y: float, items: Array, border: Col
 
 # ---------------------------------------------------------------- top strip
 
-## vm: {era, chips:[{label, value, note, note_tone, warn}], wave:{label, timer, note}, pause:{label, key}, rates:[{t, on}]}
-static func _top(root: Control, vm: Dictionary) -> void:
+## vm: {era, chips:[{label, value, note, note_tone, warn}], wave:{label, timer, note}, pause:{label, key}, rates:[{t, on}],
+## hint}. `hint` is the live game's "F1 Controls" (key, then label): a chip left of the wave chip when it fits, whose click
+## emits open_controls.
+static func _top(root: Control, vm: Dictionary, emit := Callable()) -> void:
 	var strip := Strip.new()
 	K.place(strip, 0, 0, 1920, 56)
 	root.add_child(strip)
@@ -210,6 +212,19 @@ static func _top(root: Control, vm: Dictionary) -> void:
 			items.append({"t": str(wave["note"])})
 		var chip := _chip(root, 0, 13.5, items, T.WARN)
 		chip.position.x = right - chip.size.x
+		right = chip.position.x - 12.0
+	var hint := str(vm.get("hint", ""))
+	var space := hint.find(" ")
+	if space > 0:
+		var tip := _chip(root, 0, 13.5, [{"k": "kbd", "t": hint.substr(0, space)}, {"t": hint.substr(space + 1), "px": 12, "sp": 0.12, "col": T.DIM, "up": true}])
+		if right - tip.size.x < x:
+			root.remove_child(tip)  # no room between the chips and the right group: no hint
+			tip.free()
+		else:
+			tip.position.x = right - tip.size.x
+			var hit := K.hit(root, tip.position.x, tip.position.y, tip.size.x, tip.size.y, hint)
+			if emit.is_valid():
+				hit.pressed.connect(emit.bind("open_controls", null))
 
 
 # ---------------------------------------------------------------- forecast popover

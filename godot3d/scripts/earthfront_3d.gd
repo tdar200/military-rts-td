@@ -138,6 +138,8 @@ var selected_units: Array[Node3D] = []
 var control_groups: Dictionary = {}
 var drag_start := Vector2.ZERO
 var dragging := false
+## Middle-mouse drag pan: where the pointer was at the last drag event, Vector2.INF while no pan drag is held.
+var pan_drag_from := Vector2.INF
 var selection_double_click := false
 var selection_box: Control
 var ui: Node  # GameUI: every on-screen surface
@@ -1568,6 +1570,18 @@ func _camera_step(delta: float, motion: Vector3, aspect: float, rotate_axis: flo
 		camera_focus_target.z = clampf(camera_focus_target.z, MAP_ORIGIN_Z, MAP_ORIGIN_Z + float(MAP_H - 1) * HEX_Z)
 
 
+## The focus delta for a middle-mouse drag of `relative` screen pixels (pure: reads camera fields only, so tests call it on
+## a bare instance). The ground follows the pointer, so the focus moves against the drag: one ortho height (camera_zoom)
+## per `view_height` pixels across the screen, 1 / PITCH_SIN as much up and down it (the tilted ground is foreshortened).
+func _drag_pan(relative: Vector2, view_height := 1080.0) -> Vector3:
+	if view_height <= 0.0:
+		return Vector3.ZERO
+	var per_px := camera_zoom / view_height
+	var right := Vector3(cos(camera_yaw), 0, -sin(camera_yaw))
+	var toward_camera := Vector3(-right.z, 0, right.x)
+	return -(right * relative.x + toward_camera * (relative.y / WorldArt.PITCH_SIN)) * per_px
+
+
 func _art_bounds() -> Rect2:
 	return WorldArt.world_bounds(MAP_W, MAP_H, MAP_ORIGIN_X, MAP_ORIGIN_Z, HEX_X, HEX_Z, int(WorldArt.CAMERA.edge_cells))
 
@@ -1609,6 +1623,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera_focus_zoom = maxf(_zoom_limits().x, camera_focus_zoom - 1.25)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
 			camera_focus_zoom = minf(_zoom_limits().y, camera_focus_zoom + 1.25)
+		elif event.button_index == MOUSE_BUTTON_MIDDLE and event.pressed:
+			pan_drag_from = event.position  # _input follows the drag (also over the HUD) and ends it on release
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
 				if rally_armed:
@@ -2013,6 +2029,17 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouse:
 		pointer_position = (event as InputEventMouse).position
 		pointer_known = true
+	if pan_drag_from.is_finite():
+		# A middle drag that started on the world pans until the button comes up, even across the HUD, which would eat
+		# the motion before _unhandled_input; a pause or modal opening mid-drag ends it.
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE and not event.pressed:
+			pan_drag_from = Vector2.INF
+		elif event is InputEventMouseMotion:
+			if ui == null or ui.world_blocked():
+				pan_drag_from = Vector2.INF
+			else:
+				camera_focus_target += _drag_pan(event.position - pan_drag_from, get_viewport().get_visible_rect().size.y)
+				pan_drag_from = event.position
 
 
 ## World rectangle (x, z) shown by the minimap.

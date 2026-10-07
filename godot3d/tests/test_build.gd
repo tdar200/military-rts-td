@@ -199,3 +199,34 @@ func test_placement_checks_never_overlap_the_hints(t) -> void:
 			check_right = maxf(check_right, c.position.x + c.size.x)
 	t.ok(check_right <= hint_left, "checks end before the first key hint (%s vs %s)" % [check_right, hint_left])
 	hud.free()
+
+
+## Task 2 (kestrel-depth): the live build tab's strip carries the "F1 Controls" hint left of the wave chip; the gallery
+## fixture has none, so the builddeck board is unchanged.
+func test_build_strip_shows_the_controls_hint_and_it_opens_the_controls(t) -> void:
+	var plain := _hud(Fx.build_deck())
+	t.ok(not _texts(plain.get_node("build_top")).has("F1 Controls"), "the board fixture has no hint")
+	plain.free()
+	var vm := Fx.build_deck()
+	vm["build_top"]["hint"] = "F1 Controls"
+	var hud := _hud(vm)
+	var got: Array = []
+	hud.action.connect(func(name, arg): got.append([name, arg]))
+	var hit: Button = null
+	for b in _buttons(hud.get_node("build_top")):
+		if b.text == "F1 Controls":
+			hit = b
+	t.ok(hit != null, "the hint is drawn as a clickable chip")
+	if hit != null:
+		var chips_end := 0.0
+		var wave_left := 1920.0
+		for c in hud.get_node("build_top").get_children():
+			if c is Control and not (c is Button) and c.size.y == 28.0 and c.position.y > 10.0 and absf(c.position.x - hit.position.x) > 1.0:
+				if c.position.x < hit.position.x:
+					chips_end = maxf(chips_end, c.position.x + c.size.x)
+				elif c.position.x > hit.position.x:
+					wave_left = minf(wave_left, c.position.x)
+		t.ok(hit.position.x >= chips_end and hit.position.x + hit.size.x <= wave_left, "between the chips and the wave chip")
+		hit.pressed.emit()
+	t.eq(got, [["open_controls", null]], "a click opens the controls")
+	hud.free()

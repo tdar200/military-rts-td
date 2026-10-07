@@ -750,8 +750,10 @@ const WAVE_PANEL_WINDOW := 2700
 ## the Rust source so a rebalance fails a test here instead of drifting.
 const GUN_TURRET_RANGE := 5
 const AA_TURRET_RANGE := 6
-## Control group keys the game binds (earthfront_3d.gd KEY_1 to KEY_4).
+## Control group slots always listed once any group has units (keys 1 to 4, the board's four rows).
 const CONTROL_SLOTS := 4
+## Every group key the game binds (Keybinds.GROUPS, 1 to 9): slots past CONTROL_SLOTS are listed only while they hold units.
+const CONTROL_SLOTS_MAX := 9
 ## Route arrows are drawn between every this-many route hexes.
 const WAVE_ARROW_STEP := 6
 ## The fortify hint looks this many route hexes back from where the route enters the player's zone for a named crossing.
@@ -1081,13 +1083,14 @@ static func wave_panel(snap: Dictionary, ground_model) -> Dictionary:
 	return out
 
 
-## The control group list (board 5, left). `groups` is [{n, kinds: [kind names of the live units]}]; the four bound slots are
-## always listed once any has units, an unassigned slot reads "empty". `active` is the slot whose units are selected (or -1).
+## The control group list (board 5, left). `groups` is [{n, kinds: [kind names of the live units]}]; slots 1 to 4 are
+## always listed once any has units (an unassigned one reads "empty"), slots 5 to 9 only while they hold units, so the
+## panel keeps the board's shape until a high group is used. `active` is the slot whose units are selected (or -1).
 ## {} when no slot has units.
 static func control_groups(groups: Array, active: int) -> Dictionary:
 	var any := false
 	var slots: Array = []
-	for n in range(1, CONTROL_SLOTS + 1):
+	for n in range(1, CONTROL_SLOTS_MAX + 1):
 		var kinds: Array = []
 		for g in groups:
 			if int(g.get("n", 0)) == n:
@@ -1103,7 +1106,8 @@ static func control_groups(groups: Array, active: int) -> Dictionary:
 				if best == "" or int(counts[k]) > int(counts[best]) or (int(counts[k]) == int(counts[best]) and k < best):
 					best = k
 			label = _kind_label(best)
-		slots.append({"n": n, "count": kinds.size(), "label": label, "on": n == active and not kinds.is_empty()})
+		if n <= CONTROL_SLOTS or not kinds.is_empty():
+			slots.append({"n": n, "count": kinds.size(), "label": label, "on": n == active and not kinds.is_empty()})
 	return {"slots": slots} if any else {}
 
 

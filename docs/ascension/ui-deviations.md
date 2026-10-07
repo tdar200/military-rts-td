@@ -1055,3 +1055,18 @@ wheel scores 0 on both, so a recolour cannot pass. Over the 42 same-side pairs o
   lean; harvesters have no weapon, so they draw no shot and never lean. Survival is untouched (no shots go through this path there; its SHA pins are unchanged).
 - Cost: idle frames unchanged (all nine scoreboard shots have Task 8's draw calls and primitives, except enemy +1 / +256,
   an effect card caught in flight); the lean adds one basis product per recoiling card per frame.
+
+### Controls board (gp10) and top bar: arrow pan, middle drag, groups 1-9, eleven build keys, F1 hint (kestrel-depth Task 2, 2026-10-07)
+
+- Pan moved from W/A/S/D to the arrow keys (open decision 7), so A only arms attack-move; the Pan row shows four arrow key
+  caps. A new Camera row "Drag pan" (Middle drag) sits under Zoom, so the board's compared Zoom row keeps its place.
+- Control groups are 1-9 (the rows read "1-9"). The group list on the left keeps the board's four rows and adds a row only
+  for an assigned group 5 to 9; the cards below it move down by that row.
+- Build hotkeys N (vehicle factory), I (airfield), O (supply depot) and comma (battery) fill the four blank deck cards. Eleven
+  build rows do not fit one panel under Selection above the footer, so the screen gains a seventh group, Defences (gun
+  turret, AA battery, field wall), and the columns are repacked: Camera and Production; Selection and Build; Orders, System
+  and Defences. "Place structure" moved from Build to Orders. Camera, Selection and Orders still head the three columns, so
+  every compared gp10 rect is unchanged (the scores match the earlier run).
+- The live top bar shows "F1 Controls" (an F1 key cap and a label) right-aligned left of the wave chip, on the main layout
+  and on the build tab's strip, only when it fits beside the resource chips; a click opens the controls screen. The gallery
+  fixtures carry no hint, so the gameplay and build deck boards are unchanged. The core assault layout has no hint.

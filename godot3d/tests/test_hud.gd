@@ -1,6 +1,7 @@
 extends RefCounted
 const Hud = preload("res://scripts/ui/hud.gd")
 const Fixtures = preload("res://scripts/gallery/fixtures.gd")
+const KeyCapScript = preload("res://scripts/ui/components/key_cap.gd")
 
 
 func _hud(t, root: Node) -> Control:
@@ -128,3 +129,70 @@ func test_clickable_cards_carry_their_name(t) -> void:
 	t.ok(names.has("TANK x4"), "subgroup button is findable by label")
 	t.ok(names.has("Orders"), "tab is findable")
 	hud.free()
+
+
+## Task 2: "F1 Controls" in the top bar, left of the wave chip, never over a resource chip; it opens the controls screen.
+func test_controls_hint_sits_in_the_top_bar_and_opens_the_controls(t) -> void:
+	var vm := Fixtures.hud_main()
+	vm["chips"] = (vm["chips"] as Array).slice(0, 5)
+	vm["controls_hint"] = "F1 Controls"
+	var hud := Hud.new()
+	var got: Array = []
+	hud.action.connect(func(name, arg): got.append([name, arg]))
+	hud.apply(vm)
+	var hit: Button = null
+	var right_of_chips := 0.0
+	var wave_left := 1920.0
+	var layer := hud.get_node("top_chips")
+	for c in layer.get_children():
+		if c is Button and c.text == "F1 Controls":
+			hit = c
+	t.ok(hit != null, "the hint is a button named F1 Controls")
+	if hit == null:
+		hud.free()
+		return
+	t.ok(_has_label(layer, "Controls"), "the hint reads Controls")
+	t.ok(_has_key(layer, "F1"), "beside an F1 key cap")
+	for c in layer.get_children():
+		if c is Control and c != hit and c.get_class() != "Button" and c.position.y >= 18.0 and c.size.y >= 24.0 and c.size.x > 60.0:
+			if c.position.x < hit.position.x:
+				right_of_chips = maxf(right_of_chips, c.position.x + c.size.x)
+			else:
+				wave_left = minf(wave_left, c.position.x)
+	t.ok(hit.position.x >= right_of_chips, "right of every chip (%d >= %d)" % [hit.position.x, right_of_chips])
+	t.ok(hit.position.x + hit.size.x <= wave_left, "left of the wave chip (%d <= %d)" % [hit.position.x + hit.size.x, wave_left])
+	t.ok(hit.position.y >= 10.0 and hit.position.y + hit.size.y <= 66.0, "inside the top bar")
+	hit.pressed.emit()
+	t.eq(got, [["open_controls", null]], "clicking it opens the controls")
+	hud.free()
+
+
+func test_controls_hint_absent_without_the_key_and_when_it_would_overlap(t) -> void:
+	var hud := Hud.new()
+	hud.apply(Fixtures.hud_main())
+	t.ok(not _has_label(hud.get_node("top_chips"), "Controls"), "the board fixtures carry no hint, so the gallery boards are unchanged")
+	hud.free()
+	var vm := Fixtures.hud_main()
+	var many: Array = []
+	for i in 9:
+		many.append({"icon": "material", "tone": "cyan", "label": "Material", "value": "840"})
+	vm["chips"] = many
+	vm["controls_hint"] = "F1 Controls"
+	var crowded := Hud.new()
+	crowded.apply(vm)
+	t.ok(not _has_label(crowded.get_node("top_chips"), "Controls"), "no room between the chips and the wave chip: no hint")
+	crowded.free()
+
+
+func _has_label(root: Node, s: String) -> bool:
+	for n in root.find_children("*", "", true, false):
+		if n.get("text") != null and str(n.get("text")) == s and not (n is Button):
+			return true
+	return false
+
+
+func _has_key(root: Node, s: String) -> bool:
+	for n in root.find_children("*", "", true, false):
+		if n is KeyCapScript and str(n.get("label")) == s:
+			return true
+	return false

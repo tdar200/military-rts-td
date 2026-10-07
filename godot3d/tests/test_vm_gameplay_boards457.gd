@@ -294,6 +294,17 @@ func test_control_group_rows_count_units_and_name_the_main_kind(t) -> void:
 	t.eq(c["slots"][3]["count"], 0, "slot 4 was never assigned")
 
 
+## Groups 5 to 9 (Task 2): listed after the four bound slots only once assigned, so the panel keeps its board shape.
+func test_high_control_groups_join_the_list_when_assigned(t) -> void:
+	var c := VM.control_groups([{"n": 2, "kinds": ["Tank"]}, {"n": 9, "kinds": ["Helicopter", "Helicopter"]}], 9)
+	t.eq(c["slots"].map(func(s): return s["n"]), [1, 2, 3, 4, 9], "slots 1 to 4, then the assigned 9")
+	t.eq(c["slots"][4]["count"], 2, "two units in group 9")
+	t.ok(bool(c["slots"][4]["on"]), "group 9 is the selection")
+	var only_high := VM.control_groups([{"n": 6, "kinds": ["Infantry"]}], -1)
+	t.eq(only_high["slots"].map(func(s): return s["n"]), [1, 2, 3, 4, 6], "a lone high group still shows the bound four")
+	t.eq(VM.control_groups([{"n": 8, "kinds": []}], -1), {}, "an emptied high group is not a panel")
+
+
 func test_control_groups_absent_when_none_has_units(t) -> void:
 	t.eq(VM.control_groups([], -1), {}, "no groups")
 	t.eq(VM.control_groups([{"n": 1, "kinds": []}], -1), {}, "an emptied group is not a panel")

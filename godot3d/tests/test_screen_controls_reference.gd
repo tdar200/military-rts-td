@@ -43,9 +43,9 @@ func test_every_key_shown_is_in_the_binding_list(t) -> void:
 func test_the_real_bindings_are_on_screen(t) -> void:
 	var root: Control = _build(KB.vm())[0]
 	var chips := _chips(root)
-	for expected in ["W", "A", "S", "D", "Z", "E", "Esc", "F1", "F2", ".", "Del", "Q", "U", "Y", "F", "Home", "T", "K", "V", "H", "X", "P", "R", "B", "G", "J", "C", "L", "1-4", "Wheel"]:
+	for expected in ["\u2191", "\u2190", "\u2193", "\u2192", "A", "Z", "E", "Esc", "F1", "F2", ".", "Del", "Q", "U", "Y", "F", "Home", "T", "K", "V", "H", "X", "P", "R", "B", "G", "J", "C", "L", "N", "I", "O", ",", "1-9", "Wheel", "Middle drag"]:
 		t.ok(chips.has(expected), "shows the " + expected + " key")
-	for label in ["Pan", "Rotate", "Attack-move", "Select all army", "Select idle crew", "Pause menu", "This screen", "Repair", "Sell", "Tactical ability", "Train riflemen", "Reactor", "Cancel order or placement"]:
+	for label in ["Pan", "Drag pan", "Rotate", "Vehicle factory", "Airfield", "Supply depot", "Battery", "Defences", "Attack-move", "Select all army", "Select idle crew", "Pause menu", "This screen", "Repair", "Sell", "Tactical ability", "Train riflemen", "Reactor", "Cancel order or placement"]:
 		t.ok(U.has_text(root, label), "labels " + label)
 	t.ok(U.has_text(root, "Cursor at screen edge"), "edge pan is a note, not a key")
 	root.free()
@@ -61,7 +61,7 @@ func test_groups_are_the_boards_six(t) -> void:
 func test_keys_the_game_does_not_have_are_dropped(t) -> void:
 	var root: Control = _build(KB.vm())[0]
 	var chips := _chips(root)
-	for gone in ["Tab", "F5", "F10", "Alt", "Middle drag", "Space", "+", "9", "1-9", "x2"]:
+	for gone in ["Tab", "F5", "F10", "Alt", "Space", "+", "9", "1-4", "x2", "W", "S", "D", "Up", "Left", "Down", "Right", "Comma"]:
 		t.ok(not chips.has(gone), "no %s chip" % gone)
 	for gone in ["Rebind keys", "Orbit", "Quick save", "Pause simulation", "Game speed", "Map overlays", "Hold position", "Focus fire", "Resupply", "Spread out", "Queue waypoint", "Rotate ghost", "Queue five", "Cancel last queued", "Recall and centre", "Clear selection", "Jump to alert", "Jump on minimap", "Hold "]:
 		t.ok(not U.has_text(root, gone), "no row or text: " + gone)
@@ -112,3 +112,11 @@ func test_rows_stay_inside_their_panels_and_the_screen(t) -> void:
 			lowest = maxf(lowest, n.position.y + n.size.y)
 	t.ok(lowest < 990.0, "the tallest column ends above the footer (%d)" % int(lowest))
 	root.free()
+	# Kestrel's screen has two more camera rows (alert and minimap jumps): it must fit too.
+	var kestrel: Control = _build(KB.vm(false, true))[0]
+	var low_k := 0.0
+	for n in kestrel.find_children("*", "Control", true, false):
+		if n.get_class() != "ColorRect" and n.size.y > 40.0 and n.size.y < 800.0 and n.size.x > 500.0 and n.position.y < 950.0:
+			low_k = maxf(low_k, n.position.y + n.size.y)
+	t.ok(low_k > 0.0 and low_k < 990.0, "Kestrel: the tallest column ends above the footer (%d)" % int(low_k))
+	kestrel.free()

@@ -418,3 +418,28 @@ func test_a_freed_selection_does_not_break_the_units_and_orders_tabs(t) -> void:
 	var cards: Array = vm["deck"]["body"]["cards"]
 	t.ok(_find(cards, "name", "Attack-move").get("locked", false), "attack-move locked with nothing valid selected")
 	t.ok(_find(cards, "name", "Sell").get("locked", false), "sell locked with nothing valid selected")
+
+
+## Task 2: every deck build card shows its hotkey (N, I, O and comma filled the four blanks).
+func test_every_build_card_shows_its_hotkey(t) -> void:
+	var keys: Array = []
+	for card in Adapter.BUILD_CARDS:
+		t.ok(str(card[3]) != "", "%s has a hotkey letter" % card[1])
+		keys.append(str(card[3]))
+	for k in ["N", "I", "O", ","]:
+		t.ok(keys.has(k), "the deck shows " + k)
+
+
+## Task 2: the F1 hint rides on every live layout (units tab, build tab) and on both maps; its click opens the controls.
+func test_controls_hint_is_on_every_live_layout(t) -> void:
+	var p := _make()
+	t.eq(p[1].hud_vm(0.0).get("controls_hint", ""), "F1 Controls", "units tab (Survival stub)")
+	p[1].tab = "build"
+	var build: Dictionary = p[1].hud_vm(0.0)
+	t.eq(build.get("controls_hint", ""), "F1 Controls", "build tab")
+	t.eq(build["build_top"].get("hint", ""), "F1 Controls", "the build tab's own strip carries it (Survival opens on that tab)")
+	var k := _make()
+	k[0].use_kestrel()
+	t.eq(k[1].hud_vm(0.0).get("controls_hint", ""), "F1 Controls", "Kestrel")
+	p[1].on_action("open_controls", null)
+	t.eq(p[0].calls, [], "no game command: opening the controls is presentation only (a stub without ui is a no-op)")

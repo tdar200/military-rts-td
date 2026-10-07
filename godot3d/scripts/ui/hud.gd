@@ -183,7 +183,7 @@ func _slice(vm: Dictionary, key: String) -> Variant:
 		"top_chips":
 			if not vm.has("chips"):
 				return null
-			return {"brand": vm.get("brand", {}), "chips": vm["chips"], "wave": vm.get("wave", {}), "has_speed": vm.has("speed")}
+			return {"brand": vm.get("brand", {}), "chips": vm["chips"], "wave": vm.get("wave", {}), "has_speed": vm.has("speed"), "hint": vm.get("controls_hint", "")}
 		"minimap_marks":
 			var m: Variant = vm.get("map_marks", null)
 			if m == null:
@@ -258,14 +258,36 @@ func _build_top_chips(root: Control, vm: Dictionary) -> void:
 		], o)
 		x += c.size.x + 10.0
 	var wave: Dictionary = vm.get("wave", {})
+	# Right-aligned against the speed group (137.2 wide, 6px margin, 10px gap), or the bar edge when there is none.
+	var right_edge := 1893.0 - 137.2 - 6.0 - 10.0 if vm.get("has_speed", false) else 1893.0
 	if not wave.is_empty():
 		var chip := K.chip(root, 0, 20, "wave", T.WARN, [
 			{"t": str(wave.get("label", "")), "col": T.WARN, "sp": 0.1, "up": true},
 			{"t": str(wave.get("timer", "")), "col": T.WARN_HI, "f": "disp", "px": 22, "wt": 600, "sp": 0.06, "up": true},
 		], {"h": 36, "pad": 14, "gap": 12, "border": T.WARN, "fill": Color(T.WARN.r, T.WARN.g, T.WARN.b, 0.10)})
-		# Right-aligned against the speed group (137.2 wide, 6px margin, 10px gap), or the bar edge when there is none.
-		var right_edge := 1893.0 - 137.2 - 6.0 - 10.0 if vm.get("has_speed", false) else 1893.0
 		chip.position = Vector2(roundf(right_edge - chip.size.x), 20)
+		right_edge = chip.position.x - 10.0
+	_top_hint(root, str(vm.get("hint", "")), x, right_edge)
+
+
+## The live game's "F1 Controls" reminder (Keybinds.CONTROLS_HINT: key cap, then label): right-aligned in the space between
+## the last resource chip (`left`) and the wave chip or speed group (`right`), drawn only when it fits there. A click opens
+## the controls screen. The gallery boards carry no hint.
+func _top_hint(root: Control, hint: String, left: float, right: float) -> void:
+	var space := hint.find(" ")
+	if space <= 0:
+		return
+	var key_text := hint.substr(0, space)
+	var label_text := hint.substr(space + 1)
+	var w: float = KeyCap.measure(key_text) + 8.0 + _spaced("mono", 12, 400, 0.12, label_text.to_upper())
+	var x0 := roundf(right - 6.0 - w)
+	if x0 < left + 6.0:
+		return
+	var key := K.key(root, key_text, x0, 27, {"border": T.LINE, "col": T.TEXT})
+	var label := K.text(root, label_text, {"x": x0 + key.size.x + 8.0, "y": 0, "f": "mono", "px": 12, "sp": 0.12, "col": T.DIM, "up": true})
+	label.position.y = roundf(27.0 + (key.size.y - label.size.y) * 0.5)
+	var hit := K.hit(root, x0 - 4.0, 20, w + 8.0, 36, hint)
+	hit.pressed.connect(_emit.bind("open_controls", null))
 
 
 func _build_top_speed(root: Control, vm: Dictionary) -> void:

@@ -15,10 +15,10 @@ textures/default_filters/use_nearest_mipmap_filter=false
 environment/defaults/default_clear_color=Color(0.035, 0.055, 0.075, 1)
 
 [input]
-camera_left={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":65)]}
-camera_right={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":68)]}
-camera_up={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":87)]}
-camera_down={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":83)]}
+camera_left={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":4194319)]}
+camera_right={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":4194321)]}
+camera_up={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":4194320)]}
+camera_down={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":4194322)]}
 camera_rotate_left={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":90)]}
 camera_rotate_right={"deadzone":0.5,"events":[Object(InputEventKey,"physical_keycode":69)]}
 

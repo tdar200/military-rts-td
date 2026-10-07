@@ -240,8 +240,10 @@ func test_new_chords_are_bound_to_no_input_action(t) -> void:
 			continue
 		t.ok(not InputMap.event_is_action(_key(KEY_F2), action), "F2 is not " + str(action))
 		t.ok(not InputMap.event_is_action(_key(KEY_PERIOD), action), "period is not " + str(action))
-	t.ok(InputMap.event_is_action(_key(KEY_A), "camera_left"), "A still pans left")
-	t.ok(InputMap.event_is_action(_key(KEY_A, true), "camera_left", false), "Ctrl+A is still the camera_left key, as before")
+	# kestrel-depth Task 2: pan moved to the arrow keys, so A (with or without Ctrl) only arms attack-move.
+	t.ok(not InputMap.event_is_action(_key(KEY_A), "camera_left"), "A no longer pans left")
+	t.ok(not InputMap.event_is_action(_key(KEY_A, true), "camera_left", false), "nor Ctrl+A")
+	t.ok(InputMap.event_is_action(_key(KEY_LEFT), "camera_left"), "the left arrow pans left")
 	t.eq(InputMap.action_get_events("camera_left").size(), 1, "camera_left has no extra binding")
 
 

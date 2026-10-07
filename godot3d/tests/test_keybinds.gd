@@ -3,7 +3,7 @@ extends RefCounted
 ## level: the sources are read as text. Three guarantees: every key the screen shows is a constant the handler compares
 ## against, no handler compares against a literal KEY_, and every constant is on the screen.
 const KB := preload("res://scripts/ui/keybinds.gd")
-const NOT_KEYS := ["THEN", "PLUS", "CAPS", "CAMERA_ACTIONS", "KESTREL_ONLY"]
+const NOT_KEYS := ["THEN", "PLUS", "CAPS", "CAMERA_ACTIONS", "KESTREL_ONLY", "DEFENCES"]
 
 
 func _handler_sources() -> String:
@@ -157,12 +157,14 @@ func test_the_screen_is_grouped_as_the_board_groups_it(t) -> void:
 	var names: Array = []
 	for g in KB.groups():
 		names.append(g["name"])
-	t.eq(names, ["Camera", "System", "Selection", "Build", "Orders", "Production"], "the six board groups")
+	# The board's six groups plus Defences: eleven build keys no longer fit one Build panel under Selection (Task 2).
+	t.eq(names, ["Camera", "System", "Selection", "Build", "Defences", "Orders", "Production"], "the board's six groups and Defences")
 	var vm := KB.vm()
 	t.eq(vm["columns"].size(), 3, "three columns")
-	t.eq(vm["columns"][0].map(func(g): return g["name"]), ["Camera", "System"], "column 1")
+	# Camera, Selection and Orders head the columns as on the board; the rest are packed so every column ends above the footer.
+	t.eq(vm["columns"][0].map(func(g): return g["name"]), ["Camera", "Production"], "column 1")
 	t.eq(vm["columns"][1].map(func(g): return g["name"]), ["Selection", "Build"], "column 2")
-	t.eq(vm["columns"][2].map(func(g): return g["name"]), ["Orders", "Production"], "column 3")
+	t.eq(vm["columns"][2].map(func(g): return g["name"]), ["Orders", "System", "Defences"], "column 3")
 
 
 func test_the_map_key_collides_with_nothing(t) -> void:
@@ -185,3 +187,57 @@ func test_the_map_key_collides_with_nothing(t) -> void:
 				if r["label"] == "Strategic map" and r["keys"] == [{"t": "M"}]:
 					listed = true
 	t.ok(listed, "listed as Strategic map with the key cap M")
+
+
+## Task 2 (kestrel-depth): the camera pans on the arrow keys, so W/A/S/D are free (A only arms attack-move).
+func test_wasd_no_longer_pan(t) -> void:
+	for action in ["camera_up", "camera_left", "camera_down", "camera_right"]:
+		for ev in InputMap.action_get_events(action):
+			t.ok(not (ev is InputEventKey and ev.physical_keycode in [KEY_W, KEY_A, KEY_S, KEY_D]), action)
+	t.eq(KB.CAMERA_ACTIONS, {"camera_up": KEY_UP, "camera_left": KEY_LEFT, "camera_down": KEY_DOWN, "camera_right": KEY_RIGHT, "camera_rotate_left": KEY_Z, "camera_rotate_right": KEY_E}, "the six camera actions")
+	var a := InputEventKey.new()
+	a.keycode = KEY_A
+	a.physical_keycode = KEY_A
+	for action in KB.CAMERA_ACTIONS:
+		t.ok(not InputMap.event_is_action(a, action), "A is no camera action (it was camera_left): " + str(action))
+
+
+func test_nine_groups_and_new_build_keys_do_not_clash(t) -> void:
+	t.eq(KB.GROUPS.size(), 9)
+	t.eq(KB.GROUPS, [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9], "number keys 1 to 9")
+	var seen := {}
+	var all: Array = KB.GROUPS + KB.TRAIN.keys() + KB.BUILD.keys() + KB.CAMERA_ACTIONS.values() + [KB.ATTACK_MOVE, KB.ABILITY, KB.REPAIR, KB.SELL, KB.SCIENCE, KB.REGION_MAP, KB.FOCUS, KB.HOME, KB.JUMP_ALERT, KB.SELECT_IDLE, KB.SELECT_ARMY, KB.CONTROLS, KB.PAUSE]
+	for k in all:
+		t.ok(not seen.has(k), "clash on %s" % KB.cap(k))
+		seen[k] = true
+	for kind in ["VehicleFactory", "Airfield", "SupplyDepot", "Battery"]:
+		t.ok(KB.BUILD.values().has(kind), kind)
+	t.eq(KB.BUILD.get(KEY_N, ""), "VehicleFactory", "N vehicle factory")
+	t.eq(KB.BUILD.get(KEY_I, ""), "Airfield", "I airfield")
+	t.eq(KB.BUILD.get(KEY_O, ""), "SupplyDepot", "O supply depot")
+	t.eq(KB.BUILD.get(KEY_COMMA, ""), "Battery", "comma battery")
+	t.eq(KB.cap(KEY_COMMA), ",", "comma cap")
+
+
+func test_every_build_card_has_a_key(t) -> void:
+	for card in load("res://scripts/ui/live_adapter.gd").BUILD_CARDS:
+		t.ok(str(card[3]) != "", "%s has a hotkey" % card[1])
+
+
+func test_pan_row_shows_the_arrows_and_drag_pan_is_listed(t) -> void:
+	for kestrel in [false, true]:
+		var rows := {}
+		for g in KB.groups(kestrel):
+			if g["name"] == "Camera":
+				for r in g["rows"]:
+					rows[r["label"]] = r
+		t.eq(rows["Pan"]["keys"], [KEY_UP, KEY_LEFT, KEY_DOWN, KEY_RIGHT], "Pan shows the four arrows")
+		t.ok(rows.has("Drag pan"), "a Drag pan row")
+		t.eq(rows["Drag pan"]["keys"], ["Middle drag"], "Drag pan is the middle mouse button")
+		t.eq(rows["Drag pan"]["proof"], "_drag_pan(", "proved by the handler's _drag_pan call")
+	t.eq(KB.cap(KEY_UP) + KB.cap(KEY_LEFT) + KB.cap(KEY_DOWN) + KB.cap(KEY_RIGHT), "↑←↓→", "arrow caps")
+
+
+func test_controls_hint_names_the_controls_key(t) -> void:
+	t.eq(KB.CONTROLS_HINT, "F1 Controls")
+	t.ok(KB.CONTROLS_HINT.begins_with(KB.cap(KB.CONTROLS) + " "), "the hint starts with the key that opens the screen")

@@ -8,6 +8,8 @@ extends RefCounted
 const PAUSE := KEY_ESCAPE  # opens the pause menu when nothing is armed
 const CANCEL := KEY_ESCAPE  # cancels an armed order or placement first
 const CONTROLS := KEY_F1
+## The HUD's top-bar reminder (hud.gd draws the key cap from the first word, the label from the rest; a click opens Controls).
+const CONTROLS_HINT := "F1 Controls"
 const SELECT_ARMY := KEY_F2
 const SELECT_IDLE := KEY_PERIOD
 const ATTACK_MOVE := KEY_A
@@ -25,22 +27,32 @@ const HOME := KEY_HOME
 const JUMP_ALERT := KEY_SPACE
 ## Keys that do something only on Kestrel (world art on): the controls screen lists them there and nowhere else.
 const KESTREL_ONLY := [JUMP_ALERT]
-## Number keys 1..4 recall a control group; Ctrl with one assigns it.
-const GROUPS := [KEY_1, KEY_2, KEY_3, KEY_4]
+## Number keys 1..9 recall a control group; Ctrl with one assigns it.
+const GROUPS := [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9]
 ## Train hotkeys: key -> bridge unit kind.
 const TRAIN := {KEY_T: "Infantry", KEY_K: "Tank", KEY_V: "AntiArmor", KEY_H: "Helicopter", KEY_X: "Capital"}
 ## Build hotkeys: key -> bridge building kind.
-const BUILD := {KEY_P: "PowerPlant", KEY_R: "Refinery", KEY_B: "Barracks", KEY_G: "GunTurret", KEY_J: "AaTurret", KEY_C: "Wall", KEY_L: "ResearchLab"}
-## InputMap action -> the physical key project.godot binds it to (checked against the real InputMap by the test).
+const BUILD := {
+	KEY_P: "PowerPlant", KEY_R: "Refinery", KEY_B: "Barracks", KEY_N: "VehicleFactory", KEY_I: "Airfield", KEY_O: "SupplyDepot",
+	KEY_L: "ResearchLab", KEY_COMMA: "Battery", KEY_G: "GunTurret", KEY_J: "AaTurret", KEY_C: "Wall",
+}
+## Build kinds the Controls screen lists under Defences instead of Build: eleven build rows do not fit one panel under
+## Selection above the footer (the columns are packed in vm(); test_screen_controls_reference checks the fit on both maps).
+const DEFENCES := ["GunTurret", "AaTurret", "Wall"]
+## InputMap action -> the physical key project.godot binds it to (checked against the real InputMap by the test). Pan is on
+## the arrow keys, so W/A/S/D are free (A only arms attack-move).
 const CAMERA_ACTIONS := {
-	"camera_up": KEY_W, "camera_left": KEY_A, "camera_down": KEY_S, "camera_right": KEY_D,
+	"camera_up": KEY_UP, "camera_left": KEY_LEFT, "camera_down": KEY_DOWN, "camera_right": KEY_RIGHT,
 	"camera_rotate_left": KEY_Z, "camera_rotate_right": KEY_E,
 }
 
 ## Row separators on the screen; every other string in a row's keys is a key cap.
 const THEN := "then"
 const PLUS := "+"
-const CAPS := {KEY_ESCAPE: "Esc", KEY_DELETE: "Del", KEY_PERIOD: ".", KEY_HOME: "Home", KEY_SPACE: "Space"}
+const CAPS := {
+	KEY_ESCAPE: "Esc", KEY_DELETE: "Del", KEY_PERIOD: ".", KEY_COMMA: ",", KEY_HOME: "Home", KEY_SPACE: "Space",
+	KEY_UP: "\u2191", KEY_LEFT: "\u2190", KEY_DOWN: "\u2193", KEY_RIGHT: "\u2192",
+}
 
 
 ## The text drawn on a key cap.
@@ -62,24 +74,25 @@ static func _row(label: String, keys: Array, proof := "", note := "") -> Diction
 
 
 ## The rows, grouped as the Controls board groups them. `keys` mixes keycodes (int, shown with cap()), a run of
-## keycodes (GROUPS, shown "1-4"), THEN / PLUS separators and literal caps for the mouse and modifiers. `proof` is a
+## keycodes (GROUPS, shown "1-9"), THEN / PLUS separators and literal caps for the mouse and modifiers. `proof` is a
 ## source needle for rows with no keycode (the mouse): the test looks for it in the handler sources, so a mouse row
 ## cannot describe something the handler does not do. A row with a keycode is proven by its constant instead.
 ## `kestrel` (world art on) adds the minimap and alert jumps, which exist only there.
 static func groups(kestrel := false) -> Array:
 	var build_rows: Array = []
+	var defence_rows: Array = []
 	for code in BUILD:
-		build_rows.append(_row(_kind(BUILD[code]), [code]))
-	build_rows.append(_row("Place structure", ["Left click"], "_write_bridge_build(build_mode"))
+		(defence_rows if BUILD[code] in DEFENCES else build_rows).append(_row(_kind(BUILD[code]), [code]))
 	var train_rows: Array = []
 	for code in TRAIN:
 		train_rows.append(_row("Train " + _lower_first(_kind(TRAIN[code])), [code]))
 	train_rows.append(_row("Queue from the deck", ["Click card"], "_deck_card("))
 	var camera_rows: Array = [
-		_row("Pan", [KEY_W, KEY_A, KEY_S, KEY_D], "camera_up"),
+		_row("Pan", [KEY_UP, KEY_LEFT, KEY_DOWN, KEY_RIGHT], "camera_up"),
 		_row("Edge pan", [], "viewport_size.x - 10.0", "Cursor at screen edge"),
 		_row("Rotate", [KEY_Z, KEY_E], "camera_rotate_left"),
 		_row("Zoom", ["Wheel"], "MOUSE_BUTTON_WHEEL_UP"),
+		_row("Drag pan", ["Middle drag"], "_drag_pan("),
 		_row("Focus selection", [FOCUS]),
 		_row("Jump to base", [HOME]),
 	]
@@ -105,9 +118,11 @@ static func groups(kestrel := false) -> Array:
 			_row("Recall control group", [GROUPS]),
 		]},
 		{"name": "Build", "rows": build_rows},
+		{"name": "Defences", "rows": defence_rows},
 		{"name": "Orders", "rows": [
 			_row("Move or attack", ["Right click"], "MOUSE_BUTTON_RIGHT"),
 			_row("Attack-move", [ATTACK_MOVE, THEN, "Right click"]),
+			_row("Place structure", ["Left click"], "_write_bridge_build(build_mode"),
 			_row("Tactical ability", [ABILITY]),
 			_row("Repair", [REPAIR]),
 			_row("Sell", [SELL]),
@@ -154,9 +169,9 @@ static func vm(from_pause := true, kestrel := false) -> Dictionary:
 		"title": "Controls",
 		"subtitle": "Mouse and keyboard. Build, train, repair and sell are also on the deck.",
 		"columns": [
-			[by_name["Camera"], by_name["System"]],
+			[by_name["Camera"], by_name["Production"]],
 			[by_name["Selection"], by_name["Build"]],
-			[by_name["Orders"], by_name["Production"]],
+			[by_name["Orders"], by_name["System"], by_name["Defences"]],
 		],
 		"tip": "%s cancels an armed order or placement first. With nothing armed it opens the pause menu." % cap(CANCEL),
 		"back_key": cap(PAUSE),

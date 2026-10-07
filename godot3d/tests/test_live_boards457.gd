@@ -125,6 +125,20 @@ func test_territory_card_is_pushed_below_the_left_cards(t) -> void:
 	t.ok(float(vm["territory"]["y"]) >= float(vm["control_groups"]["y"]) + 140.0, "it moves under the control group list")
 
 
+## Task 2: a high group (5 to 9) adds a row to the list, and the card under it moves down by that row.
+func test_a_high_control_group_pushes_the_territory_card_one_row_lower(t) -> void:
+	var p := _make()
+	p[0].control_groups = {1: [p[0].bridge_nodes[60]]}
+	var four: Dictionary = p[1].hud_vm(0.0)
+	p[0].control_groups = {1: [p[0].bridge_nodes[60]], 9: [p[0].bridge_nodes[61]]}
+	var five: Dictionary = p[1].hud_vm(0.0)
+	t.eq(five["control_groups"]["slots"].size(), 5, "slots 1 to 4 and 9")
+	t.eq(five["control_groups"]["slots"][4]["n"], 9, "group 9 listed last")
+	t.near(float(five["territory"]["y"]) - float(four["territory"]["y"]), Hud.ControlGroups.ROW_STEP, 0.01, "one row lower")
+	for n in p[0].bridge_nodes.values():
+		n.free()
+
+
 func test_wave_panel_replaces_the_top_wave_card_inside_its_window(t) -> void:
 	var p := _make()
 	p[0].bridge_next_wave_ticks = 1350

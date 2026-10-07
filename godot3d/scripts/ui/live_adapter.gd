@@ -54,14 +54,14 @@ const BUILD_CARDS := [
 	["power", "PowerPlant", "Reactor", "P", 100, -80, "Adds generation", "power_plant_v2.png"],
 	["refinery", "Refinery", "Refinery", "R", 150, 20, "Harvests exposed ore", "refinery_v2.png"],
 	["barracks", "Barracks", "Barracks", "B", 200, 10, "Trains infantry", "barracks_v2.png"],
-	["factory", "VehicleFactory", "Vehicle factory", "", 220, 30, "Builds tanks", "barracks_v2.png"],
-	["airfield", "Airfield", "Airfield", "", 260, 35, "Builds gunships", "helicopter_v2.png"],
+	["factory", "VehicleFactory", "Vehicle factory", "N", 220, 30, "Builds tanks", "barracks_v2.png"],
+	["airfield", "Airfield", "Airfield", "I", 260, 35, "Builds gunships", "helicopter_v2.png"],
 	["turret", "GunTurret", "Gun turret", "G", 120, 8, "Anti-ground defence", "gun_turret_v2.png"],
 	["aa", "AaTurret", "AA battery", "J", 140, 8, "Anti-air defence", "aa_turret_v2.png"],
 	["wall", "Wall", "Field wall", "C", 20, 0, "Terrain control", "wall_v2.png"],
-	["depot", "SupplyDepot", "Supply depot", "", 100, 5, "Makes ammunition", "foundation_v1.png"],
+	["depot", "SupplyDepot", "Supply depot", "O", 100, 5, "Makes ammunition", "foundation_v1.png"],
 	["lab", "ResearchLab", "Research lab", "L", 250, 30, "Powered research", "capital_v1.png"],
-	["battery", "Battery", "Battery", "", 120, 0, "Stores surplus power", "power_plant_v2.png"],
+	["battery", "Battery", "Battery", ",", 120, 0, "Stores surplus power", "power_plant_v2.png"],
 ]
 
 ## Where the board 2 and 3 cards sit, and the heights the adapter keeps them clear with (the sections measure the real ones).
@@ -73,7 +73,8 @@ const MAX_ALERT_ROWS := 5
 ## Below the core assault objective panel (20,72) at its tallest.
 const ENEMY_CARD_Y := 280
 ## Boards 4, 5 and 7: the left cards start at y 76, under the objectives panel when it is up. The heights are the cards' own
-## (CONTROL_GROUPS_H is fixed: four rows), the others are estimated from their row counts in _board_slices.
+## (CONTROL_GROUPS_H is the four-row list; each assigned group 5 to 9 adds ControlGroups.ROW_STEP), the others are estimated
+## from their row counts in _board_slices.
 const LEFT_STACK_TOP := 76.0
 const LEFT_STACK_GAP := 8.0
 const CONTROL_GROUPS_H := 148.0
@@ -85,6 +86,7 @@ const OverlayFeed = preload("res://scripts/world/overlay_feed.gd")
 const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
 const KestrelObjectives = preload("res://scripts/world/kestrel_objectives.gd")
 const Keybinds = preload("res://scripts/ui/keybinds.gd")
+const ControlGroups = preload("res://scripts/ui/sections/control_groups.gd")
 
 var tab := "build"
 ## True while the first-minutes briefing card is up (game_ui.gd sets it): that card carries the objectives, so the objectives
@@ -182,6 +184,17 @@ static func _sentence(s: String) -> String:
 # ------------------------------------------------------------------ view model out
 
 func hud_vm(now: float) -> Dictionary:
+	var vm := _layout_vm(now)
+	# The "F1 Controls" reminder on both maps: the main layout's top bar reads controls_hint, the build tab's strip its own
+	# hint key. The core assault layout (its own chrome, full top bar) carries none; F1 still opens the screen there.
+	vm["controls_hint"] = Keybinds.CONTROLS_HINT
+	if vm.get("build_top") is Dictionary:
+		vm["build_top"] = (vm["build_top"] as Dictionary).duplicate()
+		vm["build_top"]["hint"] = Keybinds.CONTROLS_HINT
+	return vm
+
+
+func _layout_vm(now: float) -> Dictionary:
 	_alerts = _alerts.filter(func(a): return a["until"] > now)
 	var deficit: int = g.bridge_power_demand - g.bridge_power_generation
 	if deficit > 0 and _deficit_since < 0.0:
@@ -324,7 +337,7 @@ func _board_slices(vm: Dictionary, snap: Dictionary, ground) -> void:
 	if not groups.is_empty():
 		groups["y"] = y
 		vm["control_groups"] = groups
-		y += CONTROL_GROUPS_H + LEFT_STACK_GAP
+		y += CONTROL_GROUPS_H + ControlGroups.ROW_STEP * maxf(0.0, float((groups["slots"] as Array).size() - VmGameplay.CONTROL_SLOTS)) + LEFT_STACK_GAP
 	if (y > top or briefing_up) and vm.has("territory") and vm["territory"] is Dictionary:
 		vm["territory"]["y"] = maxf(float(vm["territory"].get("y", 274.0)), y)
 	if g.attack_move_armed:
@@ -383,7 +396,7 @@ func board_marks(project: Callable) -> Array:
 	return marks
 
 
-## The four control group slots as the list needs them: the kinds of each group's live units, and which group is the current
+## The control group slots as the list needs them: the kinds of each group's live units, and which group is the current
 ## selection. {} when no group holds a unit.
 func _control_groups() -> Dictionary:
 	var groups: Array = []
@@ -1198,6 +1211,11 @@ func on_action(name: String, arg: Variant) -> void:
 		"world_lens":
 			if str(arg) == "" or OverlayFeed.LENSES.has(str(arg)):
 				world_lens = str(arg)
+		"open_controls":
+			# The top-bar hint: the same as F1 (game_ui.open_controls pauses and resumes on Back). A stub has no ui.
+			var ui = g.get("ui")
+			if ui != null and ui.has_method("open_controls"):
+				ui.open_controls()
 		"minimap_layer", "speed":
 			pass
 
