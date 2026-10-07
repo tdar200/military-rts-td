@@ -1,6 +1,8 @@
 extends RefCounted
 const TitleScreen = preload("res://scripts/ui/title_screen.gd")
 const Fx = preload("res://scripts/gallery/fixtures_title.gd")
+const LiveScreens = preload("res://scripts/ui/live_screens.gd")
+const MatchConfig = preload("res://scripts/match_config.gd")
 
 const MENU_LABELS := ["Continue campaign", "New operation", "Skirmish sandbox", "Research archive", "Settings", "Quit"]
 
@@ -200,4 +202,22 @@ func test_backdrop_can_be_hidden(t) -> void:
 	vm["backdrop"] = false
 	var s := _screen(t, vm)
 	t.eq(s.layer("backdrop").get_child_count(), 0, "no backdrop nodes, the host's 3D scene shows through")
+	s.queue_free()
+
+
+func test_title_new_operation_opens_the_picker_and_names_the_map(t) -> void:
+	MatchConfig.reset()
+	var vm := LiveScreens.title_vm(true, 0)
+	var deploy = vm.menu.filter(func(i): return i.id == "deploy")[0]
+	t.eq(deploy.get("action", "pick_map"), "pick_map")
+	t.eq(vm.campaign.featured.name, "Kestrel Reach")
+	t.eq(LiveScreens.title_vm(true, 0, false, "survival").campaign.featured.name, "Earthfront Survival", "the map the bridge runs")
+
+
+func test_menu_entry_emits_its_action_when_it_has_one(t) -> void:
+	var s := _screen(t, LiveScreens.title_vm(true, 0))
+	var got: Array = []
+	s.action.connect(func(name, _arg): got.append(name))
+	s.menu_buttons()[1].pressed.emit()
+	t.eq(got, ["pick_map"], "New operation emits pick_map")
 	s.queue_free()

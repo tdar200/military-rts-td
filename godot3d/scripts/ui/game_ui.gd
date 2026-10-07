@@ -21,6 +21,8 @@ const VmMaps = preload("res://scripts/ui/vm_maps.gd")
 const RegionMap = preload("res://scripts/ui/sections/region_map.gd")
 const TerrainGuide = preload("res://scripts/ui/sections/terrain_guide.gd")
 const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
+const MapPicker = preload("res://scripts/ui/sections/map_picker.gd")
+const MatchConfig = preload("res://scripts/match_config.gd")
 
 const VM_INTERVAL := 0.1
 ## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it still runs
@@ -37,6 +39,9 @@ const BRIEFING_INTERVAL := 0.2
 const MINIMAP_INTERVAL := 0.2
 const MINIMAP_CENTER := Vector3(16.7, 34.0, 10.0)
 const MINIMAP_SPAN := 35.0
+## After the bridge took restart.flag (it removes the file, then writes the new sim's first snapshot), the picker waits this
+## long (seconds) before it deploys, so start.flag never lands before that snapshot.
+const LAUNCH_SETTLE := 0.1
 
 var g  # earthfront_3d.gd, or a stub with the same members in tests
 var layer: CanvasLayer
@@ -79,6 +84,11 @@ var _marks_drawn := false
 var _minimap_drag := false  # Kestrel: the left button went down on the map inside the minimap and is still held
 var _minimap_release_due := false  # the viewport saw the left release during a drag; the next frame ends it if the minimap did not
 var _title_fogged := false  # the title already shows the Kestrel fog copy
+var _title_key: Array = []  # what the title was last built from: [fogged, map, picker open or a launch pending]
+var picker_layer: Control  # the map picker over the title (New operation)
+var picker_open := false
+var picker_choice := ""  # the map the picker has selected ("kestrel" or "survival")
+var _launch_wait := -1.0  # >= 0 while a confirmed pick waits for the bridge: seconds since restart.flag disappeared
 
 
 ## The game adds this node to its tree first, then calls setup.
@@ -118,7 +128,8 @@ func setup(game) -> void:
 	title = TitleScreen.new()
 	title.action.connect(_on_title_action)
 	layer.add_child(title)
-	title.apply(LiveScreens.title_vm(true, game.bridge_technology_total))
+	picker_layer = _full_rect_layer("PickerLayer")  # after the title, so the picker draws over it
+	_refresh_title(true)
 	title.focus_first()
 
 
@@ -263,6 +274,7 @@ func _minimap_event(event: InputEvent) -> bool:
 ## in flight over the HUD, so a button is not replaced between its press and its release.
 func process(delta: float) -> void:
 	_refresh_title()
+	_tick_launch(delta)
 	if paused():
 		# Frozen: no HUD rebuild, no ticker, no log samples, and the alert clock stands still. Only the pause screens refresh.
 		_minimap_drag = false
@@ -326,15 +338,153 @@ func _refresh_hud(delta: float) -> void:
 	minimap_view.size = hud.map_slot.size  # the Build layout reshapes the slot
 
 
-## Kestrel fog of war: the title's Visibility fact says "fog of war" once the bridge sends a fogged snapshot (it is built
-## before any snapshot, with Survival's whole-battlefield copy). Applied once.
-func _refresh_title() -> void:
-	if _title_fogged or title == null or not title.visible:
+## The title follows the bridge: its Visibility fact says "fog of war" once a fogged snapshot arrives (it is built before
+## any snapshot, with Survival's whole-battlefield copy), the campaign card names the map the bridge runs, and its deploy
+## entries wait (disabled) while the map picker covers them or a picked map is being prepared. Rebuilt only on a change.
+func _refresh_title(force := false) -> void:
+	if title == null or not title.visible:
 		return
 	var snap = g.get("bridge_snapshot")
-	if snap is Dictionary and VmGameplay.fogged(snap):
+	if not _title_fogged and snap is Dictionary and VmGameplay.fogged(snap):
 		_title_fogged = true
-		title.apply(LiveScreens.title_vm(true, int(g.bridge_technology_total), true))
+	var busy := picker_open or _launch_wait >= 0.0 or MatchConfig.pending_auto_deploy()
+	var key := [_title_fogged, shown_scenario(), busy]
+	if not force and key == _title_key:
+		return
+	var had_focus: bool = _title_key.size() == 3 and bool(_title_key[2]) and not busy
+	_title_key = key
+	title.apply(LiveScreens.title_vm(not busy, int(g.bridge_technology_total), _title_fogged, key[1]))
+	if had_focus:
+		title.focus_first()
+
+
+## The map on the title: the one the bridge's snapshot comes from, else the running config's (before any snapshot).
+func shown_scenario() -> String:
+	var snap = g.get("bridge_snapshot")
+	var running := MatchConfig.running(snap) if snap is Dictionary else ""
+	return running if running != "" else str(MatchConfig.current.scenario)
+
+
+# ---------------------------------------------------------------- map picker (New operation)
+
+func _runtime_dir() -> String:
+	var dir = g.get("runtime_directory")
+	return str(dir) if dir != null else ""
+
+
+func _restart_pending() -> bool:
+	var dir := _runtime_dir()
+	return dir != "" and FileAccess.file_exists(dir.path_join("restart.flag"))
+
+
+func open_picker() -> void:
+	if picker_open or title == null or _launch_wait >= 0.0:
+		return
+	picker_open = true
+	picker_choice = shown_scenario()
+	_build_picker()
+	_refresh_title()
+
+
+func close_picker() -> void:
+	picker_open = false
+	for child in picker_layer.get_children():
+		picker_layer.remove_child(child)
+		child.queue_free()
+	_refresh_title()
+
+
+func _build_picker() -> void:
+	for child in picker_layer.get_children():
+		picker_layer.remove_child(child)
+		child.queue_free()
+	var confirm: Control = MapPicker.build(picker_layer, LiveScreens.picker_vm(picker_choice), Callable(self, "_on_picker_action"))
+	if confirm != null and confirm.is_inside_tree():
+		confirm.grab_focus()
+
+
+func _on_picker_action(name: String, arg: Variant = null) -> void:
+	match name:
+		"pick":
+			if str(arg) in MatchConfig.SCENARIOS and str(arg) != picker_choice:
+				picker_choice = str(arg)
+				_build_picker()
+		"back":
+			close_picker()
+		"confirm":
+			confirm_picker()
+
+
+## Deploy the picked map: match.json for the bridge, then restart.flag. When the title already drew another map (its ground,
+## its entities), the scene must be fresh for the new one: the existing restart reloads it and the new title deploys by
+## itself (_tick_launch). Otherwise the bridge rebuilds in place and the mission deploys once it took the flag.
+func confirm_picker() -> void:
+	if not picker_open:
+		return
+	var cfg := MatchConfig.current
+	cfg["scenario"] = picker_choice
+	MatchConfig.current = cfg
+	var dir := _runtime_dir()
+	MatchConfig.write(dir, cfg)
+	var snap = g.get("bridge_snapshot")
+	var on_screen := MatchConfig.running(snap) if snap is Dictionary else ""
+	picker_open = false
+	for child in picker_layer.get_children():
+		picker_layer.remove_child(child)
+		child.queue_free()
+	if on_screen != "" and on_screen != picker_choice:
+		MatchConfig.set_auto_deploy(true)
+		_refresh_title()
+		g._restart_mission()
+		return
+	if dir != "":
+		var flag := FileAccess.open(dir.path_join("restart.flag"), FileAccess.WRITE)
+		if flag:
+			flag.store_line("restart")
+	_launch_wait = 0.0
+	_refresh_title()
+
+
+## Every frame while the title is up. A confirmed pick deploys LAUNCH_SETTLE seconds after the bridge removed restart.flag.
+## After a reload asked for an auto deploy (the debrief's Restart, or a pick of another map), the mission deploys once the
+## bridge took the flag and serves the chosen map at tick 0.
+func _tick_launch(delta: float) -> void:
+	if title == null:
+		return
+	if _launch_wait >= 0.0:
+		if _restart_pending():
+			_launch_wait = 0.0
+			return
+		_launch_wait += delta
+		if _launch_wait >= LAUNCH_SETTLE:
+			_launch_wait = -1.0
+			g._deploy_mission()
+		return
+	if not MatchConfig.pending_auto_deploy() or _restart_pending():
+		return
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or snap.is_empty() or int(snap.get("tick", -1)) != 0:
+		return
+	if MatchConfig.running(snap) != str(MatchConfig.current.scenario):
+		return
+	MatchConfig.set_auto_deploy(false)
+	g._deploy_mission()
+
+
+## Keys on the title (the game's input handler sends them here before deploy): Esc closes the map picker, the ui_left and
+## ui_right actions (the arrow keys) move its selection. True when the key was used.
+func route_title_key(event: InputEvent) -> bool:
+	if not picker_open or not (event is InputEventKey) or not event.pressed or event.echo:
+		return false
+	if event.keycode == Keybinds.CANCEL:
+		close_picker()
+		return true
+	var step := -1 if event.is_action_pressed("ui_left") else (1 if event.is_action_pressed("ui_right") else 0)
+	if step == 0:
+		return false
+	var at := MatchConfig.SCENARIOS.find(picker_choice)
+	_on_picker_action("pick", MatchConfig.SCENARIOS[clampi(at + step, 0, MatchConfig.SCENARIOS.size() - 1)])
+	return true
 
 
 ## Asks the minimap viewport for one more frame every MINIMAP_INTERVAL while the HUD is up (UPDATE_ONCE falls back to
@@ -438,13 +588,16 @@ func begin_operation() -> void:
 
 func _on_title_action(name: String, _arg: Variant) -> void:
 	match name:
+		"pick_map":
+			open_picker()
 		"deploy":
 			g._deploy_mission()
 		"quit":
 			get_tree().quit()
 
 
-## Victory or defeat debrief over a scrim. "review" removes it so the battlefield can be inspected; "restart" redeploys.
+## Victory or defeat debrief over a scrim. "review" removes it so the battlefield can be inspected; "restart" replays the
+## same map and seed and deploys again; "menu" returns to the title; "quit" closes the game.
 func show_debrief() -> void:
 	if scrim != null:
 		return
@@ -468,7 +621,21 @@ func _on_debrief_action(name: String, _arg: Variant) -> void:
 				scrim.queue_free()
 				scrim = null
 		"restart":
+			# Same map (the one the bridge runs) and the same seed: match.json says so, the reload's title deploys by itself.
+			var cfg := MatchConfig.current
+			var snap = g.get("bridge_snapshot")
+			var running := MatchConfig.running(snap) if snap is Dictionary else ""
+			if running != "":
+				cfg["scenario"] = running
+			MatchConfig.current = cfg
+			MatchConfig.write(_runtime_dir(), cfg)
+			MatchConfig.set_auto_deploy(true)
 			g._restart_mission()
+		"menu":
+			MatchConfig.set_auto_deploy(false)
+			g._restart_mission()  # restart.flag, then the scene reloads to the title
+		"quit":
+			get_tree().quit()
 
 
 # ---------------------------------------------------------------- pause menu and controls screen

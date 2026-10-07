@@ -1,7 +1,8 @@
 extends Control
 ## Title and campaign screen, built from a plain view model. Geometry is the Title mock at 1920x1080
 ## (docs/ascension/ui-mocks/Title.dc.html, measured with tools/ui/dump_boxes.py).
-## Emits action(name, arg): menu entries emit their `id` ("continue", "new", ...), the featured card's buttons emit their `action`.
+## Emits action(name, arg): menu entries emit their `action` when they have one, else their `id` ("continue", "new", ...);
+## the featured card's buttons emit their `action`.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 const Fx = preload("res://scripts/ui/fx.gd")
@@ -190,7 +191,7 @@ func _build_menu(root: Control, items: Array) -> void:
 		K.place(b, 120, y)
 		root.add_child(b)
 		b.setup(str(item.get("label", "")), item)
-		b.pressed.connect(_emit.bind(str(item.get("id", "")), null))
+		b.pressed.connect(_emit.bind(str(item.get("action", item.get("id", ""))), null))
 		_menu_buttons.append(b)
 		y += 66.0
 	var order: Array = _menu_buttons.filter(func(b): return not b.disabled)

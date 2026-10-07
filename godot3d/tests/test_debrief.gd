@@ -3,6 +3,8 @@ const Debrief = preload("res://scripts/ui/debrief.gd")
 const Chart = preload("res://scripts/ui/components/line_chart.gd")
 const TextBox = preload("res://scripts/ui/components/text_box.gd")
 const Fixtures = preload("res://scripts/gallery/fixtures_debrief.gd")
+const LiveScreens = preload("res://scripts/ui/live_screens.gd")
+const StubGame = preload("res://tests/stub_game.gd")
 
 
 func _col(vm: Dictionary) -> Control:
@@ -301,4 +303,22 @@ func test_place_in(t) -> void:
 	t.near(col.position.x, (1280.0 - 960.0 * col.scale.x) * 0.5, 1.0, "still centred")
 	Debrief.place_in(col, Vector2(2560, 1440))
 	t.eq(col.scale, Vector2(1, 1), "never enlarged")
+	col.free()
+
+
+func test_debrief_offers_restart_menu_and_quit(t) -> void:
+	var g := StubGame.new()  # tests/stub_game.gd
+	g.bridge_winner = 1
+	var vm := LiveScreens.debrief_vm(g, null)
+	var actions := []
+	for b in vm.buttons:
+		actions.append(b.action)
+	t.eq(actions, ["review", "restart", "menu", "quit"])
+	t.eq(vm.buttons.map(func(b): return b.label), ["Review battlefield", "Restart", "Main menu", "Quit"], "labels")
+	g.bridge_winner = 0
+	t.eq(LiveScreens.debrief_vm(g, null).buttons.map(func(b): return b.action), ["review", "restart", "menu", "quit"], "victory too")
+	var col := _col(vm)
+	_check_layout(t, col, "four buttons")
+	for b in _buttons(col):
+		t.ok(b.get_minimum_size().x <= b.size.x + 0.5, "%s fits its button" % b.text)
 	col.free()

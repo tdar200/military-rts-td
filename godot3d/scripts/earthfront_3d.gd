@@ -1605,6 +1605,7 @@ func _update_camera() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not mission_deployed:
+		ui.route_title_key(event)  # the title's map picker: Esc closes it, Left and Right pick
 		return
 	# F1 and Esc first (game_ui.gd escape_route holds the precedence), then a paused game takes no further input.
 	if ui.route_key(event, _orders_armed()):
@@ -3932,6 +3933,9 @@ func set_sim_paused(on: bool) -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
+## Back to a fresh title: restart.flag makes the bridge rebuild (from runtime/match.json when the UI wrote one), then the
+## scene reloads. The new title deploys by itself when the UI asked for it (MatchConfig.set_auto_deploy: the debrief's
+## Restart, or a map picked over another map's title).
 func _restart_mission() -> void:
 	_restarting = true
 	var restart_file := FileAccess.open(runtime_directory.path_join("restart.flag"), FileAccess.WRITE)
@@ -3992,7 +3996,11 @@ func _deploy_camera() -> void:
 	camera_cinematic = 1.4
 
 
+## Starts the match on the bridge (start.flag) and hands the screen to the HUD. Once per scene: the title's auto deploy and
+## a click in the same frame must not deploy twice.
 func _deploy_mission() -> void:
+	if mission_deployed:
+		return
 	var start_file := FileAccess.open(runtime_directory.path_join("start.flag"), FileAccess.WRITE)
 	if start_file:
 		start_file.store_line("deploy")

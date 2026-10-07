@@ -4,6 +4,7 @@ extends RefCounted
 const SPR := "res://assets/ui/sprites/"
 const UNIT_ROWS := [["Infantry", "Infantry"], ["AntiArmor", "Anti-armour"], ["Tank", "Battle tanks"], ["Helicopter", "Gunships"], ["Harvester", "Harvesters"], ["Capital", "Capital units"]]
 const SessionLog = preload("res://scripts/ui/session_log.gd")
+const MatchConfig = preload("res://scripts/match_config.gd")
 const FixturesChapters := [
 	{"tag": "Eras 3-4", "tag_color": "f0b040", "name": "Solar", "blurb": "Orbital industry, launch mass and transfer windows.", "status": "Design / Locked"},
 	{"tag": "Era 5", "tag_color": "78b4ff", "name": "Interstellar", "blurb": "Independent industrial seeds and communication delay.", "status": "Design / Locked"},
@@ -15,17 +16,31 @@ const FixturesChapters := [
 const FOG_COPY := "Fog of war, scout the alien side"
 
 
-## Title and campaign. `deploy_enabled` is false while the bridge is down. `fogged`: the bridge runs Kestrel Reach with its
-## fog of war (game_ui re-applies the title once a fogged snapshot arrives); Survival shows the whole battlefield.
-static func title_vm(deploy_enabled: bool, research_projects: int, fogged := false) -> Dictionary:
+## The map picker's two cards, Kestrel Reach first. Only what really differs between the maps is stated.
+const MAP_CARDS := [
+	{"id": "kestrel", "tags": [{"t": "Recommended", "tone": "good"}],
+		"blurb": "A painted frontier of river, ridge and forest. Scout through the fog, take down the alien relays and break the Core Node.",
+		"facts": [{"k": "Visibility", "v": "Fog of war"}, {"k": "Terrain", "v": "River, ford, ridge, forest"}]},
+	{"id": "survival", "tags": [{"t": "Classic", "tone": "dim"}],
+		"blurb": "The original Earthfront battlefield on open grassland. Hold against the alien waves with the whole map in view.",
+		"facts": [{"k": "Visibility", "v": "Full battlefield"}, {"k": "Terrain", "v": "Open grassland"}]},
+]
+
+
+## Title and campaign. `deploy_enabled` is false while the bridge is down (and while the map picker covers the title).
+## `fogged`: the bridge runs Kestrel Reach with its fog of war (game_ui re-applies the title once a fogged snapshot arrives);
+## Survival shows the whole battlefield. `scenario` is the map the card names ("" = MatchConfig.current). New operation
+## opens the map picker; the card's Deploy forces deploys the map the bridge already runs.
+static func title_vm(deploy_enabled: bool, research_projects: int, fogged := false, scenario := "") -> Dictionary:
 	var primary := {"label": "Deploy forces", "action": "deploy", "disabled": not deploy_enabled}
+	var map := scenario if scenario != "" else str(MatchConfig.current.scenario)
 	return {
 		"eyebrow": "Earthfront / Era 1",
 		"title": "Ascension",
 		"tagline": "Hold the Earthfront. Break the Core Node.",
 		"menu": [
 			{"id": "continue", "label": "Continue campaign", "icon": "play", "disabled": true},
-			{"id": "deploy", "label": "New operation", "icon": "plus", "emphasis": "primary", "disabled": not deploy_enabled},
+			{"id": "deploy", "action": "pick_map", "label": "New operation", "icon": "plus", "emphasis": "primary", "disabled": not deploy_enabled},
 			{"id": "skirmish", "label": "Skirmish sandbox", "icon": "crosshair", "disabled": true},
 			{"id": "research", "label": "Research archive", "hint": "%d projects" % research_projects if research_projects > 0 else "", "icon": "flask_title", "disabled": true},
 			{"id": "settings", "label": "Settings", "icon": "cog", "disabled": true},
@@ -34,7 +49,7 @@ static func title_vm(deploy_enabled: bool, research_projects: int, fogged := fal
 		"campaign": {
 			"title": "Campaign", "summary": "1 playable / 4 design",
 			"featured": {
-				"name": "Operation Dawnshield",
+				"name": MatchConfig.display_name(map),
 				"blurb": "Earthfront. Contemporary Humanity to Advanced Industrial Civilization.",
 				"tags": [{"t": "Playable", "tone": "good"}, {"t": "Era 1-2", "tone": "dim"}],
 				"facts": [{"k": "Objective", "v": "Destroy the alien Core Node"}, {"k": "Visibility", "v": FOG_COPY if fogged else "Full battlefield, no fog of war"}],
@@ -45,6 +60,18 @@ static func title_vm(deploy_enabled: bool, research_projects: int, fogged := fal
 		},
 		"footer_left": "Ascension", "footer_right": "",
 	}
+
+
+## The map picker (sections/map_picker.gd): one card per map, `selected` marked.
+static func picker_vm(selected: String) -> Dictionary:
+	var cards: Array = []
+	for c in MAP_CARDS:
+		var card: Dictionary = c.duplicate(true)
+		card["name"] = MatchConfig.display_name(c.id)
+		card["selected"] = c.id == selected
+		cards.append(card)
+	return {"cap": "New operation", "title": "Choose a battlefield", "cards": cards, "back": "Back", "confirm": "Deploy forces",
+		"note": "The bridge rebuilds the chosen map, then the operation starts."}
 
 
 static func clock(seconds: float) -> String:
@@ -62,11 +89,15 @@ static func thousands(n: int) -> String:
 	return ("-" if n < 0 else "") + out
 
 
-## Debrief column for the finished mission. `log` is the SessionLog the game kept.
+## Debrief column for the finished mission. `log` is the SessionLog the game kept (null reads as an empty one). Restart
+## replays the same map and seed and deploys at once; Main menu returns to the title; Quit closes the game.
 static func debrief_vm(g, log) -> Dictionary:
+	if log == null:
+		log = SessionLog.new()
 	var victory: bool = g.bridge_winner == 0
 	var elapsed := float(g.bridge_tick) / 30.0
-	var buttons: Array = [{"label": "Review battlefield", "action": "review", "primary": true}, {"label": "Redeploy", "action": "restart"}]
+	var buttons: Array = [{"label": "Review battlefield", "action": "review", "primary": true}, {"label": "Restart", "action": "restart"},
+		{"label": "Main menu", "action": "menu"}, {"label": "Quit", "action": "quit"}]
 	var vm := {
 		"variant": "victory" if victory else "defeat",
 		"tag": "Debrief / " + ("victory" if victory else "defeat"),

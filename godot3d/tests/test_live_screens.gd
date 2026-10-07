@@ -160,5 +160,5 @@ func test_victory_vm_drives_the_real_column(t) -> void:
 		if n is Button and n.text != "":
 			labels.append(n.text)
 		stack.append_array(n.get_children())
-	t.ok(labels.has("Review battlefield") and labels.has("Redeploy"), "buttons carry their labels")
+	t.ok(labels.has("Review battlefield") and labels.has("Restart") and labels.has("Main menu") and labels.has("Quit"), "buttons carry their labels")
 	col.free()

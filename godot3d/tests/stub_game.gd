@@ -62,6 +62,8 @@ var hover_cell = null
 ## Mirrors earthfront_3d.alert_pings (Kestrel's AlertPings, null in Survival) and its clock (alert_clock: the effects time).
 var alert_pings = null
 var clock := 0.0
+## Mirrors earthfront_3d.runtime_directory. Empty: the UI writes no match.json or flag (tests that need files set a user:// path).
+var runtime_directory := ""
 
 
 ## `fog_off` loads the EARTHFRONT_FOG=0 twin of the start frame (every alien entity present) for tests about the alien base.

@@ -61,6 +61,9 @@ func _ready() -> void:
 			_screen(_l("ui/title_screen.gd").new(), _l("gallery/fixtures_title.gd").title())
 		"title_empty", "title_1", "title_12", "title_long", "title_disabled":
 			_screen(_l("ui/title_screen.gd").new(), _l("gallery/fixtures_title.gd").edge(screen))
+		"title_picker":
+			_screen(_l("ui/title_screen.gd").new(), _l("gallery/fixtures_title.gd").picker_title())
+			_l("ui/sections/map_picker.gd").build(self, _l("gallery/fixtures_title.gd").picker())
 		"debrief":
 			var win = _l("ui/debrief.gd").new()
 			add_child(win)

@@ -1,6 +1,7 @@
 extends RefCounted
 const GameUI = preload("res://scripts/ui/game_ui.gd")
 const Stub = preload("res://tests/stub_game.gd")
+const MatchConfig = preload("res://scripts/match_config.gd")
 
 
 func _make(t) -> Array:
@@ -101,6 +102,7 @@ func test_debrief_blocks_input_and_both_buttons_work(t) -> void:
 	t.eq(p[0].calls.back(), ["restart"], "restart reaches the game")
 	ui._on_debrief_action("review", null)
 	t.ok(ui.scrim == null, "review drops the scrim")
+	MatchConfig.reset()  # Restart left an auto deploy pending in Engine meta: no later test may inherit it
 	_drop(p)
 
 

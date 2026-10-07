@@ -1,6 +1,7 @@
 extends RefCounted
 ## Title screen fixtures. `title()` equals the Title mock's numbers; the others are the edge cases the tests use.
 const SPRITES := "res://assets/ui/sprites/"
+const LiveScreens = preload("res://scripts/ui/live_screens.gd")
 
 
 static func menu(overrides := {}) -> Array:
@@ -106,3 +107,13 @@ static func edge(screen: String) -> Dictionary:
 			vm["menu"] = menu({"continue": {"disabled": true}, "new": {"disabled": true}, "skirmish": {"disabled": true}, "research": {"disabled": true}, "settings": {"disabled": true}, "quit": {"disabled": true}})
 			return vm
 	return {}
+
+
+## Gallery arm title_picker: the live Kestrel title as it stands under the map picker (its deploy entries wait while the
+## picker is up), and the picker's own view model with `selected` marked.
+static func picker_title() -> Dictionary:
+	return LiveScreens.title_vm(false, 12, true, "kestrel")
+
+
+static func picker(selected := "kestrel") -> Dictionary:
+	return LiveScreens.picker_vm(selected)
