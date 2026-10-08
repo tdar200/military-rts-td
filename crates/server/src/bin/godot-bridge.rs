@@ -3499,20 +3499,56 @@ mod tests {
             format!("{:?}", sim.ai_commands(PlayerId(0)))
         );
         // Every tick through Survival's survey and Kestrel's probe and wave one.
+        // Narrowed by Task 19: under the Kestrel depth rules the alien AI now
+        // runs from tick 0, so before wave one the list gains a prefix the old
+        // loop never built. Survival stays exactly equal; Kestrel before wave
+        // one must end with the old list, and every extra order is the alien
+        // AI's (owner P1) and never moves a probe unit, which stay scripted.
+        // From wave one on both lists are equal again. The awake alien takes
+        // an undefended base before wave one, so in Kestrel the playtest AI
+        // plays the human side (its orders are the player's, outside both
+        // lists) to carry the run past wave one.
         for (scenario, ticks) in [(Scenario::Survival, 3000), (Scenario::KestrelReach, 5000)] {
             let mut sim = scenario.build(2026);
             sim.set_balance(rts_data::load_default());
+            let mut extra = 0;
             for _ in 0..ticks {
                 let ours = scenario.host_commands(&sim);
-                assert_eq!(
-                    format!("{ours:?}"),
-                    format!("{:?}", pre_depth_loop_host_commands(&sim, scenario)),
-                    "{scenario:?} tick {}",
-                    sim.tick()
-                );
-                sim.step(&ours);
+                let old = pre_depth_loop_host_commands(&sim, scenario);
+                if scenario == Scenario::KestrelReach && sim.waves_survived() == 0 {
+                    let split = ours.len().checked_sub(old.len()).expect("a prefix");
+                    assert_eq!(
+                        format!("{:?}", &ours[split..]),
+                        format!("{old:?}"),
+                        "{scenario:?} tick {}",
+                        sim.tick()
+                    );
+                    let probe = rts_core::game::scenario::kestrel_probe_units(&sim);
+                    for c in &ours[..split] {
+                        assert!(format!("{c:?}").contains("owner: PlayerId(1)"), "{c:?}");
+                        assert!(
+                            !matches!(c, Command::Move { unit, .. } | Command::AttackMove { unit, .. }
+                                if probe.contains(unit)),
+                            "{c:?}"
+                        );
+                    }
+                    extra += split;
+                } else {
+                    assert_eq!(
+                        format!("{ours:?}"),
+                        format!("{old:?}"),
+                        "{scenario:?} tick {}",
+                        sim.tick()
+                    );
+                }
+                let mut all = ours;
+                if scenario == Scenario::KestrelReach {
+                    all.extend(sim.ai_commands(PlayerId(0)));
+                }
+                sim.step(&all);
             }
             if scenario == Scenario::KestrelReach {
+                assert!(extra > 0, "the alien AI acted before wave one");
                 assert!(
                     sim.waves_survived() > 0,
                     "the alien AI branch was exercised"
@@ -3622,7 +3658,16 @@ mod tests {
         // `"refinery_cost"` and `"repair_cd":0` are stripped above, and both
         // old pins still match with those two hash writes removed. Was
         // (27266, 0x3e21_0ade_88ab_a2db) and (28516, 0xa8bc_08e9_df4f_5ff5).
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0xb9cd_e28f_e163_370f));
+        //
+        // Re-pinned by Task 19 (depth waves): the seeded doctrine order is
+        // drawn from the depth rng at build, and the order, the cleared-wave
+        // count and each unit's wave tag are now hashed under depth, so only
+        // the `hash` value changed (one digit longer mid-firefight); every
+        // other byte is identical (tick 0 checked against the regenerated
+        // fixtures with the hash masked; the firefight steps with no
+        // commands, so no AI, raid or wave runs in it). Was
+        // (27265, 0xb9cd_e28f_e163_370f) and (28515, 0x7f04_e3f7_5668_c2de).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x4bec_637c_99ae_933b));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3642,7 +3687,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x7f04_e3f7_5668_c2de));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xd3c8_02cc_1bbc_0b45));
     }
 
     #[test]
