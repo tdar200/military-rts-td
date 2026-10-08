@@ -520,6 +520,10 @@ pub(super) struct DepthGlobal {
     pub(super) draft: Option<[u8; 3]>,
     /// Task 23: drafts offered so far.
     pub(super) drafted: u32,
+    /// P4 review M1: spawned waves that brought no unit (the alien sat at
+    /// the 80 supply ceiling when the wave fired). They stay in `wave_count`
+    /// but are never cleared ([`Sim::run_depth_wave_ledger`]).
+    pub(super) empty_waves: u32,
 }
 
 impl DepthGlobal {
@@ -550,6 +554,8 @@ impl DepthGlobal {
             None => h.write_u64(0),
         }
         h.write_u64(u64::from(self.drafted));
+        // P4 review M1 (appended).
+        h.write_u64(u64::from(self.empty_waves));
     }
 }
 
@@ -822,7 +828,9 @@ impl Sim {
     }
 
     /// Task 19: recounts [`DepthGlobal::waves_cleared`] after the tick's
-    /// deaths (depth only; called at the end of `step`).
+    /// deaths (depth only; called at the end of `step`): the spawned waves
+    /// with no living unit, less the [`DepthGlobal::empty_waves`] that never
+    /// had one.
     pub(super) fn run_depth_wave_ledger(&mut self) {
         let spawned = usize::try_from(self.wave_count).unwrap_or(usize::MAX);
         if spawned == 0 {
@@ -834,9 +842,14 @@ impl Sim {
                 *slot = true;
             }
         }
+        // P4 review M1: an empty wave has no living unit either, but it was
+        // never fought, so it is taken off the count.
         let cleared = alive[1..].iter().filter(|&&a| !a).count();
+        let cleared = u32::try_from(cleared)
+            .unwrap_or(u32::MAX)
+            .saturating_sub(self.dg.empty_waves);
         let before = self.dg.waves_cleared;
-        self.dg.waves_cleared = u32::try_from(cleared).unwrap_or(u32::MAX);
+        self.dg.waves_cleared = cleared;
         // Task 23: a run drafts on each increase, unless a draft is still
         // pending (a pick the player ignores stays offered, and the waves
         // cleared meanwhile queue nothing) or the run is won.
@@ -2206,7 +2219,8 @@ impl Sim {
 
     /// Ticks until living building `id` may be repaired again under depth (0
     /// when it may now). `None` with depth off, for units and for unknown or
-    /// dead ids. Read-only.
+    /// dead ids. Read-only. Right after the step that took an order it reads
+    /// [`REPAIR_COOLDOWN`] - 1: that step already counted its first tick.
     #[must_use]
     pub fn repair_cooldown(&self, id: EntityId) -> Option<u32> {
         if !self.is_depth() {
@@ -6387,6 +6401,32 @@ mod tests {
         }]
     }
 
+    /// P4 review nit, ruled not a bug: an order applied by the step from tick
+    /// T is followed by its first countdown in that same step, so
+    /// `repair_cooldown` reads `REPAIR_COOLDOWN - 1` = 449 at tick T + 1.
+    /// That is the ticks still to wait from the current tick: the next order
+    /// is refused at T + 449 and accepted at T + 450, exactly
+    /// [`super::REPAIR_COOLDOWN`] ticks after the first (the Task 18 brief).
+    #[test]
+    fn a_repair_order_waits_exactly_repair_cooldown_ticks() {
+        let (mut s, cc) = repair_arena(1000);
+        // Damaged deeper than one job heals, so only the cooldown refuses.
+        s.entities[cc.0 as usize].hp = Fixed::from_int(10);
+        let t = s.tick();
+        s.step(&repair(cc));
+        assert_eq!(s.tick(), t + 1);
+        assert_eq!(s.repair_cooldown(cc), Some(super::REPAIR_COOLDOWN - 1));
+        let mut accepted_at = None;
+        for _ in 1..=super::REPAIR_COOLDOWN {
+            let at = s.tick();
+            if spent(&mut s, &repair(cc)) > Fixed::ZERO {
+                accepted_at = Some(at);
+                break;
+            }
+        }
+        assert_eq!(accepted_at, Some(t + u64::from(super::REPAIR_COOLDOWN)));
+    }
+
     #[test]
     fn a_depth_repair_heals_gradually_costs_at_least_25_and_has_a_cooldown() {
         let (mut s, cc) = repair_arena(1000);
@@ -7708,10 +7748,16 @@ mod tests {
 
     /// A P0 Wall beside a P1 rifle squad on Hold; the Wall's HP lost in 90 ticks.
     fn rifles_on_a_wall(hardened: bool) -> Fixed {
+        rifles_on_an_armoured_wall(hardened, 0)
+    }
+
+    /// [`rifles_on_a_wall`] with `armour` armour levels on P0.
+    fn rifles_on_an_armoured_wall(hardened: bool, armour: u16) -> Fixed {
         let mut s = depth_arena();
         if hardened {
             s = with_perk(s, perk::HARDENED_WALLS);
         }
+        s.civs[0].doctrine_levels[super::DOC_ARMOR] = armour;
         let wall = s.add_building(P0, BuildingKind::Wall, 10, 10);
         let rifle = s.add_unit(P1, UnitKind::Infantry, tile_center(11, 10));
         s.entities[rifle.0 as usize].dp.stance = Stance::Hold;
@@ -7734,6 +7780,67 @@ mod tests {
         assert!(
             off < eps && Fixed::ZERO - eps < off,
             "{hard:?} is not two thirds of {plain:?}"
+        );
+    }
+
+    /// P4 review nit: Hardened Walls cut the net hit before the 1-damage
+    /// floor of armour mitigation, so a hit armour already floors stays at 1
+    /// (it was cut to two thirds of the floor). Unmitigated hits keep the
+    /// plain cut (`hardened_walls_take_a_third_less_damage`).
+    #[test]
+    fn hardened_walls_keep_the_armour_floor() {
+        // 40 levels of half a point: every rifle hit is mitigated to the floor.
+        let plain = rifles_on_an_armoured_wall(false, 40);
+        let hard = rifles_on_an_armoured_wall(true, 40);
+        std::eprintln!(
+            "floored wall HP lost in 90 ticks: plain {plain:?}, Hardened Walls {hard:?}"
+        );
+        assert!(plain > Fixed::ZERO);
+        assert_eq!(hard, plain, "a floored hit stays at the floor");
+    }
+
+    /// A P1 Tank's Barrage on a P0 Wall (Hardened Walls when `hardened`;
+    /// Bulwark when `bulwark`): the Wall's HP lost to the volley.
+    fn barrage_a_wall(hardened: bool, bulwark: bool) -> Fixed {
+        let mut s = depth_arena();
+        if hardened {
+            s = with_perk(s, perk::HARDENED_WALLS);
+        }
+        if bulwark {
+            s = with_perk(s, perk::BULWARK);
+        }
+        s.civs[1].researched_techs.set(super::BARRAGE_TECH);
+        let wall = s.add_building(P0, BuildingKind::Wall, 10, 10);
+        let at = s.entities[wall.0 as usize].pos;
+        let tank = s.add_unit(
+            P1,
+            UnitKind::Tank,
+            at + Vec2::new(Fixed::from_int(4), Fixed::ZERO),
+        );
+        s.entities[tank.0 as usize].ammunition = 0;
+        let full = s.entities[wall.0 as usize].hp;
+        s.step(&[cast(P1, tank, at)]);
+        assert!(
+            s.entities[tank.0 as usize].ability_cd > 0,
+            "the volley was cast"
+        );
+        full - s.entities[wall.0 as usize].hp
+    }
+
+    /// P4 review nit: "Walls take one third less damage" holds for a Barrage
+    /// too. Bulwark, like every armour, does not stop a Barrage (a siege
+    /// volley ignores mitigation by design).
+    #[test]
+    fn hardened_walls_also_cut_a_barrage() {
+        let plain = barrage_a_wall(false, false);
+        let hard = barrage_a_wall(true, false);
+        std::eprintln!("wall HP lost to one Barrage: plain {plain:?}, Hardened Walls {hard:?}");
+        assert!(plain > Fixed::ZERO);
+        assert_eq!(hard, plain * Fixed::from_int(2) / Fixed::from_int(3));
+        assert_eq!(
+            barrage_a_wall(false, true),
+            plain,
+            "armour never stops a Barrage"
         );
     }
 
@@ -7855,6 +7962,60 @@ mod tests {
         );
         assert!(shielded);
         assert_eq!(before, after);
+    }
+
+    /// P4 review M1: a wave that fires while the alien sits at the 80 supply
+    /// ceiling spawns nobody. It still counts as spawned (the wave clock, the
+    /// Core Node and the alien's Upgrades pace keep reading `wave_count`),
+    /// but it is never a cleared wave: no score, no draft, no step toward a
+    /// run's twelve.
+    #[test]
+    fn a_wave_that_spawns_nobody_is_never_cleared() {
+        for run in [true, false] {
+            let opts = if run {
+                run_opts(perk::DEFAULT_RUN_POOL)
+            } else {
+                MatchOptions::default()
+            };
+            let mut s = kestrel_reach_with(3, opts);
+            let cfg = s.waves.unwrap();
+            // An alien garrison at the supply ceiling, parked at home.
+            let mut i = 0;
+            while s.supply_used(cfg.attacker) < 80 {
+                s.add_unit(P1, UnitKind::Tank, hex::center(33, 4 + i % 10));
+                i += 1;
+            }
+            s.tick = cfg.first_delay - 3;
+            for _ in 0..6 {
+                s.step(&[]);
+            }
+            assert_eq!(s.waves_survived(), 1, "run {run}: the wave fired");
+            assert!(
+                s.entities.iter().all(|e| e.dp.wave == 0),
+                "run {run}: nobody spawned"
+            );
+            assert_eq!(s.waves_cleared(), 0, "run {run}");
+            assert_eq!(
+                (s.depth_draft(), s.drafts_offered()),
+                (None, 0),
+                "run {run}"
+            );
+            assert_eq!(s.depth_score().unwrap().waves_held, 0, "run {run}");
+            // The next wave that does spawn and dies counts once, as one.
+            let mut real = kestrel_reach_with(3, opts);
+            real.dg.empty_waves = 1;
+            clear_waves(&mut real, 2);
+            assert_eq!(real.waves_cleared(), 1, "run {run}");
+        }
+        // The empty-wave count is hashed under depth only.
+        let depth = kestrel_reach(3);
+        let mut empty = depth.clone();
+        empty.dg.empty_waves = 1;
+        assert_ne!(depth.state_hash(), empty.state_hash());
+        let plain = survival(7);
+        let mut ledger = plain.clone();
+        ledger.dg.empty_waves = 4;
+        assert_eq!(plain.state_hash(), ledger.state_hash());
     }
 
     #[test]

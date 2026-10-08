@@ -1033,6 +1033,10 @@ impl Sim {
                 self.order_unit_to(unit.0 as usize, target, true);
             }
         }
+        // P4 review M1: a wave with no unit is spawned but never cleared.
+        if depth && budget == 0 {
+            self.dg.empty_waves += 1;
+        }
         self.wave_count += 1;
     }
 

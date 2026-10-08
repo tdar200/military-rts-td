@@ -3378,6 +3378,10 @@ impl Sim {
                 } else {
                     Vec::new()
                 };
+                // P4 review: Hardened Walls (Task 23) take a third off a
+                // volley too; all false without depth. Armour and Bulwark
+                // never stop a Barrage.
+                let hardened = self.depth_perk_holders(crate::game::perk::HARDENED_WALLS);
                 for (j, e) in self.entities.iter_mut().enumerate() {
                     if !e.alive || e.owner == owner || spared.contains(&j) {
                         continue;
@@ -3387,13 +3391,16 @@ impl Sim {
                     }
                     e.last_combat_tick = tick;
                     let was_alive = e.hp > Fixed::ZERO;
-                    let absorbed = if e.shield < d.magnitude {
-                        e.shield
+                    let hit = if hardened[usize::from(e.owner.0)]
+                        && e.kind == Kind::Building(BuildingKind::Wall)
+                    {
+                        d.magnitude * Fixed::from_int(2) / Fixed::from_int(3)
                     } else {
                         d.magnitude
                     };
+                    let absorbed = if e.shield < hit { e.shield } else { hit };
                     e.shield = e.shield - absorbed;
-                    e.hp = e.hp - (d.magnitude - absorbed);
+                    e.hp = e.hp - (hit - absorbed);
                     if was_alive && e.hp <= Fixed::ZERO {
                         kills += 1;
                     }
@@ -4799,23 +4806,20 @@ impl Sim {
             // Armor research subtracts flat mitigation, but a mitigated hit still
             // deals at least 1 (no immunity). With no armor research (mit == 0),
             // damage is unchanged, keeping base combat identical.
-            let net = if mit > Fixed::ZERO {
-                let reduced = dmg - mit;
-                if reduced < Fixed::ONE {
-                    Fixed::ONE
-                } else {
-                    reduced
-                }
-            } else {
-                dmg
-            };
-            // Task 23: Hardened Walls take a third off the net hit.
-            let net = if hardened[usize::from(owner.0)]
+            let reduced = if mit > Fixed::ZERO { dmg - mit } else { dmg };
+            // Task 23: Hardened Walls take a third off the net hit. P4 review:
+            // the cut comes before the floor, so a floored hit stays at 1.
+            let reduced = if hardened[usize::from(owner.0)]
                 && self.entities[j].kind == Kind::Building(BuildingKind::Wall)
             {
-                net * Fixed::from_int(2) / Fixed::from_int(3)
+                reduced * Fixed::from_int(2) / Fixed::from_int(3)
             } else {
-                net
+                reduced
+            };
+            let net = if mit > Fixed::ZERO && reduced < Fixed::ONE {
+                Fixed::ONE
+            } else {
+                reduced
             };
             let killed = {
                 let e = &mut self.entities[j];
