@@ -1527,22 +1527,9 @@ fn main() -> std::io::Result<()> {
         }
         let started = Instant::now();
         let player_commands = take_commands(&paths.commands);
-        // The human-side AI exists only to resolve Survival's initial survey at
-        // the deterministic premium site. From the first active tick onward the
-        // player owns every economy, production, science, and tactical decision.
-        let mut commands = if sim.surveying() {
-            sim.ai_commands(PlayerId(0))
-        } else {
-            Vec::new()
-        };
-        // Keep the beachhead garrison defensive during the authored build-up
-        // (Kestrel Reach: 150 s, broken only by its scripted probe below). Once
-        // wave one arrives, the enemy economy and tactics activate.
-        if sim.waves_survived() > 0 {
-            commands.extend(sim.ai_commands(PlayerId(1)));
-        }
-        // The scenario's scripted orders (Kestrel Reach: the pre-wave probe); empty elsewhere.
-        commands.extend(scenario.scripted_commands(&sim));
+        // Host commands (survey AI, alien AI, scenario script) from the one shared
+        // builder, so headless tests and replay verification step the same list.
+        let mut commands = scenario.host_commands(&sim);
         commands.extend(player_commands);
         sim.step(&commands);
         shots.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
@@ -2889,6 +2876,60 @@ mod tests {
         );
     }
 
+    /// The non-player list the `main` loop built inline before
+    /// `Scenario::host_commands` existed (503fd7c), kept verbatim as the oracle.
+    fn pre_depth_loop_host_commands(
+        sim: &rts_core::game::sim::Sim,
+        scenario: Scenario,
+    ) -> Vec<Command> {
+        let mut commands = if sim.surveying() {
+            sim.ai_commands(PlayerId(0))
+        } else {
+            Vec::new()
+        };
+        if sim.waves_survived() > 0 {
+            commands.extend(sim.ai_commands(PlayerId(1)));
+        }
+        commands.extend(scenario.scripted_commands(sim));
+        commands
+    }
+
+    #[test]
+    fn host_commands_equal_the_list_the_bridge_loop_used_to_build() {
+        let mut sim = Scenario::Survival.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let first = Scenario::Survival.host_commands(&sim);
+        assert!(
+            sim.surveying() && !first.is_empty(),
+            "the survey AI acts at tick 0"
+        );
+        assert_eq!(
+            format!("{first:?}"),
+            format!("{:?}", sim.ai_commands(PlayerId(0)))
+        );
+        // Every tick through Survival's survey and Kestrel's probe and wave one.
+        for (scenario, ticks) in [(Scenario::Survival, 3000), (Scenario::KestrelReach, 5000)] {
+            let mut sim = scenario.build(2026);
+            sim.set_balance(rts_data::load_default());
+            for _ in 0..ticks {
+                let ours = scenario.host_commands(&sim);
+                assert_eq!(
+                    format!("{ours:?}"),
+                    format!("{:?}", pre_depth_loop_host_commands(&sim, scenario)),
+                    "{scenario:?} tick {}",
+                    sim.tick()
+                );
+                sim.step(&ours);
+            }
+            if scenario == Scenario::KestrelReach {
+                assert!(
+                    sim.waves_survived() > 0,
+                    "the alien AI branch was exercised"
+                );
+            }
+        }
+    }
+
     #[test]
     fn survival_snapshots_are_byte_identical_to_the_pre_fog_bridge() {
         // Fingerprints taken from the bridge at 8fbb7c9, before the fog existed.
@@ -2932,7 +2973,11 @@ mod tests {
             &mut FogState::new(false),
         );
         let off = strip(&off);
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x9a65_3391_e66d_8920));
+        // Re-pinned by the depth flag (Task 10): Kestrel's state hash now folds
+        // in the depth marker, so only the snapshot's `hash` value changed
+        // (one digit longer at tick 0); every other byte is as before. Was
+        // (27265, 0x9a65_3391_e66d_8920) and (28516, 0x8f6a_ba55_027b_186e).
+        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x3fbb_4c7d_dbd5_fa57));
         // Mid-firefight, with shots in the window, the same holds.
         let (mut sim, _, _) = kestrel_firefight();
         let mut window = ShotWindow::new();
@@ -2949,7 +2994,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0x8f6a_ba55_027b_186e));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xee0f_54cf_6c06_7e37));
     }
 
     #[test]

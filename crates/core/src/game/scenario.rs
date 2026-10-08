@@ -365,8 +365,26 @@ const KESTREL_PROBE_IDS: [u32; 3] = [9, 10, 11];
 /// `survival`'s relative offsets, waves muster at [`kestrel::HOLDFAST`] and must
 /// cross the Wyllow Ford, and a three-squad probe (see
 /// [`kestrel_probe_commands`]) makes first contact just before 2:00.
+///
+/// Kestrel Reach is the only scenario that turns on the depth rules
+/// ([`Sim::enable_depth`]), as the last step of construction.
 #[must_use]
 pub fn kestrel_reach(seed: u64) -> Sim {
+    let mut sim = kestrel_reach_world(seed);
+    sim.enable_depth();
+    sim
+}
+
+/// Classic Kestrel Reach: the same world without the depth rules, for the
+/// determinism pin that proves the depth flag leaves the classic path alone.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn kestrel_reach_classic(seed: u64) -> Sim {
+    kestrel_reach_world(seed)
+}
+
+/// The Kestrel Reach world as built before the depth rules existed.
+fn kestrel_reach_world(seed: u64) -> Sim {
     // Both sides are created with Earthfront's usual 1800; only the human purse
     // shrinks to `KESTREL_START_CREDITS` (the alien economy is left as it was).
     let mut sim = Sim::new(kestrel::build_map(), seed, Fixed::from_int(1800));
@@ -925,6 +943,31 @@ impl Scenario {
             Self::KestrelReach => kestrel_probe_commands(sim),
             _ => Vec::new(),
         }
+    }
+
+    /// One host tick's non-player commands, in order: the human-side AI while
+    /// the Survival survey runs, the alien AI once wave one has spawned, then
+    /// the scenario script ([`Scenario::scripted_commands`]). The only builder
+    /// of this list: the bridge, the tests and replay verification all call it
+    /// once per tick, before stepping, then append the player's commands.
+    #[must_use]
+    pub fn host_commands(self, sim: &Sim) -> Vec<Command> {
+        // The human-side AI exists only to resolve Survival's initial survey at
+        // the deterministic premium site. From the first active tick onward the
+        // player owns every economy, production, science, and tactical decision.
+        let mut commands = if sim.surveying() {
+            sim.ai_commands(HUMAN)
+        } else {
+            Vec::new()
+        };
+        // Keep the beachhead garrison defensive during the authored build-up
+        // (Kestrel Reach: broken only by its scripted probe). Once wave one
+        // arrives, the enemy economy and tactics activate.
+        if sim.waves_survived() > 0 {
+            commands.extend(sim.ai_commands(ENEMY));
+        }
+        commands.extend(self.scripted_commands(sim));
+        commands
     }
 
     /// Builds the scenario's starting world, seeded for deterministic randomness.
@@ -1923,15 +1966,9 @@ mod tests {
     }
 
     /// One host tick's non-player commands on Kestrel Reach, exactly as
-    /// `godot-bridge` builds them: the alien AI once wave one has spawned, then the
-    /// scenario script (the pre-wave probe).
+    /// `godot-bridge` builds them ([`Scenario::host_commands`]).
     fn kestrel_shell_commands(s: &crate::game::sim::Sim) -> Vec<Command> {
-        let mut cmds = Vec::new();
-        if s.waves_survived() > 0 {
-            cmds.extend(s.ai_commands(PlayerId(1)));
-        }
-        cmds.extend(Scenario::KestrelReach.scripted_commands(s));
-        cmds
+        Scenario::KestrelReach.host_commands(s)
     }
 
     /// The first alien unit standing within its own weapon range of a human

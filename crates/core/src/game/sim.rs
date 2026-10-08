@@ -10,6 +10,8 @@
 #[path = "earthfront.rs"]
 mod earthfront;
 pub use earthfront::{EconomyView, SupplyLink, SupplyState};
+#[path = "depth.rs"]
+mod depth;
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
@@ -145,6 +147,8 @@ struct Entity {
     supply_stock: u32,
     ore_buffer: u32,
     objective_role: earthfront::ObjectiveRole,
+    /// Kestrel depth per-entity state; hashed only when depth is on.
+    dp: depth::DepthUnit,
 }
 
 const HARVEST_CAPACITY: u32 = 100;
@@ -717,6 +721,10 @@ pub enum GamePhase {
 
 /// The deterministic RTS world.
 #[derive(Clone, Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent mode switches (survival, lod_skip, earthfront, depth), not one state machine"
+)]
 pub struct Sim {
     /// Test-only count of `order_unit_to` calls (pins that harvesters do not re-path every tick).
     #[cfg(test)]
@@ -784,6 +792,12 @@ pub struct Sim {
     planet_tiles: Vec<u32>,
     earthfront: bool,
     earthfront_wave_doctrine: u8,
+    /// Kestrel depth rules (see `depth.rs`): set only by `kestrel_reach` via
+    /// [`Sim::enable_depth`] and always read through [`Sim::is_depth`]
+    /// (`earthfront && depth`). Its state below is hashed only when on.
+    depth: bool,
+    /// Kestrel depth world-wide state; hashed only when depth is on.
+    dg: depth::DepthGlobal,
 }
 
 /// Narrows an `i128` accumulator to `i64`, saturating at the bounds rather than
@@ -992,6 +1006,8 @@ impl Sim {
             planet_tiles: Vec::new(),
             earthfront: false,
             earthfront_wave_doctrine: 0,
+            depth: false,
+            dg: depth::DepthGlobal::default(),
         }
     }
 
@@ -2184,6 +2200,11 @@ impl Sim {
                 h.write_u64(u64::from(e.ore_buffer));
                 h.write_u64(e.objective_role as u64);
             }
+            // Kestrel depth per-entity state, depth on only (Survival and the
+            // classic paths never write it, so their hashes are unchanged).
+            if self.earthfront && self.depth {
+                e.dp.hash_into(&mut h);
+            }
             h.write_u64(u64::from(e.attack_move));
             h.write_u64(u64::from(e.cargo));
             h.write_u64(u64::from(e.harvest_returning));
@@ -2198,6 +2219,11 @@ impl Sim {
         if self.earthfront {
             h.write_u64(0x4541_5254_4832);
             h.write_u64(u64::from(self.earthfront_wave_doctrine));
+        }
+        // Kestrel depth global state behind its own marker ("DEPTH"), depth on only.
+        if self.earthfront && self.depth {
+            h.write_u64(0x44_4550_5448);
+            self.dg.hash_into(&mut h);
         }
         h.write_u64(self.free.len() as u64);
         for &slot in &self.free {
@@ -2367,6 +2393,7 @@ impl Sim {
             supply_stock: 0,
             ore_buffer: 0,
             objective_role: earthfront::ObjectiveRole::None,
+            dp: depth::DepthUnit::default(),
         })
     }
 
@@ -2410,6 +2437,7 @@ impl Sim {
             supply_stock: 0,
             ore_buffer: 0,
             objective_role: earthfront::ObjectiveRole::None,
+            dp: depth::DepthUnit::default(),
         })
     }
 
