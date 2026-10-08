@@ -25,6 +25,7 @@ const LiveAdapter := preload("res://scripts/ui/live_adapter.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
+const BuildingStates := preload("res://scripts/world/building_states.gd")
 const AlertPings := preload("res://scripts/ui/alert_pings.gd")
 const Settings := preload("res://scripts/ui/settings.gd")
 const FeedbackEvents := preload("res://scripts/ui/feedback_events.gd")
@@ -58,12 +59,17 @@ var world_atmosphere: CanvasLayer  # Kestrel only: warm light and vignette under
 var world_art_on := false  # Kestrel world-art profile (a real ground layer arrived); Survival keeps every legacy value
 var world_props: RefCounted  # Kestrel only: WorldProps, the painted props as two MultiMeshes (null in Survival)
 var world_fx: RefCounted  # Kestrel only: WorldFx, pooled fire, smoke and spark cards (null in Survival: spheres)
+## Kestrel only (kestrel-depth Task 8): BuildingStates, the smoke, fire and working puffs of the buildings the player sees
+## (null in Survival). _state_tick is the tick of the last entity sync: a lower one is a restarted sim.
+var building_states: RefCounted
+var _state_tick := -1
 ## Kestrel shots (plan 2026-10-05-kestrel-combat-motion-fx, Task 3): the bridge's `shots` window, drawn once each. Purely
 ## cosmetic: nothing here touches gameplay state, selection or the HUD.
 const SHOT_WINDOW := 18  # ticks the bridge keeps a shot in its window
 const SHOTS_PER_POLL := 24  # at most this many new shots drawn per poll; the rest are dropped (never drawn late)
 const SHOT_KIND_RADIUS := 0.6 * WorldArt.TILE  # the attacker is the nearest entity this close to the shot's start
 const SHOT_HIT_WINDOW := 0.2  # s: an HP drop under a shot's impact this close in time draws no second flash
+const STATE_ROOF := 0.75  # building states (Task 8) rise from this share of the fitted roof height (crown_y)
 const SHOT_MAX_DELAY := 0.6  # s: a poll's shots replay at their own ticks' rhythm, behind the newest by at most this
 var shot_seen: Dictionary = {}  # "tick,ax,az,tx,tz#n" -> tick, the shots already handled (n: same row twice in a tick)
 var shot_tick := -1  # the tick of the last shots window read (a lower one means the sim restarted)
@@ -572,6 +578,7 @@ func _sync_ground(snapshot: Dictionary) -> void:
 		world_fx.build(self)
 		world_fx.camera = camera
 		world_fx.fog = fog_view
+		building_states = BuildingStates.new()
 		_setup_kestrel_audio()
 		alert_pings = AlertPings.new()
 	_ground_deposits = snapshot.get("deposits", [])
@@ -2857,6 +2864,10 @@ func _fit_building_card(root: Node3D, card: MeshInstance3D, progress: float) -> 
 
 
 func _sync_bridge_entities(entities: Array) -> void:
+	if building_states != null:
+		if bridge_tick < _state_tick:
+			building_states.clear(world_fx)  # a restarted sim: the old match's smoke and fire go with it
+		_state_tick = bridge_tick
 	var seen: Dictionary = {}
 	var next_frame_entities: Dictionary = {}
 	for entity_data in entities:
@@ -3017,6 +3028,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 				_set_remembered(entity_node, remembered)
 			if fog_view.active() and int(entity_data.get("owner", HUMAN)) != HUMAN and not remembered:
 				fog_seen_ids[bridge_id] = true
+		if category == "building" and building_states != null:
+			_sync_building_state(bridge_id, entity_data, entity_node, destination)
 
 	for bridge_id in bridge_nodes.keys():
 		if seen.has(bridge_id):
@@ -3024,6 +3037,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 		var stale := bridge_nodes[bridge_id] as Node3D
 		bridge_nodes.erase(bridge_id)
 		_audio_sites.erase(bridge_id)
+		if building_states != null:
+			building_states.forget(bridge_id, world_fx)  # its smoke and fire stop; the collapse takes over
 		units.erase(stale)
 		if is_instance_valid(stale):
 			if bridge_initialized and not _fog_quiet_departure(stale):
@@ -3035,6 +3050,28 @@ func _sync_bridge_entities(entities: Array) -> void:
 			stale.queue_free()
 	bridge_frame_entities = next_frame_entities
 	bridge_initialized = true
+
+
+## Kestrel building states (kestrel-depth Task 8): one building's state for this poll. A memory, a construction site or a
+## building on ground the player does not see now has none (and its cards go at once); otherwise its HP share and whether
+## it works (BuildingStates.is_working: its services power, its production, a Refinery's ore, the player's research) pick
+## smoke, fire, a working puff or nothing. The plume rises from the painted body's centre at about three quarters of its
+## roof height (crown_y, set when the card is fitted).
+func _sync_building_state(bridge_id: int, entity_data: Dictionary, node: Node3D, destination: Vector3) -> void:
+	if bool(entity_data.get("remembered", false)) or int(entity_data.get("construction", 0)) > 0 or not fog_view.is_visible(destination):
+		building_states.forget(bridge_id, world_fx)
+		return
+	var researching := bridge_active_research_id >= 0 and not bridge_research_status.begins_with("Paused")
+	var working := BuildingStates.is_working(entity_data, bridge_services.get(bridge_id, {}), researching)
+	var state := BuildingStates.state_for(int(entity_data.get("hp_bits", 0)), int(entity_data.get("max_hp_bits", 0)), working)
+	var kind := String(entity_data.get("kind", ""))
+	var width := float(WorldArt.BUILDING_TILES.get(kind, 1.7)) * WorldArt.TILE
+	var anchor := destination
+	var card := node.get_node_or_null("Visual") as MeshInstance3D
+	if card != null and card.has_meta("sprite_texture"):
+		anchor.x += WorldSprites.pad_spot(card.get_meta("sprite_texture"), card.scale.x).x
+	var lift := float(node.get_meta("crown_y", 0.78)) * STATE_ROOF
+	building_states.update(bridge_id, state, anchor, lift, width, int(entity_data.get("owner", HUMAN)), world_fx.time)
 
 
 func _apply_era_visuals() -> void:
@@ -3804,6 +3841,8 @@ func _advance_fx(delta: float) -> void:
 	if world_fx == null:
 		return
 	world_fx.advance(0.0 if sim_paused else delta)
+	if building_states != null and not sim_paused:
+		building_states.step(world_fx, world_fx.time)
 	for id in recoiling.keys():
 		var card = recoiling[id]
 		if not is_instance_valid(card):

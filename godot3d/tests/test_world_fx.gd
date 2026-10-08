@@ -667,3 +667,58 @@ func test_the_hp_drop_query_is_read_only(t) -> void:
 	scene._dispatch_shots({"tick": 70, "shots": []})
 	t.eq(scene.shot_impacts.size(), 0, "the next poll prunes them")
 	scene.free()
+
+
+# ---------------------------------------------------------------- kestrel-depth Task 8: building states
+
+func test_smoke_fire_and_puff_return_a_pooled_slot(t) -> void:
+	var pair := _fx()
+	var fx = pair[0]
+	var s: int = fx.smoke(Vector3(1, 0, 1), 1.4)
+	t.ok(s >= 0 and s < WorldFx.POOL, "smoke returns its slot (%d)" % s)
+	t.ok(fx.slot_live(s) and fx.find_slot(WorldFx.SMOKE) == s, "a live smoke card")
+	var f: int = fx.fire(Vector3(2, 0, 1), 1.4, 1)
+	t.ok(f >= 0 and fx.slot_live(f), "fire returns its slot (%d)" % f)
+	t.ok(fx.live_sprites().has(WorldFx.FIREBALL) and fx.live_sprites().has(WorldFx.FLASH), "a flame and its flicker")
+	t.ok(fx.live_bands().has(1), "an alien building burns in alien colours")
+	var p: int = fx.puff(Vector3(3, 0, 1), 1.4)
+	t.ok(p >= 0 and fx.slot_live(p), "a working puff returns its slot")
+	t.ok(fx.pool_count() <= WorldFx.FIRE_MAX_CARDS + 2, "a few cards in all (%d)" % fx.pool_count())
+	_done(pair)
+
+
+func test_state_effects_are_culled_out_of_view_and_when_busy(t) -> void:
+	var pair := _fx()
+	var fx = pair[0]
+	fx.set_view(Vector3.ZERO, Vector2(4, 3))
+	t.eq(fx.smoke(Vector3(30, 0, 30), 1.4), -1, "smoke far off screen: -1")
+	t.eq(fx.fire(Vector3(30, 0, 30), 1.4), -1, "fire far off screen: -1")
+	t.eq(fx.puff(Vector3(30, 0, 30), 1.4), -1, "puff far off screen: -1")
+	t.eq(fx.pool_count(), 0, "nothing spawned")
+	for i in WorldFx.STATE_ROOM:
+		fx._card(WorldFx.SMOKE, 0, Vector3.ZERO, {"life": 30.0})
+	t.eq(fx.smoke(Vector3.ZERO, 1.4), -1, "a busy pool (combat) leaves building states out")
+	t.ok(fx.hit(Vector3.ZERO, 2, 0) > 0, "while combat still draws")
+	_done(pair)
+
+
+func test_release_frees_only_a_tags_cards(t) -> void:
+	var pair := _fx()
+	var fx = pair[0]
+	fx.smoke(Vector3(1, 0, 1), 1.4, 0, 41)
+	fx.fire(Vector3(1, 0, 1), 1.4, 0, 41)
+	fx.smoke(Vector3(2, 0, 1), 1.4, 0, 42)
+	fx.hit(Vector3(3, 0, 3), 1, 0)
+	var other: int = fx.tag_count(42)
+	var total: int = fx.pool_count()
+	var mine: int = fx.tag_count(41)
+	t.ok(mine >= 2, "building 41 has its cards (%d)" % mine)
+	t.eq(fx.release(41), mine, "release frees them all")
+	t.eq(fx.tag_count(41), 0, "none left")
+	t.eq(fx.tag_count(42), other, "another building's are kept")
+	t.eq(fx.pool_count(), total - mine, "and the combat cards")
+	for i in WorldFx.POOL * 3:
+		fx.hit(Vector3(float(i % 5), 0, 0), i % 4, i % 2)  # the freed slots are reused and the ring stays sound
+	t.ok(fx.pool_count() <= WorldFx.POOL, "the pool holds after a release")
+	t.eq(fx.tag_count(41), 0, "a reused slot never counts for the old tag")
+	_done(pair)

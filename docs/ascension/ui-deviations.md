@@ -1082,3 +1082,33 @@ wheel scores 0 on both, so a recolour cannot pass. Over the 42 same-side pairs o
 - The live top bar shows "F1 Controls" (an F1 key cap and a label) right-aligned left of the wave chip, on the main layout
   and on the build tab's strip, only when it fits beside the resource chips; a click opens the controls screen. The gallery
   fixtures carry no hint, so the gameplay and build deck boards are unchanged. The core assault layout has no hint.
+
+### Building damage and working states (kestrel-depth Task 8, 2026-10-08)
+
+No board draws a damaged or working building, so every look here is ours. On Kestrel a building now shows its state with
+the pooled combat cards (`godot3d/scripts/world/world_fx.gd`, rules in `godot3d/scripts/world/building_states.gd`); no
+new art, no node or material per building. Survival never builds the state tracker (its SHA pins are unchanged).
+
+- States from the snapshot's HP bits (integer maths): below 25% of max HP "fire", below 50% "smoke", else "working" while
+  the building works, else nothing. Damage outranks work. Exactly half is not smoke; exactly a quarter smokes.
+- Working: complete, powered (services power at least 500 per mille; no services entry counts as powered) and producing
+  (a production order), or a Refinery holding at least 5 ore (the sim's batch), or the player's ResearchLab while the
+  player's research runs (not paused). An alien lab never reads as researching. A live refinery with ore in store
+  processes it, so it puffs on idle boards too (one faint steam card every 2.5 s; the scores did not move).
+- Looks: smoke is a grey smoke-puff card off the roof every 0.6 s (lighter than the atlas grey, so it reads as smoke and
+  not a cloud shadow; alien smoke is purple-grey); fire is a small fireball with a flicker flash every 0.35 s and a dark
+  smoke card every other flicker, in the owner's band (human amber, alien magenta); a working building lets off a pale
+  steam puff every 2.5 s. Card sizes follow the building's footprint width, clamped to 0.9 to 1.7 world units. The roof
+  spot cycles through five fixed offsets, so a plume wavers without noise.
+- Pool: the 128 shared cards. State effects may hold at most 96 of them (`STATE_ROOM`), so 40 burning buildings leave
+  room for combat hits (a hit still spawns). Each emission is paced from the effects clock with a phase fixed by the
+  building id: deterministic, no random.
+- Fog: only a building the player sees now (`FogView.is_visible`) emits; a remembered building, an unseen one, a
+  construction site or a dead one is dropped and its cards are released at once. The effects clock stands still while
+  the game is paused, so nothing is emitted or burns out behind the pause menu; a restarted sim (the tick going back)
+  clears every state.
+- Cost: state effects use the existing three card layers, at most 3 draw calls and 768 primitives. Software capture,
+  three damaged human buildings on screen plus a working barracks: home 44 draw calls / 157,922 primitives against
+  idle 35 / 157,082 (fog off), 43 / 157,666 with fog on; the most-zoomed-out frame with damaged buildings on both
+  bases 66 / 208,852. All far under the +120 / +150k budget over `world_baseline.json`. Stepping 40 burning or smoking
+  buildings costs 37 us (p50) a frame headless.

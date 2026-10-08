@@ -23,6 +23,13 @@ extends RefCounted
 ## Dust (Task 4): `dust(pos, size)` is a soft puff rising where a moving unit's tracks or boots meet the ground, `wash(pos, size)` a moving gunship's rotor wash (a ring spreading on the ground, two puffs blown
 ## aside). Both are the smoke and dust-ring sprites of the human band tinted KICKED_TINT, a pale sandy tan.
 ##
+## Building states (kestrel-depth Task 8): `smoke(pos, size)`, `fire(pos, size)` and `puff(pos, size)` draw one emission of a
+## damaged or working building (BuildingStates paces them) on the same cards: a dark smoke card rising off the roof, a small
+## flame with a flicker flash, a pale steam puff. They are the lowest priority with dust: each spawns only while fewer than
+## STATE_ROOM cards are live, only on screen and only where the fog shows the player the building NOW (FogView.is_visible,
+## not the one-poll grace of combat effects). Each card can carry a tag (the building id): `release(tag)` frees a
+## building's cards at once when it dies, becomes a site or a memory, or drops out of sight.
+##
 ## Shots (Task 3): `shot(from, to, attacker_kind, owner)` draws one round of the bridge's shots window on the same cards:
 ## a muzzle flash, a tracer, shell or plasma bolt (row 3 of the band: a vertical streak, head up) stretched along the
 ## shot's screen direction and flying muzzle to target, and an impact flash when it lands. Everything is screen space:
@@ -46,6 +53,21 @@ const DUST_NUDGE := 0.12
 ## combat effect (the pool recycles the oldest card at POOL).
 const DUST_ROOM := 80
 const DUST_LIFE := 0.85
+## Building states (Task 8) share the dust rule: they spawn only while fewer than STATE_ROOM cards are live, so a base on
+## fire never takes a firefight's slots.
+const STATE_ROOM := 96
+const SMOKE_LIFE := 2.6
+const FIRE_LIFE := 0.7
+const PUFF_LIFE := 1.8
+## Working puffs: pale steam, over 1 so the grey smoke frames read light on a roof.
+const STEAM_TINT := Color(1.85, 1.85, 1.9)
+## Damage smoke: a mid grey (the atlas smoke is about 0.41 grey, so these lift it to about 0.47) that reads as smoke over
+## sunlit grass and sand; a tint under 0.5 reads as a cloud shadow instead. A burning building's smoke is the darker pair.
+const DAMAGE_SMOKE_TINT := [Color(1.16, 1.13, 1.08), Color(1.10, 0.98, 1.22)]
+const BURNING_SMOKE_TINT := [Color(0.72, 0.69, 0.66), Color(0.70, 0.60, 0.78)]
+## A building's state effects scale with its card width, held to this range (world units): a turret's plume still reads
+## and a command centre's does not swallow the base.
+const STATE_SIZE := Vector2(0.9, 1.7)
 const GROUND_LIFT := 0.06  # decals lie flat on the ground this far over the anchor (the ground height at their centre)
 const VIEW_MARGIN := 2.5
 ## The most cards each recipe spawns (the tests hold them to it).
@@ -54,6 +76,7 @@ const HIT_MAX_CARDS := 4
 const EXPLODE_MAX_CARDS := 9
 const COLLAPSE_MAX_CARDS := 15
 const SHOT_MAX_CARDS := 6
+const FIRE_MAX_CARDS := 2  # a flame and its flicker (BuildingStates adds smoke over it on every other emission)
 ## Hit size by weight class (world units): 0 infantry, 1 anti-armour or gun, 2 tank, 3 gunship, capital or building.
 const HIT_SIZE := [0.32, 0.46, 0.66, 0.86]
 const FLASH_SIZE := [0.28, 0.36, 0.50, 0.62]
@@ -414,6 +437,79 @@ func wash(pos: Vector3, size: float) -> int:
 	return 3
 
 
+## Whether a building state of `cards` cards may spawn at `pos`: room for all of them under STATE_ROOM, on screen, and
+## seen by the player now.
+func _state_ok(pos: Vector3, cards := 1) -> bool:
+	if _layers.is_empty() or _live + cards > STATE_ROOM:
+		return false
+	if absf(pos.x - _view_focus.x) > _view_half.x + VIEW_MARGIN or absf(pos.z - _view_focus.z) > _view_half.y + VIEW_MARGIN:
+		return false
+	return fog == null or fog.is_visible(pos)
+
+
+## A damaged building's smoke (Task 8): one grey card rising from `pos` (a point on its roof), `size` the building card's
+## width, drifting a little east as it climbs and fading over SMOKE_LIFE, in `owner`'s smoke tint (`dark`: a burning
+## building's black smoke). `tag` marks the card for release(). Returns its slot, or -1 when culled (busy pool, off
+## screen, fogged).
+func smoke(pos: Vector3, size: float, owner := 0, tag := -1, dark := false) -> int:
+	if not _state_ok(pos):
+		return -1
+	var b := _band(owner)
+	var s := clampf(size, STATE_SIZE.x, STATE_SIZE.y)
+	return _card(SMOKE, b, pos, {"life": SMOKE_LIFE, "size": [s * 0.4, s * 1.05], "vel": Vector2(0.07, 0.36),
+		"tint": BURNING_SMOKE_TINT[b] if dark else DAMAGE_SMOKE_TINT[b], "alpha": 0.85, "fade_in": 0.12, "fade_out": 0.45, "tag": tag})
+
+
+## A burning building's flame (Task 8): a small fireball licking up from `pos` and a short flicker flash over it, in
+## `owner`'s fire colours (FIRE_MAX_CARDS). Returns the flame's slot, or -1 when culled.
+func fire(pos: Vector3, size: float, owner := 0, tag := -1) -> int:
+	if not _state_ok(pos, FIRE_MAX_CARDS):
+		return -1
+	var b := _band(owner)
+	var s := clampf(size, STATE_SIZE.x, STATE_SIZE.y)
+	var slot := _card(FIREBALL, b, pos, {"life": FIRE_LIFE, "size": [s * 0.3, s * 0.46], "vel": Vector2(0.0, 0.24), "tint": FIRE_TINT,
+		"fade_in": 0.1, "fade_out": 0.55, "tag": tag})
+	_card(FLASH, b, pos, {"life": 0.16, "size": [s * 0.26, s * 0.34], "off": Vector2(0.0, s * 0.08), "rot": _spin_of(_serial),
+		"tint": FIRE_TINT, "alpha": 0.7, "fade_out": 0.4, "tag": tag})
+	return slot
+
+
+## A working building's puff (Task 8): a small pale steam card from `pos` that swells, rises and fades over PUFF_LIFE.
+## Returns its slot, or -1 when culled.
+func puff(pos: Vector3, size: float, tag := -1) -> int:
+	if not _state_ok(pos):
+		return -1
+	var s := clampf(size, STATE_SIZE.x, STATE_SIZE.y)
+	return _card(SMOKE, 0, pos, {"life": PUFF_LIFE, "size": [s * 0.2, s * 0.5], "vel": Vector2(0.04, 0.26), "tint": STEAM_TINT,
+		"alpha": 0.42, "fade_in": 0.2, "fade_out": 0.4, "tag": tag})
+
+
+## Frees every live card tagged `tag` at once (a building that died, became a site or a memory, or left the player's
+## sight). Returns the cards freed. Their spawn-ring entries go stale and are skipped like expired ones.
+func release(tag: int) -> int:
+	var n := 0
+	for slot in POOL:
+		var c := _cards[slot]
+		if c.live and int(c.get("tag", -1)) == tag:
+			_clear_slot(slot)
+			_live -= 1
+			_free.push_back(slot)
+			n += 1
+	if n > 0 and _live == 0:
+		for mmi in _layers:  # advance() skips its redraw with no live card: the freed cards must not linger on screen
+			mmi.visible = false
+	return n
+
+
+## The live cards tagged `tag`.
+func tag_count(tag: int) -> int:
+	var n := 0
+	for c in _cards:
+		if c.live and int(c.get("tag", -1)) == tag:
+			n += 1
+	return n
+
+
 static func shot_style(kind: String) -> int:
 	match kind:
 		"Tank", "AntiArmor", "Capital":
@@ -507,8 +603,8 @@ static func _spin_of(serial: int) -> float:
 ## the centre from the anchor, world units), vel and acc (screen units per s and per s squared), rot and spin (radians,
 ## radians per s), tint, alpha (peak), fade_in and fade_out (fractions of the life), ground (0 for a camera-facing card,
 ## else a decal lying flat on the ground, north up, `ground` times as deep as wide: 1 for a round sprite, 0.5 for RUBBLE),
-## aspect (height over width of a standing card, default 1), nudge (world units toward the camera, default NUDGE). Returns
-## the slot.
+## aspect (height over width of a standing card, default 1), nudge (world units toward the camera, default NUDGE), tag (an
+## owner id for release(), default -1). Returns the slot.
 func _card(sprite: int, band: int, anchor: Vector3, opts: Dictionary) -> int:
 	var slot := -1
 	if not _free.is_empty():  # a free slot (the oldest is only taken when every slot is live)
@@ -543,6 +639,7 @@ func _card(sprite: int, band: int, anchor: Vector3, opts: Dictionary) -> int:
 	c.ground = float(opts.get("ground", 0.0))
 	c.aspect = float(opts.get("aspect", 1.0))
 	c.nudge = float(opts.get("nudge", NUDGE))
+	c.tag = int(opts.get("tag", -1))
 	c.flip = sprite in [FIREBALL, SMOKE, DEBRIS, EMBER] and _serial % 2 == 1  # mirrored every other card: no two alike
 	_ring_push(slot, _serial)
 	_serial += 1
