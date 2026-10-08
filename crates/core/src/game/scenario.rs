@@ -2213,6 +2213,11 @@ mod tests {
     ///   wins, at t=13622 after 2 waves -> t=17323 after 3 waves, now that idle
     ///   units on both sides (the alien base's guards included) acquire and
     ///   answer hits.
+    /// - Task 12 (separation 0.45, attack-move halts only for enemies it can
+    ///   shoot): the undefended base falls at t=4980 -> 4975; the playtest AI
+    ///   still wins, at t=17323 after 3 waves -> t=12867 after 2 waves. The
+    ///   separation pass and its corner guard move it (measured with the halt
+    ///   fix alone: both numbers unchanged).
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
@@ -2221,9 +2226,9 @@ mod tests {
         // the enemy AI (+ the scripted probe and escalating waves once the grace
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
-        // so there is no founding step. Measured: it falls at t=4980 (wave one
-        // spawns at 4500; 4959 before depth auto-acquire, Task 11; before the
-        // rework it fell at t=3159).
+        // so there is no founding step. Measured: it falls at t=4975 (wave one
+        // spawns at 4500; 4980 before depth separation, Task 12; 4959 before
+        // depth auto-acquire, Task 11; before the rework it fell at t=3159).
         let mut s = kestrel_reach(3);
         assert!(!s.surveying());
         let mut winner = None;

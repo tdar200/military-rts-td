@@ -915,6 +915,30 @@ const fn era_damage_factor(era: u8) -> Fixed {
     }
 }
 
+/// The attack-move halt scan: whether any living enemy in `snap` (the
+/// pre-tick `(alive, owner, pos, is_air)` snapshot) stands within the
+/// engagement range of entity `i` (`e`): its weapon range, or
+/// [`ATTACK_MOVE_LEASH`] when unarmed. Ascending index, first hit wins. Under
+/// Kestrel depth an enemy the weapon cannot reach (a gunship over a rifle,
+/// the `run_combat` layer test) never halts the advance.
+fn attack_move_halts(
+    snap: &[(bool, u16, Vec2, bool)],
+    i: usize,
+    e: &Entity,
+    profile: Option<AttackProfile>,
+    depth: bool,
+) -> bool {
+    let leash = profile.map_or(ATTACK_MOVE_LEASH, |p| p.range);
+    let leash_sq = leash * leash;
+    snap.iter().enumerate().any(|(j, t)| {
+        t.0 && j != i
+            && t.1 != e.owner.0
+            && (!depth
+                || profile.is_some_and(|p| if t.3 { p.targets_air } else { p.targets_ground }))
+            && (t.2 - e.pos).length_squared() <= leash_sq
+    })
+}
+
 const fn is_air_of(balance: &Balance, kind: Kind) -> bool {
     match kind {
         Kind::Unit(u) => balance.unit(u).is_air,
@@ -2467,7 +2491,14 @@ impl Sim {
             // Kestrel depth: idle units acquire, leash and walk home (depth.rs).
             self.run_depth_acquire();
         }
-        self.run_movement();
+        if self.is_depth() {
+            // Kestrel depth: same-owner units at rest spread apart (depth.rs).
+            let before = self.depth_positions();
+            self.run_movement();
+            self.run_depth_separation(&before);
+        } else {
+            self.run_movement();
+        }
         self.run_shields();
         self.run_combat();
         self.run_status();
@@ -4127,11 +4158,14 @@ impl Sim {
         // attack-mover can scan for a nearby enemy without borrowing `entities`
         // mutably during the move loop. Ascending index, no rng/float — the same
         // deterministic order the combat pass relies on.
-        let snap: Vec<(bool, u16, Vec2)> = self
+        // The last field is the air flag: under Kestrel depth only an enemy the
+        // attack-mover's weapon can reach (the `run_combat` layer test) halts it.
+        let snap: Vec<(bool, u16, Vec2, bool)> = self
             .entities
             .iter()
-            .map(|e| (e.alive, e.owner.0, e.pos))
+            .map(|e| (e.alive, e.owner.0, e.pos, is_air_of(&self.balance, e.kind)))
             .collect();
+        let depth = self.is_depth();
         let antigrav: Vec<bool> = (0..self.civs.len())
             .map(|p| self.player_has_antigrav(PlayerId(u16::try_from(p).unwrap())))
             .collect();
@@ -4142,6 +4176,9 @@ impl Sim {
         } else {
             Vec::new()
         };
+        // Kestrel depth: ground units that must re-path from their own tile
+        // (always empty when depth is off).
+        let mut repath: Vec<usize> = Vec::new();
         for (i, e) in self.entities.iter_mut().enumerate() {
             if !e.alive || e.construction_remaining > 0 {
                 continue;
@@ -4161,22 +4198,11 @@ impl Sim {
             // it is unarmed. Scan in ascending index order over the frozen
             // snapshot (deterministic; no rng/float). Plain Move never enters
             // this branch, so it marches through unchanged.
-            if e.attack_move && (!self.earthfront || e.ammunition > 0) {
-                let leash = attack_of(&self.balance, e.kind).map_or(ATTACK_MOVE_LEASH, |p| p.range);
-                let leash_sq = leash * leash;
-                let mut enemy_in_range = false;
-                for (j, t) in snap.iter().enumerate() {
-                    if !t.0 || j == i || t.1 == e.owner.0 {
-                        continue;
-                    }
-                    if (t.2 - e.pos).length_squared() <= leash_sq {
-                        enemy_in_range = true;
-                        break;
-                    }
-                }
-                if enemy_in_range {
-                    continue;
-                }
+            if e.attack_move
+                && (!self.earthfront || e.ammunition > 0)
+                && attack_move_halts(&snap, i, e, attack_of(&self.balance, e.kind), depth)
+            {
+                continue;
             }
             let base = uk.stats().speed + mobility[usize::from(e.owner.0)];
             let speed = if self.earthfront {
@@ -4220,6 +4246,22 @@ impl Sim {
                 .map_or(target, |&(wx, wy)| tile_center(wx, wy));
             let dir = subgoal - e.pos;
             let dist = dir.length();
+            // Kestrel depth: a ground unit standing off its tile centre (pushed
+            // aside by separation) must not cut a corner into the river on its
+            // way to the next waypoint; it re-centres first, or re-paths.
+            if depth && !is_air_of(&self.balance, e.kind) && !antigrav[usize::from(e.owner.0)] {
+                match depth::ground_step(&self.map, e.pos, subgoal, speed) {
+                    depth::GroundStep::Clear => {}
+                    depth::GroundStep::Recentre(p) => {
+                        e.pos = p;
+                        continue;
+                    }
+                    depth::GroundStep::Repath => {
+                        repath.push(i);
+                        continue;
+                    }
+                }
+            }
             if dist <= speed {
                 e.pos = subgoal;
                 if e.path.is_empty() {
@@ -4232,6 +4274,9 @@ impl Sim {
             } else {
                 e.pos = e.pos + dir.scale(speed / dist);
             }
+        }
+        for i in repath {
+            self.depth_repath(i);
         }
     }
 

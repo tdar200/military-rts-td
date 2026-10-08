@@ -30,6 +30,20 @@ pub(super) const LEASH: Fixed = Fixed::from_int(6);
 pub(super) const ASSIST_RADIUS: Fixed = Fixed::from_int(6);
 /// Ticks between re-paths of a chase while the engaged target keeps moving.
 pub(super) const REPATH_PERIOD: u64 = 20;
+/// Task 12: same-owner units on the same layer closer than this are pushed
+/// apart after movement (half the overlap each).
+pub(super) const SEPARATION: Fixed = Fixed::from_ratio(45, 100);
+
+/// Unit push axes for coincident units, one per hex direction (60 degrees
+/// apart, starting at 30 degrees), picked by the higher index `j % 6`.
+const HEX_AXES: [(i64, i64); 6] = [
+    (866, 500),
+    (0, 1000),
+    (-866, 500),
+    (-866, -500),
+    (0, -1000),
+    (866, -500),
+];
 
 /// Per-entity depth state. Fields are appended at the END in task order.
 #[derive(Clone, Debug, Default)]
@@ -387,6 +401,139 @@ impl Sim {
         }
     }
 
+    /// Re-issues unit `i`'s current order from where it stands (its path no
+    /// longer starts beside its tile). An order that can no longer be pathed
+    /// is dropped, so the unit idles instead of retrying every tick.
+    pub(super) fn depth_repath(&mut self, i: usize) {
+        let e = &mut self.entities[i];
+        let Some(goal) = e.order_goal.or(e.move_target) else {
+            return;
+        };
+        let attack_move = e.attack_move;
+        e.move_target = None;
+        e.path.clear();
+        e.attack_move = false;
+        self.order_unit_to(i, goal, attack_move);
+    }
+
+    /// Every entity's position, taken just before `run_movement` so
+    /// [`Sim::run_depth_separation`] can tell which units advanced this tick.
+    pub(super) fn depth_positions(&self) -> Vec<Vec2> {
+        self.entities.iter().map(|e| e.pos).collect()
+    }
+
+    /// Task 12 separation, run every depth tick right after `run_movement`
+    /// (`before` holds the positions from just before it). Living units are
+    /// bucketed by the combat grid; every same-owner pair `i < j` (ascending
+    /// index, positions updated in place) on the same layer (ground with
+    /// ground, air with air) closer than [`SEPARATION`] is pushed apart along
+    /// its axis by half the overlap each. Coincident units use the hex axis
+    /// `j % 6`. A unit that advanced this tick is never pushed: the unit at
+    /// rest steps aside by the whole overlap instead, and two advancing units
+    /// pass, so separation never alters a marching unit's route and can never
+    /// jam a ford, a corridor or a waypoint (a crowd converging on one point
+    /// spreads once it stops). A push that would put a ground unit on an
+    /// impassable tile (water, a building footprint) or any unit off the map
+    /// is skipped for that unit only. An idle unit's anchor moves with its
+    /// push, so the leash never walks it back into the crowd.
+    pub(super) fn run_depth_separation(&mut self, before: &[Vec2]) {
+        let layer: Vec<Option<bool>> = self
+            .entities
+            .iter()
+            .map(|e| {
+                (e.alive && e.hp > Fixed::ZERO && matches!(e.kind, Kind::Unit(_)))
+                    .then(|| is_air_of(&self.balance, e.kind))
+            })
+            .collect();
+        let moved: Vec<bool> = self
+            .entities
+            .iter()
+            .enumerate()
+            .map(|(i, e)| before.get(i).is_some_and(|&p| p != e.pos))
+            .collect();
+        let grid = DepthGrid::build(self);
+        let mut scratch = Vec::new();
+        let sep_sq = SEPARATION * SEPARATION;
+        for i in 0..self.entities.len() {
+            let Some(air) = layer[i] else {
+                continue;
+            };
+            grid.gather(self.entities[i].pos, SEPARATION, &mut scratch);
+            for &j in &scratch {
+                if j <= i
+                    || layer[j] != Some(air)
+                    || self.entities[j].owner != self.entities[i].owner
+                {
+                    continue;
+                }
+                let d = self.entities[j].pos - self.entities[i].pos;
+                let dsq = d.length_squared();
+                if dsq >= sep_sq {
+                    continue;
+                }
+                let dist = if dsq > Fixed::ZERO {
+                    d.length()
+                } else {
+                    Fixed::ZERO
+                };
+                let overlap = SEPARATION - dist;
+                let axis = if dist > Fixed::ZERO {
+                    d.scale(Fixed::ONE / dist)
+                } else {
+                    let (ax, ay) = HEX_AXES[j % 6];
+                    Vec2::new(Fixed::from_ratio(ax, 1000), Fixed::from_ratio(ay, 1000))
+                };
+                // Half the overlap each between units at rest; a unit that
+                // advanced this tick holds its ground and the one at rest steps
+                // aside by the whole overlap; two advancing units pass.
+                let (pi, pj) = match (moved[i], moved[j]) {
+                    (false, false) => {
+                        let half = overlap / Fixed::from_int(2);
+                        (half, half)
+                    }
+                    (true, false) => (Fixed::ZERO, overlap),
+                    (false, true) => (overlap, Fixed::ZERO),
+                    (true, true) => continue,
+                };
+                if pi > Fixed::ZERO {
+                    self.depth_push(i, axis.scale(-pi), air);
+                }
+                if pj > Fixed::ZERO {
+                    self.depth_push(j, axis.scale(pj), air);
+                }
+            }
+        }
+    }
+
+    /// Moves unit `k` by `delta` unless that lands a ground unit on an
+    /// impassable tile or any unit off the map; an idle unit's anchor follows.
+    fn depth_push(&mut self, unit: usize, delta: Vec2, air: bool) {
+        let next = self.entities[unit].pos + delta;
+        let (width, height) = (self.map.width(), self.map.height());
+        let max_x = Fixed::from_int(i32::from(width) - 1) * Fixed::from_ratio(3, 4) + Fixed::ONE;
+        let max_y = Fixed::from_int(i32::from(height)) + Fixed::from_ratio(1, 2);
+        if next.x < Fixed::ZERO || next.y < Fixed::ZERO || next.x > max_x || next.y > max_y {
+            return;
+        }
+        if !air {
+            let (tx, ty) = hex::from_world(next, width, height);
+            if !self
+                .map
+                .tile(i32::from(tx), i32::from(ty))
+                .is_some_and(|t| t.passable)
+            {
+                return;
+            }
+        }
+        let e = &mut self.entities[unit];
+        e.pos = next;
+        if e.move_target.is_none() {
+            if let Some(a) = e.dp.anchor {
+                e.dp.anchor = Some(a + delta);
+            }
+        }
+    }
+
     /// For each attack-mover, the nearest targetable enemy inside its
     /// acquisition ring (`range + ACQUIRE_BONUS`), measured before anyone moves
     /// this tick. `run_movement` steps the unit straight at it when nothing is
@@ -437,6 +584,55 @@ pub(super) fn steer_step(
             .tile(i32::from(x), i32::from(y))
             .is_some_and(|t| t.passable))
     .then_some(next)
+}
+
+/// What a depth ground unit does with its next movement step.
+pub(super) enum GroundStep {
+    /// The step lands on passable ground: take it.
+    Clear,
+    /// The step would land in water or on a footprint: walk toward the centre
+    /// of the unit's own tile instead (a segment inside one hex), from where
+    /// the straight line to an adjacent waypoint never leaves the two hexes.
+    Recentre(Vec2),
+    /// Already centred and still blocked: the path no longer starts next to
+    /// this tile, so path again from here.
+    Repath,
+}
+
+/// Task 12 corner guard for a ground unit at `pos` about to take one step of
+/// `speed` toward `subgoal`. Units travel between adjacent tile centres, a
+/// segment that stays inside those two hexes; a unit pushed off centre by
+/// separation could otherwise clip a corner of a river hex beside the ford.
+pub(super) fn ground_step(map: &Map, pos: Vec2, subgoal: Vec2, speed: Fixed) -> GroundStep {
+    let dir = subgoal - pos;
+    let dist = dir.length();
+    let next = if dist <= speed {
+        subgoal
+    } else {
+        pos + dir.scale(speed / dist)
+    };
+    let passable = |p: Vec2| {
+        let (x, y) = hex::from_world(p, map.width(), map.height());
+        map.tile(i32::from(x), i32::from(y))
+            .is_some_and(|t| t.passable)
+    };
+    // A unit already standing somewhere impassable (a structure raised under
+    // it) walks out along its path exactly as before.
+    if passable(next) || !passable(pos) {
+        return GroundStep::Clear;
+    }
+    let (hx, hy) = hex::from_world(pos, map.width(), map.height());
+    let centre = hex::center(hx, hy);
+    if centre == pos {
+        return GroundStep::Repath;
+    }
+    let d = centre - pos;
+    let len = d.length();
+    GroundStep::Recentre(if len <= speed {
+        centre
+    } else {
+        pos + d.scale(speed / len)
+    })
 }
 
 /// Within this distance of its anchor an idle unit counts as home (a return
@@ -555,7 +751,7 @@ impl DepthGrid {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACQUIRE_BONUS, LEASH};
+    use super::{is_air_of, Kind, ACQUIRE_BONUS, LEASH};
     use crate::fixed::Fixed;
     use crate::game::hex;
     use crate::game::map::Map;
@@ -1104,6 +1300,493 @@ mod tests {
             r.step(c);
         }
         assert_eq!(r.state_hash(), a);
+    }
+
+    /// Ten rifles dropped on one exact point spread out to at least 0.40 apart.
+    #[test]
+    fn ten_riflemen_on_one_point_spread_out() {
+        let mut s = depth_arena();
+        for _ in 0..10 {
+            s.add_unit(P0, UnitKind::Infantry, v(20, 20));
+        }
+        for _ in 0..90 {
+            s.step(&[]);
+        }
+        let pos: Vec<Vec2> = s.views().iter().map(|x| x.pos).collect();
+        let min_sq = Fixed::from_ratio(40, 100) * Fixed::from_ratio(40, 100);
+        let mut closest = Fixed::from_int(100);
+        for i in 0..pos.len() {
+            for j in i + 1..pos.len() {
+                closest = closest.min((pos[i] - pos[j]).length());
+                assert!(
+                    (pos[i] - pos[j]).length_squared() >= min_sq,
+                    "{i} {j} still stacked"
+                );
+            }
+        }
+        let spread = pos
+            .iter()
+            .map(|&p| (p - v(20, 20)).length())
+            .max()
+            .unwrap_or(Fixed::ZERO);
+        let milli = |f: Fixed| f.to_bits() * 1000 / Fixed::ONE.to_bits();
+        std::eprintln!(
+            "ten rifles after 90 ticks: closest pair {} milli-tiles, furthest from the drop point {}",
+            milli(closest),
+            milli(spread)
+        );
+    }
+
+    /// The spread crowd settles: after the spread every rifle is idle (no walk
+    /// home fighting the push), unengaged, within its anchor's home slack, and
+    /// the crowd stays put from then on.
+    #[test]
+    fn a_spread_crowd_settles_at_home_and_stays_put() {
+        let mut s = depth_arena();
+        let ids: Vec<_> = (0..10)
+            .map(|_| s.add_unit(P0, UnitKind::Infantry, v(20, 20)))
+            .collect();
+        for _ in 0..90 {
+            s.step(&[]);
+        }
+        let settled: Vec<Vec2> = ids.iter().map(|&id| s.position(id).unwrap()).collect();
+        let mut orders = 0u32;
+        for _ in 0..600 {
+            s.step(&[]);
+            orders += u32::try_from(
+                ids.iter()
+                    .filter(|&&id| s.entities[id.0 as usize].move_target.is_some())
+                    .count(),
+            )
+            .unwrap();
+        }
+        assert_eq!(orders, 0, "a spread unit walked home into the crowd");
+        for (k, &id) in ids.iter().enumerate() {
+            let e = &s.entities[id.0 as usize];
+            assert_eq!(s.position(id), Some(settled[k]), "unit {k} kept drifting");
+            let a = e.dp.anchor.expect("anchored");
+            assert!(
+                (e.pos - a).length_squared() <= Fixed::ONE,
+                "unit {k} off its anchor"
+            );
+            assert!(
+                (e.pos - v(20, 20)).length() < Fixed::from_ratio(3, 2),
+                "unit {k} wandered off"
+            );
+        }
+    }
+
+    /// Separation is per owner and per layer: an enemy rifle or a friendly
+    /// helicopter on the same point is never pushed.
+    #[test]
+    fn separation_ignores_enemies_and_the_other_layer() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(20, 20));
+        let heli = s.add_unit(P0, UnitKind::Helicopter, v(20, 20));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(20, 20));
+        for id in [a, heli, foe] {
+            s.entities[id.0 as usize].ammunition = 0;
+        }
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        for id in [a, heli, foe] {
+            assert_eq!(s.position(id), Some(v(20, 20)));
+        }
+        // Two friendly helicopters do separate among themselves.
+        let h2 = s.add_unit(P0, UnitKind::Helicopter, v(20, 20));
+        s.entities[h2.0 as usize].ammunition = 0;
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        let d = (s.position(h2).unwrap() - s.position(heli).unwrap()).length();
+        assert!(
+            d >= Fixed::from_ratio(40, 100),
+            "helicopters still stacked: {d:?}"
+        );
+        assert_eq!(s.position(a), Some(v(20, 20)));
+    }
+
+    /// Eight rifles on one ford hex: the push never puts one in the river.
+    #[test]
+    fn separation_never_pushes_onto_water() {
+        let mut s = kestrel_reach(3);
+        let ford = hex::center(22, 10);
+        for _ in 0..8 {
+            s.add_unit(PlayerId(0), UnitKind::Infantry, ford);
+        }
+        for _ in 0..90 {
+            s.step(&[]);
+        }
+        for v in s.views() {
+            if matches!(v.kind, EntityKindView::Unit(_)) {
+                let (x, y) = hex::from_world(v.pos, 44, 26);
+                assert!(
+                    s.map()
+                        .tile(i32::from(x), i32::from(y))
+                        .is_some_and(|t| t.passable),
+                    "unit on impassable tile at {x},{y}"
+                );
+            }
+        }
+    }
+
+    /// A crowd dropped between three buildings is never pushed onto a footprint.
+    #[test]
+    fn separation_never_pushes_onto_a_building() {
+        let mut s = depth_arena();
+        s.add_building(P0, BuildingKind::Barracks, 20, 19);
+        s.add_building(P0, BuildingKind::PowerPlant, 19, 20);
+        s.add_building(P0, BuildingKind::Refinery, 21, 20);
+        let spot = hex::center(20, 20);
+        let ids: Vec<_> = (0..8)
+            .map(|_| s.add_unit(P0, UnitKind::Infantry, spot))
+            .collect();
+        for _ in 0..120 {
+            s.step(&[]);
+            for &id in &ids {
+                let (x, y) = hex::from_world(s.position(id).unwrap(), 40, 40);
+                assert!(
+                    s.map()
+                        .tile(i32::from(x), i32::from(y))
+                        .is_some_and(|t| t.passable),
+                    "unit on a footprint at {x},{y}"
+                );
+            }
+        }
+    }
+
+    /// Infantry attack-moving past an enemy helicopter it cannot shoot keeps
+    /// going (the halt scan used to stop it under the gunship for good). The
+    /// gunship is dry so the measurement is the movement alone.
+    #[test]
+    fn attack_move_does_not_halt_under_an_untargetable_helicopter() {
+        let mut s = depth_arena();
+        let inf = s.add_unit(P0, UnitKind::Infantry, v(5, 20));
+        let heli = s.add_unit(P1, UnitKind::Helicopter, v(8, 20));
+        s.entities[heli.0 as usize].ammunition = 0;
+        s.step(&[Command::AttackMove {
+            owner: P0,
+            unit: inf,
+            target: v(30, 20),
+        }]);
+        for _ in 0..600 {
+            s.step(&[]);
+        }
+        let p = s.position(inf).expect("the rifle survives a dry gunship");
+        assert!(
+            p.x > Fixed::from_int(20),
+            "halted under the gunship at {p:?}"
+        );
+    }
+
+    /// The same march with a ground enemy it can shoot still halts there (the
+    /// fix only skips enemies the weapon cannot reach). Depth off, the rifle
+    /// halts under the gunship exactly as before.
+    #[test]
+    fn attack_move_still_halts_for_a_shootable_enemy_and_classic_is_unchanged() {
+        let mut s = depth_arena();
+        let inf = s.add_unit(P0, UnitKind::Infantry, v(5, 20));
+        let foe = s.add_unit(P1, UnitKind::Tank, v(8, 20));
+        s.entities[foe.0 as usize].ammunition = 0;
+        s.debug_set_hp(foe, Fixed::from_int(1_000_000));
+        s.step(&[Command::AttackMove {
+            owner: P0,
+            unit: inf,
+            target: v(30, 20),
+        }]);
+        for _ in 0..300 {
+            s.step(&[]);
+        }
+        assert!(
+            s.position(inf).unwrap().x < Fixed::from_int(9),
+            "marched past a target"
+        );
+
+        let mut c = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        c.enable_earthfront();
+        let inf = c.add_unit(P0, UnitKind::Infantry, v(5, 20));
+        let heli = c.add_unit(P1, UnitKind::Helicopter, v(8, 20));
+        c.entities[heli.0 as usize].ammunition = 0;
+        c.step(&[Command::AttackMove {
+            owner: P0,
+            unit: inf,
+            target: v(30, 20),
+        }]);
+        for _ in 0..600 {
+            c.step(&[]);
+        }
+        let p = c.position(inf).unwrap();
+        assert!(
+            p.x < Fixed::from_int(12),
+            "classic no longer halts under the gunship: {p:?}"
+        );
+    }
+
+    /// One column of a ford test: (start tile, destination tile).
+    type ColumnLeg = ((u16, u16), (u16, u16));
+
+    /// Walks a column of `n` rifles from `from` to `to` on Kestrel (the river
+    /// is crossable only at the two-hex Wyllow Ford, (22,10) and (23,10)), with
+    /// every unit made unkillable so the measurement is movement only. Returns
+    /// (tick the last one arrived, every unit stayed on passable ground every
+    /// tick, every unit crossed the ford).
+    fn ford_column(
+        depth: bool,
+        groups: &[ColumnLeg],
+        per_column: u16,
+        parked: bool,
+    ) -> (Option<u32>, bool, bool) {
+        let mut s = if depth {
+            kestrel_reach(3)
+        } else {
+            kestrel_reach_classic(3)
+        };
+        // Optionally three idle rifles parked on each ford hex, in the way.
+        let mut idle = Vec::new();
+        for tile in [(22, 10), (23, 10)].into_iter().filter(|_| parked) {
+            for _ in 0..3 {
+                let id = s.add_unit(P0, UnitKind::Infantry, hex::center(tile.0, tile.1));
+                s.debug_set_hp(id, Fixed::from_int(1_000_000));
+                idle.push(id);
+            }
+        }
+        let mut units = Vec::new();
+        let mut orders = Vec::new();
+        for &(from, to) in groups {
+            for i in 0..per_column {
+                let id = s.add_unit(P0, UnitKind::Infantry, hex::center(from.0, from.1));
+                s.debug_set_hp(id, Fixed::from_int(1_000_000));
+                // A column: each rifle leaves a little after the one before.
+                orders.push((u32::from(i) * 6, id, hex::center(to.0, to.1)));
+                units.push((id, from.0 < 22));
+            }
+        }
+        let (width, height) = (s.map().width(), s.map().height());
+        let mut dry = true;
+        let mut crossed = alloc::vec![false; units.len()];
+        // First tick each rifle is within 1.5 of its destination (a spread crowd
+        // fits; after that the depth rules may send it after an enemy).
+        let mut arrived: Vec<Option<u32>> = alloc::vec![None; units.len()];
+        for t in 0..1500u32 {
+            let cmds: Vec<_> = orders
+                .iter()
+                .filter(|o| o.0 == t)
+                .map(|&(_, unit, target)| Command::Move {
+                    owner: P0,
+                    unit,
+                    target,
+                })
+                .collect();
+            s.step(&cmds);
+            for &id in &idle {
+                let (x, y) = hex::from_world(s.position(id).expect("unkillable"), width, height);
+                let ok = s
+                    .map()
+                    .tile(i32::from(x), i32::from(y))
+                    .is_some_and(|t| t.passable);
+                dry &= ok;
+            }
+            for (k, &(id, west)) in units.iter().enumerate() {
+                let p = s.position(id).expect("unkillable");
+                let (x, y) = hex::from_world(p, width, height);
+                dry &= s
+                    .map()
+                    .tile(i32::from(x), i32::from(y))
+                    .is_some_and(|t| t.passable);
+                crossed[k] |= if west { x >= 24 } else { x <= 21 };
+                let near = (p - orders[k].2).length_squared() <= Fixed::from_ratio(9, 4);
+                if arrived[k].is_none() && t > orders[k].0 && near {
+                    arrived[k] = Some(t);
+                }
+            }
+        }
+        let done = arrived.iter().try_fold(0, |m, a| a.map(|a| m.max(a)));
+        (done, dry, crossed.iter().all(|&ok| ok))
+    }
+
+    /// A ten-rifle column through the two-hex ford, two columns crossing it in
+    /// opposite directions at once, and a column through six rifles parked on
+    /// the ford: with separation every rifle still crosses, nobody (parked or
+    /// marching) ever stands in the river, and the last one arrives within 10
+    /// percent of the classic (no separation) time. No corridor deadlock.
+    #[test]
+    fn columns_cross_the_two_hex_ford_without_wading_or_deadlock() {
+        let one = [((17, 10), (28, 10))];
+        let two = [((17, 10), (28, 10)), ((28, 11), (17, 11))];
+        for (label, groups, parked) in [
+            ("one column", &one[..], false),
+            ("two columns", &two[..], false),
+            ("one column past 6 parked rifles", &one[..], true),
+        ] {
+            let classic = ford_column(false, groups, 10, parked);
+            let depth = ford_column(true, groups, 10, parked);
+            std::eprintln!("ford {label}: classic {classic:?}, depth {depth:?} (last arrival tick, dry, all crossed)");
+            assert!(depth.1, "{label}: a rifle waded into the river");
+            assert!(depth.2, "{label}: a rifle never crossed");
+            let (c, d) = (
+                classic.0.expect("classic arrives"),
+                depth.0.expect("depth deadlocked"),
+            );
+            assert!(d * 10 <= c * 11, "{label}: depth {d} vs classic {c}");
+        }
+    }
+
+    /// Unit-ticks a ground unit spends on an impassable tile (river, sea, a
+    /// structure) over `steps` ticks of the AI-defended Kestrel match.
+    fn wading_unit_ticks(mut s: Sim, steps: u32) -> u32 {
+        let (width, height) = (s.map().width(), s.map().height());
+        let mut wading = 0;
+        for _ in 0..steps {
+            let mut cmds = s.ai_commands(P0);
+            cmds.extend(Scenario::KestrelReach.host_commands(&s));
+            s.step(&cmds);
+            for e in s.entities.iter().filter(|e| e.alive) {
+                if matches!(e.kind, Kind::Unit(_)) && !is_air_of(&s.balance, e.kind) {
+                    let (x, y) = hex::from_world(e.pos, width, height);
+                    if !s
+                        .map()
+                        .tile(i32::from(x), i32::from(y))
+                        .is_some_and(|t| t.passable)
+                    {
+                        wading += 1;
+                    }
+                }
+            }
+        }
+        wading
+    }
+
+    /// Over a whole defended match (both AIs crowding fords, bases and
+    /// rally points), separation and the corner guard never leave a ground
+    /// unit on an impassable tile more often than the classic rules do (the
+    /// classic count is units walking off the producer that spawned them).
+    #[test]
+    fn a_defended_match_wades_no_more_than_classic() {
+        let classic = wading_unit_ticks(kestrel_reach_classic(3), 13_000);
+        let depth = wading_unit_ticks(kestrel_reach(3), 13_000);
+        std::eprintln!("ground unit-ticks on impassable tiles in 13000 defended ticks: classic {classic}, depth {depth}");
+        assert!(depth <= classic, "depth {depth} vs classic {classic}");
+    }
+
+    /// Mines one ore hex with four harvesters feeding one refinery for 3000
+    /// ticks and returns the ore taken out of the ground.
+    fn harvest_run(depth: bool) -> u32 {
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        if depth {
+            s.enable_depth();
+        }
+        s.add_building(P0, BuildingKind::PowerPlant, 16, 16);
+        s.add_building(P0, BuildingKind::Refinery, 20, 20);
+        s.map.set_deposit(
+            25,
+            20,
+            crate::game::map::Deposit {
+                kind: crate::game::map::DepositKind::Ore,
+                remaining: 30_000,
+            },
+        );
+        for _ in 0..4 {
+            s.add_unit(P0, UnitKind::Harvester, hex::center(21, 21));
+        }
+        for _ in 0..3000 {
+            s.step(&[]);
+        }
+        30_000 - s.map.deposit(25, 20).map_or(0, |d| d.remaining)
+    }
+
+    /// Harvesters crowding one refinery and one ore hex still dock and mine:
+    /// with separation the four trucks take at least 95 percent of the ore
+    /// they take without it.
+    #[test]
+    fn harvesters_still_dock_and_mine_with_separation() {
+        let classic = harvest_run(false);
+        let depth = harvest_run(true);
+        std::eprintln!("ore mined in 3000 ticks by 4 harvesters: classic {classic}, depth {depth}");
+        assert!(classic > 0);
+        assert!(
+            depth * 100 >= classic * 95,
+            "depth {depth} vs classic {classic}"
+        );
+    }
+
+    /// A crowd that separates every tick is still deterministic: two runs give
+    /// the same hash and replaying the recorded orders reproduces it.
+    #[test]
+    fn separation_is_deterministic_and_replays() {
+        let setup = || {
+            let mut s = depth_arena();
+            let mut ids = Vec::new();
+            for i in 0..12 {
+                ids.push(s.add_unit(P0, UnitKind::Infantry, v(10, 20)));
+                ids.push(s.add_unit(P1, UnitKind::Infantry, v(30, 18 + i % 4)));
+            }
+            (s, ids)
+        };
+        let run = || {
+            let (mut s, ids) = setup();
+            let mut log = Vec::new();
+            for t in 0..900u32 {
+                let mut c = Vec::new();
+                if t == 60 {
+                    for &unit in ids.iter().step_by(2) {
+                        c.push(Command::AttackMove {
+                            owner: P0,
+                            unit,
+                            target: v(30, 20),
+                        });
+                    }
+                }
+                s.step(&c);
+                log.push(c);
+            }
+            (s.state_hash(), log)
+        };
+        let (a, log) = run();
+        let (b, _) = run();
+        assert_eq!(a, b);
+        let (mut r, _) = setup();
+        for c in &log {
+            r.step(c);
+        }
+        assert_eq!(r.state_hash(), a);
+    }
+
+    /// The bridge budget at 80 units on Kestrel: a 30 Hz tick must stay far
+    /// under its 33 ms, with separation and acquisition both running.
+    #[test]
+    #[ignore = "bench: cargo test --release -p rts-core --offline depth_tick_budget -- --ignored --nocapture"]
+    fn depth_tick_budget() {
+        let mut s = kestrel_reach(3);
+        for i in 0..40u16 {
+            s.add_unit(
+                PlayerId(0),
+                UnitKind::Infantry,
+                hex::center(10, 5 + (i % 15)),
+            );
+        }
+        for i in 0..40u16 {
+            s.add_unit(
+                PlayerId(1),
+                UnitKind::Infantry,
+                hex::center(30, 5 + (i % 15)),
+            );
+        }
+        let t = std::time::Instant::now();
+        let mut worst = std::time::Duration::ZERO;
+        for _ in 0..900 {
+            let c = Scenario::KestrelReach.host_commands(&s);
+            let t0 = std::time::Instant::now();
+            s.step(&c);
+            worst = worst.max(t0.elapsed());
+        }
+        let mean = t.elapsed() / 900;
+        std::eprintln!("depth tick mean {mean:?} worst {worst:?}");
+        assert!(
+            mean < std::time::Duration::from_millis(5)
+                && worst < std::time::Duration::from_millis(15)
+        );
     }
 
     /// Headless tick cost with 80+ units on Kestrel, depth vs classic, hosted
