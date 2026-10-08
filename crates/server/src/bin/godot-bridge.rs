@@ -1039,6 +1039,27 @@ fn snapshot_json_with(
     }
     out.push(']');
     write_additive_fields(&mut out, sim);
+    // Kestrel depth (Task 17): the human's Upgrades levels and the price of
+    // each next level (null at the era cap). Never on Survival.
+    if sim.is_depth() {
+        let levels = sim.upgrade_levels(human);
+        write!(
+            out,
+            ",\"depth\":{{\"upgrades\":[{},{},{}],\"upgrade_costs\":[",
+            levels[0], levels[1], levels[2]
+        )
+        .expect("string write");
+        for track in 0..3u8 {
+            if track > 0 {
+                out.push(',');
+            }
+            match sim.upgrade_cost(human, track) {
+                Some(cost) => write!(out, "{}", cost.to_int_floor()).expect("string write"),
+                None => out.push_str("null"),
+            }
+        }
+        out.push_str("]}");
+    }
     out.push_str(",\"supply_links\":");
     out.push_str(supply_links);
     // Kestrel only (the ground-layer scenario): Survival keeps its exact shape.
@@ -1366,6 +1387,16 @@ fn take_commands(path: &Path) -> Vec<Command> {
                         unit,
                         target,
                         attack_move,
+                    })
+                }
+                // Upgrades (Kestrel, Task 17): `upgrade,<track>` buys the next
+                // level (0 weapons, 1 armour, 2 vitality); the core refuses
+                // the forge, the cap and an empty purse.
+                "upgrade" => {
+                    let track = fields.next()?.parse::<u8>().ok()?;
+                    Some(Command::Ascend {
+                        owner: PlayerId(0),
+                        track,
                     })
                 }
                 _ => None,
@@ -1806,9 +1837,11 @@ mod tests {
         // Additive and last: at tick 0 the Command Center holds no stock yet, so the
         // three prebuilt structures beside it are not served until the first supply beat.
         // The presentation fog mask (Task 6) sits between the supply links and the shots.
+        // The depth Upgrades block (Task 17) sits between the core node and the links.
         let fog = extract_str(&json, "fog");
         assert!(json.ends_with(&format!(
-            "\"core_node\":[37,8],\"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
+            "\"core_node\":[37,8],\"depth\":{{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150]}},\
+             \"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
         )));
         assert!(json.starts_with("{\"schema\":5,"));
     }
@@ -2368,6 +2401,56 @@ mod tests {
             }
         ));
         assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn godot_command_file_supports_upgrades() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-upgrade-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "upgrade,0\nupgrade,2\nupgrade,3\n\
+             upgrade,x\nupgrade,\nupgrade\nupgrade,-1\nupgrade,256\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        // The forge (3) parses; the core refuses it (Task 17).
+        assert_eq!(commands.len(), 3, "malformed upgrade lines are dropped");
+        for (command, want) in commands.iter().zip([0u8, 2, 3]) {
+            assert!(
+                matches!(*command, Command::Ascend { owner: PlayerId(0), track } if track == want),
+                "{command:?}"
+            );
+        }
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn kestrel_snapshot_carries_the_upgrades_block_and_survival_none() {
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let json = snapshot_json(&sim);
+        assert!(
+            json.contains(",\"depth\":{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150]}"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        for track in [0, 0, 0, 2] {
+            sim.step(&[Command::Ascend {
+                owner: PlayerId(0),
+                track,
+            }]);
+        }
+        let json = snapshot_json(&sim);
+        assert!(
+            json.contains(",\"depth\":{\"upgrades\":[3,0,1],\"upgrade_costs\":[null,150,250]}"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("\"depth\""));
+        assert!(!survival.contains("upgrade"));
     }
 
     #[test]
@@ -3366,12 +3449,17 @@ mod tests {
             // 14 `"queue":0` after it (no unit here has a queue, so no
             // `"route"`); both are additive, so they are stripped here like
             // the mask and every other byte must still match the pins below.
-            ["aggressive", "defensive", "hold"]
+            // Task 17's `"depth"` Upgrades block is additive too, and goes the
+            // same way.
+            let json = ["aggressive", "defensive", "hold"]
                 .iter()
                 .fold(json.replacen(&all_visible, "", 1), |acc, name| {
                     acc.replace(&format!(",\"stance\":\"{name}\""), "")
                 })
-                .replace(",\"queue\":0", "")
+                .replace(",\"queue\":0", "");
+            let start = json.find(",\"depth\":{").expect("the depth block");
+            let end = start + json[start..].find("]}").expect("its end") + 2;
+            format!("{}{}", &json[..start], &json[end..])
         };
         let sim = Scenario::KestrelReach.build(2026);
         let off = snapshot_json_with(
