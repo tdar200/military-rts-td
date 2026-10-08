@@ -60,11 +60,11 @@ func test_corrupt_file_gives_defaults(t) -> void:
 
 
 func test_defaults_missing_file_and_bad_values(t) -> void:
-	t.eq(Settings.defaults(), {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false}, "the brief's defaults, plus Task 9's coach bit")
+	t.eq(Settings.defaults(), {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false, "game/difficulty": "normal"}, "the brief's defaults, plus Task 9's coach bit and Task 20's preset")
 	t.eq(Settings.load_from("user://test_settings/none.cfg"), Settings.defaults(), "a missing file reads as the defaults")
 	DirAccess.make_dir_recursive_absolute("user://test_settings")
 	var f := FileAccess.open(P, FileAccess.WRITE)
-	f.store_string("[audio]\nmaster=-3.0\nsfx=\"loud\"\nmusic=0\n\n[game]\nfog=1\n\n[video]\nwindow_mode=\"kiosk\"\n")
+	f.store_string("[audio]\nmaster=-3.0\nsfx=\"loud\"\nmusic=0\n\n[game]\nfog=1\ndifficulty=\"brutal\"\n\n[video]\nwindow_mode=\"kiosk\"\n")
 	f.close()
 	var v := Settings.load_from(P)
 	t.near(v["audio/master"], 0.0, 1e-6, "a negative volume is clamped to 0")
@@ -72,6 +72,7 @@ func test_defaults_missing_file_and_bad_values(t) -> void:
 	t.near(v["audio/music"], 0.0, 1e-6, "an integer volume is read")
 	t.eq(v["game/fog"], true, "the fog is a bool or the default")
 	t.eq(v["video/window_mode"], "windowed", "an unknown window mode is the default")
+	t.eq(v["game/difficulty"], "normal", "an unknown preset is the default")
 	DirAccess.remove_absolute(P)
 	DirAccess.remove_absolute("user://test_settings")
 

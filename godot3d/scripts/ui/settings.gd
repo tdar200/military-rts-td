@@ -12,6 +12,9 @@ const BUSES := {"audio/master": "Master", "audio/sfx": "SFX", "audio/ui": "UI", 
 ## The buses the audio pool ducks under explosions and alerts.
 const DUCKED := ["Ambient", "Music"]
 const WINDOW_MODES := ["windowed", "fullscreen"]
+## Task 20: the Kestrel presets the map picker remembers ("game/difficulty"; MatchConfig.DIFFICULTIES, which preloads
+## this module, so the list is repeated here).
+const DIFFICULTIES := ["easy", "normal", "hard"]
 ## A muted bus keeps this level under its mute flag (linear_to_db(0) is -inf).
 const SILENT_DB := -80.0
 ## Per audio server object: {bus: dB the player chose} and the pool's current duck (Object meta, so a test stub never
@@ -21,7 +24,7 @@ const DUCK_META := "settings_duck_db"
 
 
 static func defaults() -> Dictionary:
-	return {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false}
+	return {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false, "game/difficulty": "normal"}
 
 
 ## The file's values over the defaults. Missing file, unreadable or malformed text: the defaults.
@@ -134,7 +137,8 @@ static func apply_window(values: Dictionary, display: Object = null) -> void:
 		d.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 
 
-## A value as the key's type: volumes clamped to 0..1, a bool for the fog, a known window mode. Anything else: the default.
+## A value as the key's type: volumes clamped to 0..1, a bool for the fog, a known window mode, a known difficulty preset.
+## Anything else: the default.
 static func _clean(key: String, value: Variant) -> Variant:
 	var base: Variant = defaults().get(key)
 	if key.begins_with("audio/"):
@@ -146,6 +150,8 @@ static func _clean(key: String, value: Variant) -> Variant:
 		return value if typeof(value) == TYPE_BOOL else base
 	if key == "video/window_mode":
 		return value if typeof(value) == TYPE_STRING and value in WINDOW_MODES else base
+	if key == "game/difficulty":
+		return value if typeof(value) == TYPE_STRING and value in DIFFICULTIES else base
 	return value if typeof(value) == typeof(base) else base
 
 

@@ -1,7 +1,8 @@
 extends RefCounted
-## Map picker (New operation on the title): a scrim over the title, then one panel with a card per map and the Back and
-## Deploy forces buttons. Built from LiveScreens.picker_vm() with the pause menu's kit; `emit` is Callable(name, arg) and
-## receives pick (the card's map id), back and confirm. Each card is one invisible click target named after its map (QA
+## Map picker (New operation on the title): a scrim over the title, then one panel with a card per map, the difficulty
+## presets and the match seed (Task 20, when the vm has them) and the Back and Deploy forces buttons. Built from
+## LiveScreens.picker_vm() with the pause menu's kit; `emit` is Callable(name, arg) and receives pick (the card's map id),
+## difficulty (the preset id), seed (the seed field's text, digits only), back and confirm. Each card is one invisible click target named after its map (QA
 ## and tests find it by that name). Builds nothing for {}; returns the Deploy forces button (the host focuses it).
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
@@ -15,6 +16,10 @@ const CARD_GAP := 20.0
 const CARD_PAD := 22.0
 const BTN_H := 56.0
 const RING := Color(64.0 / 255.0, 220.0 / 255.0, 235.0 / 255.0, 0.55)
+## Task 20: the seed field (a glass box on the right of the presets row) and its longest text (2^31 - 1).
+const SEED_W := 220.0
+const SEED_H := 44.0
+const SEED_DIGITS := 10
 
 
 static func build(parent: Control, vm: Dictionary, emit := Callable()) -> Control:
@@ -53,6 +58,8 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> Contro
 		if emit.is_valid():
 			hit.pressed.connect(emit.bind("pick", str(cards[i].get("id", ""))))
 	y += card_h + 22.0
+	if vm.has("difficulty"):
+		y = _options(parent, vm, cx, y, cw, emit) + 22.0
 	var note := K.text(parent, str(vm.get("note", "")), {"x": cx, "y": y, "px": 14, "col": T.DIM})
 	var confirm := K.button(parent, str(vm.get("confirm", "Deploy forces")), 0, 0, {"primary": true, "px": 20, "sp": 0.1, "pad": 20.0, "spread": true, "min_h": BTN_H})
 	var back := K.button(parent, str(vm.get("back", "Back")), 0, 0, {"px": 20, "sp": 0.1, "pad": 20.0, "spread": true, "min_h": BTN_H, "key": "Esc"})
@@ -73,6 +80,67 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> Contro
 	panel.size.y = roundf(y + PAD + 1.0 - PANEL_Y)
 	panel.queue_redraw()
 	return confirm
+
+
+## The presets row under the cards: the Difficulty caption, one tab per preset (the chosen one on) and the preset's detail
+## on the left; the Seed caption, its field and a hint on the right. Returns the row's bottom.
+static func _options(parent: Control, vm: Dictionary, x: float, y: float, w: float, emit: Callable) -> float:
+	var d: Dictionary = vm.get("difficulty", {})
+	var cap_o := {"f": "mono", "px": 12, "sp": 0.12, "col": T.DIM, "up": true}
+	var cap := K.text(parent, str(d.get("cap", "Difficulty")), cap_o.merged({"x": x, "y": y}))
+	var top := y + cap.size.y + 8.0
+	var tx := x
+	var tab_h := 0.0
+	for o in d.get("options", []):
+		var tab := K.button(parent, str(o.get("label", "")), tx, top, {"variant": "tab", "on": bool(o.get("selected", false)), "px": 16, "pad": 22.0, "min_h": SEED_H})
+		tab.size.x = maxf(120.0, tab.size.x)
+		tab.custom_minimum_size = tab.size
+		if emit.is_valid():
+			tab.pressed.connect(emit.bind("difficulty", str(o.get("id", ""))))
+		tx += tab.size.x + 8.0
+		tab_h = maxf(tab_h, tab.size.y)
+	var bottom := top + tab_h
+	var seed_x := x + w - SEED_W
+	var detail := K.text(parent, str(d.get("detail", "")), {"x": x, "y": bottom + 10.0, "w": seed_x - 24.0 - x, "px": 14, "col": T.DIM, "wrap": true})
+	bottom += 10.0 + detail.size.y
+	var sv: Dictionary = vm.get("seed", {})
+	if not sv.is_empty():
+		K.text(parent, str(sv.get("cap", "Seed")), cap_o.merged({"x": seed_x, "y": y}))
+		var field := K.panel(parent, seed_x, top, SEED_W, SEED_H, "glass")
+		field.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var edit := LineEdit.new()
+		edit.name = "SeedField"
+		edit.flat = true
+		edit.text = str(sv.get("value", ""))
+		edit.max_length = SEED_DIGITS
+		edit.focus_mode = Control.FOCUS_CLICK
+		edit.tooltip_text = "Match seed"
+		for state in ["normal", "focus", "read_only"]:
+			edit.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+		edit.add_theme_font_override("font", T.font("mono"))
+		edit.add_theme_font_size_override("font_size", 18)
+		edit.add_theme_color_override("font_color", T.TEXT_HI)
+		edit.add_theme_color_override("caret_color", T.CYAN_HI)
+		K.place(edit, seed_x + 14.0, top + 2.0, SEED_W - 28.0, SEED_H - 4.0)
+		parent.add_child(edit)
+		edit.text_changed.connect(func(text: String) -> void: _seed_typed(edit, text, emit))
+		var hint := K.text(parent, str(sv.get("hint", "")), {"x": seed_x, "y": top + SEED_H + 10.0, "w": SEED_W, "px": 14, "col": T.DIM})
+		bottom = maxf(bottom, hint.position.y + hint.size.y)
+	return bottom
+
+
+## Keeps only the digits the player typed (the caret stays where it was) and passes the text on.
+static func _seed_typed(edit: LineEdit, text: String, emit: Callable) -> void:
+	var digits := ""
+	for ch in text:
+		if ch >= "0" and ch <= "9":
+			digits += ch
+	if digits != text:
+		var caret := maxi(0, edit.caret_column - (text.length() - digits.length()))
+		edit.text = digits
+		edit.caret_column = mini(caret, digits.length())
+	if emit.is_valid():
+		emit.call("seed", digits)
 
 
 ## One map card: its frame (ringed when selected), the tags, the name, the blurb and two facts. Returns [frame, content bottom].

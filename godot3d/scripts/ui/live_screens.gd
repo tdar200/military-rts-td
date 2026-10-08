@@ -62,16 +62,32 @@ static func title_vm(deploy_enabled: bool, research_projects: int, fogged := fal
 	}
 
 
-## The map picker (sections/map_picker.gd): one card per map, `selected` marked.
-static func picker_vm(selected: String) -> Dictionary:
+## Task 20: what each Kestrel preset means, in the picker's words (godot-bridge.rs builds rts_core Difficulty).
+const DIFFICULTY_DETAIL := {
+	"easy": "1,500 credits. First wave at 3:00, then every 3:30, at three quarters size.",
+	"normal": "1,200 credits. First wave at 2:30, then every 3:00, at full size.",
+	"hard": "1,000 credits. First wave at 2:00, then every 2:30, a quarter larger.",
+}
+const SURVIVAL_DIFFICULTY := "Presets apply to Kestrel Reach. Survival keeps its classic waves."
+
+
+## The map picker (sections/map_picker.gd): one card per map, `selected` marked, then the difficulty presets
+## (`difficulty` selected) and the match seed (Task 20).
+static func picker_vm(selected: String, difficulty := "normal", seed := MatchConfig.DEFAULT_SEED) -> Dictionary:
 	var cards: Array = []
 	for c in MAP_CARDS:
 		var card: Dictionary = c.duplicate(true)
 		card["name"] = MatchConfig.display_name(c.id)
 		card["selected"] = c.id == selected
 		cards.append(card)
+	var preset := MatchConfig.clean_difficulty(difficulty)
+	var options: Array = []
+	for id in MatchConfig.DIFFICULTIES:
+		options.append({"id": id, "label": MatchConfig.difficulty_name(id), "selected": id == preset})
 	return {"cap": "New operation", "title": "Choose a battlefield", "cards": cards, "back": "Back", "confirm": "Deploy forces",
-		"note": "The bridge rebuilds the chosen map, then the operation starts."}
+		"note": "The bridge rebuilds the chosen map, then the operation starts.",
+		"difficulty": {"cap": "Difficulty", "options": options, "detail": DIFFICULTY_DETAIL[preset] if selected != "survival" else SURVIVAL_DIFFICULTY},
+		"seed": {"cap": "Seed", "value": str(seed), "hint": "New each operation"}}
 
 
 static func clock(seconds: float) -> String:
@@ -104,7 +120,7 @@ static func debrief_vm(g, log) -> Dictionary:
 		"operation": "Operation Dawnshield",
 		"title": "Core Node destroyed" if victory else "Headquarters lost",
 		"buttons": buttons,
-		"footer": "Final tick %s" % thousands(g.bridge_tick),
+		"footer": _footer(g),
 	}
 	if victory:
 		vm["status"] = "Terminal outcome committed once"
@@ -138,6 +154,16 @@ static func debrief_vm(g, log) -> Dictionary:
 		vm["lede"] = "The Command Nexus fell at %s." % clock(elapsed)
 		_defeat_record(vm, log, elapsed)
 	return vm
+
+
+## The debrief's last line: the final tick, then (Kestrel, whose snapshot carries them) the preset and the seed, so a
+## match can be replayed or shared.
+static func _footer(g) -> String:
+	var text := "Final tick %s" % thousands(g.bridge_tick)
+	var played := MatchConfig.from_snapshot(g.get("bridge_snapshot"))
+	if not played.is_empty():
+		text += " / %s / Seed %d" % [MatchConfig.difficulty_name(played.difficulty), played.seed]
+	return text
 
 
 ## Power and depot record from the samples; nothing is added when there are fewer than three samples.

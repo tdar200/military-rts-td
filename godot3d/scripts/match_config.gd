@@ -1,13 +1,22 @@
 extends RefCounted
 ## The next match, as the bridge reads it: `match.json` in the runtime directory, read when `restart.flag` arrives
-## (godot-bridge.rs parse_match_config: a quoted `scenario`, a bare `fog`; `seed` and `difficulty` ride along for later
-## tasks). The fog comes from the player's settings (with_settings). The config of the running match and the "deploy
-## after this reload" request live in Engine meta, so they survive the scene reload a restart does (a static var alone
-## is not promised to).
+## (godot-bridge.rs parse_match_config: a quoted `scenario`, a bare `fog`, a bare unsigned `seed` and a quoted
+## `difficulty`; a malformed seed is 2026 there and an unknown preset Normal). The fog comes from the player's settings
+## (with_settings); the map picker draws a fresh seed on every open (random_seed) and the debrief's Restart replays the
+## running match's seed and preset, which the bridge reports in the Kestrel depth block (from_snapshot). The config of
+## the running match and the "deploy after this reload" request live in Engine meta, so they survive the scene reload a
+## restart does (a static var alone is not promised to).
 const Settings = preload("res://scripts/ui/settings.gd")
 const SCENARIOS := ["kestrel", "survival"]
 const NAMES := {"kestrel": "Kestrel Reach", "survival": "Earthfront Survival"}
 const KEYS := ["scenario", "seed", "difficulty", "fog"]
+## Task 20: the Kestrel difficulty presets (godot-bridge.rs reads these names), Easy first.
+const DIFFICULTIES := ["easy", "normal", "hard"]
+const DIFFICULTY_NAMES := {"easy": "Easy", "normal": "Normal", "hard": "Hard"}
+## Seeds the client draws or accepts: 1 to 2^31 - 1 (the bridge takes any u64; the client keeps to what an int and the
+## seed field hold).
+const SEED_MAX := 2147483647
+const DEFAULT_SEED := 2026
 const META := "match_config"
 const AUTO_META := "auto_deploy"
 
@@ -20,7 +29,7 @@ static var current: Dictionary:
 
 
 static func defaults() -> Dictionary:
-	return {"scenario": "kestrel", "seed": 2026, "difficulty": "normal", "fog": true}
+	return {"scenario": "kestrel", "seed": DEFAULT_SEED, "difficulty": "normal", "fog": true}
 
 
 ## Flat JSON in a fixed key order. Missing keys take the defaults and an unknown map falls back to Kestrel Reach, so the
@@ -32,7 +41,8 @@ static func to_json(cfg: Dictionary) -> String:
 		out[key] = cfg.get(key, base[key])
 	if not (str(out.scenario) in SCENARIOS):
 		out.scenario = base.scenario
-	out.seed = int(out.seed)
+	out.seed = clean_seed(out.seed)
+	out.difficulty = clean_difficulty(out.difficulty)
 	out.fog = bool(out.fog)
 	return JSON.stringify(out, "", false)
 
@@ -61,6 +71,48 @@ static func with_settings(cfg: Dictionary, settings_path := Settings.PATH) -> Di
 
 static func display_name(scenario: String) -> String:
 	return NAMES.get(scenario, scenario)
+
+
+## A fresh match seed in 1..SEED_MAX from a randomized generator: the map picker draws one on every open.
+static func random_seed() -> int:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	return rng.randi_range(1, SEED_MAX)
+
+
+## `value` as a seed: an int, or a string of digits, in 1..SEED_MAX. Anything else (a float, a sign, a letter, out of
+## range, empty) is `fallback`.
+static func clean_seed(value: Variant, fallback := DEFAULT_SEED) -> int:
+	var n := -1
+	if typeof(value) == TYPE_INT:
+		n = value
+	elif typeof(value) == TYPE_STRING and value != "" and value.length() <= 10 and value.is_valid_int() and not value.begins_with("-") and not value.begins_with("+"):
+		n = int(value)
+	return n if n >= 1 and n <= SEED_MAX else fallback
+
+
+## A known preset name, else "normal".
+static func clean_difficulty(value: Variant) -> String:
+	return str(value) if typeof(value) == TYPE_STRING and value in DIFFICULTIES else "normal"
+
+
+## "Easy", "Normal" or "Hard" (an unknown preset reads as Normal).
+static func difficulty_name(difficulty: Variant) -> String:
+	return DIFFICULTY_NAMES[clean_difficulty(difficulty)]
+
+
+## The running match's {seed, difficulty} from a bridge snapshot's Kestrel depth block; {} when there is none (no
+## snapshot yet, or Survival, which has no presets).
+static func from_snapshot(snapshot: Variant) -> Dictionary:
+	if not (snapshot is Dictionary):
+		return {}
+	var depth: Variant = snapshot.get("depth", null)
+	if not (depth is Dictionary) or not depth.has("seed"):
+		return {}
+	var seed: Variant = depth["seed"]
+	if typeof(seed) == TYPE_FLOAT:
+		seed = int(seed)  # JSON numbers parse as floats
+	return {"seed": clean_seed(seed), "difficulty": clean_difficulty(depth.get("difficulty", "normal"))}
 
 
 ## The map a bridge snapshot comes from ("" when there is none yet): only Kestrel Reach sends its Core Node.

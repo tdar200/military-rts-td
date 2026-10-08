@@ -90,6 +90,8 @@ var _title_key: Array = []  # what the title was last built from: [fogged, map, 
 var picker_layer: Control  # the map picker over the title (New operation)
 var picker_open := false
 var picker_choice := ""  # the map the picker has selected ("kestrel" or "survival")
+var picker_difficulty := "normal"  # Task 20: the preset the picker has selected (the remembered one when it opens)
+var picker_seed := 0  # Task 20: the seed the next operation runs at, drawn fresh on every open (the player may type one)
 var _launch_wait := -1.0  # >= 0 while a confirmed pick waits for the bridge: seconds since restart.flag disappeared
 var settings_layer: Control  # the Settings screen, over everything (the title's Settings entry or the pause menu's)
 var settings_open := false
@@ -388,6 +390,8 @@ func open_picker() -> void:
 		return
 	picker_open = true
 	picker_choice = shown_scenario()
+	picker_difficulty = MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
+	picker_seed = MatchConfig.random_seed()  # a new operation never reuses the last match's seed
 	_build_picker()
 	_refresh_title()
 
@@ -404,7 +408,8 @@ func _build_picker() -> void:
 	for child in picker_layer.get_children():
 		picker_layer.remove_child(child)
 		child.queue_free()
-	var confirm: Control = MapPicker.build(picker_layer, LiveScreens.picker_vm(picker_choice), Callable(self, "_on_picker_action"))
+	var vm := LiveScreens.picker_vm(picker_choice, picker_difficulty, picker_seed)
+	var confirm: Control = MapPicker.build(picker_layer, vm, Callable(self, "_on_picker_action"))
 	if confirm != null and confirm.is_inside_tree():
 		confirm.grab_focus()
 
@@ -415,6 +420,13 @@ func _on_picker_action(name: String, arg: Variant = null) -> void:
 			if str(arg) in MatchConfig.SCENARIOS and str(arg) != picker_choice:
 				picker_choice = str(arg)
 				_build_picker()
+		"difficulty":
+			if str(arg) in MatchConfig.DIFFICULTIES and str(arg) != picker_difficulty:
+				picker_difficulty = str(arg)
+				_build_picker()
+		"seed":
+			# Typed into the seed field: no redraw (the field keeps focus); an empty or invalid entry keeps the last seed.
+			picker_seed = MatchConfig.clean_seed(arg, picker_seed)
 		"back":
 			close_picker()
 		"confirm":
@@ -429,9 +441,13 @@ func confirm_picker() -> void:
 		return
 	var cfg := MatchConfig.current
 	cfg["scenario"] = picker_choice
+	cfg["seed"] = picker_seed
+	cfg["difficulty"] = picker_difficulty
 	cfg = MatchConfig.with_settings(cfg, _settings_path())
 	MatchConfig.current = cfg
 	MatchConfig.write(_runtime_dir(), cfg)
+	if Settings.get_value("game/difficulty", _settings_path()) != picker_difficulty:
+		Settings.set_value("game/difficulty", picker_difficulty, _settings_path())  # preselected next time
 	var snap = g.get("bridge_snapshot")
 	var on_screen := MatchConfig.running(snap) if snap is Dictionary else ""
 	picker_open = false
@@ -458,16 +474,21 @@ func _relaunch_in_place() -> void:
 	_refresh_title()
 
 
-## The campaign card's Deploy forces: the map the bridge already serves. When the player's fog setting differs from the
-## Kestrel frame on screen (fog switched off or on since the bridge built it), match.json asks for the match with the
-## setting and the bridge rebuilds it first; otherwise the mission deploys at once, as before.
+## The campaign card's Deploy forces: the map the bridge already serves. When the player's fog setting or remembered
+## difficulty preset differs from the Kestrel frame on screen (changed since the bridge built it), match.json asks for the
+## match with the settings (and a fresh seed: a new operation) and the bridge rebuilds it first; otherwise the mission
+## deploys at once, as before.
 func deploy_from_title() -> void:
 	var snap = g.get("bridge_snapshot")
 	if snap is Dictionary and MatchConfig.running(snap) == "kestrel":
 		var want_fog := bool(Settings.get_value("game/fog", _settings_path()))
-		if VmGameplay.fogged(snap) != want_fog:
+		var want_preset := MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
+		var served: Dictionary = MatchConfig.from_snapshot(snap)
+		if VmGameplay.fogged(snap) != want_fog or str(served.get("difficulty", want_preset)) != want_preset:
 			var cfg := MatchConfig.current
 			cfg["scenario"] = "kestrel"
+			cfg["seed"] = MatchConfig.random_seed()
+			cfg["difficulty"] = want_preset
 			cfg = MatchConfig.with_settings(cfg, _settings_path())
 			MatchConfig.current = cfg
 			MatchConfig.write(_runtime_dir(), cfg)
@@ -664,18 +685,32 @@ func _on_debrief_action(name: String, _arg: Variant) -> void:
 				scrim.queue_free()
 				scrim = null
 		"restart":
-			# Same map (the one the bridge runs) and the same seed: match.json says so, the reload's title deploys by itself.
+			# Same map (the one the bridge runs), the same seed and preset (the bridge reports them; Task 20): match.json
+			# says so, the reload's title deploys by itself.
 			var cfg := MatchConfig.current
 			var snap = g.get("bridge_snapshot")
 			var running := MatchConfig.running(snap) if snap is Dictionary else ""
 			if running != "":
 				cfg["scenario"] = running
+			cfg.merge(MatchConfig.from_snapshot(snap), true)
 			cfg = MatchConfig.with_settings(cfg, _settings_path())
 			MatchConfig.current = cfg
 			MatchConfig.write(_runtime_dir(), cfg)
 			MatchConfig.set_auto_deploy(true)
 			g._restart_mission()
 		"menu":
+			# The title holds a fresh match (a new seed at the remembered preset), so its Deploy forces never replays the
+			# finished one by accident: Restart is the only same-seed path.
+			var cfg := MatchConfig.current
+			var snap = g.get("bridge_snapshot")
+			var running := MatchConfig.running(snap) if snap is Dictionary else ""
+			if running != "":
+				cfg["scenario"] = running
+			cfg["seed"] = MatchConfig.random_seed()
+			cfg["difficulty"] = MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
+			cfg = MatchConfig.with_settings(cfg, _settings_path())
+			MatchConfig.current = cfg
+			MatchConfig.write(_runtime_dir(), cfg)
 			MatchConfig.set_auto_deploy(false)
 			g._restart_mission()  # restart.flag, then the scene reloads to the title
 		"quit":
