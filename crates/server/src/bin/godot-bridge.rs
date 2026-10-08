@@ -1095,7 +1095,9 @@ fn snapshot_json_with(
             .expect("string write");
         }
         // Task 23 appends the run (runs only): waves cleared, the pending
-        // draft's perk ids (null when none) and the pool.
+        // draft's perk ids (null when none) and the pool; Task 26 adds the
+        // player's held perks as a bitmask (the client's drafts count and
+        // the Capital discount read it).
         if sim.is_run() {
             write!(
                 out,
@@ -1116,7 +1118,13 @@ fn snapshot_json_with(
                 }
                 None => out.push_str("null"),
             }
-            write!(out, ",\"pool\":{}}}", sim.perk_pool()).expect("string write");
+            write!(
+                out,
+                ",\"pool\":{},\"held\":{}}}",
+                sim.perk_pool(),
+                sim.perks(HUMAN)
+            )
+            .expect("string write");
         }
         out.push('}');
     }
@@ -2181,7 +2189,7 @@ mod tests {
     }
 
     /// Task 23: the bridge builds a run when `match.json` asks for one, and
-    /// the Kestrel depth block then ends with `"run":{"wave","draft","pool"}`
+    /// the Kestrel depth block then ends with `"run":{"wave","draft","pool","held"}`
     /// (`wave` = waves cleared, `draft` the pending ids or null); a plain
     /// match and Survival never carry it.
     #[test]
@@ -2205,7 +2213,9 @@ mod tests {
         assert!(sim.is_run());
         let json = snapshot_json(&sim);
         assert!(
-            json.contains("\"grade\":\"D\"},\"run\":{\"wave\":0,\"draft\":null,\"pool\":511}},"),
+            json.contains(
+                "\"grade\":\"D\"},\"run\":{\"wave\":0,\"draft\":null,\"pool\":511,\"held\":0}},"
+            ),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
@@ -2225,9 +2235,10 @@ mod tests {
             .map(ToString::to_string)
             .collect();
         let want = format!(
-            ",\"run\":{{\"wave\":{},\"draft\":[{}],\"pool\":511}}}},",
+            ",\"run\":{{\"wave\":{},\"draft\":[{}],\"pool\":511,\"held\":{}}}}},",
             sim.waves_cleared(),
-            ids.join(",")
+            ids.join(","),
+            sim.perks(super::HUMAN)
         );
         assert!(
             json.contains(&want),
