@@ -1067,14 +1067,16 @@ fn snapshot_json_with(
                 None => out.push_str("null"),
             }
         }
-        // Task 20 appends the match's difficulty preset and seed.
+        // Task 20 appends the match's difficulty preset and seed, Task 21
+        // whether the Core Node is shielded.
         write!(
             out,
-            "],\"refinery_cost\":{},\"difficulty\":\"{}\",\"seed\":{}}}",
+            "],\"refinery_cost\":{},\"difficulty\":\"{}\",\"seed\":{},\"core_shielded\":{}}}",
             sim.depth_building_cost(human, BuildingKind::Refinery)
                 .to_int_floor(),
             sim.difficulty().name(),
-            sim.seed()
+            sim.seed(),
+            sim.core_node_shielded()
         )
         .expect("string write");
     }
@@ -1892,11 +1894,11 @@ mod tests {
         // The presentation fog mask (Task 6) sits between the supply links and the shots.
         // The depth Upgrades block (Task 17) sits between the core node and the links;
         // Task 18 appends the next refinery's price to it, Task 20 the match's
-        // difficulty and seed.
+        // difficulty and seed, Task 21 the Core Node shield.
         let fog = extract_str(&json, "fog");
         assert!(json.ends_with(&format!(
             "\"core_node\":[37,8],\"depth\":{{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
-             \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026}},\
+             \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true}},\
              \"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
         )));
         assert!(json.starts_with("{\"schema\":5,"));
@@ -2202,12 +2204,14 @@ mod tests {
             },
         ));
         assert!(
-            json.contains(",\"refinery_cost\":200,\"difficulty\":\"hard\",\"seed\":9},"),
+            json.contains(",\"refinery_cost\":200,\"difficulty\":\"hard\",\"seed\":9,\"core_shielded\":true},"),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
         let json = snapshot_json(&Scenario::KestrelReach.build(2026));
-        assert!(json.contains(",\"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026},"));
+        assert!(json.contains(
+            ",\"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true},"
+        ));
         let survival = snapshot_json(&Scenario::Survival.build(2026));
         assert!(!survival.contains("\"difficulty\""));
         assert!(!survival.contains("\"seed\""));
@@ -2585,6 +2589,40 @@ mod tests {
         assert!(!path.exists(), "bridge consumes the order file atomically");
     }
 
+    /// Task 21: the Kestrel depth block ends with the Core Node shield, true
+    /// until both relays fall and wave 6 has spawned; Survival never carries
+    /// it. The playtest AI exposes the Core Node on Normal at t=31501.
+    #[test]
+    fn kestrel_depth_block_reports_the_core_shield() {
+        let mut sim = Scenario::KestrelReach.build(3);
+        let json = snapshot_json(&sim);
+        assert!(
+            json.contains(",\"seed\":3,\"core_shielded\":true},"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        for _ in 0..40_000 {
+            if !sim.core_node_shielded() || sim.winner().is_some() {
+                break;
+            }
+            let mut cmds = sim.ai_commands(PlayerId(0));
+            cmds.extend(Scenario::KestrelReach.host_commands(&sim));
+            sim.step(&cmds);
+        }
+        assert!(
+            !sim.core_node_shielded(),
+            "the playtest never exposed the Core Node"
+        );
+        let json = snapshot_json(&sim);
+        assert!(
+            json.contains(",\"seed\":3,\"core_shielded\":false},"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("core_shielded"));
+    }
+
     #[test]
     fn kestrel_snapshot_carries_the_upgrades_block_and_survival_none() {
         let mut sim = Scenario::KestrelReach.build(2026);
@@ -2592,7 +2630,7 @@ mod tests {
         assert!(
             json.contains(
                 ",\"depth\":{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
-                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026}"
+                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true}"
             ),
             "{}",
             &json[json.len().saturating_sub(300)..]
@@ -2607,7 +2645,7 @@ mod tests {
         assert!(
             json.contains(
                 ",\"depth\":{\"upgrades\":[3,0,1],\"upgrade_costs\":[null,150,250],\
-                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026}"
+                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true}"
             ),
             "{}",
             &json[json.len().saturating_sub(300)..]
@@ -3816,6 +3854,10 @@ mod tests {
         // is identical (both snapshots compared against Task 19's with the
         // hash masked; mid-firefight the hash is one digit shorter). Was
         // (27265, 0x4bec_637c_99ae_933b) and (28516, 0xd3c8_02cc_1bbc_0b45).
+        //
+        // Checked by Task 21 (the Core Node shield), not re-pinned: the shield
+        // adds no hashed state and its `"core_shielded"` key sits inside the
+        // stripped depth block, so both pins hold unchanged.
         assert_eq!((off.len(), fnv1a(&off)), (27265, 0x6c7d_bcf2_78f9_0971));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
