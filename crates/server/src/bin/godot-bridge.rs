@@ -3310,7 +3310,13 @@ mod tests {
         // every other byte is identical (both old pins still match with that
         // one hash write removed). Was (27266, 0x8634_c753_bb2f_6ad4) and
         // (28516, 0x7d35_35b4_8d90_c906).
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x955e_5aec_e12d_4c8b));
+        //
+        // Re-pinned by the P2 review fixes: each unit's `order_goal` (I2) and
+        // `breach_failed` (M6) are now hashed under depth, so the `hash` value
+        // changed again; every other byte is identical (both old pins still
+        // match with those two hash writes removed). Was
+        // (27265, 0x955e_5aec_e12d_4c8b) and (28514, 0x0d21_e3c2_ea31_b1a6).
+        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x3e21_0ade_88ab_a2db));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3330,7 +3336,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28514, 0x0d21_e3c2_ea31_b1a6));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xa8bc_08e9_df4f_5ff5));
     }
 
     #[test]

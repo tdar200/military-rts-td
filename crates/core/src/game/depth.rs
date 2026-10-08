@@ -189,6 +189,11 @@ pub(super) struct DepthUnit {
     /// and any halt (`Stop`, `Hold`, `AttackTarget`, the end of a forced
     /// target). While it is set a forced target on a building is a breach.
     pub(super) breach_tried: bool,
+    /// P2 review M6: the goal tile of this unit's last breach search when it
+    /// found no route. A later order to the same tile (the alien AI re-issues
+    /// its wave target on every pass) skips the search; another tile, a
+    /// successful search or any halt clears it.
+    pub(super) breach_failed: Option<(u16, u16)>,
 }
 
 impl DepthUnit {
@@ -227,6 +232,15 @@ impl DepthUnit {
         }
         // Task 16 (appended).
         h.write_u64(u64::from(self.breach_tried));
+        // P2 review M6 (appended).
+        match self.breach_failed {
+            Some((x, y)) => {
+                h.write_u64(1);
+                h.write_u64(u64::from(x));
+                h.write_u64(u64::from(y));
+            }
+            None => h.write_u64(0),
+        }
     }
 }
 
@@ -571,7 +585,10 @@ impl Sim {
 
     /// `clear_dead` hook: forget engagements and forced targets whose target
     /// slot was just freed, before production or waves can hand the slot to a
-    /// new entity. A unit whose forced target died stops where it stands.
+    /// new entity. A living unit whose forced target died stops where it
+    /// stands (and walks any queued legs). A unit that is dead itself (dying
+    /// on the same tick) only drops that forced target and its queued legs:
+    /// it is never re-ordered (P2 review M3).
     pub(super) fn depth_drop_dangling(&mut self, freed: &[u32]) {
         for i in 0..self.entities.len() {
             let e = &mut self.entities[i];
@@ -579,7 +596,12 @@ impl Sim {
                 e.dp.engaged = None;
             }
             if e.dp.forced.is_some_and(|t| freed.contains(&t.0)) {
-                self.depth_forced_over(i);
+                if e.alive {
+                    self.depth_forced_over(i);
+                } else {
+                    e.dp.forced = None;
+                    e.dp.queue.clear();
+                }
             }
         }
     }
@@ -597,12 +619,18 @@ impl Sim {
             .map(|e| e.dp.stance)
     }
 
-    /// Index of `unit` when it is a living unit owned by `owner`.
+    /// Index of `unit` when it is a living unit owned by `owner` that depth
+    /// orders may command: never a Harvester, whose economy loop owns its
+    /// moves (P2 review M4: Stop, Hold and stances used to reach them too).
     fn depth_own_unit(&self, owner: PlayerId, unit: EntityId) -> Option<usize> {
         let i = unit.0 as usize;
         self.entities
             .get(i)
-            .is_some_and(|e| e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_)))
+            .is_some_and(|e| {
+                e.alive
+                    && e.owner == owner
+                    && matches!(e.kind, Kind::Unit(k) if k != UnitKind::Harvester)
+            })
             .then_some(i)
     }
 
@@ -620,6 +648,7 @@ impl Sim {
         e.dp.anchor = Some(e.pos);
         e.dp.queue.clear();
         e.dp.breach_tried = false;
+        e.dp.breach_failed = None;
     }
 
     /// The end of unit `i`'s forced target (the target died, was lost or
@@ -632,8 +661,9 @@ impl Sim {
         self.depth_next_leg(i);
     }
 
-    /// [`super::Command::Stop`]: depth only; the owner's living unit drops its
-    /// orders and holds its current spot as the new anchor.
+    /// [`super::Command::Stop`]: depth only; the owner's living unit (not a
+    /// Harvester) drops its orders and holds its current spot as the new
+    /// anchor.
     pub(super) fn apply_depth_stop(&mut self, owner: PlayerId, unit: EntityId) {
         if !self.is_depth() {
             return;
@@ -673,9 +703,14 @@ impl Sim {
     }
 
     /// [`super::Command::AttackTarget`]: depth only. Valid when the unit is the
-    /// owner's living armed unit (not a Harvester) and the target is alive,
-    /// owned by someone else and on a layer the unit's weapon reaches. The
-    /// unit forgets its other orders and walks toward the target at once.
+    /// owner's living armed unit (not a Harvester) with ammunition and the
+    /// target is alive, owned by someone else, on a layer the unit's weapon
+    /// reaches and tracked by the owner's side (the same [`FORCED_TRACK`] rule
+    /// that ends the order every tick). The unit forgets its other orders and
+    /// walks toward the target at once. An invalid order is a true no-op (P2
+    /// review M1: it used to halt the unit before the track test dropped it,
+    /// telling a hand-written line whether a hidden enemy id was alive); the
+    /// bridge also drops a target its fogged snapshot did not show.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "entity index fits u32 for any real game"
@@ -693,15 +728,23 @@ impl Sim {
             return;
         };
         let e = &self.entities[i];
-        if matches!(e.kind, Kind::Unit(UnitKind::Harvester)) {
-            return;
-        }
         let Some(profile) = attack_of(&self.balance, e.kind) else {
             return;
         };
+        if e.ammunition == 0 {
+            return;
+        }
         let profile = self.depth_attack_profile(e.kind, profile);
         let j = target.0 as usize;
         if !self.depth_can_hit(profile, owner, j) {
+            return;
+        }
+        let (tpos, track_sq) = (self.entities[j].pos, FORCED_TRACK * FORCED_TRACK);
+        let tracked = self
+            .entities
+            .iter()
+            .any(|o| o.alive && o.owner == owner && (o.pos - tpos).length_squared() <= track_sq);
+        if !tracked {
             return;
         }
         self.depth_halt(i);
@@ -731,9 +774,6 @@ impl Sim {
             return;
         };
         let e = &mut self.entities[i];
-        if matches!(e.kind, Kind::Unit(UnitKind::Harvester)) {
-            return;
-        }
         let ordered = e.dp.forced.is_some() || (e.move_target.is_some() && e.dp.anchor.is_none());
         if ordered {
             if e.dp.queue.len() + 1 < QUEUE_CAP {
@@ -850,7 +890,11 @@ impl Sim {
     /// Unit `i` with forced target `j` (weapon `range`): it stands still while
     /// the target is in weapon range and otherwise walks toward it, re-pathing
     /// every [`REPATH_PERIOD`] ticks while the target moves (`now` re-paths at
-    /// once). A target that cannot be reached ends the order.
+    /// once). A target that cannot be reached ends the order, and so does a
+    /// fresh walk that would end on the unit's own tile still out of range of
+    /// the target (P2 review M2: the nearest reachable tile is no closer, e.g.
+    /// a gunship over the sea), so every re-order either gains ground or
+    /// releases the unit, never repeats every tick.
     fn depth_close_on(&mut self, i: usize, j: usize, range: Fixed, now: bool) {
         let tpos = self.entities[j].pos;
         let e = &mut self.entities[i];
@@ -869,15 +913,25 @@ impl Sim {
         e.path.clear();
         e.attack_move = false;
         self.order_unit_to(i, tpos, false);
-        if self.entities[i].move_target.is_none() && !self.depth_approach(i, j) {
+        let e = &self.entities[i];
+        let stuck = match e.move_target {
+            None => !self.depth_approach(i, j),
+            Some(dest) => {
+                self.world_to_tile(dest) == self.world_to_tile(e.pos)
+                    && (tpos - dest).length_squared() > range * range
+            }
+        };
+        if stuck {
             self.depth_forced_over(i);
         }
     }
 
     /// Task 13 per-tick step for a unit on a forced target (called from
     /// [`Sim::run_depth_acquire`] in ascending index): the order ends where the
-    /// unit stands when the target is no longer a living, targetable enemy or
-    /// is lost from track; otherwise the unit closes on it.
+    /// unit stands when the unit has run dry (P2 review M2, Task 11 ruling 6:
+    /// it never stands in front of an enemy it cannot shoot), or when the
+    /// target is no longer a living, targetable enemy or is lost from track;
+    /// otherwise the unit closes on it.
     fn depth_pursue_forced(
         &mut self,
         i: usize,
@@ -896,7 +950,8 @@ impl Sim {
                 self.entities.get(j).map(|b| b.kind),
                 Some(Kind::Building(_))
             );
-        if !self.depth_can_hit(profile, owner, j)
+        if self.entities[i].ammunition == 0
+            || !self.depth_can_hit(profile, owner, j)
             || !(breach || self.depth_tracked(grid, scratch, i, self.entities[j].pos))
         {
             self.depth_forced_over(i);
@@ -908,8 +963,10 @@ impl Sim {
     /// Task 16 breach, from `order_unit_to` under depth when `find_path` found
     /// no route `(start, goal)` for unit `i` ordered to `given`. Only a unit of
     /// the waves' attacker on an order (no anchor: a chase or a walk home never
-    /// breaches) that may fight, has no forced target and has not yet searched
-    /// for this order runs one weighted search, with the defender's walls
+    /// breaches) that may fight, has ammunition (P2 review M2), has no forced
+    /// target and has not yet searched for this order runs one weighted
+    /// search, and (P2 review M6) not when its last search for this same goal
+    /// tile found no route. The search runs with the defender's walls
     /// enterable at [`BREACH_WALL_COST`] and its other structures at
     /// [`BREACH_BUILDING_COST`]. On a route it walks up to the first structure
     /// on it, forces that structure (Task 13) and puts its order back at the
@@ -934,11 +991,17 @@ impl Sim {
             || e.dp.breach_tried
             || e.dp.anchor.is_some()
             || e.dp.forced.is_some()
+            || e.ammunition == 0
             || self.depth_fighter(i).is_none()
         {
             return;
         }
         self.entities[i].dp.breach_tried = true;
+        if self.entities[i].dp.breach_failed == Some(goal) {
+            return;
+        }
+        // Set for every way the search can fail; cleared on a route below.
+        self.entities[i].dp.breach_failed = Some(goal);
         #[cfg(test)]
         {
             self.breach_searches += 1;
@@ -981,6 +1044,7 @@ impl Sim {
         path.truncate(k);
         let wall = self.entities[j].pos;
         let e = &mut self.entities[i];
+        e.dp.breach_failed = None;
         e.dp.engaged = None;
         e.dp.forced = Some(EntityId(j as u32));
         e.dp.queue.insert(0, (given, attack_move));
@@ -1216,8 +1280,9 @@ pub(super) enum GroundStep {
     /// of the unit's own tile instead (a segment inside one hex), from where
     /// the straight line to an adjacent waypoint never leaves the two hexes.
     Recentre(Vec2),
-    /// Already centred and still blocked: the path no longer starts next to
-    /// this tile, so path again from here.
+    /// Recentring cannot help: the waypoint itself turned impassable (a
+    /// structure raised on it), or it is no tile centre next to this tile, or
+    /// the unit is already centred and still blocked. Path again from here.
     Repath,
 }
 
@@ -1225,6 +1290,14 @@ pub(super) enum GroundStep {
 /// `speed` toward `subgoal`. Units travel between adjacent tile centres, a
 /// segment that stays inside those two hexes; a unit pushed off centre by
 /// separation could otherwise clip a corner of a river hex beside the ford.
+///
+/// P2 review I1: recentring only helps when `subgoal` is the centre of a
+/// passable hex next to the unit's own, since from the centre that segment
+/// never leaves the two hexes. In every other case (the waypoint's hex is
+/// impassable, or the waypoint is farther away or off centre) the unit would
+/// walk back to the centre, step out again and be blocked again forever, so
+/// it re-paths instead. A waypoint whose hex turned impassable re-paths at
+/// once, without walking up to it first.
 pub(super) fn ground_step(map: &Map, pos: Vec2, subgoal: Vec2, speed: Fixed) -> GroundStep {
     let dir = subgoal - pos;
     let dist = dir.length();
@@ -1233,19 +1306,28 @@ pub(super) fn ground_step(map: &Map, pos: Vec2, subgoal: Vec2, speed: Fixed) -> 
     } else {
         pos + dir.scale(speed / dist)
     };
+    let (width, height) = (map.width(), map.height());
     let passable = |p: Vec2| {
-        let (x, y) = hex::from_world(p, map.width(), map.height());
+        let (x, y) = hex::from_world(p, width, height);
         map.tile(i32::from(x), i32::from(y))
             .is_some_and(|t| t.passable)
     };
     // A unit already standing somewhere impassable (a structure raised under
     // it) walks out along its path exactly as before.
-    if passable(next) || !passable(pos) {
+    if !passable(pos) {
         return GroundStep::Clear;
     }
-    let (hx, hy) = hex::from_world(pos, map.width(), map.height());
+    if !passable(subgoal) {
+        return GroundStep::Repath;
+    }
+    if passable(next) {
+        return GroundStep::Clear;
+    }
+    let (hx, hy) = hex::from_world(pos, width, height);
     let centre = hex::center(hx, hy);
-    if centre == pos {
+    let (sx, sy) = hex::from_world(subgoal, width, height);
+    let beside = hex::center(sx, sy) == subgoal && hex::distance((hx, hy), (sx, sy)) == 1;
+    if centre == pos || !beside {
         return GroundStep::Repath;
     }
     let d = centre - pos;
@@ -2687,7 +2769,9 @@ mod tests {
         let a = s.add_unit(P0, UnitKind::Tank, v(5, 20));
         let runner = s.add_unit(P1, UnitKind::Infantry, v(10, 20));
         s.entities[runner.0 as usize].ammunition = 0;
-        s.entities[a.0 as usize].ammunition = 0; // dry: it chases but never kills
+        // Too tough to kill: it chases but never kills. (It used to be dry,
+        // but since P2 review M2 a dry unit takes no forced target.)
+        s.entities[runner.0 as usize].hp = Fixed::from_int(100_000);
         s.step(&[
             Command::AttackTarget {
                 owner: P0,
@@ -3244,7 +3328,9 @@ mod tests {
         let queued = || {
             let mut s = depth_arena();
             let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
-            let foe = s.add_unit(P1, UnitKind::Infantry, v(10, 30));
+            // Within FORCED_TRACK of the tank when the AttackTarget below is
+            // given (P2 review M1 rejects an untracked target outright).
+            let foe = s.add_unit(P1, UnitKind::Infantry, v(10, 28));
             s.entities[foe.0 as usize].ammunition = 0;
             s.step(&[
                 qmove(a, v(20, 20)),
@@ -4482,5 +4568,311 @@ mod tests {
             assert!(mean < std::time::Duration::from_millis(5));
             assert!(worst < std::time::Duration::from_millis(15));
         }
+    }
+
+    // ---- P2 review fixes ----
+
+    /// P2 review I1: a structure raised on a waypoint still ahead of a marching
+    /// ground unit (the next one, or one three legs on) makes it path around.
+    /// It used to jitter between its tile centre and the hex edge forever.
+    #[test]
+    fn a_structure_raised_on_the_route_is_walked_around() {
+        for kind in [UnitKind::Infantry, UnitKind::Tank, UnitKind::AntiArmor] {
+            for ahead in [0_usize, 3] {
+                let mut s = depth_arena();
+                let unit = s.add_unit(P0, kind, hex::center(5, 20));
+                s.step(&[Command::Move {
+                    owner: P0,
+                    unit,
+                    target: hex::center(30, 20),
+                }]);
+                if ahead > 0 {
+                    for _ in 0..30 {
+                        s.step(&[]);
+                    }
+                }
+                let (wx, wy) = s.entities[unit.0 as usize].path[ahead];
+                s.add_building(P0, BuildingKind::Wall, wx, wy);
+                for _ in 0..1500 {
+                    s.step(&[]);
+                }
+                let e = &s.entities[unit.0 as usize];
+                assert_eq!(
+                    (tile_of(&s, unit), e.move_target),
+                    ((30, 20), None),
+                    "{kind:?} stranded by a wall on path[{ahead}]"
+                );
+            }
+        }
+    }
+
+    /// P2 review I2: `order_goal` gates depth re-paths, so it is hashed under
+    /// depth (and only there: classic and Survival hashes never see it).
+    #[test]
+    fn order_goal_is_hashed_under_depth_only() {
+        let mut s = depth_arena();
+        let u = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        s.step(&[]);
+        let mut t = s.clone();
+        t.entities[u.0 as usize].order_goal = Some(v(12, 20));
+        assert_ne!(s.state_hash(), t.state_hash(), "order_goal is not hashed");
+        s.depth = false;
+        t.depth = false;
+        assert_eq!(
+            s.state_hash(),
+            t.state_hash(),
+            "order_goal is hashed with depth off"
+        );
+    }
+
+    /// P2 review M1: an `AttackTarget` on a live enemy that nothing of ours
+    /// tracks is a true no-op, exactly like one on an unknown id (it used to
+    /// halt the unit, an oracle for hidden enemies).
+    #[test]
+    fn attack_target_on_an_untracked_enemy_changes_nothing() {
+        let setup = || {
+            let mut s = depth_arena();
+            let a = s.add_unit(P0, UnitKind::Infantry, hex::center(5, 5));
+            let far = s.add_unit(P1, UnitKind::Infantry, hex::center(35, 35));
+            s.entities[far.0 as usize].ammunition = 0;
+            s.step(&[Command::Move {
+                owner: P0,
+                unit: a,
+                target: hex::center(5, 30),
+            }]);
+            (s, a, far)
+        };
+        let (mut s, a, far) = setup();
+        let (mut twin, _, _) = setup();
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: far,
+        }]);
+        twin.step(&[]);
+        assert_eq!(s.state_hash(), twin.state_hash(), "the order acted");
+        assert!(s.entities[a.0 as usize].move_target.is_some());
+    }
+
+    /// P2 review M2 (Task 11 ruling 6): a unit that runs dry gives up its
+    /// forced target, and a dry unit takes no forced order at all.
+    #[test]
+    fn a_dry_unit_gives_up_its_forced_target_and_takes_none() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        let wall = s.add_building(P1, BuildingKind::Wall, 16, 20);
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: wall,
+        }]);
+        assert_eq!(s.entities[a.0 as usize].dp.forced, Some(wall));
+        s.entities[a.0 as usize].ammunition = 0;
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.entities[a.0 as usize].dp.forced, None,
+            "a dry unit kept its forced target"
+        );
+        let mut twin = s.clone();
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: wall,
+        }]);
+        twin.step(&[]);
+        assert_eq!(
+            s.state_hash(),
+            twin.state_hash(),
+            "a dry unit took the order"
+        );
+    }
+
+    /// P2 review M2: a forced target whose nearest reachable tile is still out
+    /// of weapon range (a gunship hovering over the sea) ends the order once
+    /// the unit stands as close as it can get, instead of re-ordering it every
+    /// tick.
+    #[test]
+    fn an_unreachable_forced_target_is_released_not_reordered_every_tick() {
+        let mut s = depth_arena();
+        for x in 14..40 {
+            for y in 0..40 {
+                s.map.set_ground(x, y, crate::game::map::Ground::River);
+            }
+        }
+        let team = s.add_unit(P0, UnitKind::AntiArmor, hex::center(10, 20));
+        let heli = s.add_unit(P1, UnitKind::Helicopter, hex::center(22, 20));
+        s.entities[heli.0 as usize].ammunition = 0;
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: team,
+            target: heli,
+        }]);
+        assert_eq!(s.entities[team.0 as usize].dp.forced, Some(heli));
+        let calls = s.order_calls;
+        for _ in 0..300 {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.entities[team.0 as usize].dp.forced, None,
+            "never released"
+        );
+        assert!(
+            s.order_calls - calls <= 3,
+            "re-ordered {} times",
+            s.order_calls - calls
+        );
+    }
+
+    /// P2 review M3: a unit that dies on the tick its forced target dies is
+    /// never re-ordered (no queued leg started on a corpse).
+    #[test]
+    fn a_unit_dying_with_its_forced_target_is_not_reordered() {
+        let mut s = depth_arena();
+        let tank = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(11, 20));
+        s.entities[foe.0 as usize].ammunition = 0;
+        s.entities[foe.0 as usize].hp = Fixed::from_int(100_000);
+        s.step(&[
+            Command::AttackTarget {
+                owner: P0,
+                unit: tank,
+                target: foe,
+            },
+            qmove(tank, hex::center(10, 32)),
+        ]);
+        let e = &s.entities[tank.0 as usize];
+        assert_eq!((e.dp.forced, e.dp.queue.len()), (Some(foe), 1));
+        assert_eq!(e.move_target, None, "the foe is in range");
+        s.entities[tank.0 as usize].hp = Fixed::ZERO;
+        s.entities[foe.0 as usize].hp = Fixed::ZERO;
+        let calls = s.order_calls;
+        s.step(&[]);
+        let e = &s.entities[tank.0 as usize];
+        assert!(!e.alive);
+        assert_eq!(
+            (e.move_target, e.path.len(), e.dp.queue.len(), e.dp.forced),
+            (None, 0, 0, None)
+        );
+        assert_eq!(s.order_calls, calls, "a corpse was ordered");
+    }
+
+    /// P2 review M4: Stop, Hold and stance orders leave Harvesters alone (a
+    /// Hold Harvester was never pushed and slowed the docking crowd).
+    #[test]
+    fn stop_hold_and_stance_ignore_harvesters() {
+        let setup = || {
+            let mut s = depth_arena();
+            let h = s.add_unit(P0, UnitKind::Harvester, v(10, 20));
+            s.step(&[Command::Move {
+                owner: P0,
+                unit: h,
+                target: v(20, 20),
+            }]);
+            (s, h)
+        };
+        let (mut s, h) = setup();
+        let (mut twin, _) = setup();
+        s.step(&[
+            Command::Stop { owner: P0, unit: h },
+            Command::HoldPosition { owner: P0, unit: h },
+            Command::SetStance {
+                owner: P0,
+                unit: h,
+                stance: Stance::Defensive,
+            },
+        ]);
+        twin.step(&[]);
+        assert_eq!(s.state_hash(), twin.state_hash(), "a harvester obeyed");
+        assert_eq!(s.stance_of(h), Some(Stance::Aggressive));
+    }
+
+    /// P2 review M5: an order point far outside any map (raw `i64` bits from a
+    /// hand-written or replayed line) is dropped, never panics, on depth,
+    /// classic Earthfront and plain maps alike.
+    #[test]
+    fn out_of_range_order_points_are_dropped_without_panicking() {
+        let huge = [i64::MIN, i64::MAX, i64::MIN / 2, -(1_i64 << 40)];
+        for mode in 0..3 {
+            let setup = || {
+                let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+                if mode > 0 {
+                    s.enable_earthfront();
+                }
+                if mode > 1 {
+                    s.enable_depth();
+                }
+                let tank = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+                let barracks = s.add_building(P0, BuildingKind::Barracks, 5, 5);
+                (s, tank, barracks)
+            };
+            for &bits in &huge {
+                for point in [
+                    Vec2::new(Fixed::from_bits(bits), Fixed::from_int(5)),
+                    Vec2::new(Fixed::from_int(5), Fixed::from_bits(bits)),
+                ] {
+                    let (mut s, tank, barracks) = setup();
+                    let (mut twin, _, _) = setup();
+                    s.step(&[
+                        Command::Move {
+                            owner: P0,
+                            unit: tank,
+                            target: point,
+                        },
+                        Command::AttackMove {
+                            owner: P0,
+                            unit: tank,
+                            target: point,
+                        },
+                        Command::QueueMove {
+                            owner: P0,
+                            unit: tank,
+                            target: point,
+                            attack_move: true,
+                        },
+                        Command::SetRally {
+                            owner: P0,
+                            producer: barracks,
+                            target: point,
+                        },
+                        Command::UseAbility {
+                            owner: P0,
+                            unit: tank,
+                            target: point,
+                        },
+                    ]);
+                    twin.step(&[]);
+                    assert_eq!(
+                        s.state_hash(),
+                        twin.state_hash(),
+                        "mode {mode}: an out-of-range point acted"
+                    );
+                }
+            }
+        }
+    }
+
+    /// P2 review M6: a hopeless alien unit (no route even through the walls)
+    /// searches once per order target, however often the AI re-issues the
+    /// same order; a different target, or a halt, searches again.
+    #[test]
+    fn a_failed_breach_is_not_searched_again_for_the_same_target() {
+        let mut s = breach_arena(BuildingKind::Wall);
+        for y in 0..40 {
+            s.map.set_ground(25, y, crate::game::map::Ground::River);
+        }
+        let rifle = s.add_unit(P1, UnitKind::Infantry, hex::center(30, 20));
+        for _ in 0..5 {
+            s.step(&[Command::Move {
+                owner: P1,
+                unit: rifle,
+                target: hex::center(5, 20),
+            }]);
+            s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        }
+        assert_eq!(s.breach_searches, 1, "re-searched a hopeless target");
+        s.step(&[attack_move(P1, rifle, hex::center(5, 22))]);
+        assert_eq!(s.breach_searches, 2);
     }
 }

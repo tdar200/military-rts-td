@@ -104,8 +104,10 @@ struct Entity {
     move_target: Option<Vec2>,
     /// The point the last order was GIVEN, before earthfront substituted a passable tile
     /// for an impassable goal (`move_target` then holds the substitute). Harvesters compare
-    /// against this so a returning truck is not re-pathed every tick. Derived from the
-    /// order, never read by combat or hashing.
+    /// against this so a returning truck is not re-pathed every tick. Never read by combat.
+    /// Kestrel depth also reads it (chase and forced-target re-path gates, re-paths, a
+    /// breach's wall), so it is hashed under depth only (P2 review I2); classic and
+    /// Survival hashes never see it.
     order_goal: Option<Vec2>,
     /// Remaining tile waypoints toward `move_target` (from A*), nearest first.
     path: Vec<(u16, u16)>,
@@ -384,6 +386,24 @@ const FOUNDING_ORE_BONUS: Fixed = Fixed::from_int(200);
 /// so the 120-tick golden run — which never reaches era 1 — never emits an Ascend
 /// and the golden hash stays stable across future balance tuning of the sink.
 const ASCEND_MIN_RESERVE: Fixed = Fixed::from_int(2000);
+
+/// The largest world coordinate, either axis and either sign, an order point
+/// may carry (P2 review M5).
+///
+/// Every real map (u16 columns and rows) fits well inside; past it the
+/// fixed-point maths of `hex::from_world` and the distance tests can overflow
+/// (a debug panic, a meaningless wrap in release), so [`Sim::step`] drops a
+/// `Move`, `AttackMove`, `QueueMove`, `SetRally` or `UseAbility` whose point
+/// lies outside, and the bridge drops the line.
+pub const ORDER_COORD_LIMIT: Fixed = Fixed::from_int(1 << 17);
+
+/// Whether order point `p` lies within [`ORDER_COORD_LIMIT`] on both axes.
+#[must_use]
+pub fn order_point_in_range(p: Vec2) -> bool {
+    let limit = ORDER_COORD_LIMIT.to_bits();
+    let ok = |c: Fixed| (-limit..=limit).contains(&c.to_bits());
+    ok(p.x) && ok(p.y)
+}
 
 /// A player or AI input, applied at a tick boundary.
 #[derive(Clone, Debug)]
@@ -2289,6 +2309,16 @@ impl Sim {
             // classic paths never write it, so their hashes are unchanged).
             if self.earthfront && self.depth {
                 e.dp.hash_into(&mut h);
+                // P2 review I2 (appended after the depth block): the order goal
+                // the depth re-path gates read.
+                match e.order_goal {
+                    Some(g) => {
+                        h.write_u64(1);
+                        h.write_i64(g.x.to_bits());
+                        h.write_i64(g.y.to_bits());
+                    }
+                    None => h.write_u64(0),
+                }
             }
             h.write_u64(u64::from(e.attack_move));
             h.write_u64(u64::from(e.cargo));
@@ -2944,6 +2974,18 @@ impl Sim {
         reason = "a flat one-arm-per-Command dispatch match; splitting it would hurt clarity"
     )]
     fn apply_command(&mut self, command: &Command) {
+        // P2 review M5: an order point far outside any map (raw bits from a
+        // hand-written or replayed line) is dropped before any maths sees it.
+        if let Command::Move { target, .. }
+        | Command::AttackMove { target, .. }
+        | Command::QueueMove { target, .. }
+        | Command::SetRally { target, .. }
+        | Command::UseAbility { target, .. } = *command
+        {
+            if !order_point_in_range(target) {
+                return;
+            }
+        }
         match *command {
             Command::Build { owner, kind, x, y } => self.apply_build(owner, kind, x, y),
             Command::Train {
