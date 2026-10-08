@@ -43,7 +43,7 @@ static func title_vm(deploy_enabled: bool, research_projects: int, fogged := fal
 			{"id": "deploy", "action": "pick_map", "label": "New operation", "icon": "plus", "emphasis": "primary", "disabled": not deploy_enabled},
 			{"id": "skirmish", "label": "Skirmish sandbox", "icon": "crosshair", "disabled": true},
 			{"id": "research", "label": "Research archive", "hint": "%d projects" % research_projects if research_projects > 0 else "", "icon": "flask_title", "disabled": true},
-			{"id": "settings", "label": "Settings", "icon": "cog", "disabled": true},
+			{"id": "settings", "label": "Settings", "icon": "cog"},
 			{"id": "quit", "label": "Quit", "icon": "restart"},
 		],
 		"campaign": {

@@ -220,6 +220,28 @@ func test_restart_needs_the_confirm_and_uses_the_existing_restart(t) -> void:
 	_drop(p)
 
 
+func test_settings_from_the_pause_menu_and_esc_back_to_it(t) -> void:
+	var p := _make(t)
+	var ui = p[1]
+	ui.open_pause()
+	_click(ui, "Settings")
+	t.ok(ui.settings_open, "the pause menu's Settings opens the screen")
+	t.ok(ui.paused(), "the game stays paused under it")
+	t.ok(U.has_text(ui.settings_layer, "Pause / Settings"), "named as opened from the pause menu")
+	t.ok(U.has_text(ui.settings_layer, "Jump to alert"), "Kestrel: the key list has the Kestrel keys")
+	t.ok(ui.blocks_point(Vector2(900, 500)), "the world takes no clicks")
+	t.eq(ui.escape_route(false), "close_settings", "Esc closes Settings first")
+	t.ok(not ui.route_key(_key(KEY_F1), false), "F1 waits while Settings is up")
+	t.ok(not ui.controls_open, "no controls screen hidden under it")
+	t.ok(ui.route_key(_key(KEY_ESCAPE), false), "Esc")
+	t.ok(not ui.settings_open and ui.pause_open, "back to the pause menu")
+	t.eq(ui.settings_layer.get_child_count(), 0, "the screen is gone")
+	_click(ui, "Settings")
+	ui.close_pause()
+	t.ok(not ui.settings_open, "resuming closes a Settings screen opened from the pause menu")
+	_drop(p)
+
+
 func test_quit_only_asks_in_a_test(t) -> void:
 	var p := _make(t)
 	var ui = p[1]

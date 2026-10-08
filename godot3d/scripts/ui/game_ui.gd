@@ -23,6 +23,8 @@ const TerrainGuide = preload("res://scripts/ui/sections/terrain_guide.gd")
 const EarlyMission = preload("res://scripts/ui/sections/early_mission.gd")
 const MapPicker = preload("res://scripts/ui/sections/map_picker.gd")
 const MatchConfig = preload("res://scripts/match_config.gd")
+const Settings = preload("res://scripts/ui/settings.gd")
+const SettingsScreen = preload("res://scripts/ui/sections/settings_screen.gd")
 
 const VM_INTERVAL := 0.1
 ## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it still runs
@@ -89,6 +91,9 @@ var picker_layer: Control  # the map picker over the title (New operation)
 var picker_open := false
 var picker_choice := ""  # the map the picker has selected ("kestrel" or "survival")
 var _launch_wait := -1.0  # >= 0 while a confirmed pick waits for the bridge: seconds since restart.flag disappeared
+var settings_layer: Control  # the Settings screen, over everything (the title's Settings entry or the pause menu's)
+var settings_open := false
+var _settings_from_pause := false
 
 
 ## The game adds this node to its tree first, then calls setup.
@@ -129,6 +134,7 @@ func setup(game) -> void:
 	title.action.connect(_on_title_action)
 	layer.add_child(title)
 	picker_layer = _full_rect_layer("PickerLayer")  # after the title, so the picker draws over it
+	settings_layer = _full_rect_layer("SettingsLayer")  # last: over the title, the picker and the pause menu
 	_refresh_title(true)
 	title.focus_first()
 
@@ -423,9 +429,9 @@ func confirm_picker() -> void:
 		return
 	var cfg := MatchConfig.current
 	cfg["scenario"] = picker_choice
+	cfg = MatchConfig.with_settings(cfg, _settings_path())
 	MatchConfig.current = cfg
-	var dir := _runtime_dir()
-	MatchConfig.write(dir, cfg)
+	MatchConfig.write(_runtime_dir(), cfg)
 	var snap = g.get("bridge_snapshot")
 	var on_screen := MatchConfig.running(snap) if snap is Dictionary else ""
 	picker_open = false
@@ -437,12 +443,37 @@ func confirm_picker() -> void:
 		_refresh_title()
 		g._restart_mission()
 		return
+	_relaunch_in_place()
+
+
+## restart.flag for the bridge (it rebuilds the map match.json names, here the one on screen), then the mission deploys
+## once the bridge took the flag (_tick_launch).
+func _relaunch_in_place() -> void:
+	var dir := _runtime_dir()
 	if dir != "":
 		var flag := FileAccess.open(dir.path_join("restart.flag"), FileAccess.WRITE)
 		if flag:
 			flag.store_line("restart")
 	_launch_wait = 0.0
 	_refresh_title()
+
+
+## The campaign card's Deploy forces: the map the bridge already serves. When the player's fog setting differs from the
+## Kestrel frame on screen (fog switched off or on since the bridge built it), match.json asks for the match with the
+## setting and the bridge rebuilds it first; otherwise the mission deploys at once, as before.
+func deploy_from_title() -> void:
+	var snap = g.get("bridge_snapshot")
+	if snap is Dictionary and MatchConfig.running(snap) == "kestrel":
+		var want_fog := bool(Settings.get_value("game/fog", _settings_path()))
+		if VmGameplay.fogged(snap) != want_fog:
+			var cfg := MatchConfig.current
+			cfg["scenario"] = "kestrel"
+			cfg = MatchConfig.with_settings(cfg, _settings_path())
+			MatchConfig.current = cfg
+			MatchConfig.write(_runtime_dir(), cfg)
+			_relaunch_in_place()
+			return
+	g._deploy_mission()
 
 
 ## Every frame while the title is up. A confirmed pick deploys LAUNCH_SETTLE seconds after the bridge removed restart.flag.
@@ -471,10 +502,17 @@ func _tick_launch(delta: float) -> void:
 	g._deploy_mission()
 
 
-## Keys on the title (the game's input handler sends them here before deploy): Esc closes the map picker, the ui_left and
-## ui_right actions (the arrow keys) move its selection. True when the key was used.
+## Keys on the title (the game's input handler sends them here before deploy): Esc closes the Settings screen or the map
+## picker, the ui_left and ui_right actions (the arrow keys) move the picker's selection. True when the key was used.
 func route_title_key(event: InputEvent) -> bool:
-	if not picker_open or not (event is InputEventKey) or not event.pressed or event.echo:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return false
+	if settings_open:
+		if event.keycode == Keybinds.CANCEL:
+			close_settings()
+			return true
+		return false
+	if not picker_open:
 		return false
 	if event.keycode == Keybinds.CANCEL:
 		close_picker()
@@ -590,8 +628,10 @@ func _on_title_action(name: String, _arg: Variant) -> void:
 	match name:
 		"pick_map":
 			open_picker()
+		"settings":
+			open_settings()
 		"deploy":
-			g._deploy_mission()
+			deploy_from_title()
 		"quit":
 			get_tree().quit()
 
@@ -627,6 +667,7 @@ func _on_debrief_action(name: String, _arg: Variant) -> void:
 			var running := MatchConfig.running(snap) if snap is Dictionary else ""
 			if running != "":
 				cfg["scenario"] = running
+			cfg = MatchConfig.with_settings(cfg, _settings_path())
 			MatchConfig.current = cfg
 			MatchConfig.write(_runtime_dir(), cfg)
 			MatchConfig.set_auto_deploy(true)
@@ -651,9 +692,11 @@ func world_blocked() -> bool:
 	return paused() or region_open
 
 
-## What Esc does right now, most specific first: close the controls screen, close the terrain guide, close the confirm panel,
+## What Esc does right now, most specific first: close the Settings screen, close the controls screen, close the terrain guide, close the confirm panel,
 ## resume, close the strategic map, close the Science modal, cancel an armed order or placement, otherwise open the pause menu ("none" while the debrief is up).
 func escape_route(armed: bool) -> String:
+	if settings_open:
+		return "close_settings"
 	if controls_open:
 		return "close_controls"
 	if guide_open:
@@ -678,6 +721,8 @@ func escape_route(armed: bool) -> String:
 func route_key(event: InputEvent, armed := false) -> bool:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return false
+	if settings_open and event.keycode != Keybinds.CANCEL:
+		return false  # the Settings screen covers everything: F1 and M wait until it closes
 	if event.keycode == Keybinds.CONTROLS:
 		# The Science modal owns the screen: F1 must not open the controls over it (the game's handler lets Esc close it).
 		if scrim != null or not hud.visible or research.visible:
@@ -700,6 +745,8 @@ func route_key(event: InputEvent, armed := false) -> bool:
 	if event.keycode != Keybinds.CANCEL:
 		return false
 	match escape_route(armed):
+		"close_settings":
+			close_settings()
 		"close_controls":
 			close_controls()
 		"close_guide":
@@ -727,6 +774,8 @@ func open_pause() -> void:
 
 
 func close_pause() -> void:
+	if settings_open and _settings_from_pause:
+		close_settings()
 	pause_open = false
 	controls_open = false
 	guide_open = false
@@ -884,6 +933,7 @@ func _pause_vm() -> Dictionary:
 	vm["confirm"] = confirm
 	vm["can_restart"] = g.has_method("_restart_mission")
 	vm["can_guide"] = _can_guide()
+	vm["can_settings"] = true
 	return vm
 
 
@@ -920,6 +970,8 @@ func _on_pause_action(name: String, _arg: Variant = null) -> void:
 			open_controls()
 		"open_guide":
 			open_guide()
+		"open_settings":
+			open_settings()
 		"guide_back":
 			close_guide()
 		"controls_back":
@@ -938,6 +990,67 @@ func _on_pause_action(name: String, _arg: Variant = null) -> void:
 			g._restart_mission()  # the existing restart: restart.flag for the bridge, then the scene reloads to the title
 		"quit":
 			get_tree().quit()
+
+
+# ---------------------------------------------------------------- Settings screen
+
+## Where the settings live: the game's settings_path (tests point the stub at their own file), else Settings.PATH.
+func _settings_path() -> String:
+	var path = g.get("settings_path")
+	return str(path) if path != null and str(path) != "" else Settings.PATH
+
+
+## The game's audio_server / display_server when it has one (the test stub's recorders), else null: the real servers.
+func _audio_server() -> Object:
+	return g.get("audio_server") as Object
+
+
+func _display_server() -> Object:
+	return g.get("display_server") as Object
+
+
+## From the title's Settings entry, or the pause menu's (the game stays paused under it).
+func open_settings() -> void:
+	if settings_open:
+		return
+	settings_open = true
+	_settings_from_pause = pause_open
+	_build_settings()
+
+
+func close_settings() -> void:
+	settings_open = false
+	for child in settings_layer.get_children():
+		settings_layer.remove_child(child)
+		child.queue_free()
+	if title != null and title.visible:
+		title.focus_first()
+
+
+func _build_settings() -> void:
+	for child in settings_layer.get_children():
+		settings_layer.remove_child(child)
+		child.queue_free()
+	var values := Settings.load_from(_settings_path())
+	SettingsScreen.build(settings_layer, SettingsScreen.vm(values, _settings_from_pause, bool(g.get("world_art_on"))), Callable(self, "_on_settings_action"))
+
+
+## A change is saved and applied at once: volumes on the buses, the window mode on the window, the fog for the next match.
+## A slider keeps its own percent, so only the toggles rebuild the screen (never mid-drag).
+func _on_settings_action(name: String, arg: Variant = null) -> void:
+	match name:
+		"settings_back":
+			close_settings()
+		"set":
+			var key := str(arg[0])
+			Settings.set_value(key, arg[1], _settings_path())
+			var values := Settings.load_from(_settings_path())
+			if key.begins_with("audio/"):
+				Settings.apply_audio(values, _audio_server())
+			elif key == "video/window_mode":
+				Settings.apply_window(values, _display_server())
+			if not key.begins_with("audio/"):
+				_build_settings()
 
 
 # ---------------------------------------------------------------- strategic map (board 11)

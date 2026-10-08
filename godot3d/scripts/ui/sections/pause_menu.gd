@@ -1,8 +1,9 @@
 extends RefCounted
 ## Pause menu (board 9): the "Paused" marker, the command menu, the mission snapshot and, after Restart or Quit is pressed,
 ## a confirm panel. Driven by vm_gameplay.pause() plus the host's state ({confirm, can_restart}); `emit` is Callable(name, arg)
-## and receives resume, open_controls, open_guide (only when vm.can_guide), ask_restart, ask_quit, keep_playing, restart and quit. Builds nothing for {}.
-## Not built, because the game has no such feature: Settings, Save and keep playing, the Objective and Last save rows.
+## and receives resume, open_controls, open_guide (only when vm.can_guide), open_settings (only when vm.can_settings),
+## ask_restart, ask_quit, keep_playing, restart and quit. Builds nothing for {}.
+## Not built, because the game has no such feature: Save and keep playing, the Objective and Last save rows.
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
 
@@ -29,12 +30,13 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 	scrim.mouse_filter = Control.MOUSE_FILTER_STOP  # the paused game takes no clicks
 	parent.add_child(scrim)
 	_marker(parent, vm)
-	_menu(parent, vm, emit)
+	var menu_bottom := _menu(parent, vm, emit)
 	if not (vm.get("rows", []) as Array).is_empty():
 		_snapshot(parent, vm)
 	var confirm := str(vm.get("confirm", ""))
 	if confirm == "restart" or confirm == "quit":
-		_confirm(parent, vm, confirm, emit)
+		# Under the menu: at CONFIRM_Y (board 9), lower when the game's extra entries make the menu taller.
+		_confirm(parent, vm, confirm, emit, maxf(CONFIRM_Y, menu_bottom + 20.0))
 
 
 static func _marker(parent: Control, vm: Dictionary) -> void:
@@ -58,7 +60,8 @@ static func _marker(parent: Control, vm: Dictionary) -> void:
 	note.position = Vector2(roundf(cx), roundf(mid - note.size.y * 0.5))
 
 
-static func _menu(parent: Control, vm: Dictionary, emit: Callable) -> void:
+## Returns the menu panel's bottom edge.
+static func _menu(parent: Control, vm: Dictionary, emit: Callable) -> float:
 	var keys: Dictionary = vm.get("keys", {})
 	var panel := K.panel(parent, MENU_X, MENU_Y, MENU_W, 10.0)
 	var cx := MENU_X + 1.0 + 26.0
@@ -83,6 +86,13 @@ static func _menu(parent: Control, vm: Dictionary, emit: Callable) -> void:
 		if emit.is_valid():
 			guide.pressed.connect(emit.bind("open_guide", null))
 		y += BTN_H
+	if vm.get("can_settings", false):
+		# Settings screen. The game sets can_settings; the board 9 fixture does not, so that screen keeps its own height.
+		y += BTN_GAP
+		var settings := _button(parent, "Settings", cx, y, cw, {})
+		if emit.is_valid():
+			settings.pressed.connect(emit.bind("open_settings", null))
+		y += BTN_H
 	var can_restart: bool = vm.get("can_restart", true)
 	y += BTN_GAP + 4.0
 	K.rule(parent, cx, y, cw, 1, T.LINE_DIM)
@@ -103,6 +113,7 @@ static func _menu(parent: Control, vm: Dictionary, emit: Callable) -> void:
 	y += foot.size.y
 	panel.size.y = roundf(y + 22.0 + 1.0 - MENU_Y)
 	panel.queue_redraw()
+	return MENU_Y + panel.size.y
 
 
 static func _button(parent: Control, label: String, x: float, y: float, w: float, o: Dictionary) -> Button:
@@ -138,12 +149,12 @@ static func _snapshot(parent: Control, vm: Dictionary) -> void:
 
 
 ## The second state of Restart and Quit: a danger-edged strip under the menu with the two choices.
-static func _confirm(parent: Control, vm: Dictionary, which: String, emit: Callable) -> void:
+static func _confirm(parent: Control, vm: Dictionary, which: String, emit: Callable, top := CONFIRM_Y) -> void:
 	var elapsed := str(vm.get("elapsed", ""))
 	var restart := which == "restart"
-	var panel := K.panel(parent, MENU_X, CONFIRM_Y, CONFIRM_W, 88.0, "panel", {"border": T.DANGER_EDGE})
+	var panel := K.panel(parent, MENU_X, top, CONFIRM_W, 88.0, "panel", {"border": T.DANGER_EDGE})
 	panel.name = "Confirm"
-	var cy := CONFIRM_Y + 44.0
+	var cy := top + 44.0
 	K.icon(parent, "warning", MENU_X + 1.0 + 24.0, cy - 15.0, T.BAD, 30, 1.75)
 	var title := K.text(parent, "Restart this mission?" if restart else "Quit the game?", {"f": "disp", "wt": 600, "px": 24, "sp": 0.04, "col": T.BAD_HI, "up": true})
 	var lost := "You will lose %s of progress. " % elapsed if elapsed != "" else "You will lose your progress. "

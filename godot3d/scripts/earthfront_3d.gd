@@ -26,6 +26,7 @@ const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
 const AlertPings := preload("res://scripts/ui/alert_pings.gd")
+const Settings := preload("res://scripts/ui/settings.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -164,6 +165,8 @@ var bridge_supply_used := 0
 var bridge_supply_cap := 0
 var bridge_era := 0
 var runtime_directory := "res://runtime"
+## The player's settings file (Settings.PATH, under user://; QA isolates it with its own XDG_DATA_HOME).
+var settings_path := Settings.PATH
 var command_sequence := 0
 var bridge_earthfront := true
 var bridge_technology_total := 12
@@ -239,6 +242,11 @@ func _ready() -> void:
 	get_window().mouse_exited.connect(func() -> void: pointer_known = false)
 	_create_materials()
 	_setup_environment()
+	# The saved bus volumes before anything plays, and the window mode (the defaults never touch the window). Here and not
+	# inside _setup_audio, whose body test_world_art_survival pins byte for byte.
+	var saved := Settings.load_from(settings_path)
+	Settings.apply_audio(saved)
+	Settings.apply_window(saved)
 	_setup_audio()
 	_build_terrain()
 	_build_ui()

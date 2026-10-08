@@ -193,3 +193,46 @@ func test_scrim_swallows_clicks_and_panels_stay_on_screen(t) -> void:
 			var b := n as Button
 			t.ok(b.position.x >= 0.0 and b.position.y >= 0.0 and b.position.x + b.size.x <= 1920.0 and b.position.y + b.size.y <= 1080.0, "button inside the screen: " + b.text)
 	root.free()
+
+
+# ------------------------------------------------------------------ Settings (Task 4)
+
+func test_settings_entry_only_when_the_game_offers_it(t) -> void:
+	var vm := Vm.pause(_snapshot(), 4, true)
+	var plain: Array = _screen(vm)
+	t.ok(U.button_with(plain[0], "Settings") == null, "the board 9 view model (no can_settings) has no Settings entry")
+	plain[0].free()
+	vm["can_settings"] = true
+	vm["can_guide"] = true
+	var game: Array = _screen(vm)
+	t.ok(U.button_with(game[0], "Settings") != null, "the game's menu lists Settings")
+	_click(game[0], "Settings")
+	t.eq(game[1], ["open_settings"], "and it opens the Settings screen")
+	game[0].free()
+
+
+func _confirm_top(root: Node) -> float:
+	return (root.find_child("Confirm", true, false) as Control).position.y
+
+
+func _menu_bottom(root: Node) -> float:
+	for n in root.get_children():
+		if n is Control and (n as Control).position == Vector2(Menu.MENU_X, Menu.MENU_Y):
+			return (n as Control).position.y + (n as Control).size.y
+	return -1.0
+
+
+func test_the_confirm_stays_under_a_taller_menu(t) -> void:
+	var vm := Vm.pause(_snapshot(), 4, true)
+	vm["confirm"] = "restart"
+	var board: Array = _screen(vm)
+	t.eq(_confirm_top(board[0]), Menu.CONFIRM_Y, "board 9: the confirm strip where the board puts it")
+	board[0].free()
+	vm["can_guide"] = true
+	vm["can_settings"] = true
+	var tall: Array = _screen(vm)
+	var bottom := _menu_bottom(tall[0])
+	t.ok(bottom > Menu.CONFIRM_Y - 20.0, "Terrain guide and Settings make the menu reach past the board's strip (%d)" % bottom)
+	t.ok(_confirm_top(tall[0]) >= bottom + 20.0, "so the strip moves under the menu instead of over it")
+	t.ok(_confirm_top(tall[0]) + 88.0 <= 1080.0, "and stays on screen")
+	tall[0].free()

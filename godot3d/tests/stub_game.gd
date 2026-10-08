@@ -64,6 +64,42 @@ var alert_pings = null
 var clock := 0.0
 ## Mirrors earthfront_3d.runtime_directory. Empty: the UI writes no match.json or flag (tests that need files set a user:// path).
 var runtime_directory := ""
+## Mirrors earthfront_3d.settings_path. A path no test creates, so the UI reads the defaults and never the real
+## user://settings.cfg (tests that save settings set their own user://test_... path and remove it).
+var settings_path := "user://test_stub_settings/settings.cfg"
+## The UI applies volumes and the window mode to these recorders instead of the AudioServer and the DisplayServer
+## (the real game has no such members, so it gets the servers).
+var audio_server := BusRecorder.new()
+var display_server := WindowRecorder.new()
+
+
+## Records what Settings.apply_audio / apply_duck set, bus by bus (the names of default_bus_layout.tres, in order).
+class BusRecorder:
+	const NAMES := ["Master", "SFX", "SFX_L2", "SFX_L1", "SFX_R1", "SFX_R2", "UI", "Ambient", "Music"]
+	var volume := {}
+	var mute := {}
+
+	func get_bus_index(bus: StringName) -> int:
+		return NAMES.find(String(bus))
+
+	func set_bus_volume_db(idx: int, db: float) -> void:
+		volume[NAMES[idx]] = db
+
+	func set_bus_mute(idx: int, on: bool) -> void:
+		mute[NAMES[idx]] = on
+
+
+## Records what Settings.apply_window asks of the window.
+class WindowRecorder:
+	var mode: int = DisplayServer.WINDOW_MODE_WINDOWED
+	var sets: Array = []
+
+	func window_get_mode(_window := 0) -> int:
+		return mode
+
+	func window_set_mode(m: int, _window := 0) -> void:
+		sets.append(m)
+		mode = m
 
 
 ## `fog_off` loads the EARTHFRONT_FOG=0 twin of the start frame (every alien entity present) for tests about the alien base.

@@ -5,6 +5,7 @@ extends Node
 ## player (moved onto the Ambient bus). Every stream is loaded once at setup from Task 4's files; nothing is synthesised
 ## at run time. Only the game makes one, and only on Kestrel, once the scene is in the tree.
 const Director := preload("res://scripts/audio/audio_director.gd")
+const Settings := preload("res://scripts/ui/settings.gd")
 const MANIFEST := "res://assets/audio/sfx/sfx_manifest.json"
 const SFX_VOICES := 16
 const LOOP_SLEW_DB := 60.0  # dB per second a loop moves toward its level (fades in and out instead of clicking)
@@ -98,15 +99,12 @@ func set_loops(levels: Dictionary) -> void:
 			_loop_level[id] = LOOP_OFF_DB
 
 
-## The Ambient and Music level from AudioDirector.duck_db.
+## The Ambient and Music duck from AudioDirector.duck_db, under the player's own volume for each (Settings).
 func set_duck(db: float) -> void:
 	if is_equal_approx(db, _duck):
 		return
 	_duck = db
-	for bus in ["Ambient", "Music"]:
-		var idx := AudioServer.get_bus_index(bus)
-		if idx >= 0:
-			AudioServer.set_bus_volume_db(idx, db)
+	Settings.apply_duck(db)
 
 
 ## The sim's pause (earthfront_3d.set_sim_paused): every SFX and loop player holds where it is, delayed shots wait.

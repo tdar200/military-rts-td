@@ -1,8 +1,10 @@
 extends RefCounted
 ## The next match, as the bridge reads it: `match.json` in the runtime directory, read when `restart.flag` arrives
 ## (godot-bridge.rs parse_match_config: a quoted `scenario`, a bare `fog`; `seed` and `difficulty` ride along for later
-## tasks). The config of the running match and the "deploy after this reload" request live in Engine meta, so they survive
-## the scene reload a restart does (a static var alone is not promised to).
+## tasks). The fog comes from the player's settings (with_settings). The config of the running match and the "deploy
+## after this reload" request live in Engine meta, so they survive the scene reload a restart does (a static var alone
+## is not promised to).
+const Settings = preload("res://scripts/ui/settings.gd")
 const SCENARIOS := ["kestrel", "survival"]
 const NAMES := {"kestrel": "Kestrel Reach", "survival": "Earthfront Survival"}
 const KEYS := ["scenario", "seed", "difficulty", "fog"]
@@ -47,6 +49,14 @@ static func write(runtime_dir: String, cfg: Dictionary) -> bool:
 	file.store_string(to_json(cfg))
 	file.close()
 	return DirAccess.rename_absolute(next, ProjectSettings.globalize_path(runtime_dir.path_join("match.json"))) == OK
+
+
+## `cfg` for the next match: the fog follows the player's setting (Settings "game/fog" in `settings_path`), so the
+## Settings screen's fog toggle lands in the next match.json whichever way the match starts.
+static func with_settings(cfg: Dictionary, settings_path := Settings.PATH) -> Dictionary:
+	var out := cfg.duplicate()
+	out["fog"] = bool(Settings.get_value("game/fog", settings_path))
+	return out
 
 
 static func display_name(scenario: String) -> String:
