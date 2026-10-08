@@ -1445,6 +1445,7 @@ func _process(delta: float) -> void:
 		_update_camera_controls(delta)  # a paused game (or the strategic map) does not pan or orbit under the screen
 	_update_units(delta)
 	_glide_bridge_nodes(delta)
+	_update_queue_markers()
 	_animate_unit_cards(delta)
 	_animate_world(delta)
 	if world_fx != null:
@@ -1762,6 +1763,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					_select_at(event.position, event.shift_pressed, selection_double_click)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and not selected_units.is_empty():
+			# Kestrel: Shift is a modifier only. Shift + right click (after A too) appends a waypoint leg to every selected unit
+			# of ours; attack-move stays armed while legs are being queued.
+			if world_art_on and event.shift_pressed and String(selected.get_meta("category", "unit")) != "building":
+				var leg := _screen_to_ground(event.position)
+				if leg != Vector3.INF and _queue_waypoint(leg, attack_move_armed) > 0:
+					return
 			if world_art_on and String(selected.get_meta("category", "unit")) != "building":
 				# Kestrel: a right click on a live enemy focuses the selection on it (attack-target); elsewhere it moves.
 				var to_screen := func(node: Node3D, offset: Vector3) -> Vector2: return camera.unproject_position(node.global_position + offset)
@@ -2616,6 +2623,103 @@ func _order_target(foe: Node3D) -> bool:
 	return true
 
 
+## Kestrel's shift + right click (Task 14): `qmove,<id>,<x_bits>,<z_bits>` (`qattack` with attack-move armed) for every
+## selected unit of ours. A unit on an order walks the leg after it; an idle one starts at once. The sim keeps at most
+## eight legs per unit, counting the one under way, and drops more; Harvesters never queue. Returns the units ordered.
+func _queue_waypoint(ground: Vector3, attack := false) -> int:
+	if not world_art_on or not bridge_active:
+		return 0
+	var ordered := _order_units()
+	var bits := _world_to_sim_bits(ground)
+	for unit in ordered:
+		_append_bridge_command("%s,%d,%d,%d" % ["qattack" if attack else "qmove", int(unit.get_meta("bridge_id")), bits.x, bits.y])
+	if not ordered.is_empty():
+		_say("%s QUEUED \u2014 %d UNIT%s" % ["ATTACK-MOVE" if attack else "WAYPOINT", ordered.size(), "" if ordered.size() == 1 else "S"])
+		_show_move_marker(ground, attack)
+		_order_ack()
+	return ordered.size()
+
+
+## Task 14: the most queue discs and the most path segments drawn at once (each pool grows to this and is reused).
+const QUEUE_DRAW_CAP := 32
+var queue_discs: Array[MeshInstance3D] = []
+var queue_segments: Array[MeshInstance3D] = []
+var queue_drawn := 0
+
+
+## Every frame (Kestrel): a thin path from each selected unit of ours through the legs it still has to walk (the snapshot's
+## "route": the current destination, then the queued legs), with a disc on every leg, blue for a move and red for an
+## attack-move. Only our own units carry a route (the bridge sends no other), so nothing under the fog is drawn. Legs
+## shared by a group are drawn once. Pooled: at most QUEUE_DRAW_CAP discs and segments, hidden when unused. A paused
+## game leaves the markers frozen as they stand.
+func _update_queue_markers() -> void:
+	if sim_paused:
+		return
+	var discs := 0
+	var segments := 0
+	var seen := {}
+	if world_art_on:
+		for unit in _order_units():
+			var route: Array = unit.get_meta("route", [])
+			var from: Vector3 = unit.position + Vector3.UP * 0.05  # unit roots and the pooled markers share this parent
+			var from_key := ""
+			for leg in route:
+				if not (leg is Array) or leg.size() < 3 or discs >= QUEUE_DRAW_CAP or segments >= QUEUE_DRAW_CAP:
+					break
+				var key := "%d,%d" % [int(leg[0]), int(leg[1])]
+				var hostile := int(leg[2]) == 1
+				var material: Material = materials.alien_marker if hostile else materials.human_marker
+				var to := _sim_bits_to_world(int(leg[0]), int(leg[1]))
+				to.y = _height_world(to.x, to.z) + 0.05
+				var seg_key := from_key + ">" + key
+				if from_key == "" or not seen.has(seg_key):
+					seen[seg_key] = true
+					if _place_queue_segment(segments, from, to, material):
+						segments += 1
+				if not seen.has(key):
+					seen[key] = true
+					var disc := _queue_pool_node(queue_discs, discs, true)
+					disc.position = to
+					disc.material_override = material
+					disc.visible = true
+					discs += 1
+				from = to
+				from_key = key
+	for index in range(discs, queue_discs.size()):
+		queue_discs[index].visible = false
+	for index in range(segments, queue_segments.size()):
+		queue_segments[index].visible = false
+	queue_drawn = discs + segments
+
+
+## Pool slot `index` of `pool` (a disc or a unit-length segment), created on first use.
+func _queue_pool_node(pool: Array[MeshInstance3D], index: int, disc: bool) -> MeshInstance3D:
+	while pool.size() <= index:
+		var node: MeshInstance3D
+		if disc:
+			node = _cylinder(self, 0.13, 0.02, Vector3.ZERO, materials.human_marker, 16)
+		else:
+			var mesh := BoxMesh.new()
+			mesh.size = Vector3(0.028, 0.02, 1.0)
+			node = _mesh(mesh, materials.human_marker, Vector3.ZERO)
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		node.name = "QueueDisc%d" % pool.size() if disc else "QueueSegment%d" % pool.size()
+		pool.append(node)
+	return pool[index]
+
+
+## Lays pooled segment `index` from `a` to `b` (false, and nothing used, for a zero-length leg).
+func _place_queue_segment(index: int, a: Vector3, b: Vector3, material: Material) -> bool:
+	var along := b - a
+	if Vector2(along.x, along.z).length() < 0.05:
+		return false
+	var segment := _queue_pool_node(queue_segments, index, false)
+	segment.transform = Transform3D(Basis.looking_at(along, Vector3.UP) * Basis.from_scale(Vector3(1.0, 1.0, along.length())), (a + b) * 0.5)
+	segment.material_override = material
+	segment.visible = true
+	return true
+
+
 func _write_bridge_train(kind_name: String) -> void:
 	if not bridge_active:
 		objective_label.text = "SIMULATION CORE OFFLINE \u2014 PRODUCTION UNAVAILABLE"
@@ -3237,6 +3341,9 @@ func _sync_bridge_entities(entities: Array) -> void:
 		entity_node.set_meta("production_duration", int(entity_data.get("production_duration", 0)))
 		if entity_data.has("stance"):
 			entity_node.set_meta("stance", String(entity_data["stance"]))  # Kestrel's own units only (the bridge sends no other)
+		if entity_data.has("queue"):  # Task 14, the same units: legs waiting, and the route still to walk while any wait
+			entity_node.set_meta("queue", int(entity_data["queue"]))
+			entity_node.set_meta("route", entity_data.get("route", []))
 		var health_fill := entity_node.get_node_or_null("HealthFill") as MeshInstance3D
 		if health_fill:
 			var ratio := clampf(hp / max_hp, 0.0, 1.0)

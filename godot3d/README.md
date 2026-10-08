@@ -24,7 +24,10 @@ left-click or drag-select, right-click to move units or set producer rally point
 arms the next left click, Esc cancels it; it adds no key), A attack-move (the banner says to right-click the destination),
 F2 select the whole army, . select an idle crew, Ctrl+1 to Ctrl+9 save a control group and 1 to 9 recall it,
 On Kestrel Reach S stops the selection, D holds position, Z cycles its stance (aggressive, defensive, hold; Z does not
-rotate there, the yaw is locked) and a right click on an enemy in sight attacks that target.
+rotate there, the yaw is locked) and a right click on an enemy in sight attacks that target. Shift + right click (after
+A too) queues a waypoint leg behind the current order, up to eight legs a unit counting the one under way; the selected
+units' queued legs show as a thin path with a disc per leg (red for an attack-move leg). Any plain order, S or D clears
+the queue. (The Controls screen has no row for it: Kestrel's Orders column has no room left.)
 T/K/V/H/X train infantry/armour/anti-armour/gunships/capital units,
 P/R/B/N/I/O/L/,/G/J/C place reactor/refinery/barracks/vehicle factory/airfield/supply depot/research lab/battery/gun turret/AA battery/wall,
 Y opens the real-time science directorate, Q casts tactical abilities, U repairs, and Delete sells. Esc with nothing armed opens the pause menu (the bridge stops stepping while `pause.flag` exists in its runtime directory; its Terrain guide button shows the ground table), F1 opens the controls reference and M opens the strategic map (no pause; Esc or M closes it); all read their keys from `scripts/ui/keybinds.gd`. Survival shows the entire

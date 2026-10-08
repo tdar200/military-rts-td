@@ -255,3 +255,112 @@ func test_kestrel_selection_offers_stop_hold_and_a_stance_chip(t) -> void:
 	t.ok(sel["rows"].all(func(r): return r.get("label") != "Stance"), "Survival: no stance chip")
 	rifle.free()
 	tank.free()
+
+
+## Task 14: shift + right click queues a waypoint leg (`qmove`, or `qattack` with attack-move armed) for every selected
+## unit of ours on Kestrel; Survival writes nothing. The real click needs a camera in a tree, so the handler order is
+## checked in its source and the order half is driven directly, as for the attack-target click.
+func test_shift_right_click_queues_waypoints_on_kestrel(t) -> void:
+	var scene := _scene(true)
+	_kestrel_army(scene)
+	scene._set_selection([scene.bridge_nodes[750], scene.bridge_nodes[751], scene.bridge_nodes[760]])
+	var ground: Vector3 = scene._hex_world(14, 9)
+	var bits: Vector2i = scene._world_to_sim_bits(ground)
+	t.eq(scene._queue_waypoint(ground), 2, "two units of ours queue the leg")
+	t.eq(_lines(), ["qmove,750,%d,%d" % [bits.x, bits.y], "qmove,751,%d,%d" % [bits.x, bits.y]], "qmove per unit, the alien skipped")
+	t.eq(scene._queue_waypoint(ground, true), 2, "an attack-move leg")
+	t.eq(_lines(), ["qattack,750,%d,%d" % [bits.x, bits.y], "qattack,751,%d,%d" % [bits.x, bits.y]], "qattack per unit")
+	scene._set_selection([scene.bridge_nodes[760]])
+	t.eq(scene._queue_waypoint(ground), 0, "an enemy selection queues nothing")
+	t.eq(_lines(), [], "and writes nothing")
+	# In the real handler Shift is checked first, before the target pick and the plain move, and keeps A armed.
+	var src := (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
+	var input := src.substr(src.find("func _unhandled_input(event: InputEvent) -> void:"))
+	input = input.substr(0, input.find("\nfunc ", 10))
+	var queue_at := input.find("_queue_waypoint(leg, attack_move_armed)")
+	t.ok(queue_at > 0 and queue_at < input.find("_order_target(foe)"), "shift queues before the target pick")
+	t.ok(input.find("event.shift_pressed and String(selected") > 0, "only with Shift held")
+	_done(scene)
+	var survival := _scene(false)
+	_place(survival, [_unit(survival, 750, "Infantry", 0, Vector2i(10, 12))])
+	survival._set_selection([survival.bridge_nodes[750]])
+	t.eq(survival._queue_waypoint(ground), 0, "Survival queues nothing")
+	t.eq(_lines(), [], "and writes no qmove")
+	_done(survival)
+
+
+func _routed(scene, id: int, owner: int, tile: Vector2i, legs: Array) -> Dictionary:
+	var e := _unit(scene, id, "Infantry", owner, tile, "aggressive" if owner == 0 else "")
+	if owner == 0:
+		var route: Array = []
+		for leg in legs:
+			var bits: Vector2i = scene._world_to_sim_bits(scene._hex_world(leg.x, leg.y))
+			route.append([bits.x, bits.y, 1 if leg.z == 1 else 0])
+		e["queue"] = maxi(0, route.size() - 1)
+		if route.size() > 1:
+			e["route"] = route
+	return e
+
+
+func _shown(pool: Array) -> int:
+	return pool.filter(func(n): return n.visible).size()
+
+
+func test_queued_routes_draw_pooled_markers_for_our_selection_only(t) -> void:
+	var scene := _scene(true)
+	var legs := [Vector3i(12, 9, 0), Vector3i(14, 9, 1), Vector3i(14, 13, 0)]
+	_place(scene, [
+		_routed(scene, 750, 0, Vector2i(10, 12), legs),
+		_routed(scene, 751, 0, Vector2i(11, 12), legs),
+		_routed(scene, 752, 0, Vector2i(9, 12), []),
+		_routed(scene, 760, 1, Vector2i(15, 12), []),
+	])
+	t.eq(int(scene.bridge_nodes[750].get_meta("queue", -1)), 2, "queue meta from the snapshot")
+	t.eq((scene.bridge_nodes[750].get_meta("route", []) as Array).size(), 3, "route meta from the snapshot")
+	t.eq(int(scene.bridge_nodes[752].get_meta("queue", -1)), 0, "no queue, queue 0")
+	t.eq((scene.bridge_nodes[752].get_meta("route", []) as Array).size(), 0, "and no route")
+	t.ok(not scene.bridge_nodes[760].has_meta("queue"), "an alien unit carries none")
+	scene._update_queue_markers()
+	t.eq(scene.queue_drawn, 0, "nothing selected, nothing drawn")
+	scene._set_selection([scene.bridge_nodes[750], scene.bridge_nodes[751]])
+	scene._update_queue_markers()
+	t.eq(_shown(scene.queue_discs), 3, "one disc per leg, shared by the pair")
+	t.eq(_shown(scene.queue_segments), 4, "a segment from each unit, then the two shared legs once")
+	t.eq(scene.queue_discs[1].material_override, scene.materials.alien_marker, "the attack-move leg is red")
+	t.eq(scene.queue_discs[0].material_override, scene.materials.human_marker, "a move leg is blue")
+	var goal: Vector3 = scene._hex_world(14, 13)
+	t.ok(Vector2(scene.queue_discs[2].position.x - goal.x, scene.queue_discs[2].position.z - goal.z).length() < 0.01, "the last disc sits on the last leg")
+	var pool: int = scene.queue_discs.size() + scene.queue_segments.size()
+	scene._update_queue_markers()
+	t.eq(scene.queue_discs.size() + scene.queue_segments.size(), pool, "the pool is reused, not grown")
+	# Paused: the markers stay as they stand, whatever the next snapshot says.
+	scene.sim_paused = true
+	scene.bridge_nodes[750].set_meta("route", [])
+	scene.bridge_nodes[751].set_meta("route", [])
+	scene._update_queue_markers()
+	t.eq(_shown(scene.queue_discs), 3, "frozen while paused")
+	scene.sim_paused = false
+	scene._update_queue_markers()
+	t.eq(_shown(scene.queue_discs) + _shown(scene.queue_segments), 0, "cleared once the routes are gone")
+	# An alien node that somehow had a route is never drawn (the selection filter is ours-only).
+	scene.bridge_nodes[760].set_meta("route", [[0, 0, 0], [65536, 65536, 0]])
+	scene._set_selection([scene.bridge_nodes[760]])
+	scene._update_queue_markers()
+	t.eq(scene.queue_drawn, 0, "no alien route drawn")
+	# The pools never pass the cap, however large the selection and its routes.
+	var crowd: Array = []
+	for k in range(12):
+		var many: Array = []
+		for leg in range(8):
+			many.append(Vector3i(2 + leg * 3, 2 + k, leg % 2))
+		crowd.append(_routed(scene, 800 + k, 0, Vector2i(1, 2 + k), many))
+	_place(scene, crowd)
+	scene._set_selection(crowd.map(func(e): return scene.bridge_nodes[int(e["id"])]))
+	scene._update_queue_markers()
+	t.ok(scene.queue_discs.size() <= scene.QUEUE_DRAW_CAP and scene.queue_segments.size() <= scene.QUEUE_DRAW_CAP, "pools capped")
+	t.eq(_shown(scene.queue_discs), scene.QUEUE_DRAW_CAP, "a full selection fills the disc pool")
+	# Survival never draws (its units carry no route).
+	scene.world_art_on = false
+	scene._update_queue_markers()
+	t.eq(scene.queue_drawn, 0, "nothing drawn off Kestrel")
+	_done(scene)
