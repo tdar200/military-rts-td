@@ -972,14 +972,16 @@ const fn era_damage_factor(era: u8) -> Fixed {
 /// engagement range of entity `i` (`e`): its weapon range, or
 /// [`ATTACK_MOVE_LEASH`] when unarmed. Ascending index, first hit wins. Under
 /// Kestrel depth an enemy the weapon cannot reach (a gunship over a rifle,
-/// the `run_combat` layer test) never halts the advance.
+/// the `run_combat` layer test) never halts the advance, and the weapon is
+/// the depth one (Task 15: an `AntiArmor` team reaches air).
 fn attack_move_halts(
     snap: &[(bool, u16, Vec2, bool)],
     i: usize,
     e: &Entity,
-    profile: Option<AttackProfile>,
+    balance: &Balance,
     depth: bool,
 ) -> bool {
+    let profile = depth::weapon_of(balance, e.kind, depth);
     let leash = profile.map_or(ATTACK_MOVE_LEASH, |p| p.range);
     let leash_sq = leash * leash;
     snap.iter().enumerate().any(|(j, t)| {
@@ -4279,7 +4281,7 @@ impl Sim {
             // this branch, so it marches through unchanged.
             if e.attack_move
                 && (!self.earthfront || e.ammunition > 0)
-                && attack_move_halts(&snap, i, e, attack_of(&self.balance, e.kind), depth)
+                && attack_move_halts(&snap, i, e, &self.balance, depth)
             {
                 continue;
             }
@@ -4482,7 +4484,8 @@ impl Sim {
             {
                 continue;
             }
-            let Some(profile) = attack_of(&self.balance, e.kind) else {
+            // Kestrel depth (Task 15): AntiArmor teams also target air.
+            let Some(profile) = depth::weapon_of(&self.balance, e.kind, depth) else {
                 continue;
             };
             if e.cooldown > 0 {
@@ -4562,6 +4565,14 @@ impl Sim {
                 let mult = damage_multiplier(profile.damage_type, snap[j].3);
                 let raw = profile.damage * mult * era_dmg[usize::from(e.owner.0)]
                     + weapon[usize::from(e.owner.0)];
+                // Kestrel depth (Task 15): a weapon that only gained air
+                // targeting under depth lands a fraction of its hit on air.
+                let air_pct = depth::depth_air_damage_pct(e.kind);
+                let raw = if depth && snap[j].4 && air_pct != 100 {
+                    raw * Fixed::from_ratio(air_pct, 100)
+                } else {
+                    raw
+                };
                 // Earthfront cover: the target's tile removes `cover_pct` of the hit. Air
                 // targets take none. Applied before the push so splash inherits it.
                 let raw = if self.earthfront && !snap[j].4 {

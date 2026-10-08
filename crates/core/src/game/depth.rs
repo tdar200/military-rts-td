@@ -12,6 +12,7 @@
 
 use super::{attack_of, is_air_of, tile_center, EntityId, Kind, PlayerId, Sim, COMBAT_CELL};
 use crate::fixed::Fixed;
+use crate::game::balance::Balance;
 use crate::game::hex;
 use crate::game::map::Map;
 use crate::game::stats::{AttackProfile, UnitKind};
@@ -43,6 +44,50 @@ pub(super) const FORCED_TRACK: Fixed = Fixed::from_int(10);
 /// Task 14: the most waypoint legs a unit carries, counting the player order
 /// under way (a ninth leg is dropped).
 pub const QUEUE_CAP: usize = 8;
+/// Task 15: percent of its normal hit an `AntiArmor` missile lands on an air
+/// target under depth (the team gains `targets_air`). A missile does 38.5 to
+/// a Plated gunship (22 x 1.75) and a gunship has 90 HP, so only the hits to
+/// kill matter: 47 to 58 percent is 5 hits, 59 to 77 is 4 and 78 to 100 is
+/// 3. The spec's 50 (and every value up to 77) leaves 4 gunships beating
+/// 5 teams + 1 rifle for 320 of its 600 credits, short of the 60 percent
+/// trade target (`audit_duel_table`, `anti_armour_teams_now_trade_with_gunships`);
+/// 80 is the first round value in the 3-hit band with a margin (3 x 30.8 =
+/// 92.4), and one gunship still beats one team.
+pub(super) const AT_AIR_PCT: i64 = 80;
+
+/// Task 15: the depth weapon of an entity of `kind` whose balance weapon is
+/// `base`. `AntiArmor` teams also engage air (at [`depth_air_damage_pct`]);
+/// every other weapon is unchanged. Callers apply it under depth only (see
+/// [`Sim::depth_attack_profile`]); `run_combat` and `run_movement` call this
+/// directly because they hold `entities` mutably.
+pub(super) const fn depth_profile(kind: Kind, base: AttackProfile) -> AttackProfile {
+    let mut p = base;
+    if matches!(kind, Kind::Unit(UnitKind::AntiArmor)) {
+        p.targets_air = true;
+    }
+    p
+}
+
+/// Task 15: the weapon `run_combat` and the attack-move halt scan use for an
+/// entity of `kind`: [`attack_of`] with [`depth_profile`] applied when
+/// `depth`. Those passes hold `entities` mutably, so they cannot call
+/// [`Sim::depth_attack_profile`].
+pub(super) const fn weapon_of(balance: &Balance, kind: Kind, depth: bool) -> Option<AttackProfile> {
+    match attack_of(balance, kind) {
+        Some(p) if depth => Some(depth_profile(kind, p)),
+        other => other,
+    }
+}
+
+/// Task 15: percent of a hit that lands when an entity of `kind` fires at an
+/// air target under depth: [`AT_AIR_PCT`] for `AntiArmor`, 100 for the rest
+/// (the AA battery and anything else that always could).
+pub(super) const fn depth_air_damage_pct(kind: Kind) -> i64 {
+    match kind {
+        Kind::Unit(UnitKind::AntiArmor) => AT_AIR_PCT,
+        _ => 100,
+    }
+}
 
 /// How a Kestrel depth unit fights when nobody is ordering it (Task 13).
 /// Set by [`super::Command::SetStance`] (and `HoldPosition`); kept by `Stop`
@@ -206,9 +251,26 @@ impl Sim {
         self.earthfront && self.depth
     }
 
+    /// Task 15: the weapon an entity of `kind` fights with, given its balance
+    /// weapon `base`: under depth an `AntiArmor` team also targets air
+    /// ([`depth_profile`]); with depth off `base` unchanged.
+    pub(super) const fn depth_attack_profile(
+        &self,
+        kind: Kind,
+        base: AttackProfile,
+    ) -> AttackProfile {
+        if self.is_depth() {
+            depth_profile(kind, base)
+        } else {
+            base
+        }
+    }
+
     /// The weapon of entity `i` when it is a unit that may fight on its own:
     /// alive, built, not stunned, armed and not a Harvester. Ammunition is
-    /// checked by the callers (a dry unit still walks home).
+    /// checked by the callers (a dry unit still walks home). Includes the
+    /// Task 15 air override, so acquisition, calls for help, attack-move
+    /// steering and forced targets all see the weapon `run_combat` fires.
     fn depth_fighter(&self, i: usize) -> Option<AttackProfile> {
         let e = &self.entities[i];
         if !e.alive || e.construction_remaining > 0 || e.stun_ticks > 0 {
@@ -217,7 +279,7 @@ impl Sim {
         if !matches!(e.kind, Kind::Unit(k) if k != UnitKind::Harvester) {
             return None;
         }
-        attack_of(&self.balance, e.kind)
+        attack_of(&self.balance, e.kind).map(|p| self.depth_attack_profile(e.kind, p))
     }
 
     /// Whether a unit with weapon `profile` owned by `owner` may shoot entity
@@ -620,6 +682,7 @@ impl Sim {
         let Some(profile) = attack_of(&self.balance, e.kind) else {
             return;
         };
+        let profile = self.depth_attack_profile(e.kind, profile);
         let j = target.0 as usize;
         if !self.depth_can_hit(profile, owner, j) {
             return;
@@ -1155,7 +1218,8 @@ impl DepthGrid {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_air_of, EntityId, Kind, ACQUIRE_BONUS, DEFENSIVE_LEASH, FORCED_TRACK, LEASH, QUEUE_CAP,
+        depth_air_damage_pct, is_air_of, EntityId, Kind, ACQUIRE_BONUS, AT_AIR_PCT,
+        DEFENSIVE_LEASH, FORCED_TRACK, LEASH, QUEUE_CAP,
     };
     use crate::fixed::Fixed;
     use crate::game::hex;
@@ -3351,5 +3415,410 @@ mod tests {
         );
         assert!(mean < std::time::Duration::from_millis(5));
         assert!(worst < std::time::Duration::from_millis(15));
+    }
+
+    /// Task 15 duel result: units left and money value lost per side, and the
+    /// steps run (the fight ends when a side is wiped out, or at 2400).
+    #[derive(Debug)]
+    struct Duel {
+        a_left: usize,
+        b_left: usize,
+        a_value_lost: i64,
+        b_value_lost: i64,
+        ticks: u64,
+    }
+
+    /// The gameplay audit's duel method: side `a` (P0) in rows of three at
+    /// x 14 to 16 and side `b` (P1) at x 19 to 21 of an open 40x40 Earthfront
+    /// map with the default balance, both attack-moving through each other
+    /// (to x 30 and x 4), at most 2400 steps.
+    fn duel(a: &[(UnitKind, usize)], b: &[(UnitKind, usize)], depth: bool) -> Duel {
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        if depth {
+            s.enable_depth();
+        }
+        let side = |s: &mut Sim, owner: PlayerId, x0: i32, army: &[(UnitKind, usize)]| {
+            let mut ids = Vec::new();
+            let mut row = 0i32;
+            for &(k, n) in army {
+                for _ in 0..n {
+                    let id = s.add_unit(owner, k, v(x0 + row % 3, 10 + row / 3));
+                    ids.push((id, k));
+                    row += 1;
+                }
+            }
+            ids
+        };
+        let ours = side(&mut s, P0, 14, a);
+        let theirs = side(&mut s, P1, 19, b);
+        let orders: Vec<_> = ours
+            .iter()
+            .map(|&(id, _)| (P0, id, 30))
+            .chain(theirs.iter().map(|&(id, _)| (P1, id, 4)))
+            .map(|(owner, unit, x)| Command::AttackMove {
+                owner,
+                unit,
+                target: Vec2::new(Fixed::from_int(x), s.position(unit).unwrap().y),
+            })
+            .collect();
+        s.step(&orders);
+        let mut ticks = 0u64;
+        while ticks < 2400 && s.unit_count(P0) > 0 && s.unit_count(P1) > 0 {
+            s.step(&[]);
+            ticks += 1;
+        }
+        let lost = |s: &Sim, ids: &[(EntityId, UnitKind)]| -> i64 {
+            ids.iter()
+                .filter(|&&(id, _)| s.position(id).is_none())
+                .map(|&(_, k)| s.unit_cost(k).to_int_floor())
+                .sum()
+        };
+        Duel {
+            a_left: s.unit_count(P0),
+            b_left: s.unit_count(P1),
+            a_value_lost: lost(&s, &ours),
+            b_value_lost: lost(&s, &theirs),
+            ticks,
+        }
+    }
+
+    #[test]
+    fn anti_armour_teams_now_trade_with_gunships() {
+        let d = duel(
+            &[(UnitKind::Helicopter, 4)],
+            &[(UnitKind::AntiArmor, 5), (UnitKind::Infantry, 1)],
+            true,
+        );
+        assert!(d.a_left < 4, "no helicopter losses: {d:?}");
+        let s = kestrel_reach(1);
+        let at_cost = 5 * s.unit_cost(UnitKind::AntiArmor).to_int_floor()
+            + s.unit_cost(UnitKind::Infantry).to_int_floor();
+        assert!(
+            d.b_left > 0 || d.a_value_lost * 100 >= at_cost * 60,
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn infantry_still_cannot_touch_gunships() {
+        let with = duel(
+            &[(UnitKind::Helicopter, 4)],
+            &[(UnitKind::Infantry, 12)],
+            true,
+        );
+        let without = duel(
+            &[(UnitKind::Helicopter, 4)],
+            &[(UnitKind::Infantry, 12)],
+            false,
+        );
+        assert_eq!((with.a_left, with.b_left), (without.a_left, without.b_left));
+    }
+
+    /// One row of the audit's ground triangle: (side a, side b, a wins,
+    /// survivors of the winner in the audit, survivors under depth before
+    /// Task 15).
+    type TriangleCase = (
+        &'static [(UnitKind, usize)],
+        &'static [(UnitKind, usize)],
+        bool,
+        usize,
+        usize,
+    );
+
+    /// The ground triangle is untouched by the air counter. The audit column
+    /// was measured on the classic rules, which still reproduce it (checked
+    /// here within one survivor, as the brief asks). Under depth Tasks 11 to
+    /// 14 already moved two rows by two survivors before any air change
+    /// (12 Inf vs 5 AT + 1 Inf: 12 -> 10; 24 Inf vs 11 AT: 21 -> 19, both
+    /// measured at 05bb34e), so the depth run is held within one survivor of
+    /// that pre-Task 15 depth column, and every winner matches the audit.
+    #[test]
+    fn the_ground_triangle_holds_within_one_survivor_of_the_audit() {
+        // audit table (gameplay-audit.md section 2): winner side and survivors
+        let cases: [TriangleCase; 4] = [
+            (
+                &[(UnitKind::Tank, 3)],
+                &[(UnitKind::AntiArmor, 5), (UnitKind::Infantry, 1)],
+                false,
+                4,
+                4,
+            ),
+            (
+                &[(UnitKind::Infantry, 12)],
+                &[(UnitKind::AntiArmor, 5), (UnitKind::Infantry, 1)],
+                true,
+                12,
+                10,
+            ),
+            (
+                &[(UnitKind::Tank, 6)],
+                &[(UnitKind::AntiArmor, 11)],
+                false,
+                7,
+                7,
+            ),
+            (
+                &[(UnitKind::Infantry, 24)],
+                &[(UnitKind::AntiArmor, 11)],
+                true,
+                21,
+                19,
+            ),
+        ];
+        for (a, b, a_wins, audit, depth_before) in cases {
+            for (depth, left) in [(false, audit), (true, depth_before)] {
+                let d = duel(a, b, depth);
+                let (won, n) = if a_wins {
+                    (d.b_left == 0, d.a_left)
+                } else {
+                    (d.a_left == 0, d.b_left)
+                };
+                assert!(
+                    won && n.abs_diff(left) <= 1,
+                    "{a:?} vs {b:?}, depth {depth}: {d:?}"
+                );
+            }
+        }
+    }
+
+    /// The spec's guard on the counter: a gunship still beats an `AntiArmor`
+    /// team one for one under depth, and with depth off a team still never
+    /// touches a gunship (the audit's 0 losses).
+    #[test]
+    fn one_gunship_still_beats_one_team_and_classic_gunships_stay_untouchable() {
+        let one = duel(
+            &[(UnitKind::Helicopter, 1)],
+            &[(UnitKind::AntiArmor, 1)],
+            true,
+        );
+        assert_eq!((one.a_left, one.b_left), (1, 0), "{one:?}");
+        let classic = duel(
+            &[(UnitKind::Helicopter, 4)],
+            &[(UnitKind::AntiArmor, 5), (UnitKind::Infantry, 1)],
+            false,
+        );
+        assert_eq!(
+            (classic.a_left, classic.a_value_lost),
+            (4, 0),
+            "{classic:?}"
+        );
+    }
+
+    /// One `AntiArmor` missile on a gunship lands `AT_AIR_PCT` percent of the
+    /// hit it lands on a tank (both Plated, no cover in the air); a gunship
+    /// with depth off is never hit at all.
+    #[test]
+    fn an_anti_armour_missile_lands_its_air_percent_on_a_gunship() {
+        let first_hit = |depth: bool, kind: UnitKind| {
+            let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+            s.enable_earthfront();
+            if depth {
+                s.enable_depth();
+            }
+            s.add_unit(P0, UnitKind::AntiArmor, v(10, 20));
+            let foe = s.add_unit(P1, kind, v(12, 20));
+            s.entities[foe.0 as usize].ammunition = 0;
+            let hp0 = hp_of(&s, foe);
+            for _ in 0..3 {
+                s.step(&[]);
+            }
+            hp0 - hp_of(&s, foe)
+        };
+        let tank = first_hit(true, UnitKind::Tank);
+        assert!(tank > Fixed::ZERO, "no hit on the tank");
+        assert_eq!(
+            first_hit(true, UnitKind::Helicopter),
+            tank * Fixed::from_ratio(AT_AIR_PCT, 100)
+        );
+        assert_eq!(first_hit(false, UnitKind::Helicopter), Fixed::ZERO);
+        assert_eq!(depth_air_damage_pct(Kind::Unit(UnitKind::Infantry)), 100);
+        assert_eq!(
+            depth_air_damage_pct(Kind::Building(BuildingKind::AaTurret)),
+            100
+        );
+    }
+
+    /// The override feeds every depth decision that reads a weapon: an idle
+    /// team acquires a gunship in its ring (Task 11), an attack-moving team
+    /// halts under one (Task 12 halt scan) and may be ordered onto one (Task
+    /// 13). A rifle, which still cannot shoot air, does none of these.
+    #[test]
+    fn anti_armour_acquires_halts_for_and_targets_gunships_and_rifles_still_ignore_them() {
+        let ring = |kind: UnitKind| {
+            let mut s = depth_arena();
+            let r = kind.stats().attack.range;
+            let me = s.add_unit(P0, kind, v(10, 20));
+            let heli = s.add_unit(
+                P1,
+                UnitKind::Helicopter,
+                v(10, 20) + Vec2::new(r + Fixed::from_int(2), Fixed::ZERO),
+            );
+            s.entities[heli.0 as usize].ammunition = 0;
+            s.debug_set_hp(heli, Fixed::from_int(1_000_000));
+            for _ in 0..120 {
+                s.step(&[]);
+            }
+            (
+                hp_of(&s, heli) < Fixed::from_int(1_000_000),
+                s.position(me).unwrap() == v(10, 20),
+            )
+        };
+        assert_eq!(
+            ring(UnitKind::AntiArmor),
+            (true, false),
+            "team: engaged and moved"
+        );
+        assert_eq!(
+            ring(UnitKind::Infantry),
+            (false, true),
+            "rifle: ignored and stayed"
+        );
+
+        let march = |kind: UnitKind| {
+            let mut s = depth_arena();
+            let me = s.add_unit(P0, kind, v(5, 20));
+            let heli = s.add_unit(P1, UnitKind::Helicopter, v(8, 20));
+            s.entities[heli.0 as usize].ammunition = 0;
+            s.debug_set_hp(heli, Fixed::from_int(1_000_000));
+            s.step(&[Command::AttackMove {
+                owner: P0,
+                unit: me,
+                target: v(30, 20),
+            }]);
+            for _ in 0..600 {
+                s.step(&[]);
+            }
+            s.position(me).unwrap().x
+        };
+        // The gunship is in weapon range from the start, so the halt scan
+        // stops the team where it stands (attack-move steering alone would
+        // walk it onto the gunship).
+        assert_eq!(
+            march(UnitKind::AntiArmor),
+            Fixed::from_int(5),
+            "team did not halt"
+        );
+        assert!(
+            march(UnitKind::Infantry) > Fixed::from_int(20),
+            "rifle halted"
+        );
+
+        let order = |kind: UnitKind| {
+            let mut s = depth_arena();
+            let me = s.add_unit(P0, kind, v(10, 20));
+            let heli = s.add_unit(P1, UnitKind::Helicopter, v(20, 20));
+            s.step(&[Command::AttackTarget {
+                owner: P0,
+                unit: me,
+                target: heli,
+            }]);
+            s.entities[me.0 as usize].dp.forced
+        };
+        assert!(
+            order(UnitKind::AntiArmor).is_some(),
+            "team refused the gunship"
+        );
+        assert_eq!(order(UnitKind::Infantry), None, "rifle took the gunship");
+    }
+
+    /// A gunship strafing a rifle draws the team standing beside it (Task 11
+    /// call for help); a second rifle beside it cannot answer.
+    #[test]
+    fn a_team_answers_a_gunship_hitting_its_ally() {
+        let mut s = depth_arena();
+        let victim = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        s.debug_set_hp(victim, Fixed::from_int(1_000_000));
+        let team = s.add_unit(P0, UnitKind::AntiArmor, v(6, 20));
+        let rifle = s.add_unit(P0, UnitKind::Infantry, v(6, 21));
+        // In the gunship's range of the victim, past the team's ring (4 + 3).
+        let heli = s.add_unit(P1, UnitKind::Helicopter, v(14, 20));
+        s.debug_set_hp(heli, Fixed::from_int(1_000_000));
+        let mut answered = false;
+        for _ in 0..90 {
+            s.step(&[]);
+            answered |= s.entities[team.0 as usize].dp.engaged == Some(heli);
+            assert_eq!(s.entities[rifle.0 as usize].dp.engaged, None);
+        }
+        assert!(answered, "the team never answered the gunship");
+        assert!(hp_of(&s, heli) < Fixed::from_int(1_000_000));
+    }
+
+    /// The audit's ten fights (section 2), depth off and on, printed for the
+    /// task report. Depth off reproduces the audit table exactly.
+    #[test]
+    #[ignore = "table: cargo test -p rts-core --offline audit_duel_table -- --ignored --nocapture"]
+    fn audit_duel_table() {
+        type Army = &'static [(UnitKind, usize)];
+        use UnitKind::{AntiArmor, Helicopter, Infantry, Tank};
+        let armies: [(&str, &[(UnitKind, usize)]); 5] = [
+            ("12 Inf", &[(Infantry, 12)]),
+            ("3 Tank", &[(Tank, 3)]),
+            ("5 AT + 1 Inf", &[(AntiArmor, 5), (Infantry, 1)]),
+            ("4 Heli", &[(Helicopter, 4)]),
+            ("6 Inf + 3 AT", &[(Infantry, 6), (AntiArmor, 3)]),
+        ];
+        let mut fights: Vec<(String, Army, Army)> = Vec::new();
+        for i in 0..armies.len() {
+            for j in (i + 1)..armies.len() {
+                fights.push((
+                    std::format!("{} vs {}", armies[i].0, armies[j].0),
+                    armies[i].1,
+                    armies[j].1,
+                ));
+            }
+        }
+        fights.push(("24 Inf vs 6 Tank".into(), &[(Infantry, 24)], &[(Tank, 6)]));
+        fights.push((
+            "24 Inf vs 11 AT".into(),
+            &[(Infantry, 24)],
+            &[(AntiArmor, 11)],
+        ));
+        fights.push(("6 Tank vs 11 AT".into(), &[(Tank, 6)], &[(AntiArmor, 11)]));
+        fights.push((
+            "4 Heli vs 5 AT + 1 Inf (gate)".into(),
+            &[(Helicopter, 4)],
+            &[(AntiArmor, 5), (Infantry, 1)],
+        ));
+        fights.push((
+            "4 Heli vs 11 AT".into(),
+            &[(Helicopter, 4)],
+            &[(AntiArmor, 11)],
+        ));
+        fights.push((
+            "4 Heli vs 3 AT".into(),
+            &[(Helicopter, 4)],
+            &[(AntiArmor, 3)],
+        ));
+        fights.push((
+            "1 Heli vs 1 AT".into(),
+            &[(Helicopter, 1)],
+            &[(AntiArmor, 1)],
+        ));
+        fights.push((
+            "2 Heli vs 3 AT".into(),
+            &[(Helicopter, 2)],
+            &[(AntiArmor, 3)],
+        ));
+        fights.push((
+            "4 Heli vs 6 AT + 6 Inf".into(),
+            &[(Helicopter, 4)],
+            &[(AntiArmor, 6), (Infantry, 6)],
+        ));
+        for (name, a, b) in fights {
+            let off = duel(a, b, false);
+            let on = duel(a, b, true);
+            let cell = |d: &Duel| {
+                std::format!(
+                    "{} / {} left, lost {} / {}, t={}",
+                    d.a_left,
+                    d.b_left,
+                    d.a_value_lost,
+                    d.b_value_lost,
+                    d.ticks
+                )
+            };
+            std::eprintln!("| {name} | {} | {} |", cell(&off), cell(&on));
+        }
     }
 }
