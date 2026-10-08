@@ -781,6 +781,10 @@ pub struct Sim {
     /// Test-only count of `order_unit_to` calls (pins that harvesters do not re-path every tick).
     #[cfg(test)]
     order_calls: u64,
+    /// Test-only count of Kestrel depth breach searches (Task 16: at most one
+    /// per unit per order target).
+    #[cfg(test)]
+    breach_searches: u64,
     tick: u64,
     rng: Rng,
     map: Map,
@@ -1059,6 +1063,8 @@ impl Sim {
         Self {
             #[cfg(test)]
             order_calls: 0,
+            #[cfg(test)]
+            breach_searches: 0,
             tick: 0,
             rng: Rng::from_seed(seed),
             map,
@@ -2710,6 +2716,10 @@ impl Sim {
             e.move_target = Some(target);
             e.attack_move = attack_move;
             e.path = path;
+        } else if self.is_depth() {
+            // Kestrel depth (Task 16): a walled-off wave unit breaks through
+            // the defender's structures instead of standing still (depth.rs).
+            self.depth_breach(idx, (start, goal), given, attack_move);
         }
     }
 
@@ -2961,11 +2971,13 @@ impl Sim {
                     if self.is_depth() {
                         // A direct order supersedes any auto-engagement and its
                         // anchor, and (Task 13) any forced target, and (Task 14)
-                        // any queued waypoints.
+                        // any queued waypoints; (Task 16) its new target may be
+                        // breached once.
                         self.entities[idx].dp.anchor = None;
                         self.entities[idx].dp.engaged = None;
                         self.entities[idx].dp.forced = None;
                         self.entities[idx].dp.queue.clear();
+                        self.entities[idx].dp.breach_tried = false;
                     }
                     // Plain move clears any standing attack-move stance.
                     self.order_unit_to(idx, target, false);
@@ -2984,11 +2996,13 @@ impl Sim {
                     if self.is_depth() {
                         // A direct order supersedes any auto-engagement and its
                         // anchor, and (Task 13) any forced target, and (Task 14)
-                        // any queued waypoints.
+                        // any queued waypoints; (Task 16) its new target may be
+                        // breached once.
                         self.entities[idx].dp.anchor = None;
                         self.entities[idx].dp.engaged = None;
                         self.entities[idx].dp.forced = None;
                         self.entities[idx].dp.queue.clear();
+                        self.entities[idx].dp.breach_tried = false;
                     }
                     self.order_unit_to(idx, target, true);
                 }

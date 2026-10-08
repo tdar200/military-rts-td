@@ -15,7 +15,8 @@ use crate::fixed::Fixed;
 use crate::game::balance::Balance;
 use crate::game::hex;
 use crate::game::map::Map;
-use crate::game::stats::{AttackProfile, UnitKind};
+use crate::game::path::find_path_weighted;
+use crate::game::stats::{AttackProfile, BuildingKind, UnitKind};
 use crate::hash::Fnv;
 use crate::vec::Vec2;
 use alloc::vec::Vec;
@@ -54,6 +55,12 @@ pub const QUEUE_CAP: usize = 8;
 /// 80 is the first round value in the 3-hit band with a margin (3 x 30.8 =
 /// 92.4), and one gunship still beats one team.
 pub(super) const AT_AIR_PCT: i64 = 80;
+/// Task 16: path cost of breaking through one of the defender's walls when a
+/// wave unit has no open route (six grass steps: a short detour still wins).
+pub const BREACH_WALL_COST: i64 = 60;
+/// Task 16: path cost of breaking through any other defender structure, so a
+/// breach goes through a wall wherever one is about as close.
+pub const BREACH_BUILDING_COST: i64 = 120;
 
 /// Task 15: the depth weapon of an entity of `kind` whose balance weapon is
 /// `base`. `AntiArmor` teams also engage air (at [`depth_air_damage_pct`]);
@@ -175,6 +182,13 @@ pub(super) struct DepthUnit {
     /// the unit is on a player order or a forced target, so it is never
     /// anchored, acquired or called for help while legs remain.
     pub(super) queue: Vec<(Vec2, bool)>,
+    /// Task 16: this unit already ran its breach search for the order it is
+    /// on (one search per order target, found or not). Reset whenever it gets
+    /// a new order target: a `Move` or `AttackMove`, the start of a queued
+    /// leg (including the order a breach resumes once its structure falls),
+    /// and any halt (`Stop`, `Hold`, `AttackTarget`, the end of a forced
+    /// target). While it is set a forced target on a building is a breach.
+    pub(super) breach_tried: bool,
 }
 
 impl DepthUnit {
@@ -211,6 +225,8 @@ impl DepthUnit {
             h.write_i64(p.y.to_bits());
             h.write_u64(u64::from(attack_move));
         }
+        // Task 16 (appended).
+        h.write_u64(u64::from(self.breach_tried));
     }
 }
 
@@ -603,6 +619,7 @@ impl Sim {
         e.dp.forced = None;
         e.dp.anchor = Some(e.pos);
         e.dp.queue.clear();
+        e.dp.breach_tried = false;
     }
 
     /// The end of unit `i`'s forced target (the target died, was lost or
@@ -739,11 +756,14 @@ impl Sim {
             let e = &mut self.entities[i];
             e.dp.anchor = None;
             e.dp.engaged = None;
+            e.dp.breach_tried = false;
             e.move_target = None;
             e.path.clear();
             e.attack_move = false;
             self.order_unit_to(i, target, attack_move);
-            if self.entities[i].move_target.is_some() {
+            // Task 16: a leg that breaches stands on its forced structure.
+            let e = &self.entities[i];
+            if e.move_target.is_some() || e.dp.forced.is_some() {
                 return;
             }
         }
@@ -849,7 +869,7 @@ impl Sim {
         e.path.clear();
         e.attack_move = false;
         self.order_unit_to(i, tpos, false);
-        if self.entities[i].move_target.is_none() {
+        if self.entities[i].move_target.is_none() && !self.depth_approach(i, j) {
             self.depth_forced_over(i);
         }
     }
@@ -870,13 +890,135 @@ impl Sim {
         };
         let j = t.0 as usize;
         let owner = self.entities[i].owner;
+        // Task 16: a breach target is a structure, which never slips away.
+        let breach = self.entities[i].dp.breach_tried
+            && matches!(
+                self.entities.get(j).map(|b| b.kind),
+                Some(Kind::Building(_))
+            );
         if !self.depth_can_hit(profile, owner, j)
-            || !self.depth_tracked(grid, scratch, i, self.entities[j].pos)
+            || !(breach || self.depth_tracked(grid, scratch, i, self.entities[j].pos))
         {
             self.depth_forced_over(i);
             return;
         }
         self.depth_close_on(i, j, profile.range, false);
+    }
+
+    /// Task 16 breach, from `order_unit_to` under depth when `find_path` found
+    /// no route `(start, goal)` for unit `i` ordered to `given`. Only a unit of
+    /// the waves' attacker on an order (no anchor: a chase or a walk home never
+    /// breaches) that may fight, has no forced target and has not yet searched
+    /// for this order runs one weighted search, with the defender's walls
+    /// enterable at [`BREACH_WALL_COST`] and its other structures at
+    /// [`BREACH_BUILDING_COST`]. On a route it walks up to the first structure
+    /// on it, forces that structure (Task 13) and puts its order back at the
+    /// head of its queue (Task 14), so it resumes the order once the structure
+    /// falls (and may breach again for it).
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
+    pub(super) fn depth_breach(
+        &mut self,
+        i: usize,
+        (start, goal): ((u16, u16), (u16, u16)),
+        given: Vec2,
+        attack_move: bool,
+    ) {
+        let Some(cfg) = self.waves else {
+            return;
+        };
+        let e = &self.entities[i];
+        if e.owner != cfg.attacker
+            || e.dp.breach_tried
+            || e.dp.anchor.is_some()
+            || e.dp.forced.is_some()
+            || self.depth_fighter(i).is_none()
+        {
+            return;
+        }
+        self.entities[i].dp.breach_tried = true;
+        #[cfg(test)]
+        {
+            self.breach_searches += 1;
+        }
+        let width = usize::from(self.map.width());
+        let mut cost = alloc::vec![None; width * usize::from(self.map.height())];
+        for b in &self.entities {
+            if let (true, Some((x, y)), Kind::Building(kind)) =
+                (b.alive && b.owner == cfg.defender, b.tile, b.kind)
+            {
+                cost[usize::from(y) * width + usize::from(x)] =
+                    Some(if kind == BuildingKind::Wall {
+                        BREACH_WALL_COST
+                    } else {
+                        BREACH_BUILDING_COST
+                    });
+            }
+        }
+        let extra = |x: u16, y: u16| cost[usize::from(y) * width + usize::from(x)];
+        let Some(mut path) = find_path_weighted(&self.map, start, goal, &extra) else {
+            return;
+        };
+        let Some(k) = path.iter().position(|&(x, y)| {
+            !self
+                .map
+                .tile(i32::from(x), i32::from(y))
+                .is_some_and(|t| t.passable)
+        }) else {
+            return;
+        };
+        let blocked = path[k];
+        let Some(j) = self.entities.iter().position(|b| {
+            b.alive
+                && b.owner == cfg.defender
+                && b.tile == Some(blocked)
+                && matches!(b.kind, Kind::Building(_))
+        }) else {
+            return;
+        };
+        path.truncate(k);
+        let wall = self.entities[j].pos;
+        let e = &mut self.entities[i];
+        e.dp.engaged = None;
+        e.dp.forced = Some(EntityId(j as u32));
+        e.dp.queue.insert(0, (given, attack_move));
+        e.dp.queue.truncate(QUEUE_CAP - 1);
+        e.order_goal = Some(wall);
+        e.move_target = path.last().map(|&(x, y)| tile_center(x, y));
+        e.attack_move = false;
+        e.path = path;
+    }
+
+    /// Task 16: walks unit `i` toward forced structure `j` when no plain route
+    /// to a tile beside it exists (its nearest open tile lies on the far side
+    /// of a wall line): a search with only that structure's hex enterable,
+    /// stopping one hex short. False when `j` is not a building or no such
+    /// route exists.
+    fn depth_approach(&mut self, i: usize, j: usize) -> bool {
+        let Some(goal) = self.entities[j]
+            .tile
+            .filter(|_| matches!(self.entities[j].kind, Kind::Building(_)))
+        else {
+            return false;
+        };
+        let start = self.world_to_tile(self.entities[i].pos);
+        let extra = |x: u16, y: u16| ((x, y) == goal).then_some(BREACH_WALL_COST);
+        let Some(mut path) = find_path_weighted(&self.map, start, goal, &extra) else {
+            return false;
+        };
+        path.pop();
+        let wall = self.entities[j].pos;
+        let e = &mut self.entities[i];
+        e.order_goal = Some(wall);
+        e.move_target = Some(path.last().map_or_else(
+            || hex::center(start.0, start.1),
+            |&(x, y)| tile_center(x, y),
+        ));
+        e.attack_move = false;
+        e.path = path;
+        true
     }
 
     /// Re-issues unit `i`'s current order from where it stands (its path no
@@ -3819,6 +3961,526 @@ mod tests {
                 )
             };
             std::eprintln!("| {name} | {} | {} |", cell(&off), cell(&on));
+        }
+    }
+
+    // Task 16: walls delay instead of win (breach pathing, siege threshold).
+
+    /// The audit's four-wall seal: every passable west-bank hex beside the two
+    /// Wyllow Ford hexes, `(22, 10)` and `(23, 10)`.
+    const FORD_SEAL: [(u16, u16); 4] = [(21, 9), (21, 10), (22, 11), (23, 11)];
+    /// Open grass beside the home Command Centre. The plan's seal check pathed
+    /// to `HOME_CC` itself, a building footprint no path ever ends on, so it
+    /// held with or without the walls; a path to this hex only fails sealed.
+    const HOME_YARD: (u16, u16) = (8, 9);
+
+    /// A depth arena with waves configured P1 against P0 (never spawned: P1
+    /// has no Command Centre), so P1 units are the waves' attacker, a P0
+    /// Command Centre at (3, 20) and a line of P0 `kind` across column 20.
+    fn breach_arena(line: BuildingKind) -> Sim {
+        breach_arena_with(|_| line)
+    }
+
+    /// [`breach_arena`] with the building at `(20, y)` chosen by `line`.
+    fn breach_arena_with(line: impl Fn(u16) -> BuildingKind) -> Sim {
+        let mut s = depth_arena();
+        s.set_waves(crate::game::sim::WaveConfig {
+            first_delay: 1_000_000,
+            interval: 1_000_000,
+            base_size: 0,
+            growth: 0,
+            spawn: hex::center(30, 20),
+            unit: UnitKind::Infantry,
+            attacker: P1,
+            defender: P0,
+            escalate: false,
+        });
+        s.add_building(P0, BuildingKind::CommandCenter, 3, 20);
+        for y in 0..40 {
+            s.add_building(P0, line(y), 20, y);
+        }
+        s
+    }
+
+    fn attack_move(owner: PlayerId, unit: EntityId, target: Vec2) -> Command {
+        Command::AttackMove {
+            owner,
+            unit,
+            target,
+        }
+    }
+
+    fn p1_qmove(unit: EntityId, target: Vec2) -> Command {
+        Command::QueueMove {
+            owner: P1,
+            unit,
+            target,
+            attack_move: false,
+        }
+    }
+
+    fn tile_of(s: &Sim, id: EntityId) -> (u16, u16) {
+        s.world_to_tile(s.entities[id.0 as usize].pos)
+    }
+
+    fn living_walls(s: &Sim, owner: PlayerId) -> usize {
+        s.count_alive_buildings(owner, BuildingKind::Wall)
+    }
+
+    #[test]
+    fn a_walled_off_wave_unit_breaks_the_first_wall_and_walks_on() {
+        let mut s = breach_arena(BuildingKind::Wall);
+        let tank = s.add_unit(P1, UnitKind::Tank, hex::center(30, 20));
+        s.step(&[attack_move(P1, tank, hex::center(5, 20))]);
+        let e = &s.entities[tank.0 as usize];
+        let wall = e.dp.forced.expect("the blocked unit forces a wall");
+        let w = &s.entities[wall.0 as usize];
+        assert_eq!(w.kind, Kind::Building(BuildingKind::Wall));
+        assert_eq!(w.owner, P0);
+        assert!(e.dp.breach_tried);
+        assert_eq!(e.dp.queue, alloc::vec![(hex::center(5, 20), true)]);
+        assert!(
+            e.path
+                .iter()
+                .all(|&(x, y)| s.map.tile(x.into(), y.into()).unwrap().passable),
+            "the walk stops short of the wall"
+        );
+        assert_eq!(s.breach_searches, 1);
+        let mut crossed = false;
+        for _ in 0..4000 {
+            s.step(&[]);
+            if tile_of(&s, tank).0 < 20 {
+                crossed = true;
+                break;
+            }
+        }
+        assert!(crossed, "the tank never got through");
+        // Once the gap is open it resumes its attack-move, which (as before
+        // depth) also fights the walls in reach on its way through the gap.
+        assert!(living_walls(&s, P0) < 40);
+        assert_eq!(s.breach_searches, 1, "one search per order target");
+        assert_eq!(s.entities[tank.0 as usize].dp.forced, None);
+    }
+
+    #[test]
+    fn a_breach_prefers_a_wall_to_any_other_building() {
+        // Column 20 is walls except a plant straight on the line of march: the
+        // wall costs half as much, so the route bends to the next wall hex.
+        let mut s = breach_arena_with(|y| {
+            if y == 20 {
+                BuildingKind::PowerPlant
+            } else {
+                BuildingKind::Wall
+            }
+        });
+        let rifle = s.add_unit(P1, UnitKind::Infantry, hex::center(30, 20));
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        let forced = s.entities[rifle.0 as usize].dp.forced.unwrap();
+        assert_eq!(
+            s.entities[forced.0 as usize].kind,
+            Kind::Building(BuildingKind::Wall)
+        );
+        // A line of plants only: the plant on the route is forced instead.
+        let mut s = breach_arena(BuildingKind::PowerPlant);
+        let rifle = s.add_unit(P1, UnitKind::Infantry, hex::center(30, 20));
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        let forced = s.entities[rifle.0 as usize].dp.forced.unwrap();
+        assert_eq!(
+            s.entities[forced.0 as usize].kind,
+            Kind::Building(BuildingKind::PowerPlant)
+        );
+    }
+
+    #[test]
+    fn only_the_waves_attacker_breaches_and_only_under_depth() {
+        // The defender's own unit behind the line just gets no route.
+        let mut s = breach_arena(BuildingKind::Wall);
+        let ours = s.add_unit(P0, UnitKind::Infantry, hex::center(30, 20));
+        s.step(&[attack_move(P0, ours, hex::center(5, 20))]);
+        let e = &s.entities[ours.0 as usize];
+        assert_eq!(
+            (e.dp.forced, e.move_target, e.dp.breach_tried),
+            (None, None, false)
+        );
+        assert_eq!(s.breach_searches, 0);
+        // Depth off: the attacker is stuck as before.
+        let mut s = breach_arena(BuildingKind::Wall);
+        s.depth = false;
+        let theirs = s.add_unit(P1, UnitKind::Tank, hex::center(30, 20));
+        s.step(&[attack_move(P1, theirs, hex::center(5, 20))]);
+        let e = &s.entities[theirs.0 as usize];
+        assert_eq!((e.dp.forced, e.move_target), (None, None));
+        assert_eq!(s.breach_searches, 0);
+    }
+
+    #[test]
+    fn one_breach_search_per_order_target() {
+        // A river column with no building in it: no breach route exists, so
+        // the single search fails and is never retried until a new order.
+        let mut s = breach_arena(BuildingKind::Wall);
+        for y in 0..40 {
+            s.map.set_ground(25, y, crate::game::map::Ground::River);
+        }
+        let rifle = s.add_unit(P1, UnitKind::Infantry, hex::center(30, 20));
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        assert_eq!(s.breach_searches, 1);
+        assert!(s.entities[rifle.0 as usize].dp.breach_tried);
+        for _ in 0..300 {
+            s.step(&[]);
+        }
+        assert_eq!(s.breach_searches, 1, "a failed breach is never retried");
+        // A new order target is a new search.
+        s.step(&[attack_move(P1, rifle, hex::center(5, 21))]);
+        assert_eq!(s.breach_searches, 2);
+        // Stop resets it; a later order searches again.
+        s.step(&[Command::Stop {
+            owner: P1,
+            unit: rifle,
+        }]);
+        assert!(!s.entities[rifle.0 as usize].dp.breach_tried);
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        assert_eq!(s.breach_searches, 3);
+    }
+
+    #[test]
+    fn a_new_order_or_stop_ends_a_breach() {
+        let mut s = breach_arena(BuildingKind::Wall);
+        let rifle = s.add_unit(P1, UnitKind::Infantry, hex::center(30, 20));
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        assert!(s.entities[rifle.0 as usize].dp.forced.is_some());
+        s.step(&[Command::Move {
+            owner: P1,
+            unit: rifle,
+            target: hex::center(32, 25),
+        }]);
+        let e = &s.entities[rifle.0 as usize];
+        assert_eq!((e.dp.forced, e.dp.queue.len()), (None, 0));
+        assert!(!e.dp.breach_tried, "a reachable order never searched");
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        assert!(s.entities[rifle.0 as usize].dp.forced.is_some());
+        s.step(&[Command::Stop {
+            owner: P1,
+            unit: rifle,
+        }]);
+        let e = &s.entities[rifle.0 as usize];
+        assert_eq!(
+            (e.dp.forced, e.dp.queue.len(), e.move_target),
+            (None, 0, None)
+        );
+    }
+
+    #[test]
+    fn a_breach_keeps_queued_legs_and_hold_still_follows_it() {
+        // A Hold-stance attacker queues a reachable leg, then one across the
+        // wall: the breach runs when that leg starts, and the leg after it is
+        // walked once the wall is down.
+        let mut s = breach_arena(BuildingKind::Wall);
+        let tank = s.add_unit(P1, UnitKind::Tank, hex::center(30, 20));
+        s.step(&[Command::HoldPosition {
+            owner: P1,
+            unit: tank,
+        }]);
+        s.step(&[
+            Command::Move {
+                owner: P1,
+                unit: tank,
+                target: hex::center(28, 20),
+            },
+            p1_qmove(tank, hex::center(5, 20)),
+            p1_qmove(tank, hex::center(5, 30)),
+        ]);
+        let mut forced_seen = false;
+        for _ in 0..5000 {
+            s.step(&[]);
+            forced_seen |= s.entities[tank.0 as usize].dp.forced.is_some();
+            if s.entities[tank.0 as usize].dp.queue.is_empty() && tile_of(&s, tank).0 < 20 {
+                break;
+            }
+        }
+        assert!(forced_seen, "the queued leg never breached");
+        assert!(tile_of(&s, tank).0 < 20, "never crossed");
+        assert_eq!(s.stance_of(tank), Some(Stance::Hold));
+        for _ in 0..1500 {
+            s.step(&[]);
+        }
+        let (x, y) = tile_of(&s, tank);
+        assert!(x <= 6 && y >= 28, "the last leg was not walked: at {x},{y}");
+    }
+
+    #[test]
+    fn a_crowd_at_the_wall_spreads_without_jamming_and_breaks_through() {
+        let mut s = breach_arena(BuildingKind::Wall);
+        let rifles: Vec<EntityId> = (0..12)
+            .map(|_| s.add_unit(P1, UnitKind::Infantry, hex::center(30, 20)))
+            .collect();
+        let orders: Vec<Command> = rifles
+            .iter()
+            .map(|&r| attack_move(P1, r, hex::center(5, 20)))
+            .collect();
+        s.step(&orders);
+        let mut targets: Vec<u32> = rifles
+            .iter()
+            .filter_map(|r| s.entities[r.0 as usize].dp.forced.map(|t| t.0))
+            .collect();
+        targets.dedup();
+        assert_eq!(targets.len(), 1, "the crowd focuses one wall: {targets:?}");
+        assert!(rifles
+            .iter()
+            .all(|r| s.entities[r.0 as usize].dp.forced.is_some()));
+        for _ in 0..3000 {
+            s.step(&[]);
+        }
+        let through = rifles.iter().filter(|&&r| tile_of(&s, r).0 < 20).count();
+        assert_eq!(through, rifles.len(), "{through} of 12 got through");
+    }
+
+    #[test]
+    fn the_alien_ai_leaves_a_breaching_unit_alone() {
+        // P1 gets a base so its Earthfront AI runs; it re-orders every idle
+        // unit every 30 ticks, which would cancel a breach at the wall.
+        let mut s = breach_arena(BuildingKind::Wall);
+        s.add_building(P1, BuildingKind::CommandCenter, 36, 20);
+        let rifle = s.add_unit(P1, UnitKind::Infantry, hex::center(22, 20));
+        let idle = s.add_unit(P1, UnitKind::Infantry, hex::center(30, 30));
+        s.step(&[attack_move(P1, rifle, hex::center(5, 20))]);
+        let (mut at_wall, mut idle_ordered) = (0, false);
+        for _ in 0..120 {
+            let ai = s.ai_commands(P1);
+            let ordered = |u: EntityId| {
+                ai.iter().any(|c| {
+                    matches!(c, Command::Move { unit, .. } | Command::AttackMove { unit, .. } if *unit == u)
+                })
+            };
+            let e = &s.entities[rifle.0 as usize];
+            assert!(e.dp.forced.is_some(), "the breach was cancelled");
+            if e.move_target.is_none() && s.tick().is_multiple_of(30) {
+                at_wall += 1;
+            }
+            assert!(!ordered(rifle), "the AI re-ordered the breaching rifle");
+            idle_ordered |= ordered(idle);
+            s.step(&ai);
+        }
+        assert!(
+            at_wall > 0,
+            "the rifle never stood at the wall on an AI tick"
+        );
+        assert!(idle_ordered, "the AI is not running");
+    }
+
+    #[test]
+    fn breaching_is_deterministic_and_replays() {
+        let run = || {
+            let mut s = kestrel_reach(3);
+            for (x, y) in FORD_SEAL {
+                s.add_building(P0, BuildingKind::Wall, x, y);
+            }
+            let mut log = Vec::new();
+            for _ in 0..4200 {
+                let c = Scenario::KestrelReach.host_commands(&s);
+                s.step(&c);
+                log.push(c);
+            }
+            (s.state_hash(), log)
+        };
+        let (a, log) = run();
+        let (b, _) = run();
+        assert_eq!(a, b);
+        let mut r = kestrel_reach(3);
+        for (x, y) in FORD_SEAL {
+            r.add_building(P0, BuildingKind::Wall, x, y);
+        }
+        for c in &log {
+            r.step(c);
+        }
+        assert_eq!(r.state_hash(), a);
+    }
+
+    #[test]
+    fn four_wall_ford_seal_is_breached_by_wave_two() {
+        use crate::game::kestrel;
+        use crate::game::path::find_path;
+        // Wave two spawns at 4500 + 5400 and crosses in well under 1800 ticks.
+        // A fixed step count: a decided match stops advancing its tick.
+        const STEPS: u32 = 4500 + 5400 + 1800;
+        let run = |mut s: Sim| {
+            // Clear the east bank first, as the audit's measured run did: the
+            // probe on its picket and the south relay's GunTurret at (29, 12)
+            // (range 5) have the seal walls in reach and shoot them down even
+            // in classic Kestrel (all four gone by t=2167, base hit at 3461),
+            // and under depth the relay's AntiArmor team at (30, 14) acquires
+            // them on its own (all four gone by t=624, no breach needed). With
+            // them gone only a breach can open the seal.
+            let mut cleared = crate::game::scenario::kestrel_probe_units(&s);
+            cleared.extend(
+                s.views()
+                    .iter()
+                    .filter(|v| matches!(s.world_to_tile(v.pos), (29, 12) | (30, 14)))
+                    .map(|v| v.id),
+            );
+            assert_eq!(cleared.len(), 5);
+            for id in cleared {
+                s.entities[id.0 as usize].hp = Fixed::ZERO;
+            }
+            assert!(find_path(s.map(), kestrel::HOLDFAST, HOME_YARD).is_some());
+            for (x, y) in FORD_SEAL {
+                s.add_building(P0, BuildingKind::Wall, x, y);
+            }
+            assert!(
+                find_path(s.map(), kestrel::HOLDFAST, HOME_YARD).is_none(),
+                "seal is not a seal"
+            );
+            let mut breached_at = None;
+            for _ in 0..STEPS {
+                let c = Scenario::KestrelReach.host_commands(&s);
+                s.step(&c);
+                if living_walls(&s, P0) < FORD_SEAL.len() && breached_at.is_none() {
+                    breached_at = Some(s.tick());
+                }
+                if s.winner().is_some() {
+                    break;
+                }
+            }
+            (breached_at, s)
+        };
+        let (breach, s) = run(kestrel_reach(3));
+        assert!(breach.is_some(), "no wall fell by wave two");
+        assert!(s.breach_searches > 0, "the seal fell without a breach");
+        assert!(
+            breach > Some(crate::game::scenario::KESTREL_FIRST_WAVE_TICKS),
+            "a wall fell before any wave: {breach:?}"
+        );
+        assert!(s.winner().is_some() || s.waves_survived() >= 2);
+        let base_hit = s.winner() == Some(P1)
+            || s.views().iter().any(|v| {
+                v.owner == P0
+                    && matches!(v.kind, EntityKindView::Building(k) if k != BuildingKind::Wall)
+                    && v.hp < v.max_hp
+            });
+        assert!(base_hit, "the base was never attacked");
+        let (classic, s) = run(kestrel_reach_classic(3));
+        assert!(
+            classic.is_none(),
+            "classic Kestrel documents the old exploit"
+        );
+        assert_eq!(s.winner(), None, "the classic seal holds");
+        assert_eq!(s.breach_searches, 0);
+    }
+
+    /// The first `n` units spawned by the next Kestrel wave with three human
+    /// walls standing from tick 0, and the doctrine announced for it.
+    fn wave_one_with_three_walls(mut s: Sim) -> (&'static str, u32, Vec<UnitKind>) {
+        for (x, y) in [(3, 9), (3, 10), (3, 11)] {
+            s.add_building(P0, BuildingKind::Wall, x, y);
+        }
+        let mut before = 0;
+        for _ in 0..4600 {
+            if s.waves_survived() == 1 {
+                break;
+            }
+            // No slot reuse, so the wave's units are appended in spawn order.
+            s.free.clear();
+            before = s.entities.len();
+            let c = Scenario::KestrelReach.host_commands(&s);
+            s.step(&c);
+        }
+        assert_eq!(s.waves_survived(), 1, "wave one never came");
+        let budget = u32::try_from(
+            s.entities[before..]
+                .iter()
+                .filter(|e| e.owner == P1 && matches!(e.kind, Kind::Unit(_)))
+                .count(),
+        )
+        .unwrap();
+        let kinds = s.entities[before..]
+            .iter()
+            .filter(|e| e.owner == P1)
+            .filter_map(|e| match e.kind {
+                Kind::Unit(k) => Some(k),
+                Kind::Building(_) => None,
+            })
+            .collect();
+        (s.incoming_doctrine(), budget, kinds)
+    }
+
+    #[test]
+    fn three_walls_call_a_siege_led_by_tanks() {
+        let (doctrine, budget, kinds) = wave_one_with_three_walls(kestrel_reach(3));
+        assert_eq!(doctrine, "Siege against fortifications");
+        assert!(budget >= 6, "wave one spawned {budget}");
+        let lead = usize::try_from(budget.div_ceil(4)).unwrap();
+        assert!(
+            kinds[..lead].iter().all(|&k| k == UnitKind::Tank),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds[lead..].iter().all(|&k| k != UnitKind::Tank),
+            "{kinds:?}"
+        );
+        // Classic keeps the old threshold (more than five walls) and wave one
+        // stays all rifles.
+        let (doctrine, _, kinds) = wave_one_with_three_walls(kestrel_reach_classic(3));
+        assert_ne!(doctrine, "Siege against fortifications");
+        assert!(kinds.iter().all(|&k| k == UnitKind::Infantry), "{kinds:?}");
+    }
+
+    /// Breach tick cost on Kestrel with the ford sealed: 40 alien rifles
+    /// attack-moved at the base from the east bank on the first tick (all
+    /// blocked, so each runs its one breach search on that tick) and 40 human
+    /// rifles at home, hosted as the bridge hosts them; against the same
+    /// armies with the ford open, and the sealed ford in classic Kestrel
+    /// (whose failed searches the breach search comes on top of).
+    #[test]
+    #[ignore = "bench: cargo test --release -p rts-core --offline depth_breach_tick_cost -- --ignored --nocapture"]
+    fn depth_breach_tick_cost() {
+        let bench = |mut s: Sim, sealed: bool| {
+            if sealed {
+                for (x, y) in FORD_SEAL {
+                    s.add_building(P0, BuildingKind::Wall, x, y);
+                }
+            }
+            for i in 0..40u16 {
+                s.add_unit(P0, UnitKind::Infantry, hex::center(10, 5 + (i % 15)));
+            }
+            let aliens: Vec<EntityId> = (0..40u16)
+                .map(|i| s.add_unit(P1, UnitKind::Infantry, hex::center(30, 5 + (i % 15))))
+                .collect();
+            let units = s.unit_count(P0) + s.unit_count(P1);
+            let t = std::time::Instant::now();
+            let mut worst = std::time::Duration::ZERO;
+            let mut first = (std::time::Duration::ZERO, 0);
+            for step in 0..900 {
+                let mut c = Scenario::KestrelReach.host_commands(&s);
+                if step == 0 {
+                    c.extend(
+                        aliens
+                            .iter()
+                            .map(|&a| attack_move(P1, a, hex::center(8, 9))),
+                    );
+                }
+                let t0 = std::time::Instant::now();
+                s.step(&c);
+                let dt = t0.elapsed();
+                if step == 0 {
+                    first = (dt, s.breach_searches);
+                }
+                worst = worst.max(dt);
+            }
+            (units, first, s.breach_searches, t.elapsed() / 900, worst)
+        };
+        let runs = [
+            ("depth, sealed", bench(kestrel_reach(3), true)),
+            ("depth, open", bench(kestrel_reach(3), false)),
+            ("classic, sealed", bench(kestrel_reach_classic(3), true)),
+        ];
+        for (label, (n, (first, first_searches), searches, mean, worst)) in &runs {
+            std::eprintln!(
+                "{label}: {n} units; order tick {first:?} with {first_searches} breach searches ({searches} in 900 ticks); mean {mean:?}, worst {worst:?}"
+            );
+        }
+        for (_, (n, _, _, mean, worst)) in runs {
+            assert!(n >= 80);
+            assert!(mean < std::time::Duration::from_millis(5));
+            assert!(worst < std::time::Duration::from_millis(15));
         }
     }
 }

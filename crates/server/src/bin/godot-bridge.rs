@@ -3303,7 +3303,14 @@ mod tests {
         // additive `"queue":0` is stripped above and every other byte is
         // identical. Was (27266, 0x39f8_16c8_d6c2_8b72) and
         // (28516, 0x75a7_17ec_27d9_da19).
-        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x8634_c753_bb2f_6ad4));
+        //
+        // Re-pinned by Task 16 (breach pathing): each unit's `breach_tried`
+        // flag is now hashed (false everywhere here), so the `hash` value
+        // changed again (one digit shorter at tick 0, two mid-firefight);
+        // every other byte is identical (both old pins still match with that
+        // one hash write removed). Was (27266, 0x8634_c753_bb2f_6ad4) and
+        // (28516, 0x7d35_35b4_8d90_c906).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x955e_5aec_e12d_4c8b));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3323,7 +3330,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0x7d35_35b4_8d90_c906));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28514, 0x0d21_e3c2_ea31_b1a6));
     }
 
     #[test]

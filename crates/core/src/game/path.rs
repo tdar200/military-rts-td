@@ -123,6 +123,96 @@ pub fn find_path(map: &Map, start: (u16, u16), goal: (u16, u16)) -> Option<Vec<(
     None
 }
 
+/// [`find_path`] with enterable obstacles.
+///
+/// The same A*, heuristic and `(f_score, tile_index)` tie-break, except that
+/// an impassable tile `(x, y)`
+/// may be entered at the cost `extra(x, y)` returns (`None` keeps it blocked).
+///
+/// With `extra` always `None` it returns exactly what [`find_path`] returns.
+/// Kestrel depth breaching (Task 16) uses it to route a blocked wave through
+/// the defender's structures. Costs below the map's cheapest passable step
+/// make the heuristic inadmissible (the path is then still deterministic, just
+/// not always the cheapest); breach costs are many times a grass step.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "tile coords are bounds-checked non-negative and < the u16 grid"
+)]
+pub fn find_path_weighted(
+    map: &Map,
+    start: (u16, u16),
+    goal: (u16, u16),
+    extra: &dyn Fn(u16, u16) -> Option<i64>,
+) -> Option<Vec<(u16, u16)>> {
+    if start.0 >= map.width()
+        || start.1 >= map.height()
+        || goal.0 >= map.width()
+        || goal.1 >= map.height()
+    {
+        return None;
+    }
+    if start == goal {
+        return Some(Vec::new());
+    }
+    // Cost of entering a tile: its ground cost when passable, else `extra`.
+    let enter = |x: u16, y: u16| {
+        if passable(map, i32::from(x), i32::from(y)) {
+            Some(step_cost(map, x, y))
+        } else {
+            extra(x, y)
+        }
+    };
+    enter(goal.0, goal.1)?;
+    let width = usize::from(map.width());
+    let height = usize::from(map.height());
+    let count = width * height;
+    let index = |x: u16, y: u16| usize::from(y) * width + usize::from(x);
+
+    // A map whose only enterable tiles are obstacles has no passable floor:
+    // fall back to the floor every passable ground respects.
+    let per_hex = match min_step_cost(map) {
+        i64::MAX => i64::from(Ground::MIN_PASSABLE_COST),
+        cost => cost,
+    };
+    let mut g_score = alloc::vec![i64::MAX; count];
+    let mut came_from = alloc::vec![usize::MAX; count];
+    let start_i = index(start.0, start.1);
+    let goal_i = index(goal.0, goal.1);
+    g_score[start_i] = 0;
+
+    // Min-heap on (f_score, tile_index); the index breaks ties for determinism.
+    let mut open = BinaryHeap::new();
+    open.push(Reverse((heuristic(start, goal, per_hex), start_i)));
+
+    while let Some(Reverse((_, current))) = open.pop() {
+        if current == goal_i {
+            return Some(reconstruct(&came_from, current, width));
+        }
+        let cx = (current % width) as u16;
+        let cy = (current / width) as u16;
+        let here = g_score[current];
+        for (nx, ny) in hex::neighbors(cx, cy) {
+            if nx < 0 || ny < 0 || nx >= i32::from(map.width()) || ny >= i32::from(map.height()) {
+                continue;
+            }
+            let Some(step) = enter(nx as u16, ny as u16) else {
+                continue;
+            };
+            let neighbor = index(nx as u16, ny as u16);
+            let tentative = here + step;
+            if tentative < g_score[neighbor] {
+                g_score[neighbor] = tentative;
+                came_from[neighbor] = current;
+                let f = tentative + heuristic((nx as u16, ny as u16), goal, per_hex);
+                open.push(Reverse((f, neighbor)));
+            }
+        }
+    }
+    None
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     reason = "tile indices are < width*height which fits the u16 grid"
@@ -442,6 +532,88 @@ mod ground_cost_tests {
         }
         m.set_ground(1, 1, Ground::Flats);
         assert_eq!(find_path(&m, (0, 0), (4, 0)), None);
+    }
+}
+
+#[cfg(test)]
+mod weighted_tests {
+    use super::{find_path, find_path_weighted};
+    use crate::game::map::{Ground, Map, Tile};
+
+    #[test]
+    fn weighted_path_crosses_a_wall_only_when_needed() {
+        let mut m = Map::new(10, 3);
+        for y in 0..3 {
+            m.set_tile(5, y, Tile::BLOCKED);
+        }
+        assert!(find_path(&m, (1, 1), (8, 1)).is_none());
+        let p = find_path_weighted(&m, (1, 1), (8, 1), &|x, _| (x == 5).then_some(60)).unwrap();
+        assert!(p.iter().any(|&(x, _)| x == 5));
+        let open = Map::new(10, 3);
+        assert_eq!(
+            find_path_weighted(&open, (1, 1), (8, 1), &|_, _| None),
+            find_path(&open, (1, 1), (8, 1))
+        );
+    }
+
+    #[test]
+    fn weighted_path_prefers_a_detour_cheaper_than_the_wall() {
+        // A wall with a gap at the bottom: a 60-cost wall hex is dearer than the
+        // few extra grass steps around, so the weighted path takes the gap.
+        let mut m = Map::new(10, 6);
+        for y in 0..5 {
+            m.set_tile(5, y, Tile::BLOCKED);
+        }
+        let p = find_path_weighted(&m, (1, 3), (8, 3), &|_, _| Some(60)).unwrap();
+        assert!(p
+            .iter()
+            .all(|&(x, y)| m.tile(x.into(), y.into()).unwrap().passable));
+        assert_eq!(p, find_path(&m, (1, 3), (8, 3)).unwrap());
+        // A dearer detour (the gap is far away) goes through the wall instead.
+        let mut long = Map::new(10, 30);
+        for y in 0..29 {
+            long.set_tile(5, y, Tile::BLOCKED);
+        }
+        let p = find_path_weighted(&long, (1, 1), (8, 1), &|_, _| Some(60)).unwrap();
+        assert!(p.iter().any(|&(x, _)| x == 5));
+    }
+
+    #[test]
+    fn weighted_path_matches_find_path_on_mixed_ground_without_extras() {
+        // Same A*, same tie-break: with no enterable impassable tile the two
+        // searches agree on every route of a mixed map, found or not.
+        let mut m = Map::new(16, 12);
+        let mix = [
+            Ground::Grass,
+            Ground::Flats,
+            Ground::Highland,
+            Ground::Forest,
+            Ground::River,
+        ];
+        for y in 0..12u16 {
+            for x in 0..16u16 {
+                m.set_ground(x, y, mix[usize::from((x * 7 + y * 3) % 5)]);
+            }
+        }
+        for (s, g) in [((0, 0), (15, 11)), ((3, 4), (12, 2)), ((15, 0), (0, 11))] {
+            assert_eq!(
+                find_path_weighted(&m, s, g, &|_, _| None),
+                find_path(&m, s, g)
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_path_never_enters_an_impassable_tile_without_a_cost() {
+        let mut m = Map::new(10, 3);
+        for y in 0..3 {
+            m.set_tile(5, y, Tile::BLOCKED);
+        }
+        assert!(find_path_weighted(&m, (1, 1), (8, 1), &|_, y| (y == 9).then_some(60)).is_none());
+        assert_eq!(
+            find_path_weighted(&m, (9, 9), (1, 1), &|_, _| Some(1)),
+            None
+        );
     }
 }
 

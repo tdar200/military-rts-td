@@ -2218,6 +2218,14 @@ mod tests {
     ///   still wins, at t=17323 after 3 waves -> t=12867 after 2 waves. The
     ///   separation pass and its corner guard move it (measured with the halt
     ///   fix alone: both numbers unchanged).
+    /// - Task 16 (breach pathing, siege at 3 walls led by tanks), the P2
+    ///   re-baseline read with `kestrel_opening_playtest`: the undefended base
+    ///   falls at t=4995 -> 4995 and the playtest AI wins at t=12868 -> 12868
+    ///   after 2 waves (waves at 4501 and 9901). Neither run builds a wall or
+    ///   leaves a wave without a path, so no breach or siege happens; the
+    ///   change only moves the depth hash. P2 overall (old -> new): undefended
+    ///   falls at t=4959 -> 4995, the playtest AI wins at t=13622 -> 12868,
+    ///   2 waves both times.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]

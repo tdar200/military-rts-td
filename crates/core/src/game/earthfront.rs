@@ -937,18 +937,24 @@ impl Sim {
                     e.alive && e.owner == cfg.defender && e.kind == Kind::Unit(UnitKind::Tank)
                 })
                 .count();
-            self.earthfront_wave_doctrine =
-                if self.count_alive_buildings(cfg.defender, BuildingKind::Wall) > 5 {
-                    2
-                } else if tanks > 3 {
-                    1
-                } else if self.enemy_has_air(cfg.attacker) {
-                    3
-                } else if self.wave_count % 3 == 2 {
-                    4
-                } else {
-                    0
-                };
+            let walls = self.count_alive_buildings(cfg.defender, BuildingKind::Wall);
+            // Kestrel depth (Task 16): three walls already call a siege.
+            let siege = if self.is_depth() {
+                walls >= 3
+            } else {
+                walls > 5
+            };
+            self.earthfront_wave_doctrine = if siege {
+                2
+            } else if tanks > 3 {
+                1
+            } else if self.enemy_has_air(cfg.attacker) {
+                3
+            } else if self.wave_count % 3 == 2 {
+                4
+            } else {
+                0
+            };
         }
         if elapsed < cfg.first_delay || !(elapsed - cfg.first_delay).is_multiple_of(cfg.interval) {
             return;
@@ -976,9 +982,18 @@ impl Sim {
             None
         }
         .or_else(|| self.command_center_pos(cfg.defender));
+        // Kestrel depth (Task 16): a siege wave leads with tanks (Explosive is
+        // x1.5 against structures), its first quarter rounded up.
+        let siege_lead = if self.is_depth() && self.earthfront_wave_doctrine == 2 {
+            budget.div_ceil(4)
+        } else {
+            0
+        };
         for i in 0..budget {
             let kind = if self.earthfront_wave_doctrine == 2 && w >= 3 && i == 0 {
                 UnitKind::Capital
+            } else if i < siege_lead {
+                UnitKind::Tank
             } else if w >= 3 && i % 7 == 0 {
                 UnitKind::Helicopter
             } else if self.earthfront_wave_doctrine == 1 && i % 3 == 0 {
@@ -1153,8 +1168,12 @@ impl Sim {
                     slots -= 1;
                 }
             }
+            // Kestrel depth (Task 16): a unit breaking a wall (its forced
+            // target) is left to it unless it runs low on ammunition.
+            let breaching = self.is_depth() && e.dp.forced.is_some() && e.ammunition >= 15;
             if matches!(e.kind, Kind::Unit(k) if k != UnitKind::Harvester)
                 && (e.move_target.is_none() || e.ammunition < 15)
+                && !breaching
             {
                 let target = if e.ammunition < 15 {
                     Some(base)
