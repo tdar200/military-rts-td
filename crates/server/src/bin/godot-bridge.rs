@@ -10,7 +10,9 @@ use rts_core::game::hex;
 use rts_core::game::kestrel;
 use rts_core::game::map::{Deposit, Ground};
 use rts_core::game::scenario::Scenario;
-use rts_core::game::sim::{Command, EntityId, EntityKindView, EntityView, PlayerId, SupplyState};
+use rts_core::game::sim::{
+    Command, EntityId, EntityKindView, EntityView, PlayerId, Stance, SupplyState,
+};
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
 
@@ -914,7 +916,19 @@ fn snapshot_json_with(
         )
         .expect("writing to String cannot fail");
         match entity.kind {
-            EntityKindView::Unit(_) => write!(out, ",\"rank\":{}", sim.rank_of(entity.id)),
+            EntityKindView::Unit(_) => {
+                write!(out, ",\"rank\":{}", sim.rank_of(entity.id))
+                    .expect("writing to String cannot fail");
+                // Only the player's own units, and only on a depth map: the
+                // alien side's stances never reach the client, and Survival
+                // snapshots stay byte-identical.
+                match sim.stance_of(entity.id) {
+                    Some(stance) if entity.owner == human => {
+                        write!(out, ",\"stance\":\"{}\"", stance.name())
+                    }
+                    _ => Ok(()),
+                }
+            }
             EntityKindView::Building(BuildingKind::PowerPlant) => {
                 write!(out, ",\"river_kw\":{}", sim.river_bonus_kw_of(entity.id))
             }
@@ -1249,6 +1263,40 @@ fn take_commands(path: &Path) -> Vec<Command> {
                             owner: PlayerId(0),
                             building,
                         }
+                    })
+                }
+                // Depth orders (Kestrel). The sim ignores them on any other map.
+                "stop" | "hold" => {
+                    let hold = line.starts_with("hold,");
+                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+                    Some(if hold {
+                        Command::HoldPosition {
+                            owner: PlayerId(0),
+                            unit,
+                        }
+                    } else {
+                        Command::Stop {
+                            owner: PlayerId(0),
+                            unit,
+                        }
+                    })
+                }
+                "stance" => {
+                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+                    let stance = Stance::from_name(fields.next()?)?;
+                    Some(Command::SetStance {
+                        owner: PlayerId(0),
+                        unit,
+                        stance,
+                    })
+                }
+                "target" => {
+                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+                    let target = EntityId(fields.next()?.parse::<u32>().ok()?);
+                    Some(Command::AttackTarget {
+                        owner: PlayerId(0),
+                        unit,
+                        target,
                     })
                 }
                 _ => None,
@@ -2201,6 +2249,104 @@ mod tests {
         ));
         assert!(!path.exists(), "bridge consumes the order file atomically");
     }
+
+    #[test]
+    fn godot_command_file_supports_depth_orders() {
+        use rts_core::game::sim::Stance;
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-depth-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "stop,7\nhold,8\nstance,9,defensive\ntarget,10,44\n\
+             stop,x\nhold,\nstance,9,Defensive\nstance,9\nstance,x,hold\n\
+             target,10\ntarget,10,y\ntarget,-1,3\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 4, "malformed depth lines are dropped");
+        assert!(matches!(
+            commands[0],
+            Command::Stop {
+                owner: PlayerId(0),
+                unit: EntityId(7)
+            }
+        ));
+        assert!(matches!(
+            commands[1],
+            Command::HoldPosition {
+                owner: PlayerId(0),
+                unit: EntityId(8)
+            }
+        ));
+        assert!(matches!(
+            commands[2],
+            Command::SetStance {
+                owner: PlayerId(0),
+                unit: EntityId(9),
+                stance: Stance::Defensive
+            }
+        ));
+        assert!(matches!(
+            commands[3],
+            Command::AttackTarget {
+                owner: PlayerId(0),
+                unit: EntityId(10),
+                target: EntityId(44)
+            }
+        ));
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn kestrel_human_units_carry_their_stance_and_nothing_else_does() {
+        use rts_core::game::sim::{EntityKindView, Stance};
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let id = human_infantry(&sim);
+        let json = snapshot_json(&sim);
+        assert!(
+            entity_object(&json, id.0).contains("\"stance\":\"aggressive\""),
+            "{}",
+            entity_object(&json, id.0)
+        );
+        sim.step(&[Command::SetStance {
+            owner: PlayerId(0),
+            unit: id,
+            stance: Stance::Hold,
+        }]);
+        let json = snapshot_json(&sim);
+        assert!(entity_object(&json, id.0).contains("\"stance\":\"hold\""));
+        // Enemy units and every building carry no stance, so nothing about
+        // the alien side's orders reaches the client.
+        let mut checked = 0;
+        for v in sim.views() {
+            let own_unit = v.owner == PlayerId(0) && matches!(v.kind, EntityKindView::Unit(_));
+            let shown = json.contains(&format!("{{\"id\":{},\"owner\"", v.id.0));
+            if own_unit || !shown {
+                continue;
+            }
+            let obj = entity_object(&json, v.id.0);
+            assert!(!obj.contains("stance"), "{obj}");
+            checked += 1;
+        }
+        assert!(checked > 0, "no building or alien was checked");
+        let alien = sim.add_unit(
+            PlayerId(1),
+            UnitKind::Infantry,
+            sim.views()
+                .into_iter()
+                .find(|v| v.id == id)
+                .expect("unit")
+                .pos,
+        );
+        let json = snapshot_json(&sim);
+        assert!(!entity_object(&json, alien.0).contains("stance"));
+        // Survival has no depth, so it never mentions a stance.
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("\"stance\""));
+    }
+
     #[test]
     fn godot_command_file_covers_the_complete_combat_roster() {
         let path = std::env::temp_dir().join(format!(
@@ -2963,7 +3109,14 @@ mod tests {
                 json.contains(&all_visible),
                 "fog off still sends an all-visible mask"
             );
-            json.replacen(&all_visible, "", 1)
+            // Task 13 appends `"stance"` to the player's own units; it is
+            // additive, so it is stripped here like the mask and every other
+            // byte must still match the pins below.
+            ["aggressive", "defensive", "hold"]
+                .iter()
+                .fold(json.replacen(&all_visible, "", 1), |acc, name| {
+                    acc.replace(&format!(",\"stance\":\"{name}\""), "")
+                })
         };
         let sim = Scenario::KestrelReach.build(2026);
         let off = snapshot_json_with(
