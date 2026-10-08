@@ -136,6 +136,11 @@ func _write_bridge_research(tech_id := -1) -> void:
 	calls.append(["research", tech_id])
 
 
+func _write_bridge_upgrade(track: int) -> bool:
+	calls.append(["upgrade", track])
+	return true
+
+
 func _restart_mission() -> void:
 	calls.append(["restart"])
 

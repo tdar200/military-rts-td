@@ -602,6 +602,9 @@ func _on_research_action(name: String, arg: Variant) -> void:
 	if result.has("research"):
 		g._write_bridge_research(result["research"])
 		research.visible = false
+	elif result.has("upgrade"):
+		g._write_bridge_upgrade(result["upgrade"])  # Kestrel Upgrades: the screen stays open to buy another level
+		research.apply(live_research.vm(g))
 	elif result.has("close"):
 		research.visible = false
 	elif name == "zoom_to" and _left_down:

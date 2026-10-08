@@ -128,7 +128,7 @@ static func groups(kestrel := false) -> Array:
 		{"name": "System", "rows": [
 			_row("Pause menu", [PAUSE]),
 			_row("This screen", [CONTROLS]),
-			_row("Science panel", [SCIENCE]),
+			_row("Science and upgrades" if kestrel else "Science panel", [SCIENCE]),  # Kestrel's Upgrades live there
 			_row("Strategic map", [REGION_MAP]),
 		]},
 		{"name": "Selection", "rows": [

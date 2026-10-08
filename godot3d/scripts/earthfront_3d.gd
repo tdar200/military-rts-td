@@ -22,6 +22,7 @@ const WorldFx := preload("res://scripts/world/world_fx.gd")
 const KestrelObjectives := preload("res://scripts/world/kestrel_objectives.gd")
 const KestrelIntel := preload("res://scripts/world/kestrel_intel.gd")
 const LiveAdapter := preload("res://scripts/ui/live_adapter.gd")
+const LiveResearch := preload("res://scripts/ui/live_research.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
@@ -2724,7 +2725,7 @@ func _write_bridge_train(kind_name: String) -> void:
 	if not bridge_active:
 		objective_label.text = "SIMULATION CORE OFFLINE \u2014 PRODUCTION UNAVAILABLE"
 		return
-	var producer_kind := "Refinery" if kind_name == "Harvester" else ("VehicleFactory" if kind_name == "Tank" else ("Airfield" if kind_name == "Helicopter" else "Barracks"))
+	var producer_kind := "Refinery" if kind_name == "Harvester" else ("VehicleFactory" if kind_name in ["Tank", "Capital"] else ("Airfield" if kind_name == "Helicopter" else "Barracks"))
 	var producers: Array = bridge_nodes.values()
 	if is_instance_valid(selected):
 		producers.push_front(selected)
@@ -2756,6 +2757,9 @@ func _write_bridge_rally(producer: Node3D, ground: Vector3) -> void:
 
 
 func _write_bridge_ability() -> void:
+	if world_art_on:
+		_cast_depth_ability(_screen_to_ground(mouse_position()))
+		return
 	if not is_instance_valid(selected) or String(selected.get_meta("category", "unit")) != "unit":
 		objective_label.text = "SELECT A COMBAT UNIT BEFORE CASTING AN ABILITY"
 		return
@@ -2771,6 +2775,98 @@ func _write_bridge_ability() -> void:
 	_append_bridge_command("ability,%d,%d,%d" % [int(selected.get_meta("bridge_id")), simulation_x_bits, simulation_z_bits])
 	objective_label.text = "TACTICAL ABILITY TRANSMITTED"
 	_show_move_marker(ground, true)
+
+
+## Kestrel (kestrel-depth Task 17): the ability each kind carries (the core's `ability_for`), its cast range in sim
+## tiles (`ability::def`) and the project it waits for (`depth_ability_allowed`: the Barrage needs Precision
+## Manufacturing, tech 6; -1 is none).
+const DEPTH_ABILITIES := {
+	"Tank": {"name": "Barrage", "range": 6.0, "tech": 6},
+	"Helicopter": {"name": "EMP burst", "range": 5.0, "tech": -1},
+	"Capital": {"name": "Nanite field", "range": 5.0, "tech": -1},
+}
+const DENIED_TONE := Color("ffd071")
+
+
+## Kestrel's Q: the first unit of ours in the selection whose ability is ready, unlocked and in range of `ground` casts
+## there (`ability,<id>,<x_bits>,<z_bits>`). The sim drops a cast it would refuse without a word, so the client checks
+## first and says why with the denied sound. Returns "" when the line was written, otherwise the reason: no_ability,
+## recharging, needs_tech, range, no_ground or offline.
+func _cast_depth_ability(ground: Vector3) -> String:
+	if not bridge_active:
+		return "offline"
+	var carriers := _order_units().filter(func(u: Node3D) -> bool: return DEPTH_ABILITIES.has(String(u.get_meta("kind_name", ""))))
+	if carriers.is_empty():
+		_deny("NO TACTICAL ABILITY", "TANKS, HELICOPTERS AND THE CAPITAL CARRY ONE")
+		return "no_ability"
+	var ready := carriers.filter(func(u: Node3D) -> bool: return int(u.get_meta("ability_cd", 0)) <= 0 and int(u.get_meta("stun_ticks", 0)) <= 0)
+	if ready.is_empty():
+		var wait := -1  # ticks until the first carrier is ready again
+		for u in carriers:
+			var left := maxi(int(u.get_meta("ability_cd", 0)), int(u.get_meta("stun_ticks", 0)))
+			wait = left if wait < 0 else mini(wait, left)
+		_deny("ABILITY RECHARGING", "READY IN %d S" % ceili(float(wait) / 30.0))
+		return "recharging"
+	var unlocked := ready.filter(func(u: Node3D) -> bool: return _tech_researched(int(DEPTH_ABILITIES[String(u.get_meta("kind_name", ""))]["tech"])))
+	if unlocked.is_empty():
+		_deny("BARRAGE LOCKED", "RESEARCH PRECISION MANUFACTURING FIRST")
+		return "needs_tech"
+	if not ground.is_finite():
+		return "no_ground"
+	var target := _world_to_sim_bits(ground)
+	var in_range := unlocked.filter(func(u: Node3D) -> bool:
+		var at := _world_to_sim_bits(u.position)
+		var reach: float = DEPTH_ABILITIES[String(u.get_meta("kind_name", ""))]["range"] * 65536.0
+		return Vector2(target - at).length_squared() <= reach * reach)
+	if in_range.is_empty():
+		var first_kind := String(unlocked[0].get_meta("kind_name", ""))
+		_deny("OUT OF RANGE", "THE %s CASTS WITHIN %d TILES" % [_kind_text(first_kind), int(DEPTH_ABILITIES[first_kind]["range"])])
+		return "range"
+	var caster: Node3D = in_range[0]
+	_append_bridge_command("ability,%d,%d,%d" % [int(caster.get_meta("bridge_id")), target.x, target.y])
+	_say("TACTICAL ABILITY TRANSMITTED")  # the ticker becomes a sentence-case toast: a name like EMP would read "Emp"
+	if is_inside_tree():
+		_show_move_marker(ground, true)
+	return ""
+
+
+## True when research project `tech_id` is complete in the latest snapshot (-1, no project, is always true).
+func _tech_researched(tech_id: int) -> bool:
+	if tech_id < 0:
+		return true
+	for option in bridge_research_options:
+		if option is Dictionary and int(option.get("id", -1)) == tech_id:
+			return bool(option.get("researched", false))
+	return false
+
+
+## The Kestrel refusal: a toast in the funds-short tone, the denied sound and the objective line.
+func _deny(title: String, body: String) -> void:
+	_show_notification(title, body, DENIED_TONE)
+	_sfx("denied")
+	_say(title)
+
+
+## Kestrel Upgrades (Task 17): buys the next level of `track` (0 weapons, 1 armour, 2 vitality; the forge is never
+## sold) with `upgrade,<track>`. The cost comes from the snapshot's `depth.upgrade_costs` (null at the era's cap) and
+## goes through the Task 7 funds check, so a short order is denied with the toast and sound instead of being sent.
+func _write_bridge_upgrade(track: int) -> bool:
+	if not world_art_on or not bridge_active or track < 0 or track >= LiveResearch.UPGRADE_TRACKS.size():
+		return false
+	var depth: Variant = bridge_snapshot.get("depth", null)
+	if not depth is Dictionary:
+		return false
+	var costs: Array = depth.get("upgrade_costs", [])
+	var name: String = LiveResearch.UPGRADE_TRACKS[track]
+	var cost: Variant = costs[track] if track < costs.size() else null
+	if cost == null:
+		_deny("%s AT MAX LEVEL" % name.to_upper(), "THE NEXT ERA RAISES THE CAP")
+		return false
+	if not _funds_ok(int(cost), "%s upgrade" % name):
+		return false
+	_append_bridge_command("upgrade,%d" % track)
+	_say("%s UPGRADE ORDERED" % name.to_upper())
+	return true
 
 
 func _write_bridge_structure_action(verb: String) -> void:

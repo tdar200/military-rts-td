@@ -7,6 +7,7 @@ extends Control
 ##   gate    {label, from: {n, name}, to: {n, name}, criteria: [{state: done|active|todo, label, value, tone?}], note}
 ##   filters {search: {placeholder, text}, groups: [{id, title, row_h?, rows: [{id, label, on, icon?, tone?, count?}]}],
 ##            honesty: {title, tags: [{label, tone, dashed?}]}}
+##   upgrades {title, rows: [{id, label, level, tone?, button: {label, action, arg, disabled?}}]}  (Kestrel, Task 17)
 ##   graph   {nodes: [node], selected: id, highlight: [ids], horizon: {...}, hint: {...}, empty: {title, body},
 ##            click_to_start: bool}
 ##   zoom    {value: 0..1, scale: 0.5..1.5, hint}
@@ -34,6 +35,7 @@ const SECTIONS := [
 	["header", "_build_header"],
 	["gate", "_build_gate"],
 	["filters", "_build_filters"],
+	["upgrades", "_build_upgrades"],
 	["graph", "_build_graph"],
 	["zoom", "_build_zoom"],
 	["eras", "_build_eras"],
@@ -389,6 +391,30 @@ func _filter_row(root: Control, group: Dictionary, row: Dictionary, y: float, ro
 	hit.pressed.connect(_emit.bind("filter", {"group": group.get("id", ""), "id": row.get("id", label), "on": not on}))
 	hit.mouse_entered.connect(hover.setup.bind(Color(T.CYAN.r, T.CYAN.g, T.CYAN.b, 0.07), Color(0, 0, 0, 0)))
 	hit.mouse_exited.connect(hover.setup.bind(Color(0, 0, 0, 0), Color(0, 0, 0, 0)))
+
+
+## Task 17: the Upgrades section sits at the foot of the filter panel (its rows end near y 702 with every branch
+## listed), inside the panel's 16,184 280x880 rect: a rule, the caption and a row per track (name, level, buy button).
+const UPGRADES_TOP := 812.0
+const UPGRADE_ROW_H := 66.0
+
+
+func _build_upgrades(root: Control, vm: Dictionary) -> void:
+	var y := UPGRADES_TOP
+	K.rule(root, 33, y, 246, 1, T.LINE_DIM)
+	y += 1.0 + 12.0
+	_cap(root, str(vm.get("title", "Upgrades")), 33, y, T.CYAN_HI)
+	y += 15.0 + 12.0
+	for row in vm.get("rows", []):
+		var tone := _col(row.get("tone", "text"), T.TEXT)
+		K.text(root, str(row.get("label", "")), {"x": 33, "y": y, "px": 14, "col": T.TEXT})
+		var level := K.text(root, str(row.get("level", "")), {"x": 0, "y": y + 1.0, "f": "mono", "px": 13, "col": tone if tone != T.TEXT else T.DIM})
+		level.position.x = roundf(279.0 - level.size.x)
+		var spec: Dictionary = row.get("button", {})
+		var btn := K.button(root, str(spec.get("label", "")), 33, y + 22.0, {"min_h": 34, "w": 246.0, "h": 34.0, "px": 14, "pad": 12})
+		btn.disabled = bool(spec.get("disabled", false))
+		btn.pressed.connect(_emit.bind(str(spec.get("action", "upgrade")), spec.get("arg")))
+		y += UPGRADE_ROW_H
 
 
 # ---------------------------------------------------------------- graph

@@ -48,6 +48,7 @@ func test_the_real_bindings_are_on_screen(t) -> void:
 	for label in ["Pan", "Drag pan", "Rotate", "Vehicle factory", "Airfield", "Supply depot", "Battery", "Defences", "Attack-move", "Select all army", "Select idle crew", "Pause menu", "This screen", "Repair", "Sell", "Tactical ability", "Train riflemen", "Reactor", "Cancel order or placement"]:
 		t.ok(U.has_text(root, label), "labels " + label)
 	t.ok(U.has_text(root, "Cursor at screen edge"), "edge pan is a note, not a key")
+	t.ok(U.has_text(root, "Science panel") and not U.has_text(root, "upgrades"), "Survival has no Upgrades (Task 17)")
 	root.free()
 
 
@@ -130,7 +131,7 @@ func test_kestrel_shows_the_order_keys_and_fits(t) -> void:
 	for expected in ["S", "D", "Z", "Space", "Click map", "Right click"]:
 		t.ok(chips.has(expected), "Kestrel shows the " + expected + " key")
 	t.ok(not chips.has("E"), "no E chip: Rotate is not on Kestrel")
-	for label in ["Stop", "Hold position", "Cycle stance", "Move, or attack a target", "Gun turret", "Field wall"]:
+	for label in ["Stop", "Hold position", "Cycle stance", "Move, or attack a target", "Gun turret", "Field wall", "Tactical ability", "Science and upgrades"]:
 		t.ok(U.has_text(root, label), "labels " + label)
 	t.ok(not U.has_text(root, "Rotate") and not U.has_text(root, "Defences"), "no Rotate row, no Defences panel")
 	var lowest := 0.0
