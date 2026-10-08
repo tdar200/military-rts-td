@@ -622,6 +622,21 @@ pub enum Command {
         /// The enemy entity to focus.
         target: EntityId,
     },
+    /// Kestrel depth only (a shift-click): appends a waypoint leg to the
+    /// unit's queue, walked after its current player order (a move, an
+    /// attack-move or a forced target). A unit with no player order starts the
+    /// leg at once. At most [`QUEUE_CAP`](depth::QUEUE_CAP) legs in all,
+    /// counting the one under way; more are dropped. Harvesters never queue.
+    QueueMove {
+        /// Owning player.
+        owner: PlayerId,
+        /// The unit entity.
+        unit: EntityId,
+        /// The leg's destination.
+        target: Vec2,
+        /// Whether the leg is an attack-move (halts for enemies in range).
+        attack_move: bool,
+    },
 }
 
 /// Building or unit, for the render/UI layer (public projection of the internal
@@ -2943,10 +2958,12 @@ impl Sim {
                 if valid {
                     if self.is_depth() {
                         // A direct order supersedes any auto-engagement and its
-                        // anchor, and (Task 13) any forced target.
+                        // anchor, and (Task 13) any forced target, and (Task 14)
+                        // any queued waypoints.
                         self.entities[idx].dp.anchor = None;
                         self.entities[idx].dp.engaged = None;
                         self.entities[idx].dp.forced = None;
+                        self.entities[idx].dp.queue.clear();
                     }
                     // Plain move clears any standing attack-move stance.
                     self.order_unit_to(idx, target, false);
@@ -2964,10 +2981,12 @@ impl Sim {
                 if valid {
                     if self.is_depth() {
                         // A direct order supersedes any auto-engagement and its
-                        // anchor, and (Task 13) any forced target.
+                        // anchor, and (Task 13) any forced target, and (Task 14)
+                        // any queued waypoints.
                         self.entities[idx].dp.anchor = None;
                         self.entities[idx].dp.engaged = None;
                         self.entities[idx].dp.forced = None;
+                        self.entities[idx].dp.queue.clear();
                     }
                     self.order_unit_to(idx, target, true);
                 }
@@ -3071,6 +3090,12 @@ impl Sim {
                 unit,
                 target,
             } => self.apply_depth_attack_target(owner, unit, target),
+            Command::QueueMove {
+                owner,
+                unit,
+                target,
+                attack_move,
+            } => self.apply_depth_queue_move(owner, unit, target, attack_move),
         }
     }
 
@@ -4331,6 +4356,11 @@ impl Sim {
         }
         for i in repath {
             self.depth_repath(i);
+        }
+        if depth {
+            // Kestrel depth (Task 14): a unit whose leg ended this tick starts
+            // its next queued waypoint at once.
+            self.depth_advance_queues();
         }
     }
 

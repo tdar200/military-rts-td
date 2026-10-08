@@ -925,6 +925,7 @@ fn snapshot_json_with(
                 match sim.stance_of(entity.id) {
                     Some(stance) if entity.owner == human => {
                         write!(out, ",\"stance\":\"{}\"", stance.name())
+                            .and_then(|()| write_queue(sim, entity.id, &mut out))
                     }
                     _ => Ok(()),
                 }
@@ -1134,6 +1135,38 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     clippy::too_many_lines,
     reason = "one protocol parser keeps every line-oriented Godot command auditable in one match"
 )]
+/// Task 14: the player's own unit's waypoint queue on a depth map, appended
+/// after its stance: `"queue":N` (legs waiting behind the current order), and
+/// while N > 0 its `"route"` still to walk as `[x_bits,z_bits,attack]` legs,
+/// the current destination first. The points are the player's own clicks, so
+/// nothing hidden by the fog is revealed (a forced target is never listed).
+fn write_queue(sim: &rts_core::game::sim::Sim, id: EntityId, out: &mut String) -> std::fmt::Result {
+    write!(out, ",\"queue\":{}", sim.queue_len(id))?;
+    let route = sim.queue_route(id);
+    if route.is_empty() {
+        return Ok(());
+    }
+    out.push_str(",\"route\":[");
+    for (k, (point, attack_move)) in route.iter().enumerate() {
+        if k > 0 {
+            out.push(',');
+        }
+        write!(
+            out,
+            "[{},{},{}]",
+            point.x.to_bits(),
+            point.y.to_bits(),
+            u8::from(*attack_move)
+        )?;
+    }
+    out.push(']');
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "a flat one-arm-per-line-kind parser; Task 24 moves it into bridge_protocol unchanged"
+)]
 fn take_commands(path: &Path) -> Vec<Command> {
     // Legacy single-file input remains readable for older tools. The player client
     // publishes immutable packets with atomic rename, so polling cannot unlink an
@@ -1297,6 +1330,19 @@ fn take_commands(path: &Path) -> Vec<Command> {
                         owner: PlayerId(0),
                         unit,
                         target,
+                    })
+                }
+                // Shift-queued waypoints (Kestrel): `qmove`/`qattack,<id>,<x_bits>,<z_bits>`.
+                "qmove" | "qattack" => {
+                    let attack_move = line.starts_with("qattack,");
+                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+                    let x_bits = fields.next()?.parse::<i64>().ok()?;
+                    let z_bits = fields.next()?.parse::<i64>().ok()?;
+                    Some(Command::QueueMove {
+                        owner: PlayerId(0),
+                        unit,
+                        target: Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits)),
+                        attack_move,
                     })
                 }
                 _ => None,
@@ -2300,6 +2346,113 @@ mod tests {
     }
 
     #[test]
+    fn godot_command_file_supports_queued_waypoints() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-queue-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "qmove,7,65536,-131072\nqattack,8,196608,262144\n\
+             qmove,x,1,2\nqmove,7,1\nqattack,8,1,y\nqmove,-1,1,2\nqattack,\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 2, "malformed queue lines are dropped");
+        assert!(matches!(
+            commands[0],
+            Command::QueueMove {
+                owner: PlayerId(0),
+                unit: EntityId(7),
+                attack_move: false,
+                target
+            } if target.x.to_bits() == 65536 && target.y.to_bits() == -131_072
+        ));
+        assert!(matches!(
+            commands[1],
+            Command::QueueMove {
+                owner: PlayerId(0),
+                unit: EntityId(8),
+                attack_move: true,
+                target
+            } if target.x.to_bits() == 196_608 && target.y.to_bits() == 262_144
+        ));
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn kestrel_human_units_carry_their_queue_and_nothing_else_does() {
+        use rts_core::game::hex;
+        use rts_core::game::sim::EntityKindView;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let id = human_infantry(&sim);
+        let json = snapshot_json(&sim);
+        let obj = entity_object(&json, id.0);
+        assert!(obj.contains(",\"queue\":0"), "{obj}");
+        assert!(!obj.contains("\"route\""), "{obj}");
+        let legs = [
+            (hex::center(9, 7), false),
+            (hex::center(12, 9), true),
+            (hex::center(9, 11), false),
+        ];
+        let orders: Vec<Command> = legs
+            .iter()
+            .map(|&(target, attack_move)| Command::QueueMove {
+                owner: PlayerId(0),
+                unit: id,
+                target,
+                attack_move,
+            })
+            .collect();
+        sim.step(&orders);
+        let json = snapshot_json(&sim);
+        let obj = entity_object(&json, id.0);
+        let bits = |p: rts_core::vec::Vec2| (p.x.to_bits(), p.y.to_bits());
+        let route: String = legs
+            .iter()
+            .map(|&(p, a)| {
+                let (x, z) = bits(p);
+                format!("[{x},{z},{}]", u8::from(a))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(
+            obj.contains(&format!(",\"queue\":2,\"route\":[{route}]")),
+            "{obj}"
+        );
+        // Enemy units and buildings never carry a queue or a route.
+        let mut checked = 0;
+        for v in sim.views() {
+            let own_unit = v.owner == PlayerId(0) && matches!(v.kind, EntityKindView::Unit(_));
+            let shown = json.contains(&format!("{{\"id\":{},\"owner\"", v.id.0));
+            if own_unit || !shown {
+                continue;
+            }
+            let obj = entity_object(&json, v.id.0);
+            assert!(
+                !obj.contains("\"queue\"") && !obj.contains("\"route\""),
+                "{obj}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no building or alien was checked");
+        // A Stop clears the queue and the route with it.
+        sim.step(&[Command::Stop {
+            owner: PlayerId(0),
+            unit: id,
+        }]);
+        let json = snapshot_json(&sim);
+        let obj = entity_object(&json, id.0);
+        assert!(
+            obj.contains(",\"queue\":0") && !obj.contains("\"route\""),
+            "{obj}"
+        );
+        // Survival has no depth: no queue key anywhere.
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("\"queue\"") && !survival.contains("\"route\""));
+    }
+
+    #[test]
     fn kestrel_human_units_carry_their_stance_and_nothing_else_does() {
         use rts_core::game::sim::{EntityKindView, Stance};
         let mut sim = Scenario::KestrelReach.build(2026);
@@ -3109,14 +3262,16 @@ mod tests {
                 json.contains(&all_visible),
                 "fog off still sends an all-visible mask"
             );
-            // Task 13 appends `"stance"` to the player's own units; it is
-            // additive, so it is stripped here like the mask and every other
-            // byte must still match the pins below.
+            // Task 13 appends `"stance"` to the player's own units, and Task
+            // 14 `"queue":0` after it (no unit here has a queue, so no
+            // `"route"`); both are additive, so they are stripped here like
+            // the mask and every other byte must still match the pins below.
             ["aggressive", "defensive", "hold"]
                 .iter()
                 .fold(json.replacen(&all_visible, "", 1), |acc, name| {
                     acc.replace(&format!(",\"stance\":\"{name}\""), "")
                 })
+                .replace(",\"queue\":0", "")
         };
         let sim = Scenario::KestrelReach.build(2026);
         let off = snapshot_json_with(
@@ -3142,7 +3297,13 @@ mod tests {
         // committed fixtures with the hash masked). Was
         // (27266, 0xda83_524c_dd7e_782f) and (28515, 0x17d2_6a57_4400_cc38);
         // the mid-firefight hash is one digit longer, nothing else moved.
-        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x39f8_16c8_d6c2_8b72));
+        //
+        // Re-pinned by Task 14 (queued waypoints): each unit's queue is now
+        // hashed (its length, 0 here), so the `hash` value changed again; the
+        // additive `"queue":0` is stripped above and every other byte is
+        // identical. Was (27266, 0x39f8_16c8_d6c2_8b72) and
+        // (28516, 0x75a7_17ec_27d9_da19).
+        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x8634_c753_bb2f_6ad4));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3162,7 +3323,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0x75a7_17ec_27d9_da19));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0x7d35_35b4_8d90_c906));
     }
 
     #[test]

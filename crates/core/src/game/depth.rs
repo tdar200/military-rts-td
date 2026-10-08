@@ -40,6 +40,9 @@ pub(super) const DEFENSIVE_LEASH: Fixed = Fixed::from_int(3);
 /// unit sight the client's fog uses, a Gunship's 10); past that the target is
 /// lost and the order ends where the chaser stands.
 pub(super) const FORCED_TRACK: Fixed = Fixed::from_int(10);
+/// Task 14: the most waypoint legs a unit carries, counting the player order
+/// under way (a ninth leg is dropped).
+pub const QUEUE_CAP: usize = 8;
 
 /// How a Kestrel depth unit fights when nobody is ordering it (Task 13).
 /// Set by [`super::Command::SetStance`] (and `HoldPosition`); kept by `Stop`
@@ -119,6 +122,14 @@ pub(super) struct DepthUnit {
     /// dies, is lost from track, turns untargetable or cannot be reached, and
     /// by any new order.
     pub(super) forced: Option<EntityId>,
+    /// Task 14: shift-queued waypoint legs `(point, attack_move)`, nearest
+    /// first, walked after the current player order. Never holds more than
+    /// `QUEUE_CAP - 1` legs (the one under way is the eighth). Cleared by any
+    /// new direct order (`Move`, `AttackMove`, `Stop`, `HoldPosition`,
+    /// `AttackTarget`). Invariant after every tick: a non-empty queue means
+    /// the unit is on a player order or a forced target, so it is never
+    /// anchored, acquired or called for help while legs remain.
+    pub(super) queue: Vec<(Vec2, bool)>,
 }
 
 impl DepthUnit {
@@ -147,6 +158,13 @@ impl DepthUnit {
                 h.write_u64(u64::from(id.0));
             }
             None => h.write_u64(0),
+        }
+        // Task 14 (appended): the queue length, then each leg.
+        h.write_u64(self.queue.len() as u64);
+        for &(p, attack_move) in &self.queue {
+            h.write_i64(p.x.to_bits());
+            h.write_i64(p.y.to_bits());
+            h.write_u64(u64::from(attack_move));
         }
     }
 }
@@ -483,7 +501,7 @@ impl Sim {
                 e.dp.engaged = None;
             }
             if e.dp.forced.is_some_and(|t| freed.contains(&t.0)) {
-                self.depth_halt(i);
+                self.depth_forced_over(i);
             }
         }
     }
@@ -510,9 +528,9 @@ impl Sim {
             .then_some(i)
     }
 
-    /// Unit `i` drops every order and engagement and stands where it is, its
-    /// anchor here (its stance is kept). Shared by `Stop` and the end of a
-    /// forced target.
+    /// Unit `i` drops every order, engagement and queued leg and stands where
+    /// it is, its anchor here (its stance is kept). Used by `Stop`, `Hold`,
+    /// the start of an `AttackTarget` and a stance switch to Hold.
     fn depth_halt(&mut self, i: usize) {
         let e = &mut self.entities[i];
         e.move_target = None;
@@ -522,6 +540,17 @@ impl Sim {
         e.dp.engaged = None;
         e.dp.forced = None;
         e.dp.anchor = Some(e.pos);
+        e.dp.queue.clear();
+    }
+
+    /// The end of unit `i`'s forced target (the target died, was lost or
+    /// cannot be reached): it halts where it stands, then walks any legs
+    /// queued behind the target (Task 14).
+    fn depth_forced_over(&mut self, i: usize) {
+        let queue = core::mem::take(&mut self.entities[i].dp.queue);
+        self.depth_halt(i);
+        self.entities[i].dp.queue = queue;
+        self.depth_next_leg(i);
     }
 
     /// [`super::Command::Stop`]: depth only; the owner's living unit drops its
@@ -602,6 +631,117 @@ impl Sim {
         self.depth_close_on(i, j, profile.range, true);
     }
 
+    /// [`super::Command::QueueMove`]: depth only, the owner's living unit, not
+    /// a Harvester (its economy loop owns its moves). A unit on a player order
+    /// (a move or attack-move it was given, or a forced target) appends the
+    /// leg, unless it already carries [`QUEUE_CAP`] legs counting the one
+    /// under way; any other unit (idle, fighting or walking home on its own)
+    /// starts the leg at once, exactly as a `Move` or `AttackMove` would.
+    pub(super) fn apply_depth_queue_move(
+        &mut self,
+        owner: PlayerId,
+        unit: EntityId,
+        target: Vec2,
+        attack_move: bool,
+    ) {
+        if !self.is_depth() {
+            return;
+        }
+        let Some(i) = self.depth_own_unit(owner, unit) else {
+            return;
+        };
+        let e = &mut self.entities[i];
+        if matches!(e.kind, Kind::Unit(UnitKind::Harvester)) {
+            return;
+        }
+        let ordered = e.dp.forced.is_some() || (e.move_target.is_some() && e.dp.anchor.is_none());
+        if ordered {
+            if e.dp.queue.len() + 1 < QUEUE_CAP {
+                e.dp.queue.push((target, attack_move));
+            }
+            return;
+        }
+        e.dp.queue.clear();
+        e.dp.queue.push((target, attack_move));
+        self.depth_next_leg(i);
+    }
+
+    /// Starts unit `i`'s next queued leg as a player order (no anchor, no
+    /// engagement). A leg that cannot be pathed is skipped, so at most
+    /// [`QUEUE_CAP`] path searches run and the unit never retries a hopeless
+    /// leg; with every leg gone it simply falls idle.
+    fn depth_next_leg(&mut self, i: usize) {
+        while !self.entities[i].dp.queue.is_empty() {
+            let (target, attack_move) = self.entities[i].dp.queue.remove(0);
+            let e = &mut self.entities[i];
+            e.dp.anchor = None;
+            e.dp.engaged = None;
+            e.move_target = None;
+            e.path.clear();
+            e.attack_move = false;
+            self.order_unit_to(i, target, attack_move);
+            if self.entities[i].move_target.is_some() {
+                return;
+            }
+        }
+    }
+
+    /// Task 14, run at the end of every depth `run_movement` in ascending
+    /// index: a living unit whose leg ended this tick (arrived, ran out of
+    /// path, or could not re-path) and that is not on a forced target starts
+    /// its next queued leg, so it is never left idle with legs to walk.
+    pub(super) fn depth_advance_queues(&mut self) {
+        for i in 0..self.entities.len() {
+            let e = &self.entities[i];
+            if e.alive && e.move_target.is_none() && e.dp.forced.is_none() && !e.dp.queue.is_empty()
+            {
+                self.depth_next_leg(i);
+            }
+        }
+    }
+
+    /// The number of waypoint legs living unit `id` has queued behind its
+    /// current order (0 when depth is off, for buildings and for unknown or
+    /// dead ids). Read-only.
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the queue never holds more than QUEUE_CAP legs"
+    )]
+    pub fn queue_len(&self, id: EntityId) -> u32 {
+        if !self.is_depth() {
+            return 0;
+        }
+        self.entities
+            .get(id.0 as usize)
+            .filter(|e| e.alive && matches!(e.kind, Kind::Unit(_)))
+            .map_or(0, |e| e.dp.queue.len() as u32)
+    }
+
+    /// The route a living unit with queued legs still has to walk, as
+    /// `(point, attack_move)`: the destination of the move under way (the
+    /// point it was given), then every queued leg in order. Empty when depth is
+    /// off, when the queue is empty, and for unknown or dead ids. A forced
+    /// target is never listed (its position is the enemy's). Read-only.
+    #[must_use]
+    pub fn queue_route(&self, id: EntityId) -> Vec<(Vec2, bool)> {
+        let Some(e) = self
+            .entities
+            .get(id.0 as usize)
+            .filter(|e| self.is_depth() && e.alive && !e.dp.queue.is_empty())
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(e.dp.queue.len() + 1);
+        if e.dp.forced.is_none() {
+            if let Some(goal) = e.order_goal.or(e.move_target) {
+                out.push((goal, e.attack_move));
+            }
+        }
+        out.extend_from_slice(&e.dp.queue);
+        out
+    }
+
     /// Whether the side `owner` still tracks a forced target at `tpos`: the
     /// chaser `i` itself or any other entity of that side within
     /// [`FORCED_TRACK`] of it.
@@ -647,7 +787,7 @@ impl Sim {
         e.attack_move = false;
         self.order_unit_to(i, tpos, false);
         if self.entities[i].move_target.is_none() {
-            self.depth_halt(i);
+            self.depth_forced_over(i);
         }
     }
 
@@ -670,7 +810,7 @@ impl Sim {
         if !self.depth_can_hit(profile, owner, j)
             || !self.depth_tracked(grid, scratch, i, self.entities[j].pos)
         {
-            self.depth_halt(i);
+            self.depth_forced_over(i);
             return;
         }
         self.depth_close_on(i, j, profile.range, false);
@@ -1014,7 +1154,9 @@ impl DepthGrid {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_air_of, EntityId, Kind, ACQUIRE_BONUS, DEFENSIVE_LEASH, FORCED_TRACK, LEASH};
+    use super::{
+        is_air_of, EntityId, Kind, ACQUIRE_BONUS, DEFENSIVE_LEASH, FORCED_TRACK, LEASH, QUEUE_CAP,
+    };
     use crate::fixed::Fixed;
     use crate::game::hex;
     use crate::game::map::Map;
@@ -1107,6 +1249,22 @@ mod tests {
                         owner: PlayerId(0),
                         unit,
                         target,
+                    });
+                }
+            }
+            // Task 14: a three-leg queue (the last an attack-move) on the
+            // second rifle, which has been holding since tick 1100.
+            (1300, _, Some(&unit)) => {
+                for (target, attack_move) in [
+                    (hex::center(14, 10), false),
+                    (hex::center(16, 13), false),
+                    (hex::center(20, 10), true),
+                ] {
+                    out.push(Command::QueueMove {
+                        owner: PlayerId(0),
+                        unit,
+                        target,
+                        attack_move,
                     });
                 }
             }
@@ -2765,6 +2923,431 @@ mod tests {
         let (pmean, pworst) = bench(false);
         std::eprintln!(
             "orders: mean {mean:?} worst {worst:?}; plain: mean {pmean:?} worst {pworst:?}"
+        );
+        assert!(mean < std::time::Duration::from_millis(5));
+        assert!(worst < std::time::Duration::from_millis(15));
+    }
+
+    // ---- Task 14: shift-queued waypoints ----
+
+    fn qmove(unit: EntityId, target: Vec2) -> Command {
+        Command::QueueMove {
+            owner: P0,
+            unit,
+            target,
+            attack_move: false,
+        }
+    }
+
+    fn qattack(unit: EntityId, target: Vec2) -> Command {
+        Command::QueueMove {
+            owner: P0,
+            unit,
+            target,
+            attack_move: true,
+        }
+    }
+
+    /// Steps `s` up to `steps` times and returns, for each point of `legs`, the
+    /// first tick the unit stood exactly on it (sampled after every step).
+    fn visits(s: &mut Sim, unit: EntityId, legs: &[Vec2], steps: u32) -> Vec<Option<u64>> {
+        let mut seen = alloc::vec![None; legs.len()];
+        for _ in 0..steps {
+            s.step(&[]);
+            let p = s.position(unit);
+            for (k, &leg) in legs.iter().enumerate() {
+                if seen[k].is_none() && p == Some(leg) {
+                    seen[k] = Some(s.tick());
+                }
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn queued_legs_are_visited_in_order() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        let legs = [v(16, 20), v(16, 27), v(9, 27)];
+        // Three legs in one tick: the first starts at once, two wait.
+        s.step(&legs.iter().map(|&p| qmove(a, p)).collect::<Vec<_>>());
+        assert_eq!(s.queue_len(a), 2, "the first leg is under way");
+        assert!(
+            s.position(a).unwrap().x > Fixed::from_int(10),
+            "idle unit started at once"
+        );
+        let mut arrivals = Vec::new();
+        let mut last = s.queue_len(a);
+        for _ in 0..900 {
+            s.step(&[]);
+            let now = s.queue_len(a);
+            if now < last {
+                // The next leg is popped the tick the previous one arrives.
+                arrivals.push(s.position(a).unwrap());
+                last = now;
+            }
+        }
+        assert_eq!(arrivals, alloc::vec![legs[0], legs[1]], "arrival samples");
+        assert_eq!(s.position(a), Some(legs[2]), "ends on the last leg");
+        assert_eq!(s.queue_len(a), 0);
+        // The order of first visits is the order of the legs.
+        let mut t = depth_arena();
+        let b = t.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        t.step(&legs.iter().map(|&p| qmove(b, p)).collect::<Vec<_>>());
+        let seen = visits(&mut t, b, &legs, 900);
+        assert!(seen.iter().all(Option::is_some), "{seen:?}");
+        assert!(seen.windows(2).all(|w| w[0] < w[1]), "{seen:?}");
+        // At rest on its last leg the unit is idle again and anchors there.
+        assert_eq!(t.entities[b.0 as usize].dp.anchor, Some(legs[2]));
+    }
+
+    #[test]
+    fn a_queue_appends_after_a_plain_move_and_the_ninth_leg_is_dropped() {
+        let waiting = u32::try_from(QUEUE_CAP - 1).unwrap();
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(4, 4));
+        let legs: Vec<Vec2> = (0..9).map(|k| v(6 + 3 * k, 4 + (k % 2) * 3)).collect();
+        // A plain Move is the first leg; QueueMoves append behind it.
+        let mut c = alloc::vec![Command::Move {
+            owner: P0,
+            unit: a,
+            target: legs[0],
+        }];
+        c.extend(legs[1..].iter().map(|&p| qmove(a, p)));
+        s.step(&c);
+        assert_eq!(s.queue_len(a), waiting, "eight legs in all");
+        s.step(&[qmove(a, v(30, 30))]);
+        assert_eq!(s.queue_len(a), waiting, "a full queue drops more");
+        let seen = visits(&mut s, a, &legs, 2400);
+        assert!(seen[..8].iter().all(Option::is_some), "{seen:?}");
+        assert!(seen[..8].windows(2).all(|w| w[0] < w[1]), "{seen:?}");
+        assert_eq!(seen[8], None, "the ninth leg was dropped");
+        assert_eq!(s.position(a), Some(legs[7]));
+        // The same cap holds for an idle unit given nine QueueMoves at once.
+        let mut idle = depth_arena();
+        let fresh = idle.add_unit(P0, UnitKind::Infantry, v(4, 4));
+        idle.step(&legs.iter().map(|&p| qmove(fresh, p)).collect::<Vec<_>>());
+        assert_eq!(idle.queue_len(fresh), waiting);
+        let seen = visits(&mut idle, fresh, &legs, 2400);
+        assert_eq!(seen[8], None, "the ninth leg was dropped");
+        assert_eq!(idle.position(fresh), Some(legs[7]));
+    }
+
+    #[test]
+    fn move_stop_hold_and_attack_target_clear_the_queue() {
+        let queued = || {
+            let mut s = depth_arena();
+            let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+            let foe = s.add_unit(P1, UnitKind::Infantry, v(10, 30));
+            s.entities[foe.0 as usize].ammunition = 0;
+            s.step(&[
+                qmove(a, v(20, 20)),
+                qmove(a, v(20, 10)),
+                qattack(a, v(30, 10)),
+            ]);
+            for _ in 0..10 {
+                s.step(&[]);
+            }
+            assert_eq!(s.queue_len(a), 2);
+            (s, a, foe)
+        };
+        // A plain Move replaces the whole queue.
+        let (mut s, a, _) = queued();
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: a,
+            target: v(10, 10),
+        }]);
+        assert_eq!(s.queue_len(a), 0);
+        for _ in 0..600 {
+            s.step(&[]);
+        }
+        assert_eq!(s.position(a), Some(v(10, 10)));
+        // So does an AttackMove.
+        let (mut s, a, _) = queued();
+        s.step(&[Command::AttackMove {
+            owner: P0,
+            unit: a,
+            target: v(10, 10),
+        }]);
+        assert_eq!(s.queue_len(a), 0);
+        // Stop clears it and the unit stays put.
+        let (mut s, a, _) = queued();
+        s.step(&[Command::Stop { owner: P0, unit: a }]);
+        assert_eq!(s.queue_len(a), 0);
+        let here = s.position(a);
+        for _ in 0..300 {
+            s.step(&[]);
+        }
+        assert_eq!(s.position(a), here, "a stopped unit walked its old queue");
+        // Hold too.
+        let (mut s, a, _) = queued();
+        s.step(&[Command::HoldPosition { owner: P0, unit: a }]);
+        assert_eq!(s.queue_len(a), 0);
+        // An AttackTarget forgets the queue as well.
+        let (mut s, a, foe) = queued();
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: foe,
+        }]);
+        assert_eq!(s.queue_len(a), 0);
+    }
+
+    /// An attack-move leg halts for an enemy in weapon range, the unit fights,
+    /// and once the area is clear it walks the rest of its queue. A plain move
+    /// leg marches on.
+    #[test]
+    fn an_attack_move_leg_halts_for_an_enemy_and_resumes_the_queue() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Tank, v(4, 20));
+        // Dry, so the tank wins without a scratch and the test stays a fight.
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(14, 20));
+        s.entities[foe.0 as usize].ammunition = 0;
+        let legs = [v(22, 20), v(22, 28)];
+        s.step(&[qattack(a, legs[0]), qmove(a, legs[1])]);
+        let mut halted = 0;
+        let mut prev = s.position(a);
+        for _ in 0..900 {
+            s.step(&[]);
+            if s.position(foe).is_some() && s.position(a) == prev {
+                halted += 1;
+            }
+            prev = s.position(a);
+        }
+        assert!(s.position(foe).is_none(), "the enemy survived");
+        assert!(halted > 0, "the attack-move leg never halted");
+        assert_eq!(s.position(a), Some(legs[1]), "never resumed the queue");
+        assert_eq!(s.queue_len(a), 0);
+    }
+
+    /// A unit on a forced target queues legs behind it and walks them once the
+    /// target dies; Hold set mid-queue keeps the player's legs going and the
+    /// unit holds where the last one ends.
+    #[test]
+    fn a_forced_target_and_hold_keep_the_queue() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+        let foe = s.add_unit(P1, UnitKind::Infantry, v(16, 20));
+        s.entities[foe.0 as usize].ammunition = 0;
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: foe,
+        }]);
+        let legs = [v(16, 28), v(24, 28)];
+        s.step(&[qmove(a, legs[0]), qmove(a, legs[1])]);
+        assert_eq!(s.queue_len(a), 2, "both legs wait behind the target");
+        for _ in 0..40 {
+            s.step(&[]);
+        }
+        s.step(&[Command::SetStance {
+            owner: P0,
+            unit: a,
+            stance: Stance::Hold,
+        }]);
+        let seen = visits(&mut s, a, &legs, 900);
+        assert!(s.position(foe).is_none(), "the target survived");
+        assert!(seen.iter().all(Option::is_some), "{seen:?}");
+        assert!(seen[0] < seen[1]);
+        assert_eq!(s.position(a), Some(legs[1]));
+        assert_eq!(s.stance_of(a), Some(Stance::Hold));
+        // Hold: it now stays there, a passer-by notwithstanding.
+        let p1 = s.add_unit(P1, UnitKind::Infantry, legs[1] + v(5, 0));
+        s.entities[p1.0 as usize].ammunition = 0;
+        for _ in 0..200 {
+            s.step(&[]);
+            assert_eq!(s.position(a), Some(legs[1]), "hold left its last leg");
+        }
+    }
+
+    /// A queued unit that dies leaves nothing behind: its slot's next owner
+    /// starts with an empty queue and stays put. Harvesters never queue, and a
+    /// `QueueMove` from another owner is ignored.
+    #[test]
+    fn death_harvesters_and_other_owners_never_inherit_a_queue() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        s.step(&[qmove(a, v(20, 20)), qmove(a, v(20, 30))]);
+        assert_eq!(s.queue_len(a), 1);
+        s.entities[a.0 as usize].hp = Fixed::ZERO;
+        s.step(&[]);
+        assert!(s.position(a).is_none());
+        assert_eq!(s.queue_len(a), 0, "a dead unit reports no queue");
+        let b = s.add_unit(P0, UnitKind::Infantry, v(5, 5));
+        assert_eq!(b, a, "the slot is reused");
+        assert_eq!(s.queue_len(b), 0);
+        for _ in 0..300 {
+            s.step(&[]);
+        }
+        assert_eq!(
+            s.position(b),
+            Some(v(5, 5)),
+            "the new unit walked a dead queue"
+        );
+        let h = s.add_unit(P0, UnitKind::Harvester, v(30, 30));
+        let before = s.state_hash();
+        let mut twin = s.clone();
+        s.step(&[qmove(h, v(35, 35))]);
+        twin.step(&[]);
+        assert_eq!(s.state_hash(), twin.state_hash(), "a harvester queued");
+        assert_eq!(s.queue_len(h), 0);
+        assert_ne!(before, s.state_hash());
+        let mut s2 = s.clone();
+        let mut twin = s.clone();
+        s2.step(&[Command::QueueMove {
+            owner: P1,
+            unit: b,
+            target: v(30, 5),
+            attack_move: false,
+        }]);
+        twin.step(&[]);
+        assert_eq!(
+            s2.state_hash(),
+            twin.state_hash(),
+            "another owner's order was obeyed"
+        );
+    }
+
+    #[test]
+    fn queue_move_is_ignored_without_depth() {
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        let mut twin = s.clone();
+        s.step(&[qmove(a, v(30, 20)), qattack(a, v(30, 30))]);
+        twin.step(&[]);
+        assert_eq!(
+            s.state_hash(),
+            twin.state_hash(),
+            "a queued leg acted without depth"
+        );
+        for _ in 0..60 {
+            s.step(&[]);
+        }
+        assert_eq!(s.position(a), Some(v(10, 20)));
+        assert_eq!(s.queue_len(a), 0);
+    }
+
+    /// Queues replay: a skirmish where every unit walks a patrol of queued
+    /// legs (some attack-move), with a `Stop`, a `Move` and an `AttackTarget` cutting
+    /// in, run twice gives one hash, and the recorded log reproduces it. The
+    /// queue is in the hash: the same world with one leg fewer hashes apart.
+    #[test]
+    fn queued_waypoints_are_deterministic_and_replay() {
+        let setup = || {
+            let mut s = depth_arena();
+            let mut mine = Vec::new();
+            let mut theirs = Vec::new();
+            for i in 0..8 {
+                mine.push(s.add_unit(P0, UnitKind::Infantry, v(6, 12 + i)));
+                theirs.push(s.add_unit(P1, UnitKind::Infantry, v(28, 12 + i)));
+            }
+            (s, mine, theirs)
+        };
+        let orders = |t: u32, mine: &[EntityId], theirs: &[EntityId]| -> Vec<Command> {
+            let mut c = Vec::new();
+            match t {
+                5 => {
+                    for (k, &unit) in mine.iter().enumerate() {
+                        let y = 10 + 2 * i32::try_from(k).unwrap();
+                        c.push(qmove(unit, v(12, y)));
+                        c.push(qattack(unit, v(20, y)));
+                        c.push(qmove(unit, v(20, y + 6)));
+                        c.push(qattack(unit, v(27, y)));
+                    }
+                }
+                60 => c.push(Command::Stop {
+                    owner: P0,
+                    unit: mine[0],
+                }),
+                70 => c.push(Command::Move {
+                    owner: P0,
+                    unit: mine[1],
+                    target: v(6, 30),
+                }),
+                80 => c.push(Command::AttackTarget {
+                    owner: P0,
+                    unit: mine[2],
+                    target: theirs[2],
+                }),
+                90 => c.push(qmove(mine[2], v(10, 30))),
+                _ => {}
+            }
+            c
+        };
+        let run = || {
+            let (mut s, mine, theirs) = setup();
+            let mut log = Vec::new();
+            for t in 0..1200u32 {
+                let c = orders(t, &mine, &theirs);
+                s.step(&c);
+                log.push(c);
+            }
+            (s.state_hash(), log)
+        };
+        let (first, log) = run();
+        let (second, _) = run();
+        assert_eq!(first, second);
+        let (mut replay, _, _) = setup();
+        for c in &log {
+            replay.step(c);
+        }
+        assert_eq!(replay.state_hash(), first);
+        // The queue itself is hashed.
+        let (mut s, mine, _) = setup();
+        let mut t = s.clone();
+        s.step(&[qmove(mine[0], v(12, 12)), qmove(mine[0], v(14, 14))]);
+        t.step(&[qmove(mine[0], v(12, 12))]);
+        assert_ne!(s.state_hash(), t.state_hash());
+    }
+
+    /// Task 14 tick cost: the two 40-rifle lines 15 apart on Kestrel, every
+    /// human rifle on an eight-leg patrol (half of it attack-move), against the
+    /// same world with no orders.
+    #[test]
+    #[ignore = "bench: cargo test --release -p rts-core --offline depth_queue_tick_cost -- --ignored --nocapture"]
+    fn depth_queue_tick_cost() {
+        let bench = |queued: bool| {
+            let mut s = kestrel_reach(3);
+            let mine: Vec<_> = (0..40u16)
+                .map(|i| s.add_unit(P0, UnitKind::Infantry, hex::center(10, 5 + (i % 15))))
+                .collect();
+            for i in 0..40u16 {
+                s.add_unit(P1, UnitKind::Infantry, hex::center(30, 5 + (i % 15)));
+            }
+            let mut first = Vec::new();
+            if queued {
+                for (k, &unit) in mine.iter().enumerate() {
+                    let row = 5 + u16::try_from(k % 15).unwrap();
+                    for leg in 0..QUEUE_CAP {
+                        let col = if leg % 2 == 0 { 14 } else { 10 };
+                        let target = hex::center(col, row);
+                        first.push(if leg % 4 < 2 {
+                            qmove(unit, target)
+                        } else {
+                            qattack(unit, target)
+                        });
+                    }
+                }
+            }
+            let t = std::time::Instant::now();
+            let mut worst = std::time::Duration::ZERO;
+            for step in 0..900 {
+                let mut c = Scenario::KestrelReach.host_commands(&s);
+                if step == 0 {
+                    c.extend(first.iter().cloned());
+                }
+                let t0 = std::time::Instant::now();
+                s.step(&c);
+                worst = worst.max(t0.elapsed());
+            }
+            (t.elapsed() / 900, worst)
+        };
+        let (mean, worst) = bench(true);
+        let (pmean, pworst) = bench(false);
+        std::eprintln!(
+            "queued: mean {mean:?} worst {worst:?}; plain: mean {pmean:?} worst {pworst:?}"
         );
         assert!(mean < std::time::Duration::from_millis(5));
         assert!(worst < std::time::Duration::from_millis(15));
