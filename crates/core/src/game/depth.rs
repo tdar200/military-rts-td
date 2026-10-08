@@ -102,6 +102,82 @@ pub(super) const AI_SURPLUS: i32 = 1500;
 /// the Task 18 note on `KESTREL_DEFENDED_WAVES` in scenario.rs.
 pub(super) const AI_SURPLUS_REFINERIES: usize = 4;
 
+/// Task 19: the most units an expedition's wave table supplies before the
+/// relays add theirs (`6 + 2w`, capped here; reached at wave 10).
+pub const WAVE_SIZE_CAP: u32 = 24;
+/// Task 19: the percent of the table size a wave brings. Normal is 100;
+/// Task 20's difficulty presets replace this.
+pub(super) const WAVE_SIZE_PCT: u32 = 100;
+/// Task 19: the zero-based index of the elite wave (wave 6), which opens with
+/// a Capital and [`ELITE_ESCORT_TANKS`] Tanks before its doctrine's mix.
+pub const ELITE_WAVE: u32 = 5;
+/// Task 19: the Tanks escorting the elite wave's Capital.
+pub const ELITE_ESCORT_TANKS: u32 = 2;
+/// Task 19: the last table row (wave 10); later waves repeat it.
+pub(super) const LAST_TABLE_WAVE: u32 = 9;
+/// Task 19: the first zero-based wave whose mix follows its doctrine (wave 5).
+/// Before it the seeded doctrines pick only the target; the defender
+/// overrides (siege, anti-armour) still shape the mix.
+pub(super) const DOCTRINE_WAVE: u32 = 4;
+/// Task 19: ticks between the alien's era-0 raids (90 s).
+pub const RAID_PERIOD: u64 = 2700;
+/// Task 19: the supply the alien must have in use before it raids at era 0.
+pub const RAID_SUPPLY: u32 = 12;
+
+/// Task 19: the kind of unit `i` (of `budget`) in zero-based wave `w` under
+/// doctrine `doctrine` (0 mixed, 1 anti-armour, 2 siege, 3 air interdiction,
+/// 4 supply raid). Wave 1 is rifles; wave 2 adds a Tank every 4th; wave 3 an
+/// `AntiArmor` team every 5th; wave 4 brings the first flyers (a Helicopter
+/// every 7th). From wave 5 the doctrine shapes the mix: 1 puts an `AntiArmor`
+/// team every 3rd, 2 leads with a Capital and Tanks (the Task 16 siege lead,
+/// the first quarter rounded up), 3 a Helicopter every 4th, 4 is a fast raid
+/// of rifles with a Tank every 3rd, 0 is wave 4's mix. Wave 6 is the elite
+/// wave: a Capital, then [`ELITE_ESCORT_TANKS`] Tanks, then its doctrine's
+/// mix. Waves after 10 repeat wave 10's mix. The siege lead and the
+/// anti-armour mix also answer the defender's walls and tanks before wave 5
+/// (the Capital only from wave 5), because [`Sim::depth_wave_doctrine`] lets
+/// doctrines 1 and 2 reach waves 1 to 4 only as those overrides.
+#[must_use]
+pub(super) const fn depth_wave_kind(w: u32, i: u32, budget: u32, doctrine: u8) -> UnitKind {
+    let w = if w > LAST_TABLE_WAVE {
+        LAST_TABLE_WAVE
+    } else {
+        w
+    };
+    if w == ELITE_WAVE {
+        if i == 0 {
+            return UnitKind::Capital;
+        }
+        if i <= ELITE_ESCORT_TANKS {
+            return UnitKind::Tank;
+        }
+    }
+    let shaped = w >= DOCTRINE_WAVE;
+    match doctrine {
+        2 if shaped && i == 0 => return UnitKind::Capital,
+        2 if i < budget.div_ceil(4) => return UnitKind::Tank,
+        1 if i.is_multiple_of(3) => return UnitKind::AntiArmor,
+        3 if shaped && i.is_multiple_of(4) => return UnitKind::Helicopter,
+        4 if shaped => {
+            return if i.is_multiple_of(3) {
+                UnitKind::Tank
+            } else {
+                UnitKind::Infantry
+            }
+        }
+        _ => {}
+    }
+    if w >= 3 && i.is_multiple_of(7) {
+        UnitKind::Helicopter
+    } else if w >= 2 && i.is_multiple_of(5) {
+        UnitKind::AntiArmor
+    } else if w >= 1 && i.is_multiple_of(4) {
+        UnitKind::Tank
+    } else {
+        UnitKind::Infantry
+    }
+}
+
 /// Task 15: the depth weapon of an entity of `kind` whose balance weapon is
 /// `base`. `AntiArmor` teams also engage air (at [`depth_air_damage_pct`]);
 /// every other weapon is unchanged. Callers apply it under depth only (see
@@ -241,6 +317,10 @@ pub(super) struct DepthUnit {
     /// Task 18: ticks until this building may be repaired again (0 when it
     /// may). Set to [`REPAIR_COOLDOWN`] by an accepted repair order.
     pub(super) repair_cd: u32,
+    /// Task 19: the one-based wave this unit spawned with (0 when it is not a
+    /// wave unit). [`Sim::waves_cleared`] counts a wave once none of its
+    /// living units remain.
+    pub(super) wave: u16,
 }
 
 impl DepthUnit {
@@ -291,23 +371,31 @@ impl DepthUnit {
         // Task 18 (appended).
         h.write_u64(u64::from(self.repair_ticks));
         h.write_u64(u64::from(self.repair_cd));
+        // Task 19 (appended).
+        h.write_u64(u64::from(self.wave));
     }
 }
 
-/// World-wide depth state. Empty until the match-shape tasks append to it.
+/// World-wide depth state. Fields are appended at the END in task order.
 #[derive(Clone, Debug, Default)]
-pub(super) struct DepthGlobal {}
+pub(super) struct DepthGlobal {
+    /// Task 19: the seeded doctrine cycle; wave `w` (zero-based) follows
+    /// `doctrine_order[w % 5]` unless the defender's walls or tanks override
+    /// it ([`Sim::depth_wave_doctrine`]). Drawn once by [`Sim::enable_depth`].
+    pub(super) doctrine_order: [u8; 5],
+    /// Task 19: spawned waves none of whose units are alive any more,
+    /// recounted at the end of every depth tick ([`Sim::waves_cleared`]).
+    pub(super) waves_cleared: u32,
+}
 
 impl DepthGlobal {
     /// Folds the global depth state into the world hash (depth on only).
-    #[allow(
-        clippy::unused_self,
-        clippy::needless_pass_by_ref_mut,
-        clippy::missing_const_for_fn,
-        reason = "the fixed hash call site exists before the fields that later depth tasks append here"
-    )]
     pub(super) fn hash_into(&self, h: &mut Fnv) {
-        let _ = h;
+        // Task 19.
+        for &d in &self.doctrine_order {
+            h.write_u64(u64::from(d));
+        }
+        h.write_u64(u64::from(self.waves_cleared));
     }
 }
 
@@ -315,12 +403,134 @@ impl Sim {
     /// Turns on the Kestrel depth rules. Called only by
     /// [`crate::game::scenario::kestrel_reach`], after `enable_earthfront`;
     /// depth means nothing without Earthfront (see [`Sim::is_depth`]).
-    #[allow(
-        clippy::missing_const_for_fn,
-        reason = "later depth tasks draw deterministic match state here"
-    )]
+    ///
+    /// Task 19: draws the doctrine order, a Fisher-Yates shuffle of
+    /// `[0, 1, 2, 3, 4]` with five `next_below` draws (the sim's first real
+    /// draws; nothing else in the core uses the rng, and no other scenario
+    /// calls this, so their rng state stays the seed).
     pub fn enable_depth(&mut self) {
         self.depth = true;
+        let mut order = [0, 1, 2, 3, 4];
+        for i in (0..order.len()).rev() {
+            let bound = u32::try_from(i + 1).unwrap_or(1);
+            let j = usize::try_from(self.rng.next_below(bound)).unwrap_or(0);
+            order.swap(i, j);
+        }
+        self.dg.doctrine_order = order;
+    }
+
+    /// Task 19: the doctrine zero-based wave `w` is locked to, 45 seconds
+    /// before it lands: 2 (siege) when the defender has at least 3 walls, else
+    /// 1 (anti-armour) when it has more than 3 tanks, else the seeded
+    /// `doctrine_order[w % 5]`. Before wave 5 a seeded 1 or 2 reads as 0
+    /// (mixed): the early table rows keep their shape, so those two doctrines
+    /// reach waves 1 to 4 only as answers to the defender.
+    #[must_use]
+    pub(super) fn depth_wave_doctrine(&self, w: u32, walls: usize, tanks: usize) -> u8 {
+        if walls >= 3 {
+            return 2;
+        }
+        if tanks > 3 {
+            return 1;
+        }
+        let seeded = self.dg.doctrine_order[usize::try_from(w % 5).unwrap_or(0)];
+        if w < DOCTRINE_WAVE && matches!(seeded, 1 | 2) {
+            0
+        } else {
+            seeded
+        }
+    }
+
+    /// Task 19: the force zero-based wave `w` brings before the supply
+    /// ceiling: `min(6 + 2w, 24)` at the difficulty's percent (100 until
+    /// Task 20) plus 2 per operational relay of the waves' attacker.
+    #[must_use]
+    pub(super) fn depth_expedition_size(&self, w: u32) -> u32 {
+        let Some(cfg) = self.waves else {
+            return 0;
+        };
+        let table = 6_u32.saturating_add(w.saturating_mul(2)).min(WAVE_SIZE_CAP);
+        table * WAVE_SIZE_PCT / 100 + 2 * self.alien_relay_count(cfg.attacker, true)
+    }
+
+    /// Task 19: spawned waves with no living unit left (0 without depth).
+    #[must_use]
+    pub const fn waves_cleared(&self) -> u32 {
+        if self.is_depth() {
+            self.dg.waves_cleared
+        } else {
+            0
+        }
+    }
+
+    /// Task 19: recounts [`DepthGlobal::waves_cleared`] after the tick's
+    /// deaths (depth only; called at the end of `step`).
+    pub(super) fn run_depth_wave_ledger(&mut self) {
+        let spawned = usize::try_from(self.wave_count).unwrap_or(usize::MAX);
+        if spawned == 0 {
+            return;
+        }
+        let mut alive = alloc::vec![false; spawned + 1];
+        for e in self.entities.iter().filter(|e| e.alive && e.dp.wave > 0) {
+            if let Some(slot) = alive.get_mut(usize::from(e.dp.wave)) {
+                *slot = true;
+            }
+        }
+        let cleared = alive[1..].iter().filter(|&&a| !a).count();
+        self.dg.waves_cleared = u32::try_from(cleared).unwrap_or(u32::MAX);
+    }
+
+    /// Task 19: whether unit `i` of `player` is idle enough to join a raid: a
+    /// built, armed, unstunned combat unit with no order, forced target,
+    /// engagement or queued leg, and ammunition to fight with.
+    #[must_use]
+    pub(super) fn depth_raider(&self, i: usize, player: PlayerId) -> bool {
+        let e = &self.entities[i];
+        e.owner == player
+            && self.depth_fighter(i).is_some()
+            && e.move_target.is_none()
+            && e.dp.forced.is_none()
+            && e.dp.engaged.is_none()
+            && e.dp.queue.is_empty()
+            && e.ammunition >= 15
+    }
+
+    /// Task 19: the alien's era-0 raid on this AI pass, if one is due: every
+    /// [`RAID_PERIOD`] ticks, once its supply in use is at least
+    /// [`RAID_SUPPLY`], the lowest-index half of its idle combat units
+    /// ([`Sim::depth_raider`]) and the defender's structure nearest `base`
+    /// (ties to the lowest index) that they attack-move at. Only the waves'
+    /// attacker raids, and only under depth.
+    #[must_use]
+    pub(super) fn depth_raid(&self, player: PlayerId, base: Vec2) -> Option<(Vec<usize>, Vec2)> {
+        let cfg = self.waves?;
+        if !self.is_depth()
+            || player != cfg.attacker
+            || !self.tick.is_multiple_of(RAID_PERIOD)
+            || self.player_era(player) != 0
+            || self.supply_used(player) < RAID_SUPPLY
+        {
+            return None;
+        }
+        let idle: Vec<usize> = (0..self.entities.len())
+            .filter(|&i| self.depth_raider(i, player))
+            .collect();
+        let party = idle.len() / 2;
+        if party == 0 {
+            return None;
+        }
+        let target = self
+            .entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && e.hp > Fixed::ZERO
+                    && e.owner == cfg.defender
+                    && matches!(e.kind, Kind::Building(_))
+            })
+            .min_by_key(|e| (e.pos - base).length_squared())?
+            .pos;
+        Some((idle[..party].to_vec(), target))
     }
 
     /// Whether the Kestrel depth rules are active: Earthfront AND depth. Every
@@ -1853,11 +2063,12 @@ mod tests {
     /// mutates the sim and asking twice gives the same list, so a replay that
     /// re-derives them per tick (the bridge, the tests, `verify-run`) and one
     /// that replays a recorded log reach the same hash, including from a save
-    /// (a clone) taken mid-match just before the alien AI wakes up.
+    /// (a clone) taken mid-match. Since Task 19 the alien AI is awake from
+    /// tick 0, so the replayed half carries its orders throughout.
     #[test]
     fn host_commands_are_pure_and_replay_from_a_mid_match_save() {
         // Fixed step counts, never `while tick < n`: a decided Earthfront match
-        // stops advancing its tick (the undefended base falls near t=5000).
+        // stops advancing its tick (the undefended base can fall near t=4100).
         const STEPS: u32 = 6000;
         const SAVE_AT: u32 = 4000;
         let mut s = kestrel_reach(11);
@@ -1883,9 +2094,20 @@ mod tests {
             }
             s.step(&c);
         }
+        // Task 19: the alien AI acts from tick 0 (it used to wake with wave
+        // one, which `waves_survived() > 0` checked); its own orders must be in
+        // the replayed half. The probe script orders only at ticks 1650 and
+        // 3300, before the save.
         assert!(
-            s.waves_survived() > 0,
-            "the horizon must reach the alien AI"
+            log.iter().flatten().any(|c| matches!(
+                c,
+                Command::Build { owner: P1, .. }
+                    | Command::Train { owner: P1, .. }
+                    | Command::Research { owner: P1, .. }
+                    | Command::Ascend { owner: P1, .. }
+                    | Command::AttackMove { owner: P1, .. }
+            )),
+            "the replayed half must carry alien AI orders"
         );
         // Continue the save by re-deriving host commands live.
         let mut live = save.clone().expect("save taken");
@@ -4665,15 +4887,18 @@ mod tests {
             // in classic Kestrel (all four gone by t=2167, base hit at 3461),
             // and under depth the relay's AntiArmor team at (30, 14) acquires
             // them on its own (all four gone by t=624, no breach needed). With
-            // them gone only a breach can open the seal.
+            // them gone only a breach can open the seal. Task 19: the alien AI
+            // now runs from tick 0, and its home rally walks the north relay's
+            // AntiArmor team at (28, 4) on an attack-move that steps toward
+            // the seal and shoots a wall at t=208, so that team goes too.
             let mut cleared = crate::game::scenario::kestrel_probe_units(&s);
             cleared.extend(
                 s.views()
                     .iter()
-                    .filter(|v| matches!(s.world_to_tile(v.pos), (29, 12) | (30, 14)))
+                    .filter(|v| matches!(s.world_to_tile(v.pos), (29, 12) | (30, 14) | (28, 4)))
                     .map(|v| v.id),
             );
-            assert_eq!(cleared.len(), 5);
+            assert_eq!(cleared.len(), 6);
             for id in cleared {
                 s.entities[id.0 as usize].hp = Fixed::ZERO;
             }
@@ -4687,7 +4912,13 @@ mod tests {
             );
             let mut breached_at = None;
             for _ in 0..STEPS {
-                let c = Scenario::KestrelReach.host_commands(&s);
+                // Task 19: the alien AI now runs from tick 0, so its training
+                // is held off here. A Tank it trains at t=3750 rallies onto
+                // the ford and shoots a seal wall at t=3885, before any wave,
+                // and a rifle born in a cleared probe squad's slot would be
+                // staged on the picket by the probe script. Waves still come.
+                let mut c = Scenario::KestrelReach.host_commands(&s);
+                c.retain(|c| !matches!(c, Command::Train { owner: P1, .. }));
                 s.step(&c);
                 if living_walls(&s, P0) < FORD_SEAL.len() && breached_at.is_none() {
                     breached_at = Some(s.tick());
@@ -4727,6 +4958,12 @@ mod tests {
     fn wave_one_with_three_walls(mut s: Sim) -> (&'static str, u32, Vec<UnitKind>) {
         for (x, y) in [(3, 9), (3, 10), (3, 11)] {
             s.add_building(P0, BuildingKind::Wall, x, y);
+        }
+        // Task 19: with the alien AI buying Upgrades from tick 0 the probe
+        // alone takes the undefended base before wave one (t=4121 on seed 3),
+        // so it is cleared; this test reads only the wave's composition.
+        for id in crate::game::scenario::kestrel_probe_units(&s) {
+            s.entities[id.0 as usize].hp = Fixed::ZERO;
         }
         let mut before = 0;
         for _ in 0..4600 {
@@ -5800,5 +6037,322 @@ mod tests {
         std::eprintln!("money(P0) at tick {tick}: {money}");
         assert!(money < 2500, "P0 banks {money} at tick {tick}");
         assert!(refs <= super::AI_SURPLUS_REFINERIES, "{refs} refineries");
+    }
+
+    // ---------------------------------------------------------------- Task 19
+
+    #[test]
+    fn doctrine_order_differs_across_seeds_and_repeats_per_seed() {
+        let orders: Vec<[u8; 5]> = (1..=8)
+            .map(|seed| kestrel_reach(seed).dg.doctrine_order)
+            .collect();
+        for order in &orders {
+            let mut sorted = *order;
+            sorted.sort_unstable();
+            assert_eq!(sorted, [0, 1, 2, 3, 4], "not a permutation: {order:?}");
+        }
+        let mut distinct = orders.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert!(distinct.len() >= 3, "seeds 1..8 gave {orders:?}");
+        for seed in [1, 3, 2026] {
+            assert_eq!(
+                kestrel_reach(seed).dg.doctrine_order,
+                kestrel_reach(seed).dg.doctrine_order
+            );
+        }
+        // The draws are the sim's first real ones, depth only: the classic and
+        // Survival worlds never draw (their rng state is the seed).
+        assert_eq!(kestrel_reach_classic(3).dg.doctrine_order, [0; 5]);
+        assert_eq!(kestrel_reach_classic(3).rng.current_state(), 3);
+        assert_ne!(kestrel_reach(3).rng.current_state(), 3);
+        assert_eq!(survival(3).rng.current_state(), 3);
+    }
+
+    #[test]
+    fn the_wave_table_spot_checks() {
+        use super::depth_wave_kind;
+        use UnitKind::{AntiArmor, Capital, Helicopter, Infantry, Tank};
+        let wave = |w: u32, budget: u32, d: u8| -> Vec<UnitKind> {
+            (0..budget)
+                .map(|i| depth_wave_kind(w, i, budget, d))
+                .collect()
+        };
+        // Doctrines 0, 3 and 4 never shape waves 1 to 4 (1 and 2 do only as
+        // the defender overrides, see `depth_wave_doctrine`).
+        for d in [0, 3, 4] {
+            assert!(wave(0, 10, d).iter().all(|&k| k == Infantry), "{d}");
+            let w2 = wave(1, 12, d);
+            assert!(w2.iter().all(|&k| matches!(k, Infantry | Tank)), "{w2:?}");
+            assert_eq!(w2.iter().filter(|&&k| k == Tank).count(), 3, "{w2:?}");
+            let w3 = wave(2, 14, d);
+            assert!(
+                w3.contains(&AntiArmor) && !w3.contains(&Helicopter),
+                "{w3:?}"
+            );
+        }
+        for d in 0..5 {
+            assert!(wave(3, 16, d).contains(&Helicopter), "wave 4, doctrine {d}");
+            assert_eq!(
+                wave(5, 20, d)[..3],
+                [Capital, Tank, Tank],
+                "wave 6, doctrine {d}"
+            );
+            // Waves after 10 repeat wave 10's mix.
+            assert_eq!(wave(12, 28, d), wave(9, 28, d));
+            assert_eq!(wave(40, 28, d), wave(9, 28, d));
+        }
+        // Waves 5+ follow the doctrine.
+        let w5 = |d| wave(4, 18, d);
+        assert!(w5(1).iter().step_by(3).all(|&k| k == AntiArmor));
+        assert_eq!(w5(2)[..5], [Capital, Tank, Tank, Tank, Tank]);
+        assert!(w5(3).iter().step_by(4).all(|&k| k == Helicopter));
+        assert!(w5(4).iter().all(|&k| matches!(k, Infantry | Tank)));
+        assert!(w5(4).iter().step_by(3).all(|&k| k == Tank));
+        assert_ne!(w5(0), w5(1));
+        // The siege lead (Task 16) answers walls from wave one, without a
+        // Capital before wave 5.
+        let siege = wave(0, 10, 2);
+        assert_eq!(siege[..3], [Tank, Tank, Tank]);
+        assert!(siege[3..].iter().all(|&k| k == Infantry), "{siege:?}");
+    }
+
+    #[test]
+    fn the_wave_doctrine_follows_the_seeded_order_and_the_defender_overrides() {
+        let s = kestrel_reach(3);
+        let order = s.dg.doctrine_order;
+        for w in 4..15 {
+            assert_eq!(s.depth_wave_doctrine(w, 0, 0), order[(w % 5) as usize]);
+        }
+        for w in 0..4 {
+            let seeded = order[(w % 5) as usize];
+            let want = if matches!(seeded, 1 | 2) { 0 } else { seeded };
+            assert_eq!(s.depth_wave_doctrine(w, 2, 3), want, "wave {}", w + 1);
+        }
+        for w in 0..12 {
+            assert_eq!(s.depth_wave_doctrine(w, 3, 0), 2);
+            assert_eq!(s.depth_wave_doctrine(w, 3, 9), 2);
+            assert_eq!(s.depth_wave_doctrine(w, 2, 4), 1);
+        }
+    }
+
+    #[test]
+    fn the_expedition_size_grows_to_its_cap_plus_the_relays() {
+        let s = kestrel_reach(3);
+        assert_eq!(s.alien_relay_count(P1, true), 2);
+        assert_eq!(s.depth_expedition_size(0), 10);
+        assert_eq!(s.depth_expedition_size(4), 18);
+        assert_eq!(s.depth_expedition_size(9), 28);
+        assert_eq!(s.depth_expedition_size(30), 28);
+        assert_eq!(s.next_expedition_size(), s.depth_expedition_size(0));
+    }
+
+    #[test]
+    fn waves_cleared_counts_a_wave_once_its_last_unit_dies() {
+        let mut s = kestrel_reach(3);
+        for _ in 0..4600 {
+            if s.waves_survived() == 1 {
+                break;
+            }
+            s.step(&[]);
+        }
+        assert_eq!(s.waves_survived(), 1, "wave one never came");
+        assert_eq!(s.waves_cleared(), 0);
+        let wave: Vec<usize> = (0..s.entities.len())
+            .filter(|&i| s.entities[i].alive && s.entities[i].dp.wave == 1)
+            .collect();
+        assert_eq!(wave.len(), 10, "wave one is 6 + 2 per relay");
+        assert!(s
+            .entities
+            .iter()
+            .all(|e| e.dp.wave <= 1 && (e.dp.wave == 0 || e.owner == P1)));
+        let (last, rest) = wave.split_last().unwrap();
+        for &i in rest {
+            s.entities[i].hp = Fixed::ZERO;
+        }
+        s.step(&[]);
+        assert_eq!(s.waves_cleared(), 0, "one unit of wave one still lives");
+        s.entities[*last].hp = Fixed::ZERO;
+        s.step(&[]);
+        assert_eq!(s.waves_cleared(), 1);
+        // Classic Kestrel tags nothing and clears nothing.
+        let mut c = kestrel_reach_classic(3);
+        for _ in 0..4600 {
+            c.step(&[]);
+        }
+        assert_eq!(c.waves_survived(), 1);
+        assert!(c.entities.iter().all(|e| e.dp.wave == 0));
+        assert_eq!(c.waves_cleared(), 0);
+    }
+
+    #[test]
+    fn the_alien_ai_runs_from_tick_zero_and_leaves_the_probe_to_its_script() {
+        use crate::game::scenario::{kestrel_probe_units, KESTREL_PROBE_STRIKE_TICK};
+        let s = kestrel_reach(3);
+        let c = Scenario::KestrelReach.host_commands(&s);
+        assert!(
+            c.iter()
+                .any(|c| matches!(c, Command::Build { owner, .. } if *owner == P1)),
+            "no alien AI order at tick 0: {c:?}"
+        );
+        assert!(Scenario::KestrelReach
+            .host_commands(&kestrel_reach_classic(3))
+            .is_empty());
+        // Before wave one the probe squads take only their two scripted orders.
+        let probe = kestrel_probe_units(&s);
+        let mut s = s;
+        let mut orders = 0;
+        for _ in 0..4400 {
+            let c = Scenario::KestrelReach.host_commands(&s);
+            orders += c
+                .iter()
+                .filter(|c| {
+                    matches!(c, Command::Move { unit, .. } | Command::AttackMove { unit, .. }
+                        if probe.contains(unit))
+                })
+                .count();
+            s.step(&c);
+        }
+        assert!(s.tick() > KESTREL_PROBE_STRIKE_TICK);
+        assert_eq!(orders, 2 * probe.len());
+    }
+
+    /// An alien garrison of `n` idle rifles near its Command Center, at `tick`.
+    fn raid_setup(n: u16, tick: u64) -> Sim {
+        let mut s = kestrel_reach(3);
+        for i in 0..n {
+            s.add_unit(P1, UnitKind::Infantry, hex::center(33, 4 + i % 10));
+        }
+        s.tick = tick;
+        s
+    }
+
+    /// The structure of `owner`'s enemy nearest `owner`'s base (ties by id).
+    fn nearest_enemy_structure(s: &Sim, owner: PlayerId) -> Vec2 {
+        let base = s.command_center_pos(owner).unwrap();
+        s.views()
+            .into_iter()
+            .filter(|v| v.owner != owner && matches!(v.kind, EntityKindView::Building(_)))
+            .min_by_key(|v| ((v.pos - base).length_squared().to_bits(), v.id.0))
+            .unwrap()
+            .pos
+    }
+
+    /// The alien AI's attack-moves at the human structure nearest its base.
+    fn raid_orders(s: &Sim) -> Vec<(EntityId, Vec2)> {
+        let target = nearest_enemy_structure(s, P1);
+        s.ai_commands(P1)
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::AttackMove { unit, target, .. } => Some((unit, target)),
+                _ => None,
+            })
+            .filter(|&(_, t)| t == target)
+            .collect()
+    }
+
+    #[test]
+    fn at_era_zero_the_alien_raids_with_half_its_idle_army_every_2700_ticks() {
+        let s = raid_setup(4, super::RAID_PERIOD);
+        assert!(s.supply_used(P1) >= super::RAID_SUPPLY);
+        let idle: Vec<EntityId> = (0..s.entities.len())
+            .filter(|&i| s.depth_raider(i, P1))
+            .map(|i| EntityId(u32::try_from(i).unwrap()))
+            .collect();
+        let raid = raid_orders(&s);
+        assert_eq!(raid.len(), idle.len() / 2, "{raid:?} of {idle:?}");
+        // The lowest-index half, at the human structure nearest the alien base.
+        let units: Vec<EntityId> = raid.iter().map(|&(u, _)| u).collect();
+        assert_eq!(units, idle[..idle.len() / 2]);
+        // Off the period, under the supply line, past era 0, for the
+        // defender, and without depth there is no raid.
+        assert!(raid_orders(&raid_setup(4, super::RAID_PERIOD + 30)).is_empty());
+        assert!(raid_orders(&raid_setup(0, super::RAID_PERIOD)).is_empty());
+        let mut late = raid_setup(4, super::RAID_PERIOD);
+        late.civs[1].era = 1;
+        assert!(raid_orders(&late).is_empty());
+        let mut classic = kestrel_reach_classic(3);
+        for i in 0..4 {
+            classic.add_unit(P1, UnitKind::Infantry, hex::center(33, 4 + i));
+        }
+        classic.tick = super::RAID_PERIOD;
+        assert!(raid_orders(&classic).is_empty());
+        // The human playtest AI never raids.
+        let mut human = raid_setup(0, super::RAID_PERIOD);
+        for i in 0..14 {
+            human.add_unit(P0, UnitKind::Infantry, hex::center(9, 4 + i % 10));
+        }
+        let alien_target = nearest_enemy_structure(&human, P0);
+        assert!(!human
+            .ai_commands(P0)
+            .iter()
+            .any(|c| matches!(c, Command::AttackMove { target, .. } if *target == alien_target)));
+    }
+
+    /// Wave by wave, the doctrine and the kinds `kestrel_reach(seed)` actually
+    /// spawns, hosted as the bridge hosts it, when every wave is recorded and
+    /// wiped out the tick it spawns (so the supply ceiling never trims a wave
+    /// and no override fires) and the human Command Center cannot fall.
+    fn spawned_waves(seed: u64, waves: u32) -> Vec<(u8, Vec<(UnitKind, usize)>)> {
+        let mut s = kestrel_reach(seed);
+        let cc = (0..s.entities.len())
+            .find(|&i| {
+                s.entities[i].owner == P0
+                    && s.entities[i].kind == Kind::Building(BuildingKind::CommandCenter)
+            })
+            .unwrap();
+        let mut out = Vec::new();
+        let mut recorded = 0;
+        for _ in 0..(4500 + 5400 * waves) {
+            s.entities[cc].hp = Fixed::from_int(1_000_000);
+            if s.waves_survived() == waves {
+                break;
+            }
+            let c = Scenario::KestrelReach.host_commands(&s);
+            s.step(&c);
+            if s.waves_survived() > recorded {
+                recorded = s.waves_survived();
+                let mut kinds: Vec<(UnitKind, usize)> = Vec::new();
+                for e in s
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && u32::from(e.dp.wave) == recorded)
+                {
+                    let Kind::Unit(k) = e.kind else { continue };
+                    match kinds.iter_mut().find(|(kk, _)| *kk == k) {
+                        Some((_, n)) => *n += 1,
+                        None => kinds.push((k, 1)),
+                    }
+                }
+                out.push((s.earthfront_wave_doctrine, kinds));
+                for e in s.entities.iter_mut().filter(|e| e.dp.wave > 0) {
+                    e.hp = Fixed::ZERO;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    #[ignore = "table: cargo test --release -p rts-core --offline depth_wave_composition -- --ignored --nocapture"]
+    fn depth_wave_composition() {
+        std::eprintln!("doctrine order {:?}", kestrel_reach(3).dg.doctrine_order);
+        for (w, (d, kinds)) in spawned_waves(3, 12).iter().enumerate() {
+            std::eprintln!("wave {} doctrine {d}: {kinds:?}", w + 1);
+        }
+    }
+
+    #[test]
+    fn seed_three_spawns_flyers_at_wave_four_and_an_elite_wave_six() {
+        let waves = spawned_waves(3, 6);
+        assert_eq!(waves.len(), 6);
+        let has = |w: usize, k: UnitKind| waves[w].1.iter().any(|&(kk, _)| kk == k);
+        assert!(
+            waves[0].1.iter().all(|&(k, _)| k == UnitKind::Infantry),
+            "{waves:?}"
+        );
+        assert!((0..3).all(|w| !has(w, UnitKind::Helicopter)), "{waves:?}");
+        assert!(has(3, UnitKind::Helicopter), "{waves:?}");
+        assert!(has(5, UnitKind::Capital), "{waves:?}");
     }
 }

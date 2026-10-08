@@ -2597,6 +2597,8 @@ impl Sim {
         if self.is_depth() {
             // Kestrel depth: repair jobs heal and cooldowns run (depth.rs).
             self.run_depth_repairs();
+            // Task 19: recount the cleared waves after the tick's deaths.
+            self.run_depth_wave_ledger();
         }
         self.run_conquest();
         self.tick += 1;

@@ -495,7 +495,10 @@ fn kestrel_reach_world(seed: u64) -> Sim {
 ///
 /// They are the alien rifle squads at [`KESTREL_PROBE_IDS`]. A slot freed by a dead probe squad can only
 /// be reused by a later entity; the owner and kind check keeps a human unit from
-/// ever being picked, and before wave one no other alien infantry is created.
+/// ever being picked. In classic Kestrel no other alien infantry is created
+/// before wave one; under depth (Task 19) the alien AI trains rifles from tick
+/// 0, so an alien rifle that takes a dead squad's slot before wave one counts
+/// as a probe squad (deterministically) until then.
 #[must_use]
 pub fn kestrel_probe_units(sim: &Sim) -> Vec<EntityId> {
     let views = sim.views();
@@ -946,8 +949,10 @@ impl Scenario {
     }
 
     /// One host tick's non-player commands, in order: the human-side AI while
-    /// the Survival survey runs, the alien AI once wave one has spawned, then
-    /// the scenario script ([`Scenario::scripted_commands`]). The only builder
+    /// the Survival survey runs, the alien AI once wave one has spawned (under
+    /// the Kestrel depth rules from tick 0, leaving the probe squads to their
+    /// script until wave one), then the scenario script
+    /// ([`Scenario::scripted_commands`]). The only builder
     /// of this list: the bridge, the tests and replay verification all call it
     /// once per tick, before stepping, then append the player's commands.
     #[must_use]
@@ -963,7 +968,21 @@ impl Scenario {
         // Keep the beachhead garrison defensive during the authored build-up
         // (Kestrel Reach: broken only by its scripted probe). Once wave one
         // arrives, the enemy economy and tactics activate.
-        if sim.waves_survived() > 0 {
+        if sim.is_depth() {
+            // Kestrel depth (Task 19): the alien AI runs every tick from tick
+            // 0. Until wave one the probe squads still belong to their script
+            // (`kestrel_probe_commands`), so the AI's move orders for them
+            // are dropped and they hold, stage and strike as authored.
+            let scripted = if self == Self::KestrelReach && sim.waves_survived() == 0 {
+                kestrel_probe_units(sim)
+            } else {
+                Vec::new()
+            };
+            commands.extend(sim.ai_commands(ENEMY).into_iter().filter(|c| {
+                !matches!(c, Command::Move { unit, .. } | Command::AttackMove { unit, .. }
+                    if scripted.contains(unit))
+            }));
+        } else if sim.waves_survived() > 0 {
             commands.extend(sim.ai_commands(ENEMY));
         }
         commands.extend(self.scripted_commands(sim));
@@ -2145,6 +2164,30 @@ mod tests {
         assert_eq!(s.waves_survived(), 0, "the probe lands before wave one");
     }
 
+    /// Task 19: with the alien AI awake from tick 0 (and raiding at era 0),
+    /// the undefended `kestrel_reach(3)`, hosted as the bridge hosts it for a
+    /// fixed 6000 steps, still meets nothing before tick 3000 and still falls.
+    #[test]
+    fn first_contact_is_not_earlier_than_tick_3000_on_normal() {
+        let mut s = kestrel_reach(3);
+        let mut contact = None;
+        for _ in 0..6000 {
+            let cmds = kestrel_shell_commands(&s);
+            s.step(&cmds);
+            if contact.is_none() {
+                contact = kestrel_hostile_in_range_of_the_base(&s).map(|id| (s.tick(), id));
+            }
+        }
+        std::eprintln!(
+            "first contact {contact:?}, winner {:?} at {}",
+            s.winner(),
+            s.tick()
+        );
+        let (tick, _) = contact.expect("no first contact in 6000 steps");
+        assert!(tick >= 3000, "first contact at tick {tick}");
+        assert_eq!(s.winner(), Some(PlayerId(1)), "the undefended base fell");
+    }
+
     #[test]
     fn kestrel_probe_is_scripted_deterministically_and_replays() {
         let run = |seed| {
@@ -2241,6 +2284,19 @@ mod tests {
     ///   enough that it is overrun at t=21291 after 4 waves; with uncapped
     ///   surplus refineries it builds 18 and wins at t=13081 after 2 waves.
     ///   The match is sensitive to small spending changes either way.
+    /// - Task 19 (ten-wave table, seeded doctrine order, the alien AI from
+    ///   tick 0, era-0 raids): the undefended base falls at t=4930 -> 4121,
+    ///   before wave one. The awake alien AI builds a refinery (with its free
+    ///   Harvester), a lab and a factory and buys Upgrades from tick 0, and
+    ///   the upgraded probe takes the four home rifle squads and the Command
+    ///   Center alone (first contact still at t=3435). The playtest AI still
+    ///   wins, at t=16792 after 3 waves -> t=13048 after 2 waves (waves at
+    ///   4501 and 9901). Its alien base now spends from tick 0 and the waves
+    ///   follow the new table; the two were not measured apart. The match
+    ///   end moves; it is not tuned here (Task 21). The undefended half of the test below now runs
+    ///   the host commands, as the shell does; its old harness (raw alien AI
+    ///   plus the probe script) gives t=4799 after 1 wave both before and
+    ///   after this task.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
@@ -2249,9 +2305,10 @@ mod tests {
         // the enemy AI (+ the scripted probe and escalating waves once the grace
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
-        // so there is no founding step. Measured: it falls at t=4930 (wave one
-        // spawns at 4500; unchanged by the Task 18 economy; 4995 before
-        // abilities and Upgrades, Task 17; 4975
+        // so there is no founding step. Hosted as the shell hosts it (Task 19:
+        // the alien AI is awake from tick 0). Measured: it falls at t=4121,
+        // before wave one (4930 before Task 19; unchanged by the Task 18
+        // economy; 4995 before abilities and Upgrades, Task 17; 4975
         // at Task 12; 4980 before depth separation, Task 12; 4959 before
         // depth auto-acquire, Task 11; before the rework it fell at t=3159).
         let mut s = kestrel_reach(3);
@@ -2259,8 +2316,7 @@ mod tests {
         let mut winner = None;
         let mut undefended_fell_at = 0;
         for t in 0..40000u64 {
-            let mut enemy = s.ai_commands(PlayerId(1));
-            enemy.extend(Scenario::KestrelReach.scripted_commands(&s));
+            let enemy = kestrel_shell_commands(&s);
             s.step(&enemy);
             if let Some(w) = s.winner() {
                 winner = Some(w);

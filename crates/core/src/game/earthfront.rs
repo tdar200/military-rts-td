@@ -911,6 +911,10 @@ impl Sim {
         let Some(cfg) = self.waves else {
             return 0;
         };
+        // Kestrel depth (Task 19): the depth size rule.
+        if self.is_depth() {
+            return self.depth_expedition_size(self.wave_count);
+        }
         (6 + self.wave_count * 2).min(24) + 2 * self.alien_relay_count(cfg.attacker, true)
     }
 
@@ -949,13 +953,12 @@ impl Sim {
                 })
                 .count();
             let walls = self.count_alive_buildings(cfg.defender, BuildingKind::Wall);
-            // Kestrel depth (Task 16): three walls already call a siege.
-            let siege = if self.is_depth() {
-                walls >= 3
-            } else {
-                walls > 5
-            };
-            self.earthfront_wave_doctrine = if siege {
+            // Kestrel depth (Task 19): the seeded doctrine order, overridden
+            // by three walls (Task 16's siege threshold) or more than three
+            // tanks.
+            self.earthfront_wave_doctrine = if self.is_depth() {
+                self.depth_wave_doctrine(self.wave_count, walls, tanks)
+            } else if walls > 5 {
                 2
             } else if tanks > 3 {
                 1
@@ -993,18 +996,15 @@ impl Sim {
             None
         }
         .or_else(|| self.command_center_pos(cfg.defender));
-        // Kestrel depth (Task 16): a siege wave leads with tanks (Explosive is
-        // x1.5 against structures), its first quarter rounded up.
-        let siege_lead = if self.is_depth() && self.earthfront_wave_doctrine == 2 {
-            budget.div_ceil(4)
-        } else {
-            0
-        };
+        let depth = self.is_depth();
+        let doctrine = self.earthfront_wave_doctrine;
         for i in 0..budget {
-            let kind = if self.earthfront_wave_doctrine == 2 && w >= 3 && i == 0 {
+            // Kestrel depth (Task 19): the wave table in depth.rs, which
+            // carries Task 16's siege lead.
+            let kind = if depth {
+                super::depth::depth_wave_kind(w, i, budget, doctrine)
+            } else if self.earthfront_wave_doctrine == 2 && w >= 3 && i == 0 {
                 UnitKind::Capital
-            } else if i < siege_lead {
-                UnitKind::Tank
             } else if w >= 3 && i % 7 == 0 {
                 UnitKind::Helicopter
             } else if self.earthfront_wave_doctrine == 1 && i % 3 == 0 {
@@ -1019,6 +1019,9 @@ impl Sim {
                 Fixed::from_ratio(i64::from(i % 5) - 2, 2),
             );
             let unit = self.add_unit(cfg.attacker, kind, cfg.spawn + offset);
+            if depth {
+                self.entities[unit.0 as usize].dp.wave = u16::try_from(w + 1).unwrap_or(u16::MAX);
+            }
             if let Some(target) = target {
                 self.order_unit_to(unit.0 as usize, target, true);
             }
@@ -1117,6 +1120,8 @@ impl Sim {
         }
         let army_target: u32 = if self.player_era(player) == 0 { 10 } else { 24 };
         let mut slots = army_target.saturating_sub(self.supply_used(player));
+        // Kestrel depth (Task 19): the alien's era-0 raid, if one is due.
+        let raid = self.depth_raid(player, base);
         for (i, e) in self.entities.iter().enumerate() {
             if !e.alive || e.owner != player {
                 continue;
@@ -1168,6 +1173,16 @@ impl Sim {
             // Kestrel depth (Task 16): a unit breaking a wall (its forced
             // target) is left to it unless it runs low on ammunition.
             let breaching = self.is_depth() && e.dp.forced.is_some() && e.ammunition >= 15;
+            if let Some((party, target)) = &raid {
+                if party.binary_search(&i).is_ok() {
+                    commands.push(Command::AttackMove {
+                        owner: player,
+                        unit: entity,
+                        target: *target,
+                    });
+                    continue;
+                }
+            }
             if matches!(e.kind, Kind::Unit(k) if k != UnitKind::Harvester)
                 && (e.move_target.is_none() || e.ammunition < 15)
                 && !breaching
