@@ -18,8 +18,15 @@ use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
 use rts_server::bridge_protocol::{
     accept_lines, build_match, parse_scenario, parse_speed, read_command_lines, read_match_config,
-    read_replay_text, step_frame, MatchConfig, ReplayPlayback, ReplayPlayer, ReplayRecorder,
+    read_replay_text, sim_fingerprint, split_tick_lines, step_frame, MatchConfig, ReplayPlayback,
+    ReplayPlayer, ReplayRecorder,
 };
+
+/// [`sight_radius_with`] without Long Sight (the tests' baseline).
+#[cfg(test)]
+fn sight_radius(kind: EntityKindView, range_pct: u32) -> i64 {
+    sight_radius_with(kind, range_pct, false)
+}
 
 #[cfg(test)]
 fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
@@ -55,7 +62,11 @@ const FIX_ONE: i64 = 1 << Fixed::FRAC_BITS;
 /// reach + 1. The reach is the weapon range stretched by the viewer's ground
 /// (`range_pct`, Highland +25 percent), rounded up, so whatever a viewer can shoot
 /// it can see: nothing it fires on sits in fog.
-fn sight_radius(kind: EntityKindView, range_pct: u32) -> i64 {
+///
+/// `long_sight`: the viewer's owner holds Long Sight (Task 23: Gun and AA
+/// turrets reach one tile further). P4 review nit: those turrets then see one
+/// tile further too, keeping "whatever a viewer can shoot it can see".
+fn sight_radius_with(kind: EntityKindView, range_pct: u32, long_sight: bool) -> i64 {
     let reach = |range: Fixed| {
         let bits = range.to_bits() * (100 + i64::from(range_pct)) / 100;
         (bits + FIX_ONE - 1).div_euclid(FIX_ONE)
@@ -76,10 +87,15 @@ fn sight_radius(kind: EntityKindView, range_pct: u32) -> i64 {
             } else {
                 7
             };
-            building
-                .stats()
-                .attack
-                .map_or(base, |attack| base.max(reach(attack.range) + 1))
+            building.stats().attack.map_or(base, |attack| {
+                let turret = matches!(building, BuildingKind::GunTurret | BuildingKind::AaTurret);
+                let range = if long_sight && turret {
+                    attack.range + Fixed::ONE
+                } else {
+                    attack.range
+                };
+                base.max(reach(range) + 1)
+            })
         }
     }
 }
@@ -261,6 +277,9 @@ impl FogState {
         let (width, height) = (map.width(), map.height());
         let mut viewers = std::mem::take(&mut self.viewers);
         viewers.clear();
+        // P4 review nit: the human's Long Sight turrets see as far as they shoot.
+        let long_sight =
+            sim.is_depth() && sim.perks(HUMAN) & (1 << rts_core::game::perk::LONG_SIGHT) != 0;
         // Living human entities see (a building under construction included: the
         // player's own site). A viewer at zero HP is dying this tick and sees nothing.
         viewers.extend(
@@ -274,7 +293,7 @@ impl FogState {
                     } else {
                         0
                     };
-                    (v.pos, sight_radius(v.kind, pct))
+                    (v.pos, sight_radius_with(v.kind, pct, long_sight))
                 }),
         );
         self.observe(width, height, &viewers);
@@ -1375,14 +1394,44 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
     })
 }
 
-/// Task 25: `snapshot` with `"replay":{"speed":S,"tick":T,"end":E}` appended as
-/// its last top-level key (playback only; every other snapshot is untouched).
-fn with_replay_block(mut snapshot: String, speed: f32, tick: u64, end: u64) -> String {
+/// Task 25: what a playback snapshot's `replay` block reports besides the tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ReplayView {
+    /// The playback speed (`replay_speed.txt`).
+    speed: f32,
+    /// The recording's `END` tick.
+    end: u64,
+    /// P4 review I1: the replay names another sim build ([`ReplayPlayback::stale`]).
+    stale: bool,
+    /// P4 review I1: the end check ([`ReplayPlayback::end_check`]).
+    check: Option<bool>,
+}
+
+/// Task 25: `snapshot` with
+/// `"replay":{"speed":S,"tick":T,"end":E,"stale":B,"check":C}` appended as its
+/// last top-level key (playback only; every other snapshot is untouched). P4
+/// review I1 added `stale` (true when the replay was recorded on another sim
+/// build, so what plays may not be what was recorded) and `check`
+/// (`"pending"` until the playback reaches the recording's end, then
+/// `"match"` or `"mismatch"` against its `END` tick, hash and score).
+fn with_replay_block(mut snapshot: String, tick: u64, view: ReplayView) -> String {
     debug_assert!(snapshot.ends_with('}'));
     snapshot.pop();
+    let ReplayView {
+        speed,
+        end,
+        stale,
+        check,
+    } = view;
+    let check = match check {
+        None => "pending",
+        Some(true) => "match",
+        Some(false) => "mismatch",
+    };
     write!(
         snapshot,
-        ",\"replay\":{{\"speed\":{speed},\"tick\":{tick},\"end\":{end}}}}}"
+        ",\"replay\":{{\"speed\":{speed},\"tick\":{tick},\"end\":{end},\"stale\":{stale},\
+         \"check\":\"{check}\"}}}}"
     )
     .expect("string write");
     snapshot
@@ -1444,6 +1493,21 @@ fn start_replay(recorder: &mut ReplayRecorder, config: &MatchConfig, fog: bool, 
     }
 }
 
+/// P4 review M3: the lines a live frame steps, at most
+/// `REPLAY_MAX_TICK_LINES`: the lines `backlog` carried from earlier frames,
+/// then `fresh`, in order. The rest wait in `backlog` for the next frame, so a
+/// recorded tick never holds more lines than a replay may (the recorder would
+/// otherwise end the replay there).
+fn frame_lines(
+    backlog: &mut Vec<(String, Command)>,
+    fresh: Vec<(String, Command)>,
+) -> Vec<(String, Command)> {
+    let mut lines = std::mem::take(backlog);
+    lines.extend(fresh);
+    *backlog = split_tick_lines(&mut lines);
+    lines
+}
+
 /// Task 24: finishes the running mission's replay (a restart or exit); an I/O
 /// error is logged and the bridge runs on.
 fn stop_replay(recorder: &mut ReplayRecorder, sim: &Sim) {
@@ -1482,9 +1546,14 @@ fn boot_mission(
     (config, sim, playback)
 }
 
-/// Task 25: the playback's `(speed, END tick)` for the snapshot's `replay` block.
-fn replay_view(playback: &ReplayPlayback, paths: &RuntimePaths) -> (f32, u64) {
-    (read_replay_speed(&paths.replay_speed), playback.end_tick())
+/// Task 25: the playback's `replay` block at `speed`.
+const fn replay_view(playback: &ReplayPlayback, speed: f32) -> ReplayView {
+    ReplayView {
+        speed,
+        end: playback.end_tick(),
+        stale: playback.stale(),
+        check: playback.end_check(),
+    }
 }
 
 /// One frame's snapshot, with the `replay` block when `replay` is given.
@@ -1493,11 +1562,11 @@ fn frame_snapshot(
     supply_cache: &mut SupplyLinkCache,
     shots: &mut ShotWindow,
     fog: &mut FogState,
-    replay: Option<(f32, u64)>,
+    replay: Option<ReplayView>,
 ) -> String {
     let snapshot = snapshot_json_with(sim, supply_cache.get(sim), shots, fog);
     match replay {
-        Some((speed, end)) => with_replay_block(snapshot, speed, sim.tick(), end),
+        Some(view) => with_replay_block(snapshot, sim.tick(), view),
         None => snapshot,
     }
 }
@@ -1531,13 +1600,15 @@ fn main() -> std::io::Result<()> {
             &mut SupplyLinkCache::new(),
             &mut ShotWindow::new(),
             &mut FogState::new(mission_fog(fog_enabled, &config, playback.as_ref())),
-            playback.as_ref().map(|p| (1.0, p.end_tick())),
+            playback.as_ref().map(|p| replay_view(p, 1.0)),
         );
         return write_atomic(&path, &snapshot);
     }
     // Match the primary client: the deterministic simulation is authored at 30 Hz.
     // Godot renders between snapshots, but must not double the gameplay speed.
     let frame_time = Duration::from_micros(33_333);
+    // P4 review I1: the sim fingerprint (probe runs) is warmed off the frame loop.
+    std::thread::spawn(sim_fingerprint);
     let paths = RuntimePaths::from_output(&output);
     // Never let an order left by a previous closed match disable opening AI, and never
     // let a previous session's match choice hijack this session's first restart.
@@ -1553,6 +1624,7 @@ fn main() -> std::io::Result<()> {
     let mut fog = FogState::new(mission_fog(fog_enabled, &config, playback.as_ref()));
     // Task 24: the running mission's replay (when `match.json` names a `replay_dir`).
     let mut recorder = ReplayRecorder::new();
+    let mut backlog = Vec::new(); // P4 review M3: orders past a tick's cap, for the next frame.
 
     for _ in 0..frame_limit {
         if paths.restart.exists() {
@@ -1562,6 +1634,7 @@ fn main() -> std::io::Result<()> {
             let _ = std::fs::remove_file(&paths.commands);
             let _ = std::fs::remove_file(&paths.pause);
             clear_command_packets(&paths.commands)?;
+            backlog.clear();
             // The old mission's replay ends here, at its last stepped tick.
             stop_replay(&mut recorder, &sim);
             // The client may switch the map (and the fog) for the next match; with no
@@ -1591,7 +1664,9 @@ fn main() -> std::io::Result<()> {
         if !mission_started || paths.pause.exists() {
             // Before Deploy, or paused: no step, no commands taken (they wait for
             // the resume), the same snapshot stays current.
-            let replay = playback.as_ref().map(|p| replay_view(p, &paths));
+            let replay = playback
+                .as_ref()
+                .map(|p| replay_view(p, read_replay_speed(&paths.replay_speed)));
             write_atomic(
                 &paths.snapshot,
                 &frame_snapshot(&sim, &mut supply_cache, &mut shots, &mut fog, replay),
@@ -1604,13 +1679,12 @@ fn main() -> std::io::Result<()> {
             // Task 25: playback steps the recording at the client's speed and
             // ignores the client's orders; it never records a new replay.
             let speed = playback_frame(p, &mut sim, &paths, &mut shots);
-            Some((speed, p.end_tick()))
+            Some(replay_view(p, speed))
         } else {
             // Orders on enemies the last fogged frame did not show never reach the sim
             // (nor the replay, which logs only the lines applied).
-            let accepted = accept_lines(read_command_lines(&paths.commands), |command| {
-                fog.admits(command)
-            });
+            let fresh = accept_lines(read_command_lines(&paths.commands), |c| fog.admits(c));
+            let accepted = frame_lines(&mut backlog, fresh);
             // Host commands, then the player's (bridge_protocol::step_frame, the body
             // replay recording and verification share).
             if let Err(error) = step_frame(&mut sim, scenario, accepted, &mut recorder) {
@@ -1632,9 +1706,10 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_match, fog_enabled_from, parse_args, playback_frame, sight_radius, snapshot_json,
-        snapshot_json_with, supply_links_json, with_replay_block, BuildingKind, Command, EntityId,
-        FogState, PlayerId, RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
+        build_match, fog_enabled_from, frame_snapshot, parse_args, playback_frame, replay_view,
+        sight_radius, sight_radius_with, snapshot_json, snapshot_json_with, supply_links_json,
+        with_replay_block, BuildingKind, Command, EntityId, FogState, PlayerId, ReplayView,
+        RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
     use rts_core::game::sim::Difficulty;
@@ -2873,6 +2948,48 @@ mod tests {
         assert_eq!(sight_radius(Unit(UnitKind::Infantry), 25), 7);
     }
 
+    /// P4 review nit: Long Sight gives turrets one more tile of range, so
+    /// they see one more as well (what a viewer can shoot it can see). Other
+    /// structures and every unit keep their sight.
+    #[test]
+    fn long_sight_turrets_see_as_far_as_they_shoot() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::map::Ground;
+        use rts_core::game::sim::EntityKindView::{Building, Unit};
+        for turret in [BuildingKind::GunTurret, BuildingKind::AaTurret] {
+            let range = turret.stats().attack.expect("armed").range + Fixed::ONE;
+            for ground in Ground::ALL {
+                let pct = ground.props().range_pct;
+                let reach = range.to_bits() * (100 + i64::from(pct)) / 100;
+                let sight = sight_radius_with(Building(turret), pct, true) << 16;
+                assert!(
+                    sight > reach,
+                    "{turret:?} on {ground:?}: {sight} <= {reach}"
+                );
+                assert!(
+                    sight_radius_with(Building(turret), pct, true)
+                        >= sight_radius(Building(turret), pct)
+                );
+            }
+        }
+        assert_eq!(
+            sight_radius_with(Building(BuildingKind::AaTurret), 25, true),
+            10
+        );
+        for kind in [
+            Building(BuildingKind::CommandCenter),
+            Building(BuildingKind::Wall),
+            Unit(UnitKind::Infantry),
+            Unit(UnitKind::Helicopter),
+        ] {
+            assert_eq!(
+                sight_radius_with(kind, 25, true),
+                sight_radius(kind, 25),
+                "{kind:?}"
+            );
+        }
+    }
+
     #[test]
     fn fog_radius_fill_reveals_cells_within_sight_and_explored_persists() {
         use rts_core::fixed::Fixed;
@@ -3462,7 +3579,14 @@ mod tests {
         // match writes no `"run"` object, and every other byte is identical
         // (both snapshots compared against Task 22's with the hash masked).
         // Was (27265, 0x6f74_db97_ef5d_c332) and (28515, 0x8924_a375_71e4_2f40).
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x71d7_279a_e191_4947));
+        //
+        // Re-pinned by the P4 review fixes (M1): the depth state now hashes
+        // the count of waves that spawned nobody (0 here), so only the `hash`
+        // value changed (same length at tick 0, one digit shorter
+        // mid-firefight); both old pins still match with that one hash write
+        // removed. Was (27265, 0x71d7_279a_e191_4947) and
+        // (28516, 0xc0d2_9e04_0e38_c619).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x091d_c2b1_dc3c_88ab));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3487,7 +3611,8 @@ mod tests {
         // Task 22: same length, a new `hash` value (see above).
         // Task 23: the state hash is one digit longer (28515 -> 28516); with
         // `"hash"` masked the snapshot is byte-identical to Task 22's.
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xc0d2_9e04_0e38_c619));
+        // P4 fix round: one digit shorter again (28516 -> 28515), see above.
+        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x57e0_8825_88f2_74bf));
     }
 
     #[test]
@@ -3737,16 +3862,117 @@ mod tests {
         let mut survival = Scenario::Survival.build(7);
         survival.set_balance(rts_data::load_default());
         assert!(!snapshot_json(&survival).contains("\"replay\""));
-        let json = with_replay_block(plain.clone(), 0.5, 9, 60);
+        let view = |speed, end, stale, check| ReplayView {
+            speed,
+            end,
+            stale,
+            check,
+        };
+        let json = with_replay_block(plain.clone(), 9, view(0.5, 60, false, None));
         assert!(json_ok(&json), "{}", &json[json.len() - 80..]);
         assert_eq!(
             json,
             format!(
-                "{},\"replay\":{{\"speed\":0.5,\"tick\":9,\"end\":60}}}}",
+                "{},\"replay\":{{\"speed\":0.5,\"tick\":9,\"end\":60,\"stale\":false,\
+                 \"check\":\"pending\"}}}}",
                 &plain[..plain.len() - 1]
             )
         );
-        assert!(with_replay_block(plain, 8.0, 0, 0)
-            .ends_with(",\"replay\":{\"speed\":8,\"tick\":0,\"end\":0}}"));
+        assert!(with_replay_block(plain.clone(), 0, view(8.0, 0, true, Some(true)))
+            .ends_with(
+                ",\"replay\":{\"speed\":8,\"tick\":0,\"end\":0,\"stale\":true,\"check\":\"match\"}}"
+            ));
+        let mismatch = with_replay_block(plain, 60, view(1.0, 60, false, Some(false)));
+        assert!(json_ok(&mismatch));
+        assert!(mismatch.ends_with(",\"stale\":false,\"check\":\"mismatch\"}}"));
+    }
+
+    /// P4 review M3: a live frame steps at most `REPLAY_MAX_TICK_LINES`
+    /// accepted lines; the rest wait, in order, ahead of the next frame's lines,
+    /// so a recorded tick never holds more than a replay may.
+    #[test]
+    fn a_live_frame_steps_at_most_the_tick_cap_and_carries_the_rest() {
+        use super::frame_lines;
+        use rts_server::bridge_protocol::REPLAY_MAX_TICK_LINES;
+        let line = |i: usize| {
+            (
+                format!("stop {i}"),
+                Command::Stop {
+                    owner: super::HUMAN,
+                    unit: EntityId(1),
+                },
+            )
+        };
+        let mut backlog = Vec::new();
+        let first = frame_lines(
+            &mut backlog,
+            (0..REPLAY_MAX_TICK_LINES + 3).map(line).collect(),
+        );
+        assert_eq!(first.len(), REPLAY_MAX_TICK_LINES);
+        assert_eq!(backlog.len(), 3);
+        let second = frame_lines(&mut backlog, vec![line(9999)]);
+        let texts: Vec<&str> = second.iter().map(|(text, _)| text.as_str()).collect();
+        let cap = REPLAY_MAX_TICK_LINES;
+        assert_eq!(
+            texts,
+            [
+                format!("stop {cap}"),
+                format!("stop {}", cap + 1),
+                format!("stop {}", cap + 2),
+                "stop 9999".to_owned()
+            ]
+        );
+        assert!(backlog.is_empty());
+    }
+
+    /// P4 review I1: the replay block flags a replay recorded on another sim
+    /// build (`stale`) and, once the playback reaches the recording's end,
+    /// whether it reached the file's END (`check`: pending, match, mismatch).
+    #[test]
+    fn the_replay_block_reports_a_stale_replay_and_the_end_check() {
+        use rts_server::bridge_protocol::{sim_fingerprint, ReplayPlayback, ReplayPlayer};
+        let root = std::env::temp_dir().join(format!("earthfront-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let text = record_kestrel(&root.join("replays"), 60);
+        let block = |text: &str| {
+            let mut playback = ReplayPlayback::new(ReplayPlayer::new(text).unwrap());
+            let mut sim = playback.build();
+            let first = replay_view(&playback, 8.0);
+            for _ in 0..10 {
+                playback.frame(&mut sim, 8.0, |_| {});
+            }
+            let last = replay_view(&playback, 8.0);
+            let json = frame_snapshot(
+                &sim,
+                &mut SupplyLinkCache::new(),
+                &mut ShotWindow::new(),
+                &mut FogState::new(true),
+                Some(last),
+            );
+            assert!(json_ok(&json));
+            let tail = json[json.rfind(",\"replay\":").unwrap()..].to_owned();
+            (first.stale, first.check, tail)
+        };
+        let (stale, check, tail) = block(&text);
+        assert_eq!((stale, check), (false, None));
+        assert_eq!(
+            tail,
+            ",\"replay\":{\"speed\":8,\"tick\":60,\"end\":60,\"stale\":false,\"check\":\"match\"}}"
+        );
+        let (body, _) = text.rsplit_once("END ").unwrap();
+        let (_, _, tail) = block(&format!("{body}END 60 1 0\n"));
+        assert!(
+            tail.ends_with("\"stale\":false,\"check\":\"mismatch\"}}"),
+            "{tail}"
+        );
+        let here = format!("sim={}\n", sim_fingerprint());
+        let other = text.replacen(&here, &format!("sim={}\n", sim_fingerprint() ^ 1), 1);
+        let (stale, _, tail) = block(&other);
+        assert!(stale);
+        assert!(
+            tail.ends_with("\"stale\":true,\"check\":\"match\"}}"),
+            "{tail}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
