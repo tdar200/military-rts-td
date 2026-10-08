@@ -1071,7 +1071,7 @@ fn snapshot_json_with(
         // whether the Core Node is shielded.
         write!(
             out,
-            "],\"refinery_cost\":{},\"difficulty\":\"{}\",\"seed\":{},\"core_shielded\":{}}}",
+            "],\"refinery_cost\":{},\"difficulty\":\"{}\",\"seed\":{},\"core_shielded\":{}",
             sim.depth_building_cost(human, BuildingKind::Refinery)
                 .to_int_floor(),
             sim.difficulty().name(),
@@ -1079,6 +1079,18 @@ fn snapshot_json_with(
             sim.core_node_shielded()
         )
         .expect("string write");
+        // Task 22 appends the match's score so far (the debrief reads the
+        // decided match's, which holds once the tick stops).
+        if let Some(sc) = sim.depth_score() {
+            write!(
+                out,
+                ",\"score\":{{\"waves_held\":{},\"destroyed\":{},\"lost\":{},\
+                 \"victory_bonus\":{},\"total\":{},\"grade\":\"{}\"}}",
+                sc.waves_held, sc.destroyed, sc.lost, sc.victory_bonus, sc.total, sc.grade
+            )
+            .expect("string write");
+        }
+        out.push('}');
     }
     out.push_str(",\"supply_links\":");
     out.push_str(supply_links);
@@ -1894,12 +1906,13 @@ mod tests {
         // The presentation fog mask (Task 6) sits between the supply links and the shots.
         // The depth Upgrades block (Task 17) sits between the core node and the links;
         // Task 18 appends the next refinery's price to it, Task 20 the match's
-        // difficulty and seed, Task 21 the Core Node shield.
+        // difficulty and seed, Task 21 the Core Node shield, Task 22 the score.
         let fog = extract_str(&json, "fog");
         assert!(json.ends_with(&format!(
             "\"core_node\":[37,8],\"depth\":{{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
-             \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true}},\
-             \"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
+             \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true,\
+             \"score\":{{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\"victory_bonus\":0,\"total\":0,\
+             \"grade\":\"D\"}}}},\"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
         )));
         assert!(json.starts_with("{\"schema\":5,"));
     }
@@ -2204,13 +2217,13 @@ mod tests {
             },
         ));
         assert!(
-            json.contains(",\"refinery_cost\":200,\"difficulty\":\"hard\",\"seed\":9,\"core_shielded\":true},"),
+            json.contains(",\"refinery_cost\":200,\"difficulty\":\"hard\",\"seed\":9,\"core_shielded\":true,\"score\":{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\"victory_bonus\":0,\"total\":0,\"grade\":\"D\"}},"),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
         let json = snapshot_json(&Scenario::KestrelReach.build(2026));
         assert!(json.contains(
-            ",\"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true},"
+            ",\"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true,\"score\":{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\"victory_bonus\":0,\"total\":0,\"grade\":\"D\"}},"
         ));
         let survival = snapshot_json(&Scenario::Survival.build(2026));
         assert!(!survival.contains("\"difficulty\""));
@@ -2597,7 +2610,7 @@ mod tests {
         let mut sim = Scenario::KestrelReach.build(3);
         let json = snapshot_json(&sim);
         assert!(
-            json.contains(",\"seed\":3,\"core_shielded\":true},"),
+            json.contains(",\"seed\":3,\"core_shielded\":true,\"score\":{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\"victory_bonus\":0,\"total\":0,\"grade\":\"D\"}},"),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
@@ -2615,12 +2628,54 @@ mod tests {
         );
         let json = snapshot_json(&sim);
         assert!(
-            json.contains(",\"seed\":3,\"core_shielded\":false},"),
+            json.contains(",\"seed\":3,\"core_shielded\":false,\"score\":{"),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
         let survival = snapshot_json(&Scenario::Survival.build(2026));
         assert!(!survival.contains("core_shielded"));
+    }
+
+    /// Task 22: the Kestrel depth block ends with the match's score object
+    /// (`Sim::depth_score`): zero at tick 0, the playtest's win on Normal at
+    /// the end; Survival never carries it.
+    #[test]
+    fn kestrel_depth_block_reports_the_score() {
+        let mut sim = Scenario::KestrelReach.build(3);
+        let json = snapshot_json(&sim);
+        assert!(
+            json.contains(
+                ",\"core_shielded\":true,\"score\":{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\
+                 \"victory_bonus\":0,\"total\":0,\"grade\":\"D\"}},"
+            ),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        for _ in 0..40_000 {
+            if sim.winner().is_some() {
+                break;
+            }
+            let mut cmds = sim.ai_commands(PlayerId(0));
+            cmds.extend(Scenario::KestrelReach.host_commands(&sim));
+            sim.step(&cmds);
+        }
+        assert_eq!(sim.winner(), Some(PlayerId(0)));
+        let sc = sim.depth_score().expect("a depth match");
+        assert!(sc.total > 0 && sc.victory_bonus > 0, "{sc:?}");
+        let json = snapshot_json(&sim);
+        let want = format!(
+            ",\"score\":{{\"waves_held\":{},\"destroyed\":{},\"lost\":{},\"victory_bonus\":{},\
+             \"total\":{},\"grade\":\"{}\"}}}},",
+            sc.waves_held, sc.destroyed, sc.lost, sc.victory_bonus, sc.total, sc.grade
+        );
+        assert!(
+            json.contains(&want),
+            "{want} in {}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("\"score\""));
+        assert!(!survival.contains("victory_bonus"));
     }
 
     #[test]
@@ -2630,7 +2685,7 @@ mod tests {
         assert!(
             json.contains(
                 ",\"depth\":{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
-                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true}"
+                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true,\"score\":{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\"victory_bonus\":0,\"total\":0,\"grade\":\"D\"}}"
             ),
             "{}",
             &json[json.len().saturating_sub(300)..]
@@ -2645,7 +2700,7 @@ mod tests {
         assert!(
             json.contains(
                 ",\"depth\":{\"upgrades\":[3,0,1],\"upgrade_costs\":[null,150,250],\
-                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true}"
+                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026,\"core_shielded\":true,\"score\":{\"waves_held\":0,\"destroyed\":0,\"lost\":0,\"victory_bonus\":0,\"total\":0,\"grade\":\"D\"}}"
             ),
             "{}",
             &json[json.len().saturating_sub(300)..]
@@ -3783,8 +3838,25 @@ mod tests {
                 })
                 .replace(",\"queue\":0", "")
                 .replace(",\"repair_cd\":0", "");
+            // Task 22 nests the `"score"` object in the depth block, so the
+            // block ends at its matching brace, not the first one.
             let start = json.find(",\"depth\":{").expect("the depth block");
-            let end = start + json[start..].find('}').expect("its end") + 1;
+            let mut open = 0usize;
+            let mut end = None;
+            for (i, ch) in json[start..].char_indices() {
+                match ch {
+                    '{' => open += 1,
+                    '}' => {
+                        open -= 1;
+                        if open == 0 {
+                            end = Some(start + i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let end = end.expect("its end");
             format!("{}{}", &json[..start], &json[end..])
         };
         let sim = Scenario::KestrelReach.build(2026);
@@ -3858,7 +3930,14 @@ mod tests {
         // Checked by Task 21 (the Core Node shield), not re-pinned: the shield
         // adds no hashed state and its `"core_shielded"` key sits inside the
         // stripped depth block, so both pins hold unchanged.
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x6c7d_bcf2_78f9_0971));
+        //
+        // Re-pinned by Task 22 (score): the destroyed and lost ledgers are now
+        // hashed under depth, so only the `hash` value changed; the new
+        // `"score"` object nests inside the depth block, which the strip now
+        // removes up to its matching brace, and every other byte is identical
+        // (both snapshots compared against Task 21's with the hash masked).
+        // Was (27265, 0x6c7d_bcf2_78f9_0971) and (28515, 0x97e0_4af7_95bc_21c3).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x6f74_db97_ef5d_c332));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3880,7 +3959,8 @@ mod tests {
         let fight = strip(&fight);
         // Task 20: the state hash in it is one digit shorter (28516 -> 28515);
         // with `"hash"` masked both snapshots are byte-identical to Task 19's.
-        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x97e0_4af7_95bc_21c3));
+        // Task 22: same length, a new `hash` value (see above).
+        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x8924_a375_71e4_2f40));
     }
 
     #[test]
