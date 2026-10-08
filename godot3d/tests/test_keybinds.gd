@@ -206,7 +206,7 @@ func test_nine_groups_and_new_build_keys_do_not_clash(t) -> void:
 	t.eq(KB.GROUPS.size(), 9)
 	t.eq(KB.GROUPS, [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9], "number keys 1 to 9")
 	var seen := {}
-	var all: Array = KB.GROUPS + KB.TRAIN.keys() + KB.BUILD.keys() + KB.CAMERA_ACTIONS.values() + [KB.ATTACK_MOVE, KB.ABILITY, KB.REPAIR, KB.SELL, KB.SCIENCE, KB.REGION_MAP, KB.FOCUS, KB.HOME, KB.JUMP_ALERT, KB.SELECT_IDLE, KB.SELECT_ARMY, KB.CONTROLS, KB.PAUSE]
+	var all: Array = KB.GROUPS + KB.TRAIN.keys() + KB.BUILD.keys() + KB.CAMERA_ACTIONS.values() + [KB.ATTACK_MOVE, KB.ABILITY, KB.REPAIR, KB.SELL, KB.SCIENCE, KB.REGION_MAP, KB.FOCUS, KB.HOME, KB.JUMP_ALERT, KB.SELECT_IDLE, KB.SELECT_ARMY, KB.CONTROLS, KB.PAUSE, KB.STOP, KB.HOLD]
 	for k in all:
 		t.ok(not seen.has(k), "clash on %s" % KB.cap(k))
 		seen[k] = true
@@ -241,3 +241,58 @@ func test_pan_row_shows_the_arrows_and_drag_pan_is_listed(t) -> void:
 func test_controls_hint_names_the_controls_key(t) -> void:
 	t.eq(KB.CONTROLS_HINT, "F1 Controls")
 	t.ok(KB.CONTROLS_HINT.begins_with(KB.cap(KB.CONTROLS) + " "), "the hint starts with the key that opens the screen")
+
+
+## Task 13 (kestrel-depth): S stop, D hold and Z stance are Kestrel's order keys. S and D clash with nothing (no
+## InputMap action, no other constant); Z is shared on purpose with camera_rotate_left, which only Survival reads
+## (Kestrel's yaw is locked), so it means one thing per map. Shift stays a modifier.
+func test_depth_order_keys_are_kestrel_only_and_clash_with_nothing(t) -> void:
+	t.eq([KB.STOP, KB.HOLD, KB.STANCE], [KEY_S, KEY_D, KEY_Z], "S, D and Z")
+	for code in [KB.STOP, KB.HOLD, KB.STANCE]:
+		t.ok(code in KB.KESTREL_ONLY, "%s is a Kestrel-only key" % KB.cap(code))
+	for code in [KB.STOP, KB.HOLD]:
+		var ev := InputEventKey.new()
+		ev.keycode = code
+		ev.physical_keycode = code
+		for action in InputMap.get_actions():
+			if str(action).begins_with("ui_"):
+				continue  # Godot's built-in text and graph editing actions (Ctrl+D); the HUD takes no keyboard focus
+			t.ok(not InputMap.event_is_action(ev, action), "%s is also the InputMap action %s" % [KB.cap(code), action])
+		var owners: Array = []
+		for name in _constants():
+			if code in _constants()[name]:
+				owners.append(str(name))
+		t.eq(owners.size(), 1, "%s belongs to one constant (%s)" % [KB.cap(code), owners])
+	var z_owners: Array = []
+	for name in _constants():
+		if KEY_Z in _constants()[name]:
+			z_owners.append(str(name))
+	t.eq(z_owners, ["STANCE"], "Z is no other key constant")
+	t.eq(KB.CAMERA_ACTIONS["camera_rotate_left"], KB.STANCE, "Z also rotates, on Survival only")
+	var src := _handler_sources()
+	t.ok(src.contains("world_art_on and event.keycode in [Keybinds.STOP, Keybinds.HOLD]"), "S and D are read on Kestrel only")
+	t.ok(src.contains("world_art_on and event.keycode == Keybinds.STANCE"), "Z cycles the stance on Kestrel only")
+	t.ok(not (KEY_SHIFT in KB.shown_codes(true)), "Shift is a modifier, never a key of its own")
+
+
+func test_kestrel_controls_list_the_depth_orders_and_survival_does_not(t) -> void:
+	var rows := func(kestrel: bool) -> Dictionary:
+		var out := {}
+		for g in KB.groups(kestrel):
+			for r in g["rows"]:
+				out[r["label"]] = r
+		return out
+	var k: Dictionary = rows.call(true)
+	var s: Dictionary = rows.call(false)
+	t.eq(k.get("Stop", {}).get("keys", []), [KB.STOP], "Kestrel: Stop on S")
+	t.eq(k.get("Hold position", {}).get("keys", []), [KB.HOLD], "Kestrel: Hold position on D")
+	t.eq(k.get("Cycle stance", {}).get("keys", []), [KB.STANCE], "Kestrel: Cycle stance on Z")
+	t.ok(k.has("Move, or attack a target") and not k.has("Move or attack"), "Kestrel: the right click attacks a target")
+	t.ok(not k.has("Rotate"), "Kestrel: no Rotate (the yaw is locked; Z is the stance)")
+	for label in ["Stop", "Hold position", "Cycle stance", "Move, or attack a target"]:
+		t.ok(not s.has(label), "Survival: no %s row" % label)
+	t.ok(s.has("Rotate") and s.has("Move or attack"), "Survival keeps Rotate and Move or attack")
+	var names: Array = KB.groups(true).map(func(g): return g["name"])
+	t.eq(names, ["Camera", "System", "Selection", "Build", "Orders", "Production"], "Kestrel folds Defences into Build")
+	var cols: Array = KB.vm(false, true)["columns"]
+	t.eq(cols.map(func(c): return c.map(func(g): return g["name"])), [["Camera", "Selection"], ["Build", "System"], ["Orders", "Production"]], "Kestrel's packing")

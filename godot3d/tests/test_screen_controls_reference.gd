@@ -120,3 +120,22 @@ func test_rows_stay_inside_their_panels_and_the_screen(t) -> void:
 			low_k = maxf(low_k, n.position.y + n.size.y)
 	t.ok(low_k > 0.0 and low_k < 990.0, "Kestrel: the tallest column ends above the footer (%d)" % int(low_k))
 	kestrel.free()
+
+
+## Task 13: Kestrel's screen shows the depth order keys and still fits above the footer (the Survival screen, which the
+## gallery's board 10 draws, is unchanged: test_keys_the_game_does_not_have_are_dropped bans S, D and Hold there).
+func test_kestrel_shows_the_order_keys_and_fits(t) -> void:
+	var root: Control = _build(KB.vm(false, true))[0]
+	var chips := _chips(root)
+	for expected in ["S", "D", "Z", "Space", "Click map", "Right click"]:
+		t.ok(chips.has(expected), "Kestrel shows the " + expected + " key")
+	t.ok(not chips.has("E"), "no E chip: Rotate is not on Kestrel")
+	for label in ["Stop", "Hold position", "Cycle stance", "Move, or attack a target", "Gun turret", "Field wall"]:
+		t.ok(U.has_text(root, label), "labels " + label)
+	t.ok(not U.has_text(root, "Rotate") and not U.has_text(root, "Defences"), "no Rotate row, no Defences panel")
+	var lowest := 0.0
+	for n in root.find_children("*", "Control", true, false):
+		if n.get_class() != "ColorRect" and n.size.y > 40.0 and n.size.y < 800.0 and n.size.x > 500.0 and n.position.y < 950.0:
+			lowest = maxf(lowest, n.position.y + n.size.y)
+	t.ok(lowest > 0.0 and lowest < 990.0, "Kestrel: the tallest column ends above the footer (%d)" % int(lowest))
+	root.free()

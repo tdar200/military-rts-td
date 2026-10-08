@@ -1762,6 +1762,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					_select_at(event.position, event.shift_pressed, selection_double_click)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed and not selected_units.is_empty():
+			if world_art_on and String(selected.get_meta("category", "unit")) != "building":
+				# Kestrel: a right click on a live enemy focuses the selection on it (attack-target); elsewhere it moves.
+				var to_screen := func(node: Node3D, offset: Vector3) -> Vector2: return camera.unproject_position(node.global_position + offset)
+				var foe: Node3D = _pick_entity(event.position, to_screen, true)
+				if _order_target(foe):
+					_show_move_marker(_node_point(foe), true)
+					return
 			var ground := _screen_to_ground(event.position)
 			if ground != Vector3.INF:
 				if String(selected.get_meta("category", "unit")) == "building":
@@ -1795,6 +1802,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			rally_armed = false
 			build_mode = ""
 			objective_label.text = "ATTACK-MOVE ARMED \u2014 RIGHT-CLICK A DESTINATION"
+		elif world_art_on and event.keycode in [Keybinds.STOP, Keybinds.HOLD]:
+			_order_selection("hold" if event.keycode == Keybinds.HOLD else "stop")
+		elif world_art_on and event.keycode == Keybinds.STANCE:
+			_cycle_stance()  # Survival never gets here: Z is its camera_rotate_left axis
 		elif event.keycode == Keybinds.CANCEL:
 			# Only reached while something is armed: with nothing armed game_ui.route_key opened the pause menu above.
 			attack_move_armed = false
@@ -1895,12 +1906,12 @@ func _select_at(screen_position: Vector2, additive := false, similar := false) -
 ## sprite) holds one inside any of its mesh boxes. Among the entities that hold it a unit wins (it stands in front of the
 ## buildings), then the narrowest, then the nearest root. A click on nothing falls back to the Survival rule, so a small
 ## unit keeps its 32 px reach.
-func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
+func _pick_entity(screen_position: Vector2, to_screen: Callable, enemy := false) -> Node3D:
 	var nearest: Node3D
 	if world_art_on:
 		var best := Vector2(INF, INF)  # (visual tiles, distance to the root)
 		for candidate in bridge_nodes.values():
-			if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN or bool(candidate.get_meta("remembered", false)):
+			if not _pickable(candidate, enemy):
 				continue
 			if not _parts_hold(candidate, screen_position, to_screen):
 				continue
@@ -1916,13 +1927,25 @@ func _pick_entity(screen_position: Vector2, to_screen: Callable) -> Node3D:
 			return nearest
 	var nearest_distance := 32.0
 	for candidate in bridge_nodes.values():
-		if not is_instance_valid(candidate) or int(candidate.get_meta("team", -1)) != HUMAN or bool(candidate.get_meta("remembered", false)):
+		if not _pickable(candidate, enemy):
 			continue
 		var distance: float = (to_screen.call(candidate, Vector3.UP * 0.15) as Vector2).distance_to(screen_position)
 		if distance < nearest_distance:
 			nearest = candidate
 			nearest_distance = distance
 	return nearest
+
+
+## A node a click may pick: one of the player's own (`enemy` false) or, for the attack-target click, a live enemy one. A
+## remembered building (the fog's memory) is never picked, and an enemy the fog hides is not in the snapshot at all, so
+## no hidden or remembered entity can be targeted.
+func _pickable(node: Node3D, enemy: bool) -> bool:
+	if not is_instance_valid(node) or bool(node.get_meta("remembered", false)):
+		return false
+	var team := int(node.get_meta("team", -1))
+	if enemy:
+		return team >= 0 and team != HUMAN and node.visible
+	return team == HUMAN
 
 
 ## Whether `point` falls inside the screen rectangle of one of `node`'s part boxes (its eight corners projected) and, on a
@@ -2511,6 +2534,86 @@ func _write_bridge_move(unit: Node3D, ground: Vector3, attack_move := false) -> 
 	var verb := "attack" if attack_move else "move"
 	_append_bridge_command("%s,%d,%d,%d" % [verb, int(unit.get_meta("bridge_id")), simulation_x_bits, simulation_z_bits])
 	objective_label.text = "%s ORDER TRANSMITTED \u2014 %d UNIT%s" % ["ATTACK-MOVE" if attack_move else "MOVE", selected_units.size(), "" if selected_units.size() == 1 else "S"]
+
+
+## The stance cycle Z steps through (the bridge's names, depth.rs Stance::name).
+const STANCES := ["aggressive", "defensive", "hold"]
+
+
+## A selected node the depth orders reach: one of the player's own bridge units.
+func _orderable(unit: Node3D) -> bool:
+	return is_instance_valid(unit) and String(unit.get_meta("category", "unit")) == "unit" and int(unit.get_meta("team", -1)) == HUMAN and bool(unit.get_meta("bridge_controlled", false)) and unit.has_meta("bridge_id")
+
+
+func _order_units() -> Array:
+	return selected_units.filter(func(unit: Node3D) -> bool: return _orderable(unit))
+
+
+func _say(text: String) -> void:
+	if objective_label:
+		objective_label.text = text
+
+
+## Kestrel's S and D: `stop,<id>` or `hold,<id>` for every selected unit of ours. Hold also shows the hold stance at once
+## (the next snapshot confirms it). Returns the number of units ordered.
+func _order_selection(verb: String) -> int:
+	if not world_art_on or not bridge_active:
+		return 0
+	var ordered := _order_units()
+	for unit in ordered:
+		_append_bridge_command("%s,%d" % [verb, int(unit.get_meta("bridge_id"))])
+		if verb == "hold":
+			unit.set_meta("stance", "hold")
+	if not ordered.is_empty():
+		_say("%s \u2014 %d UNIT%s" % ["HOLD POSITION" if verb == "hold" else "STOP", ordered.size(), "" if ordered.size() == 1 else "S"])
+		_order_ack()
+	return ordered.size()
+
+
+## The selection's stance as the snapshot reported it: one of STANCES, "mixed", or "" with no unit of ours selected.
+func _selection_stance() -> String:
+	var found := ""
+	for unit in _order_units():
+		var stance := String(unit.get_meta("stance", ""))
+		if found == "":
+			found = stance
+		elif stance != found:
+			return "mixed"
+	return found
+
+
+## Kestrel's Z: the next stance for the whole selection (a mixed one goes aggressive), `stance,<id>,<name>` per unit.
+## The new stance shows at once; the next snapshot confirms it. Returns the number of units ordered.
+func _cycle_stance() -> int:
+	if not world_art_on or not bridge_active:
+		return 0
+	var now := _selection_stance()
+	var next: String = STANCES[(STANCES.find(now) + 1) % STANCES.size()] if now in STANCES else STANCES[0]
+	var ordered := _order_units()
+	for unit in ordered:
+		_append_bridge_command("stance,%d,%s" % [int(unit.get_meta("bridge_id")), next])
+		unit.set_meta("stance", next)
+	if not ordered.is_empty():
+		_say("STANCE %s \u2014 %d UNIT%s" % [next.to_upper(), ordered.size(), "" if ordered.size() == 1 else "S"])
+		_order_ack()
+	return ordered.size()
+
+
+## Kestrel's right click on a live enemy (`_pick_entity(..., true)`): `target,<id>,<eid>` for every selected unit of ours,
+## which then walks into range and fires only at it until it dies or slips out of sight. False, with nothing written,
+## when `foe` is no live enemy or no unit of ours is selected, so the click falls through to a move.
+func _order_target(foe: Node3D) -> bool:
+	if not world_art_on or not bridge_active or not _pickable(foe, true) or not foe.has_meta("bridge_id"):
+		return false
+	var ordered := _order_units()
+	for unit in ordered:
+		_append_bridge_command("target,%d,%d" % [int(unit.get_meta("bridge_id")), int(foe.get_meta("bridge_id"))])
+	if ordered.is_empty():
+		return false
+	attack_move_armed = false
+	_say("ATTACK TARGET \u2014 %d UNIT%s" % [ordered.size(), "" if ordered.size() == 1 else "S"])
+	_order_ack()
+	return true
 
 
 func _write_bridge_train(kind_name: String) -> void:
@@ -3132,6 +3235,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 		entity_node.set_meta("production_queued", int(entity_data.get("production_queued", 0)))
 		entity_node.set_meta("production_progress", int(entity_data.get("production_progress", 0)))
 		entity_node.set_meta("production_duration", int(entity_data.get("production_duration", 0)))
+		if entity_data.has("stance"):
+			entity_node.set_meta("stance", String(entity_data["stance"]))  # Kestrel's own units only (the bridge sends no other)
 		var health_fill := entity_node.get_node_or_null("HealthFill") as MeshInstance3D
 		if health_fill:
 			var ratio := clampf(hp / max_hp, 0.0, 1.0)
@@ -3286,6 +3391,10 @@ func _on_command_button(action: String) -> void:
 			rally_armed = false
 			build_mode = ""
 			objective_label.text = "ATTACK-MOVE ARMED \u2014 RIGHT-CLICK A DESTINATION"
+		"stop", "hold":
+			_order_selection(action)
+		"stance":
+			_cycle_stance()
 		"cancel_orders":
 			attack_move_armed = false
 			rally_armed = false

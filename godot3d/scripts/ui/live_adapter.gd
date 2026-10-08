@@ -11,6 +11,8 @@ const MAX_ALERTS := 3
 const STRUCTURE_ALERT_GAP := 5.0
 const STRUCTURE_ALERT_REPEAT := 15.0
 const AMMO_CAPACITY := 90.0
+## The stance chip's value tone: hold (never moves) stands out, defensive is cyan, aggressive the plain default.
+const STANCE_TONES := {"hold": "warn", "defensive": "cyan", "mixed": "dim"}
 
 ## id, display name, hotkey, bridge kind, material, crew, producing building, sprite ("" = icon card), icon
 const UNIT_CARDS := [
@@ -822,6 +824,9 @@ func _selection() -> Dictionary:
 		rows.append({"label": "Ammunition carried", "value": "%d / %d rounds" % [roundi(carried), int(AMMO_CAPACITY)], "ratio": clampf(carried / AMMO_CAPACITY, 0.0, 1.0), "bar": "cyan" if carried > 0.0 else "bad"})
 	if is_building and picked.size() == 1:
 		rows.append_array(_structure_rows(first))
+	var stance := _stance_chip(picked) if _world_art() and not is_building else {}
+	if not stance.is_empty():
+		rows.append(stance)
 	vm["rows"] = rows
 	return vm
 
@@ -856,6 +861,24 @@ func _structure_rows(node: Node3D) -> Array:
 	return rows
 
 
+## Kestrel's stance chip (Task 13): the selected units' stance as the snapshot reports it ("stance" on the player's own
+## units on a depth map), "Mixed" when they differ. Empty when no picked node carries one (Survival, or buildings only).
+static func _stance_chip(picked: Array) -> Dictionary:
+	var found := ""
+	for n in picked:
+		var stance := String(n.get_meta("stance", ""))
+		if stance == "":
+			continue
+		if found == "":
+			found = stance
+		elif stance != found:
+			found = "mixed"
+			break
+	if found == "":
+		return {}
+	return {"label": "Stance", "value": found.capitalize(), "tone": STANCE_TONES.get(found, "")}
+
+
 func _orders(is_building: bool, kind: String) -> Array:
 	var armed: bool = g.attack_move_armed
 	if is_building:
@@ -863,6 +886,15 @@ func _orders(is_building: bool, kind: String) -> Array:
 			{"label": "Repair", "key": "U", "action": "order", "arg": "repair"},
 			{"label": "Sell", "key": "Del", "action": "order", "arg": "sell", "disabled": kind == "CommandCenter"},
 			{"label": "Focus", "key": "F", "wide": true, "action": "order", "arg": "focus"},
+		]
+	if _world_art():
+		# Kestrel's depth orders fill the 2x2 grid; the keys are keybinds.gd STOP, HOLD and STANCE.
+		return [
+			{"label": "Attack-move", "key": "A", "primary": armed, "action": "order", "arg": "attack_move"},
+			{"label": "Stop", "key": "S", "action": "order", "arg": "stop"},
+			{"label": "Hold", "key": "D", "action": "order", "arg": "hold"},
+			{"label": "Stance", "key": "Z", "action": "order", "arg": "stance"},
+			{"label": "Focus group", "key": "F", "wide": true, "action": "order", "arg": "focus"},
 		]
 	return [
 		{"label": "Attack-move", "key": "A", "primary": armed, "action": "order", "arg": "attack_move"},
@@ -1234,7 +1266,7 @@ func _order(verb: String) -> void:
 	match verb:
 		"attack_move":
 			g._on_command_button("attack")
-		"repair", "sell":
+		"repair", "sell", "stop", "hold", "stance":
 			g._on_command_button(verb)
 		"cancel_armed":
 			g._on_command_button("cancel_orders")

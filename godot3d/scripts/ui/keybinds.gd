@@ -25,8 +25,14 @@ const HOME := KEY_HOME
 ## nothing before (no project action, no constant here; the HUD's buttons take no keyboard focus, so Godot's ui_accept
 ## never fires on them in play).
 const JUMP_ALERT := KEY_SPACE
+## Kestrel only (the depth orders, Task 13): S stops the selection (clears its orders and queue, keeps its stance), D
+## holds it (stops and takes the hold stance), Z cycles its stance aggressive, defensive, hold. S and D were free since
+## Task 2 moved the pan to the arrows; Z still rotates the Survival camera (Kestrel's yaw is locked north-up).
+const STOP := KEY_S
+const HOLD := KEY_D
+const STANCE := KEY_Z
 ## Keys that do something only on Kestrel (world art on): the controls screen lists them there and nowhere else.
-const KESTREL_ONLY := [JUMP_ALERT]
+const KESTREL_ONLY := [JUMP_ALERT, STOP, HOLD, STANCE]
 ## Number keys 1..9 recall a control group; Ctrl with one assigns it.
 const GROUPS := [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9]
 ## Train hotkeys: key -> bridge unit kind.
@@ -38,6 +44,7 @@ const BUILD := {
 }
 ## Build kinds the Controls screen lists under Defences instead of Build: eleven build rows do not fit one panel under
 ## Selection above the footer (the columns are packed in vm(); test_screen_controls_reference checks the fit on both maps).
+## On Kestrel the order keys add rows to Orders, so Defences rejoin Build there and Build sits over System (see vm()).
 const DEFENCES := ["GunTurret", "AaTurret", "Wall"]
 ## InputMap action -> the physical key project.godot binds it to (checked against the real InputMap by the test). Pan is on
 ## the arrow keys, so W/A/S/D are free (A only arms attack-move).
@@ -77,12 +84,14 @@ static func _row(label: String, keys: Array, proof := "", note := "") -> Diction
 ## keycodes (GROUPS, shown "1-9"), THEN / PLUS separators and literal caps for the mouse and modifiers. `proof` is a
 ## source needle for rows with no keycode (the mouse): the test looks for it in the handler sources, so a mouse row
 ## cannot describe something the handler does not do. A row with a keycode is proven by its constant instead.
-## `kestrel` (world art on) adds the minimap and alert jumps, which exist only there.
+## `kestrel` (world art on) adds the minimap and alert jumps and the depth orders (stop, hold, stance, attack a target),
+## which exist only there, drops Rotate (the yaw is locked) and folds Defences back into Build.
 static func groups(kestrel := false) -> Array:
 	var build_rows: Array = []
 	var defence_rows: Array = []
 	for code in BUILD:
-		(defence_rows if BUILD[code] in DEFENCES else build_rows).append(_row(_kind(BUILD[code]), [code]))
+		var defence: bool = BUILD[code] in DEFENCES and not kestrel
+		(defence_rows if defence else build_rows).append(_row(_kind(BUILD[code]), [code]))
 	var train_rows: Array = []
 	for code in TRAIN:
 		train_rows.append(_row("Train " + _lower_first(_kind(TRAIN[code])), [code]))
@@ -96,9 +105,24 @@ static func groups(kestrel := false) -> Array:
 		_row("Focus, hold to follow", [FOCUS]),
 		_row("Jump to base", [HOME]),
 	]
+	var order_rows: Array = [
+		_row("Move or attack", ["Right click"], "MOUSE_BUTTON_RIGHT"),
+		_row("Attack-move", [ATTACK_MOVE, THEN, "Right click"]),
+		_row("Place structure", ["Left click"], "_write_bridge_build(build_mode"),
+		_row("Tactical ability", [ABILITY]),
+		_row("Repair", [REPAIR]),
+		_row("Sell", [SELL]),
+		_row("Cancel order or placement", [CANCEL]),
+	]
 	if kestrel:
+		camera_rows.remove_at(2)  # no Rotate: Kestrel's yaw is locked north-up, and Z cycles the stance there
 		camera_rows.append(_row("Jump to alert", [JUMP_ALERT]))  # pressed again soon after: the alert before
 		camera_rows.append(_row("Jump on minimap", ["Click map"], "g.minimap_jump("))  # a drag follows the pointer
+		# A right click on a live enemy focuses the selection on it; anywhere else it moves, as before.
+		order_rows[0] = _row("Move, or attack a target", ["Right click"], "_order_target(foe)")
+		order_rows.insert(2, _row("Stop", [STOP]))
+		order_rows.insert(3, _row("Hold position", [HOLD]))
+		order_rows.insert(4, _row("Cycle stance", [STANCE]))
 	return [
 		{"name": "Camera", "rows": camera_rows},
 		{"name": "System", "rows": [
@@ -118,16 +142,8 @@ static func groups(kestrel := false) -> Array:
 			_row("Recall group, twice to centre", [GROUPS]),
 		]},
 		{"name": "Build", "rows": build_rows},
-		{"name": "Defences", "rows": defence_rows},
-		{"name": "Orders", "rows": [
-			_row("Move or attack", ["Right click"], "MOUSE_BUTTON_RIGHT"),
-			_row("Attack-move", [ATTACK_MOVE, THEN, "Right click"]),
-			_row("Place structure", ["Left click"], "_write_bridge_build(build_mode"),
-			_row("Tactical ability", [ABILITY]),
-			_row("Repair", [REPAIR]),
-			_row("Sell", [SELL]),
-			_row("Cancel order or placement", [CANCEL]),
-		]},
+	] + ([] if kestrel else [{"name": "Defences", "rows": defence_rows}]) + [
+		{"name": "Orders", "rows": order_rows},
 		{"name": "Production", "rows": train_rows},
 	]
 
@@ -169,6 +185,10 @@ static func vm(from_pause := true, kestrel := false) -> Dictionary:
 		"title": "Controls",
 		"subtitle": "Mouse and keyboard. Build, train, repair and sell are also on the deck.",
 		"columns": [
+			[by_name["Camera"], by_name["Selection"]],
+			[by_name["Build"], by_name["System"]],
+			[by_name["Orders"], by_name["Production"]],
+		] if kestrel else [
 			[by_name["Camera"], by_name["Production"]],
 			[by_name["Selection"], by_name["Build"]],
 			[by_name["Orders"], by_name["System"], by_name["Defences"]],

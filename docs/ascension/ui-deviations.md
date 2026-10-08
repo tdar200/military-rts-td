@@ -1112,3 +1112,19 @@ new art, no node or material per building. Survival never builds the state track
   idle 35 / 157,082 (fog off), 43 / 157,666 with fog on; the most-zoomed-out frame with damaged buildings on both
   bases 66 / 208,852. All far under the +120 / +150k budget over `world_baseline.json`. Stepping 40 burning or smoking
   buildings costs 37 us (p50) a frame headless.
+
+## Kestrel depth orders (kestrel-depth Task 13)
+
+- Keys, Kestrel only (`Keybinds.KESTREL_ONLY`): S `stop,<id>`, D `hold,<id>`, Z `stance,<id>,<name>` for every selected
+  unit of the player's. Z steps aggressive, defensive, hold and back; a mixed selection goes aggressive. Survival reads
+  none of them, and Z stays its camera_rotate_left axis there (Kestrel's yaw is locked north-up, so Z never rotated it).
+- A right click on an enemy in sight sends `target,<id>,<eid>` for each selected unit (an enemy pick, `_pick_entity(...,
+  true)`: never a remembered building, and an enemy the fog hides has no node at all). Anywhere else it moves as before.
+- The selection panel's 2x2 order grid on Kestrel: Attack-move (A), Stop (S), Hold (D), Stance (Z), with Focus group
+  underneath; a Stance row ("Aggressive", "Defensive" in cyan, "Hold" in amber, "Mixed") under Ammunition. The row reads
+  the bridge's `"stance"` field, sent for the player's own units on a depth map only. The board has no stance chip; the
+  army orders column (nothing selected) is unchanged, since the orders act on a selection.
+- Controls screen on Kestrel: Orders gains Stop, Hold position and Cycle stance, and its first row reads "Move, or attack
+  a target"; Rotate is dropped (the yaw is locked) and Defences fold back into Build, packed as Camera over Selection,
+  Build over System, Orders over Production (column ends 945, 913, 952 of 990). Survival and the gallery gp10 board keep
+  the old rows and packing (828, 952, 963), so their pixel gates are unchanged.
