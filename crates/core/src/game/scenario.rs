@@ -2549,6 +2549,40 @@ mod tests {
         }
     }
 
+    /// Task 22: the playtest's score per seed (3, 5) and preset, for the
+    /// report: the result, then each score term, the total and the grade.
+    #[test]
+    #[ignore = "table: cargo test --release -p rts-core --offline depth_score_table -- --ignored --nocapture"]
+    fn depth_score_table() {
+        for seed in [3, 5] {
+            for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                let mut s = kestrel_reach_with(seed, MatchOptions { difficulty: d });
+                for _ in 0..60_000 {
+                    if s.winner().is_some() {
+                        break;
+                    }
+                    let mut c = s.ai_commands(PlayerId(0));
+                    c.extend(Scenario::KestrelReach.host_commands(&s));
+                    s.step(&c);
+                }
+                let sc = s.depth_score().expect("a depth match");
+                std::eprintln!(
+                    "seed {seed} {d:?}: {:?} at t={} after {} waves | held {} destroyed {} \
+                     lost {} bonus {} total {} grade {}",
+                    s.winner(),
+                    s.tick(),
+                    s.waves_survived(),
+                    sc.waves_held,
+                    sc.destroyed,
+                    sc.lost,
+                    sc.victory_bonus,
+                    sc.total,
+                    sc.grade
+                );
+            }
+        }
+    }
+
     #[test]
     #[ignore = "opening playtest: run with --ignored --nocapture to read the curve"]
     fn kestrel_opening_playtest() {

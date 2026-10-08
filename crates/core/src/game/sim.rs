@@ -12,7 +12,7 @@ mod earthfront;
 pub use earthfront::{EconomyView, SupplyLink, SupplyState};
 #[path = "depth.rs"]
 mod depth;
-pub use depth::{Difficulty, Stance};
+pub use depth::{DepthScore, Difficulty, Stance};
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
@@ -2984,6 +2984,10 @@ impl Sim {
         let refund = self.balance.building(kind).money_cost / Fixed::from_int(2);
         self.civs[usize::from(owner.0)].money = self.civs[usize::from(owner.0)].money + refund;
         self.entities[idx].hp = Fixed::ZERO;
+        if self.is_depth() {
+            // Task 22: a sale is not a loss (`depth_credit_deaths`).
+            self.dg.sold.push(building.0);
+        }
     }
 
     #[allow(
@@ -4848,6 +4852,9 @@ impl Sim {
             self.map.set_tile(x, y, Tile::OPEN);
         }
         if self.is_depth() && !freed_slots.is_empty() {
+            // Task 22: the dead join the destroyed and lost ledgers (a sale
+            // does not).
+            self.depth_credit_deaths(&freed_slots);
             // Before the slots can be reused: nobody keeps chasing a dead target.
             self.depth_drop_dangling(&freed_slots);
         }

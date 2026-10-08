@@ -324,6 +324,17 @@ impl Difficulty {
         }
     }
 
+    /// Task 22: the percent of the base score a match on this preset earns
+    /// ([`Sim::depth_score`]).
+    #[must_use]
+    pub const fn score_pct(self) -> i64 {
+        match self {
+            Self::Easy => 75,
+            Self::Normal => 100,
+            Self::Hard => 150,
+        }
+    }
+
     /// The protocol name: "easy", "normal" or "hard".
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -484,6 +495,19 @@ pub(super) struct DepthGlobal {
     /// [`crate::game::scenario::kestrel_reach_with`] chose another). It scales
     /// the wave size here; the purse and the wave clock are set at build time.
     pub(super) difficulty: Difficulty,
+    /// Task 22: the money value (balance price) of the enemy units and
+    /// structures that died, by the player credited with them (the other side
+    /// of the two-player match: the sim records no killer). Credited by
+    /// `clear_dead`; a sold structure is never credited.
+    pub(super) destroyed: [i64; 2],
+    /// Task 22: the money value of each player's own units and structures that
+    /// died (never a sale), by owner.
+    pub(super) lost: [i64; 2],
+    /// Task 22: entity slots sold by this tick's commands, so the `clear_dead`
+    /// right after the commands treats them as sales, not losses. Transient:
+    /// filled by `apply_sell` and emptied by that same tick's first
+    /// `clear_dead`, so it is always empty between ticks and is not hashed.
+    pub(super) sold: Vec<u32>,
 }
 
 impl DepthGlobal {
@@ -496,7 +520,55 @@ impl DepthGlobal {
         h.write_u64(u64::from(self.waves_cleared));
         // Task 20 (appended).
         h.write_u64(self.difficulty.tag());
+        // Task 22 (appended): the destroyed and lost ledgers.
+        for v in self.destroyed.iter().chain(&self.lost) {
+            h.write_i64(*v);
+        }
     }
+}
+
+/// Task 22: points per cleared wave.
+pub const SCORE_PER_WAVE: i64 = 500;
+/// Task 22: a human win earns a tenth of the ticks left before this one (25
+/// minutes, the end of the match window).
+pub const SCORE_VICTORY_TICKS: i64 = 45_000;
+/// Task 22: the least total for each grade, S first; below the last is D.
+pub const GRADE_THRESHOLDS: [(i64, char); 4] =
+    [(12_000, 'S'), (8_000, 'A'), (5_000, 'B'), (2_500, 'C')];
+
+/// Task 22: the score of a Kestrel depth match so far, from the human's side.
+/// Derived from hashed sim state only ([`Sim::depth_score`]), so a replay that
+/// reaches the same state reaches the same score.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepthScore {
+    /// Spawned waves none of whose units are left ([`Sim::waves_cleared`]).
+    pub waves_held: u32,
+    /// Money value of the alien units and structures destroyed.
+    pub destroyed: i64,
+    /// Money value of the human's own units and structures lost.
+    pub lost: i64,
+    /// A tenth of the ticks left before [`SCORE_VICTORY_TICKS`] on a human
+    /// win, else 0.
+    pub victory_bonus: i64,
+    /// `max(0, waves_held * 500 + destroyed - lost / 2 + victory_bonus)`
+    /// times the preset's [`Difficulty::score_pct`] / 100.
+    pub total: i64,
+    /// S, A, B, C or D ([`depth_grade`]).
+    pub grade: char,
+}
+
+/// Task 22: the grade a score total earns: S at 12,000, A at 8,000, B at
+/// 5,000, C at 2,500, else D.
+#[must_use]
+pub const fn depth_grade(total: i64) -> char {
+    let mut i = 0;
+    while i < GRADE_THRESHOLDS.len() {
+        if total >= GRADE_THRESHOLDS[i].0 {
+            return GRADE_THRESHOLDS[i].1;
+        }
+        i += 1;
+    }
+    'D'
 }
 
 impl Sim {
@@ -609,6 +681,65 @@ impl Sim {
         } else {
             classic
         }
+    }
+
+    /// Task 22: the match's score from the human's (the waves' defender's)
+    /// side; `None` without depth. It reads only hashed state (the cleared
+    /// waves, the destroyed and lost ledgers, the tick, the winner and the
+    /// preset), so it is deterministic and replay-safe. A decided match stops
+    /// its tick, so the score holds once the match is over.
+    #[must_use]
+    pub fn depth_score(&self) -> Option<DepthScore> {
+        if !self.is_depth() {
+            return None;
+        }
+        let human = usize::from(self.waves.map_or(self.human_civ, |c| c.defender).0).min(1);
+        let waves_held = self.dg.waves_cleared;
+        let destroyed = self.dg.destroyed[human];
+        let lost = self.dg.lost[human];
+        let won = self.winner().is_some_and(|w| usize::from(w.0) == human);
+        let tick = i64::try_from(self.tick).unwrap_or(i64::MAX);
+        let victory_bonus = if won {
+            (SCORE_VICTORY_TICKS - tick).max(0) / 10
+        } else {
+            0
+        };
+        let base = i64::from(waves_held) * SCORE_PER_WAVE + destroyed - lost / 2 + victory_bonus;
+        let total = base.max(0) * self.dg.difficulty.score_pct() / 100;
+        Some(DepthScore {
+            waves_held,
+            destroyed,
+            lost,
+            victory_bonus,
+            total,
+            grade: depth_grade(total),
+        })
+    }
+
+    /// Task 22: credits the entities in `dead` (slots `clear_dead` just
+    /// reaped) to the destroyed and lost ledgers at their balance price: the
+    /// owner loses it and the other player destroyed it. Slots sold this tick
+    /// ([`DepthGlobal::sold`]) are skipped; the sold list is emptied. Depth
+    /// only; owners outside the two players are not counted.
+    pub(super) fn depth_credit_deaths(&mut self, dead: &[u32]) {
+        for &slot in dead {
+            if self.dg.sold.contains(&slot) {
+                continue;
+            }
+            let e = &self.entities[slot as usize];
+            let owner = usize::from(e.owner.0);
+            if owner > 1 {
+                continue;
+            }
+            let value = match e.kind {
+                Kind::Unit(u) => self.balance.unit(u).money_cost,
+                Kind::Building(b) => self.balance.building(b).money_cost,
+            }
+            .to_int_floor();
+            self.dg.lost[owner] += value;
+            self.dg.destroyed[1 - owner] += value;
+        }
+        self.dg.sold.clear();
     }
 
     /// Task 19: spawned waves with no living unit left (0 without depth).
@@ -2106,9 +2237,12 @@ mod tests {
     use crate::game::hex;
     use crate::game::map::Map;
     use crate::game::scenario::{
-        kestrel_reach, kestrel_reach_classic, lane_defense, survival, Scenario,
+        kestrel_reach, kestrel_reach_classic, kestrel_reach_with, lane_defense, survival,
+        MatchOptions, Scenario,
     };
-    use crate::game::sim::{Command, EntityKindView, PlayerId, Sim, Stance};
+    use crate::game::sim::{
+        Command, DepthScore, Difficulty, EntityKindView, PlayerId, Sim, Stance,
+    };
     use crate::game::stats::{BuildingKind, UnitKind};
     use crate::vec::Vec2;
     use alloc::vec::Vec;
@@ -6341,8 +6475,6 @@ mod tests {
     /// before the relays add theirs (2 relays on seed 3: +4).
     #[test]
     fn the_preset_scales_the_expedition_before_the_relays() {
-        use crate::game::scenario::{kestrel_reach_with, MatchOptions};
-        use crate::game::sim::Difficulty;
         for (d, first, fifth, capped) in [
             (Difficulty::Easy, 4 + 4, 10 + 4, 18 + 4),
             (Difficulty::Normal, 10, 18, 28),
@@ -6819,5 +6951,203 @@ mod tests {
         let mut lane = lane_defense(3);
         lane.step(&[]);
         assert!(!lane.core_node_shielded());
+    }
+
+    /// Task 22: the money value of entity `i` (its balance price).
+    fn value_of(s: &Sim, i: usize) -> i64 {
+        match s.entities[i].kind {
+            Kind::Unit(u) => s.unit_cost(u).to_int_floor(),
+            Kind::Building(b) => s.building_cost(b).to_int_floor(),
+        }
+    }
+
+    /// Task 22: the first `n` living entities of `owner` that `keep` accepts.
+    fn pick(s: &Sim, owner: PlayerId, n: usize, keep: fn(Kind) -> bool) -> Vec<usize> {
+        (0..s.entities.len())
+            .filter(|&i| {
+                let e = &s.entities[i];
+                e.alive && e.owner == owner && keep(e.kind)
+            })
+            .take(n)
+            .collect()
+    }
+
+    const fn is_unit(k: Kind) -> bool {
+        matches!(k, Kind::Unit(_))
+    }
+
+    fn is_spare_building(k: Kind) -> bool {
+        matches!(k, Kind::Building(b) if b != BuildingKind::CommandCenter)
+    }
+
+    #[test]
+    fn deaths_credit_destroyed_and_lost_value_by_owner_and_a_sale_is_no_loss() {
+        let mut s = kestrel_reach(3);
+        let aliens = pick(&s, P1, 3, is_unit);
+        let humans = pick(&s, P0, 2, is_unit);
+        assert_eq!((aliens.len(), humans.len()), (3, 2));
+        let alien_value: i64 = aliens.iter().map(|&i| value_of(&s, i)).sum();
+        let human_value: i64 = humans.iter().map(|&i| value_of(&s, i)).sum();
+        assert!(alien_value > 0 && human_value > 0);
+        assert_eq!((s.dg.destroyed, s.dg.lost), ([0, 0], [0, 0]));
+        for &i in aliens.iter().chain(&humans) {
+            s.entities[i].hp = Fixed::ZERO;
+        }
+        s.step(&[]);
+        assert_eq!(s.dg.destroyed, [alien_value, human_value]);
+        assert_eq!(s.dg.lost, [human_value, alien_value]);
+        // A sold structure is refunded, not lost: nothing moves.
+        let spare = pick(&s, P0, 2, is_spare_building);
+        assert_eq!(spare.len(), 2);
+        s.step(&[Command::Sell {
+            owner: P0,
+            building: EntityId(u32::try_from(spare[0]).unwrap()),
+        }]);
+        assert!(!s.entities[spare[0]].alive, "the sale went through");
+        assert_eq!(s.dg.lost, [human_value, alien_value]);
+        assert_eq!(s.dg.destroyed, [alien_value, human_value]);
+        // A structure that falls counts its price.
+        let price = value_of(&s, spare[1]);
+        assert!(price > 0);
+        s.entities[spare[1]].hp = Fixed::ZERO;
+        s.step(&[]);
+        assert_eq!(s.dg.lost, [human_value + price, alien_value]);
+        assert_eq!(s.dg.destroyed, [alien_value, human_value + price]);
+        // Survival and classic Kestrel keep no ledger.
+        for build in [survival as fn(u64) -> Sim, kestrel_reach_classic] {
+            let mut c = build(3);
+            let mut units = pick(&c, P0, 1, is_unit);
+            units.extend(pick(&c, P1, 1, is_unit));
+            assert!(!units.is_empty());
+            for &i in &units {
+                c.entities[i].hp = Fixed::ZERO;
+            }
+            c.step(&[]);
+            assert_eq!((c.dg.destroyed, c.dg.lost), ([0, 0], [0, 0]));
+            assert!(c.depth_score().is_none());
+        }
+    }
+
+    #[test]
+    fn grades_follow_the_score_thresholds() {
+        for (total, grade) in [
+            (50_000, 'S'),
+            (12_000, 'S'),
+            (11_999, 'A'),
+            (8_000, 'A'),
+            (7_999, 'B'),
+            (5_000, 'B'),
+            (4_999, 'C'),
+            (2_500, 'C'),
+            (2_499, 'D'),
+            (0, 'D'),
+        ] {
+            assert_eq!(super::depth_grade(total), grade, "{total}");
+        }
+    }
+
+    #[test]
+    fn the_difficulty_scales_the_score() {
+        assert_eq!(
+            [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard].map(Difficulty::score_pct),
+            [75, 100, 150]
+        );
+    }
+
+    /// Task 22: `kestrel_reach_with(3, d)` with a crafted ledger: 4 waves
+    /// cleared, 3000 destroyed and 1000 lost by the human.
+    fn crafted(d: Difficulty) -> Sim {
+        let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+        s.dg.waves_cleared = 4;
+        s.dg.destroyed = [3000, 700];
+        s.dg.lost = [1000, 3000];
+        s
+    }
+
+    #[test]
+    fn the_score_adds_waves_destroyed_half_the_losses_and_the_difficulty() {
+        let normal = crafted(Difficulty::Normal).depth_score().unwrap();
+        // 4 x 500 + 3000 - 1000 / 2 = 4500.
+        assert_eq!(
+            normal,
+            DepthScore {
+                waves_held: 4,
+                destroyed: 3000,
+                lost: 1000,
+                victory_bonus: 0,
+                total: 4500,
+                grade: 'C',
+            }
+        );
+        let hard = crafted(Difficulty::Hard).depth_score().unwrap();
+        assert_eq!((hard.total, hard.grade), (6750, 'B'), "Hard is x1.5");
+        let easy = crafted(Difficulty::Easy).depth_score().unwrap();
+        assert_eq!((easy.total, easy.grade), (3375, 'C'), "Easy is x0.75");
+        // Heavy losses never push the score below zero.
+        let mut broke = crafted(Difficulty::Hard);
+        broke.dg.lost[0] = 20_000;
+        let broke = broke.depth_score().unwrap();
+        assert_eq!((broke.lost, broke.total, broke.grade), (20_000, 0, 'D'));
+        // No score without depth.
+        assert!(survival(7).depth_score().is_none());
+        assert!(kestrel_reach_classic(3).depth_score().is_none());
+        assert!(lane_defense(3).depth_score().is_none());
+    }
+
+    #[test]
+    fn a_human_win_adds_a_tenth_of_the_ticks_left_before_45000() {
+        let mut s = crafted(Difficulty::Normal);
+        let core = pick(&s, P1, 1, |k| {
+            k == Kind::Building(BuildingKind::CommandCenter)
+        })[0];
+        let core_value = value_of(&s, core);
+        s.entities[core].hp = Fixed::ZERO;
+        s.step(&[]);
+        assert_eq!(s.winner(), Some(P0));
+        let t = i64::try_from(s.tick()).unwrap();
+        let won = s.depth_score().unwrap();
+        assert_eq!(won.victory_bonus, (45_000 - t) / 10);
+        assert_eq!(won.destroyed, 3000 + core_value);
+        assert_eq!(
+            won.total,
+            4 * 500 + 3000 + core_value - 500 + (45_000 - t) / 10
+        );
+        // A decided match stops: the score holds on later steps.
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        assert_eq!(s.depth_score(), Some(won));
+        // A human loss earns no bonus.
+        let mut lost = crafted(Difficulty::Normal);
+        let home = pick(&lost, P0, 1, |k| {
+            k == Kind::Building(BuildingKind::CommandCenter)
+        })[0];
+        lost.entities[home].hp = Fixed::ZERO;
+        lost.step(&[]);
+        assert_eq!(lost.winner(), Some(P1));
+        assert_eq!(lost.depth_score().unwrap().victory_bonus, 0);
+        // A win after 45,000 ticks earns none either.
+        let mut late = crafted(Difficulty::Normal);
+        late.tick = 45_500;
+        late.entities[core].hp = Fixed::ZERO;
+        late.step(&[]);
+        assert_eq!(late.winner(), Some(P0));
+        assert_eq!(late.depth_score().unwrap().victory_bonus, 0);
+    }
+
+    #[test]
+    fn the_score_ledger_is_hashed_under_depth_only() {
+        let depth = kestrel_reach(3);
+        let mut one = depth.clone();
+        one.dg.destroyed[0] = 1;
+        assert_ne!(depth.state_hash(), one.state_hash());
+        let mut two = depth.clone();
+        two.dg.lost[1] = 1;
+        assert_ne!(depth.state_hash(), two.state_hash());
+        let plain = survival(7);
+        let mut ledger = plain.clone();
+        ledger.dg.destroyed = [5, 6];
+        ledger.dg.lost = [7, 8];
+        assert_eq!(plain.state_hash(), ledger.state_hash());
     }
 }
