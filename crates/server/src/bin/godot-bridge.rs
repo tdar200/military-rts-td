@@ -11,7 +11,8 @@ use rts_core::game::kestrel;
 use rts_core::game::map::{Deposit, Ground};
 use rts_core::game::scenario::Scenario;
 use rts_core::game::sim::{
-    Command, EntityId, EntityKindView, EntityView, PlayerId, Stance, SupplyState,
+    order_point_in_range, Command, EntityId, EntityKindView, EntityView, PlayerId, Stance,
+    SupplyState,
 };
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
@@ -343,6 +344,25 @@ impl FogState {
                 *shown = Shown::Ghost;
             }
         }
+    }
+
+    /// Whether a player command may reach the sim (P2 review M1): an
+    /// `AttackTarget` only on an entity this write showed live, which is what
+    /// the client could click, so a hand-written line can neither learn
+    /// whether a hidden enemy id is alive nor send a unit after one. Every
+    /// other command, and everything while the fog is inactive, passes. The
+    /// loop calls this before the next step, so the ids still name the
+    /// entities this write showed.
+    fn admits(&self, command: &Command) -> bool {
+        let Command::AttackTarget { target, .. } = *command else {
+            return true;
+        };
+        !self.active
+            || self
+                .holder
+                .get(target.0 as usize)
+                .and_then(|&slot| slot.checked_sub(1))
+                .is_some_and(|index| self.shown(index) == Shown::Live)
     }
 
     /// What view `index` of this write shows (everything, when the fog is inactive).
@@ -1131,10 +1151,6 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     std::fs::rename(temporary, path)
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "one protocol parser keeps every line-oriented Godot command auditable in one match"
-)]
 /// Task 14: the player's own unit's waypoint queue on a depth map, appended
 /// after its stance: `"queue":N` (legs waiting behind the current order), and
 /// while N > 0 its `"route"` still to walk as `[x_bits,z_bits,attack]` legs,
@@ -1161,6 +1177,18 @@ fn write_queue(sim: &rts_core::game::sim::Sim, id: EntityId, out: &mut String) -
     }
     out.push(']');
     Ok(())
+}
+
+/// The `<x_bits>,<z_bits>` world point of an order line, or `None` when a
+/// field is missing, malformed or outside
+/// [`rts_core::game::sim::ORDER_COORD_LIMIT`] (P2 review
+/// M5: raw bits such as `i64::MIN` overflow the fixed-point maths; the sim
+/// drops such points too).
+fn order_point<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Option<Vec2> {
+    let x_bits = fields.next()?.parse::<i64>().ok()?;
+    let z_bits = fields.next()?.parse::<i64>().ok()?;
+    let point = Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits));
+    order_point_in_range(point).then_some(point)
 }
 
 #[allow(
@@ -1197,9 +1225,7 @@ fn take_commands(path: &Path) -> Vec<Command> {
                 "move" | "attack" => {
                     let mode = line.starts_with("attack,");
                     let unit = fields.next()?.parse::<u32>().ok()?;
-                    let x_bits = fields.next()?.parse::<i64>().ok()?;
-                    let z_bits = fields.next()?.parse::<i64>().ok()?;
-                    let target = Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits));
+                    let target = order_point(&mut fields)?;
                     Some(if mode {
                         Command::AttackMove {
                             owner: PlayerId(0),
@@ -1266,9 +1292,7 @@ fn take_commands(path: &Path) -> Vec<Command> {
                 "rally" | "ability" => {
                     let ability = line.starts_with("ability,");
                     let entity = fields.next()?.parse::<u32>().ok()?;
-                    let x_bits = fields.next()?.parse::<i64>().ok()?;
-                    let z_bits = fields.next()?.parse::<i64>().ok()?;
-                    let target = Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits));
+                    let target = order_point(&mut fields)?;
                     Some(if ability {
                         Command::UseAbility {
                             owner: PlayerId(0),
@@ -1336,12 +1360,11 @@ fn take_commands(path: &Path) -> Vec<Command> {
                 "qmove" | "qattack" => {
                     let attack_move = line.starts_with("qattack,");
                     let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    let x_bits = fields.next()?.parse::<i64>().ok()?;
-                    let z_bits = fields.next()?.parse::<i64>().ok()?;
+                    let target = order_point(&mut fields)?;
                     Some(Command::QueueMove {
                         owner: PlayerId(0),
                         unit,
-                        target: Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits)),
+                        target,
                         attack_move,
                     })
                 }
@@ -1620,7 +1643,9 @@ fn main() -> std::io::Result<()> {
             continue;
         }
         let started = Instant::now();
-        let player_commands = take_commands(&paths.commands);
+        let mut player_commands = take_commands(&paths.commands);
+        // Orders on enemies the last fogged frame did not show never reach the sim.
+        player_commands.retain(|command| fog.admits(command));
         // Host commands (survey AI, alien AI, scenario script) from the one shared
         // builder, so headless tests and replay verification step the same list.
         let mut commands = scenario.host_commands(&sim);
@@ -2378,6 +2403,81 @@ mod tests {
             } if target.x.to_bits() == 196_608 && target.y.to_bits() == 262_144
         ));
         assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    /// P2 review M5: a point line whose raw bits lie outside any map (up to
+    /// `i64::MIN`, which used to panic `hex::from_world` in a debug verifier)
+    /// is dropped like any malformed line; points at the limit still parse.
+    #[test]
+    fn godot_command_file_drops_hostile_order_points() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-hostile-commands-{}.txt",
+            std::process::id()
+        ));
+        let limit = rts_core::game::sim::ORDER_COORD_LIMIT.to_bits();
+        let min = i64::MIN;
+        let max = i64::MAX;
+        let over = limit + 1;
+        std::fs::write(
+            &path,
+            format!(
+                "qmove,7,{min},0\nqattack,7,0,{max}\nmove,7,{min},{min}\n\
+                 attack,7,{over},0\nrally,3,0,-{over}\nability,7,{max},0\n\
+                 qmove,7,{limit},-{limit}\nmove,7,65536,65536\n"
+            ),
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 2, "hostile point lines are dropped");
+        assert!(matches!(
+            commands[0],
+            Command::QueueMove { target, .. }
+                if target.x.to_bits() == limit && target.y.to_bits() == -limit
+        ));
+        assert!(matches!(commands[1], Command::Move { .. }));
+    }
+
+    /// P2 review M1: the bridge passes a `target` order to the sim only when
+    /// the fogged snapshot the player last saw showed that enemy live, so a
+    /// hand-written line cannot probe or chase a hidden enemy id; with the fog
+    /// off (or on Survival) every order passes.
+    #[test]
+    fn fog_drops_attack_target_orders_on_enemies_out_of_sight() {
+        use rts_core::fixed::Fixed;
+        use rts_core::game::sim::EntityKindView;
+        use rts_core::vec::Vec2;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        sim.set_balance(rts_data::load_default());
+        let rifle = human_infantry(&sim);
+        let hidden = sim
+            .views()
+            .into_iter()
+            .find(|v| v.owner != PlayerId(0) && matches!(v.kind, EntityKindView::Unit(_)))
+            .expect("an alien unit")
+            .id;
+        let order = |target| Command::AttackTarget {
+            owner: PlayerId(0),
+            unit: rifle,
+            target,
+        };
+        let mut fog = FogState::new(true);
+        let _ = snapshot_json_with(&sim, "[]", &mut ShotWindow::new(), &mut fog);
+        assert!(!fog.admits(&order(hidden)), "a hidden enemy was targeted");
+        assert!(!fog.admits(&order(EntityId(9999))), "an unknown id passed");
+        assert!(fog.admits(&Command::Stop {
+            owner: PlayerId(0),
+            unit: rifle,
+        }));
+        // An enemy that walks into sight can be targeted on the next frame.
+        let near = sim.position(rifle).expect("rifle") + Vec2::new(Fixed::ONE, Fixed::ZERO);
+        let seen = sim.add_unit(PlayerId(1), UnitKind::Infantry, near);
+        let _ = snapshot_json_with(&sim, "[]", &mut ShotWindow::new(), &mut fog);
+        assert!(fog.admits(&order(seen)));
+        assert!(!fog.admits(&order(hidden)));
+        // Fog off: the player sees everything, so nothing is filtered.
+        let mut off = FogState::new(false);
+        let _ = snapshot_json_with(&sim, "[]", &mut ShotWindow::new(), &mut off);
+        assert!(off.admits(&order(hidden)));
     }
 
     #[test]
