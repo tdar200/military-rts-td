@@ -67,6 +67,8 @@ var runtime_directory := ""
 ## Mirrors earthfront_3d.settings_path. A path no test creates, so the UI reads the defaults and never the real
 ## user://settings.cfg (tests that save settings set their own user://test_... path and remove it).
 var settings_path := "user://test_stub_settings/settings.cfg"
+## Mirrors earthfront_3d.records_path. Empty: the debrief records no score (tests that submit set a user://test_... path).
+var records_path := ""
 ## The UI applies volumes and the window mode to these recorders instead of the AudioServer and the DisplayServer
 ## (the real game has no such members, so it gets the servers).
 var audio_server := BusRecorder.new()

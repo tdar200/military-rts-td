@@ -25,6 +25,7 @@ const MapPicker = preload("res://scripts/ui/sections/map_picker.gd")
 const MatchConfig = preload("res://scripts/match_config.gd")
 const Settings = preload("res://scripts/ui/settings.gd")
 const SettingsScreen = preload("res://scripts/ui/sections/settings_screen.gd")
+const Records = preload("res://scripts/records.gd")
 
 const VM_INTERVAL := 0.1
 ## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it still runs
@@ -72,6 +73,10 @@ var _briefing_hash := 0
 var _briefing_clock := BRIEFING_INTERVAL
 var _controls_over_play := false  # F1 opened the controls with no pause menu behind them: Back resumes
 var _pause_tick := 0
+## Task 22: this match's score went to the personal bests already (each match runs in a fresh scene, so this is per
+## match), and what record_score() reported then.
+var _score_recorded := false
+var _score_record: Dictionary = {}
 var _pause_seen_tick := 0
 var _pause_still_s := 0.0
 var _pause_moving := false  # the bridge tick moved on after the pause began and has not stood still since
@@ -674,8 +679,32 @@ func show_debrief() -> void:
 	var panel := Debrief.new()
 	scrim.add_child(panel)
 	panel.action.connect(_on_debrief_action)
-	panel.apply(LiveScreens.debrief_vm(g, session_log))
+	panel.apply(LiveScreens.debrief_vm(g, session_log, record_score()))
 	Debrief.place_in(panel, g.get_viewport().get_visible_rect().size)
+
+
+## Task 22: submits a decided Kestrel depth match's score total to the personal bests (Records, keyed by map and
+## difficulty) once, and returns {best, new_best} for the debrief. {} when there is nothing to record: no winner yet (a
+## restart mid-match never gets here), Survival or classic Kestrel (no depth score), or no records file in use (the game's
+## records_path is ""; the test stub's default). A second call for the same match returns the first answer.
+func record_score() -> Dictionary:
+	if _score_recorded:
+		return _score_record
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or int(g.bridge_winner) < 0:
+		return {}
+	var depth: Variant = snap.get("depth", null)
+	if not (depth is Dictionary) or not (depth.get("score", null) is Dictionary):
+		return {}
+	var path := _records_path()
+	if path == "":
+		return {}
+	var map := MatchConfig.running(snap)
+	var difficulty := MatchConfig.clean_difficulty(depth.get("difficulty", "normal"))
+	_score_recorded = true
+	var new_best := Records.submit(map, difficulty, int(depth["score"].get("total", 0)), path)
+	_score_record = {"best": Records.best(map, difficulty, path), "new_best": new_best}
+	return _score_record
 
 
 func _on_debrief_action(name: String, _arg: Variant) -> void:
@@ -1036,6 +1065,12 @@ func _on_pause_action(name: String, _arg: Variant = null) -> void:
 func _settings_path() -> String:
 	var path = g.get("settings_path")
 	return str(path) if path != null and str(path) != "" else Settings.PATH
+
+
+## The personal bests file: the game's records_path (Records.PATH, under user://), "" when the game keeps none.
+func _records_path() -> String:
+	var path = g.get("records_path")
+	return Records.PATH if path == null else str(path)
 
 
 ## The game's audio_server / display_server when it has one (the test stub's recorders), else null: the real servers.

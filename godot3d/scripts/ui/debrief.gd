@@ -23,6 +23,10 @@ const LOST := Color("f06050")
 const GLOW_COPIES := 40
 const GLOW_SIGMA := 11.0
 const GLOW_ALPHA := 0.4
+## Task 22: the score panel's least height and the step between its rows.
+const SCORE_MIN_H := 130.0
+const SCORE_ROW_H := 22.0
+const SCORE_GRADE_COLORS := {"S": T.WARN_HI, "A": T.CYAN, "B": T.GOOD, "C": T.TEXT, "D": T.DIM}
 
 var variant := "victory"
 ## Height the content needs; larger than HEIGHT only when a very long timeline or list pushes the buttons down.
@@ -54,7 +58,8 @@ static func place_in(col: Control, host_size: Vector2) -> void:
 	col.position = ((host_size - col.size * s) * 0.5).round()
 
 
-## vm: variant, divider?, tag, operation, status?, title, lede, stats?[], casualties?{rows[], legend?}, economy?{...chart},
+## vm: variant, divider?, tag, operation, status?, title, lede, stats?[], score?{total, grade, rows[], best?, new_best},
+## casualties?{rows[], legend?}, economy?{...chart},
 ## teaser?{title, tag?, body}, chips?[], timeline?{title, range, rows[], ticks[], end?}, chain?[], advice?[], footer?, buttons[].
 func apply(vm: Dictionary) -> void:
 	var h := hash(vm)
@@ -82,6 +87,8 @@ func apply(vm: Dictionary) -> void:
 		y = _block("chips", x0, y, _chips(vm["chips"], x0, w, y)) + GAP
 	if not vm.get("stats", []).is_empty():
 		y = _block("stats", x0, y, _stats(vm["stats"], x0, w, y)) + GAP
+	if not vm.get("score", {}).is_empty():
+		y = _block("score", x0, y, _score(vm["score"], x0, w, y)) + GAP
 	if not vm.get("casualties", {}).get("rows", []).is_empty() or not vm.get("economy", {}).get("series", []).is_empty():
 		y = _block("charts", x0, y, _casualties_and_economy(vm, x0, w, y)) + GAP
 	if not vm.get("timeline", {}).get("rows", []).is_empty():
@@ -210,6 +217,38 @@ func _stats(stats: Array, x0: float, w: float, y: float) -> float:
 		var value := {"f": "disp", "wt": 600, "px": 40, "sp": 0.02, "lh": 44, "col": T.tone(str(s.get("tone", "hi")))}
 		K.text(self, _fit(str(s.get("value", "")), value, cw - 30), value.merged({"x": x + 15, "y": y + 28}))
 	return y + 85.0
+
+
+## Task 22: one panel, the grade on the left, the total with the personal best (and the New best flag) beside it, and
+## the score rows (label left, signed value right) in the right half.
+func _score(sc: Dictionary, x0: float, w: float, y: float) -> float:
+	var rows: Array = sc.get("rows", [])
+	var h := maxf(SCORE_MIN_H, 16.0 + rows.size() * SCORE_ROW_H + 14.0)
+	K.panel(self, x0, y, w, h)
+	var cap := {"f": "mono", "px": 12, "sp": 0.12, "col": T.DIM, "up": true}
+	K.text(self, "Grade", cap.merged({"x": x0 + 21, "y": y + 16}))
+	var grade := str(sc.get("grade", ""))
+	K.text(self, grade, {"x": x0 + 21, "y": y + 34, "f": "disp", "wt": 600, "px": 64, "lh": 64, "col": SCORE_GRADE_COLORS.get(grade, T.TEXT_HI)})
+	var mid := x0 + 128.0
+	K.text(self, "Score", cap.merged({"x": mid, "y": y + 16}))
+	var value := {"f": "disp", "wt": 600, "px": 40, "sp": 0.02, "lh": 44, "col": T.TEXT_HI}
+	var total := K.text(self, str(sc.get("total", "0")), value.merged({"x": mid, "y": y + 34}))
+	var rows_x := x0 + w * 0.5
+	if sc.has("best"):
+		var best := K.text(self, "Best %s" % sc["best"], {"x": mid, "y": y + 34 + total.size.y + 8, "f": "mono", "px": 13, "sp": 0.03, "col": T.DIM})
+		if sc.get("new_best", false):
+			var chip := K.chip(self, mid + best.size.x + 12.0, best.position.y - 6.0, "", T.GOOD, [{"t": "New best", "col": T.GOOD, "px": 12, "sp": 0.12, "up": true}], {"border": T.GOOD})
+			if chip.position.x + chip.size.x > rows_x - 16.0:
+				chip.position = Vector2(roundf(mid), roundf(best.position.y + best.size.y + 6.0))
+	var rw := x0 + w - 21.0 - rows_x
+	var ry := y + 16.0
+	for r in rows:
+		var row_o := {"px": 14, "col": T.DIM}
+		var v := K.text(self, str(r.get("value", "")), {"y": ry, "f": "mono", "px": 14, "col": T.TEXT})
+		v.position.x = roundf(rows_x + rw - v.size.x)
+		K.text(self, _fit(str(r.get("label", "")), row_o, rw - v.size.x - 12.0), row_o.merged({"x": rows_x, "y": ry}))
+		ry += SCORE_ROW_H
+	return y + h
 
 
 func _casualties_and_economy(vm: Dictionary, x0: float, w: float, y: float) -> float:

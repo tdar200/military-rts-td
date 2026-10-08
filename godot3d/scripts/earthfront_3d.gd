@@ -29,6 +29,7 @@ const FogView := preload("res://scripts/world/fog_view.gd")
 const BuildingStates := preload("res://scripts/world/building_states.gd")
 const AlertPings := preload("res://scripts/ui/alert_pings.gd")
 const Settings := preload("res://scripts/ui/settings.gd")
+const Records := preload("res://scripts/records.gd")
 const FeedbackEvents := preload("res://scripts/ui/feedback_events.gd")
 const KestrelCoach := preload("res://scripts/ui/kestrel_coach.gd")
 const ERA_NAMES := [
@@ -176,6 +177,8 @@ var bridge_era := 0
 var runtime_directory := "res://runtime"
 ## The player's settings file (Settings.PATH, under user://; QA isolates it with its own XDG_DATA_HOME).
 var settings_path := Settings.PATH
+## Task 22: the personal bests file (Records.PATH, under user://; QA isolates it the same way).
+var records_path := Records.PATH
 var command_sequence := 0
 var bridge_earthfront := true
 var bridge_technology_total := 12

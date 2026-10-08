@@ -106,8 +106,9 @@ static func thousands(n: int) -> String:
 
 
 ## Debrief column for the finished mission. `log` is the SessionLog the game kept (null reads as an empty one). Restart
-## replays the same map and seed and deploys at once; Main menu returns to the title; Quit closes the game.
-static func debrief_vm(g, log) -> Dictionary:
+## replays the same map and seed and deploys at once; Main menu returns to the title; Quit closes the game. Task 22:
+## `record` is game_ui.record_score() ({best, new_best} once the decided Kestrel match's score is recorded, else {}).
+static func debrief_vm(g, log, record := {}) -> Dictionary:
 	if log == null:
 		log = SessionLog.new()
 	var victory: bool = g.bridge_winner == 0
@@ -153,7 +154,48 @@ static func debrief_vm(g, log) -> Dictionary:
 	else:
 		vm["lede"] = "The Command Nexus fell at %s." % clock(elapsed)
 		_defeat_record(vm, log, elapsed)
+	var score := score_vm(g.get("bridge_snapshot"), record)
+	if not score.is_empty():
+		vm["score"] = score
 	return vm
+
+
+## Task 22: the score block from the Kestrel depth block's "score" (the bridge's Sim::depth_score): the total, the grade,
+## one row per term and, with a `record` ({best, new_best}), the personal best and the New best flag. {} without a score
+## (Survival, classic Kestrel or no snapshot).
+static func score_vm(snapshot: Variant, record := {}) -> Dictionary:
+	if not (snapshot is Dictionary):
+		return {}
+	var depth: Variant = snapshot.get("depth", null)
+	if not (depth is Dictionary) or not (depth.get("score", null) is Dictionary):
+		return {}
+	var sc: Dictionary = depth["score"]
+	var waves := int(sc.get("waves_held", 0))
+	var lost := int(sc.get("lost", 0))
+	var bonus := int(sc.get("victory_bonus", 0))
+	var difficulty := MatchConfig.clean_difficulty(depth.get("difficulty", "normal"))
+	var rows: Array = [
+		{"label": "Waves held (%d x 500)" % waves, "value": _signed(waves * 500)},
+		{"label": "Enemy value destroyed", "value": _signed(int(sc.get("destroyed", 0)))},
+		{"label": "Losses (half of %s)" % thousands(lost), "value": _signed(-floori(lost / 2.0))},
+	]
+	if bonus > 0:
+		rows.append({"label": "Victory bonus", "value": _signed(bonus)})
+	rows.append({"label": "%s difficulty" % MatchConfig.difficulty_name(difficulty), "value": SCORE_MULTIPLIERS[difficulty]})
+	var out := {"total": thousands(int(sc.get("total", 0))), "grade": str(sc.get("grade", "D")), "rows": rows, "new_best": bool(record.get("new_best", false))}
+	if record.has("best"):
+		out["best"] = thousands(int(record["best"]))
+	return out
+
+
+## The score multiplier each preset shows (Difficulty::score_pct in the core: 75, 100, 150).
+const SCORE_MULTIPLIERS := {"easy": "x0.75", "normal": "x1", "hard": "x1.5"}
+
+
+static func _signed(n: int) -> String:
+	if n == 0:
+		return "0"
+	return ("+" if n > 0 else "") + thousands(n)
 
 
 ## The debrief's last line: the final tick, then (Kestrel, whose snapshot carries them) the preset and the seed, so a
