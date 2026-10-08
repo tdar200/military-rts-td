@@ -1971,13 +1971,18 @@ mod tests {
         Scenario::KestrelReach.host_commands(s)
     }
 
-    /// The first alien unit standing within its own weapon range of a human
-    /// structure this tick, if any (center distance, as combat measures it).
-    fn kestrel_hostile_in_range_of_a_structure(
+    /// The first alien unit standing within its own weapon range of the human
+    /// base this tick, if any (center distance, as combat measures it): any
+    /// human structure, or (under the depth rules, where the idle rifle squads
+    /// at the base now step out and meet a raid) a human combat unit. The
+    /// classic rules never had the squads leave the base, so there the first
+    /// contact was always with a structure.
+    fn kestrel_hostile_in_range_of_the_base(
         s: &crate::game::sim::Sim,
     ) -> Option<crate::game::sim::EntityId> {
         use crate::game::sim::EntityKindView;
         let views = s.views();
+        let depth = s.is_depth();
         views
             .iter()
             .filter(|v| v.owner == PlayerId(1))
@@ -1988,7 +1993,10 @@ mod tests {
                 let r = kind.stats().attack.range;
                 views.iter().any(|h| {
                     h.owner == PlayerId(0)
-                        && matches!(h.kind, EntityKindView::Building(_))
+                        && match h.kind {
+                            EntityKindView::Building(_) => true,
+                            EntityKindView::Unit(k) => depth && k != UnitKind::Harvester,
+                        }
                         && (h.pos - a.pos).length_squared() <= r * r
                 })
             })
@@ -2122,9 +2130,12 @@ mod tests {
                     "the probe leaves the holdfast by tick 1800"
                 );
             }
-            contact = kestrel_hostile_in_range_of_a_structure(&s).map(|id| (s.tick(), id));
+            contact = kestrel_hostile_in_range_of_the_base(&s).map(|id| (s.tick(), id));
         }
-        let (tick, unit) = contact.expect("no hostile reached a human structure by tick 4200");
+        // Measured first contact: t=3461 at a structure on the classic rules;
+        // t=3435 under depth (Task 11), where the base's rifle squads step out
+        // and meet the probe before it reaches a structure.
+        let (tick, unit) = contact.expect("no hostile reached the human base by tick 4200");
         assert!(
             (3000..=4200).contains(&tick),
             "first contact at tick {tick} ({}s)",
@@ -2194,6 +2205,14 @@ mod tests {
     /// (removing the truck at tick 0 makes it fall at t=5410 after 1 wave).
     /// "Holds 3 waves" therefore means the base is never overrun before the
     /// third wave: the run sees that wave, or ends earlier in a human victory.
+    ///
+    /// Depth re-baselines (old -> new, seed 3):
+    /// - Task 11 (auto-acquire, leash, under-attack response): the undefended
+    ///   base falls at t=4959 -> 4980 (its four idle rifle squads now step out
+    ///   to meet the probe instead of standing still); the playtest AI still
+    ///   wins, at t=13622 after 2 waves -> t=17323 after 3 waves, now that idle
+    ///   units on both sides (the alien base's guards included) acquire and
+    ///   answer hits.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
@@ -2202,8 +2221,9 @@ mod tests {
         // the enemy AI (+ the scripted probe and escalating waves once the grace
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
-        // so there is no founding step. Measured: it falls at t=4959 (wave one
-        // spawns at 4500; before the rework it fell at t=3159).
+        // so there is no founding step. Measured: it falls at t=4980 (wave one
+        // spawns at 4500; 4959 before depth auto-acquire, Task 11; before the
+        // rework it fell at t=3159).
         let mut s = kestrel_reach(3);
         assert!(!s.surveying());
         let mut winner = None;
@@ -2262,7 +2282,7 @@ mod tests {
             let cmds = kestrel_shell_commands(&s);
             s.step(&cmds);
             if contact.is_none() {
-                contact = kestrel_hostile_in_range_of_a_structure(&s).map(|id| (s.tick(), id));
+                contact = kestrel_hostile_in_range_of_the_base(&s).map(|id| (s.tick(), id));
             }
             if s.tick().is_multiple_of(600) {
                 let e = s.economy_view(PlayerId(0));

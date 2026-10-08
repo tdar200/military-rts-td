@@ -2977,8 +2977,16 @@ mod tests {
         // in the depth marker, so only the snapshot's `hash` value changed
         // (one digit longer at tick 0); every other byte is as before. Was
         // (27265, 0x9a65_3391_e66d_8920) and (28516, 0x8f6a_ba55_027b_186e).
-        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x3fbb_4c7d_dbd5_fa57));
-        // Mid-firefight, with shots in the window, the same holds.
+        //
+        // Re-pinned by Task 11 (auto-acquire and leash): the per-entity depth
+        // state (anchor, engagement) is now hashed, so the tick-0 `hash` value
+        // changed again (same length); every other byte is identical. Was
+        // (27266, 0x3fbb_4c7d_dbd5_fa57) and (28516, 0xee0f_54cf_6c06_7e37).
+        assert_eq!((off.len(), fnv1a(&off)), (27266, 0xda83_524c_dd7e_782f));
+        // Mid-firefight, with shots in the window, the same holds. Since Task 11
+        // the fight also moves one alien rifle (id 20, about 5.8 from its hit
+        // ally): it answers the hit and steps toward the human shooter, so its
+        // position and the hash differ from the Task 10 pin (one byte shorter).
         let (mut sim, _, _) = kestrel_firefight();
         let mut window = ShotWindow::new();
         while sim.recent_attacks().is_empty() {
@@ -2994,7 +3002,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xee0f_54cf_6c06_7e37));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x17d2_6a57_4400_cc38));
     }
 
     #[test]

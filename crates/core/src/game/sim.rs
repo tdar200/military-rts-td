@@ -2463,6 +2463,10 @@ impl Sim {
         self.run_production();
         self.run_waves();
         self.run_harvesters();
+        if self.is_depth() {
+            // Kestrel depth: idle units acquire, leash and walk home (depth.rs).
+            self.run_depth_acquire();
+        }
         self.run_movement();
         self.run_shields();
         self.run_combat();
@@ -2868,6 +2872,11 @@ impl Sim {
                     e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_))
                 });
                 if valid {
+                    if self.is_depth() {
+                        // A direct order supersedes any auto-engagement and its anchor.
+                        self.entities[idx].dp.anchor = None;
+                        self.entities[idx].dp.engaged = None;
+                    }
                     // Plain move clears any standing attack-move stance.
                     self.order_unit_to(idx, target, false);
                 }
@@ -2882,6 +2891,11 @@ impl Sim {
                     e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_))
                 });
                 if valid {
+                    if self.is_depth() {
+                        // A direct order supersedes any auto-engagement and its anchor.
+                        self.entities[idx].dp.anchor = None;
+                        self.entities[idx].dp.engaged = None;
+                    }
                     self.order_unit_to(idx, target, true);
                 }
             }
@@ -4121,6 +4135,13 @@ impl Sim {
         let antigrav: Vec<bool> = (0..self.civs.len())
             .map(|p| self.player_has_antigrav(PlayerId(u16::try_from(p).unwrap())))
             .collect();
+        // Kestrel depth: where each attack-mover would step to engage (empty, so
+        // never consulted, when depth is off).
+        let steer = if self.is_depth() {
+            self.depth_steer_points()
+        } else {
+            Vec::new()
+        };
         for (i, e) in self.entities.iter_mut().enumerate() {
             if !e.alive || e.construction_remaining > 0 {
                 continue;
@@ -4163,6 +4184,16 @@ impl Sim {
             } else {
                 base
             };
+            // Kestrel depth: an attack-mover with an enemy inside its acquisition
+            // ring (none in weapon range, or it would have halted above) steps
+            // straight at it when that step lands on passable ground.
+            if let Some(&Some(goal)) = steer.get(i) {
+                let flies = is_air_of(&self.balance, e.kind) || antigrav[usize::from(e.owner.0)];
+                if let Some(next) = depth::steer_step(&self.map, e.pos, goal, speed, flies) {
+                    e.pos = next;
+                    continue;
+                }
+            }
             // Earthfront: the straight final leg must never carry a ground unit
             // onto an impassable tile. Once the path is exhausted, a target that
             // sits on one (terrain changed under the order, a building raised on
@@ -4466,7 +4497,14 @@ impl Sim {
             reason = "tick fits u32 for any real game"
         )]
         let tick = self.tick as u32;
+        // Kestrel depth: (victim, attacker) in damage order, for the
+        // under-attack response once every hit has landed.
+        let mut hits: Vec<(usize, usize)> = Vec::new();
+        let depth = self.is_depth();
         for (j, attacker, dmg, pierces) in damage {
+            if depth {
+                hits.push((j, attacker));
+            }
             let owner = self.entities[j].owner;
             let mit = armor[usize::from(owner.0)] + perk_mit[usize::from(owner.0)];
             // Armor research subtracts flat mitigation, but a mitigated hit still
@@ -4530,6 +4568,9 @@ impl Sim {
         for (seat_idx, capturing_owner) in captures {
             self.apply_seat_capture(seat_idx, capturing_owner);
         }
+        if depth {
+            self.depth_respond_to_hits(&hits);
+        }
     }
 
     #[allow(
@@ -4550,6 +4591,10 @@ impl Sim {
         }
         for (x, y) in freed_tiles {
             self.map.set_tile(x, y, Tile::OPEN);
+        }
+        if self.is_depth() && !freed_slots.is_empty() {
+            // Before the slots can be reused: nobody keeps chasing a dead target.
+            self.depth_drop_dangling(&freed_slots);
         }
         self.free.extend(freed_slots);
 
