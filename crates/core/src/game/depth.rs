@@ -82,6 +82,26 @@ pub const UPGRADE_TRACKS: u8 = 3;
 /// (Precision Manufacturing).
 pub(super) const BARRAGE_TECH: u32 = 6;
 
+/// Task 18: the money a Refinery costs on top of its base price for each
+/// refinery its owner already has (alive or under construction).
+pub const REFINERY_STEP: i32 = 50;
+/// Task 18: ticks a depth repair job spreads its `max_hp / 5` over.
+pub const REPAIR_TICKS: u32 = 150;
+/// Task 18: ticks after a repair order before the same building may be
+/// repaired again (counted from the order, so it covers the job).
+pub const REPAIR_COOLDOWN: u32 = 450;
+/// Task 18: the least a depth repair costs (the Command Center, priced 0,
+/// pays this); dearer buildings pay a tenth of their price.
+pub const REPAIR_MIN_COST: i32 = 25;
+/// Task 18: the money line above which the depth AI spends its surplus on
+/// extra refineries once science, training and Upgrades have had their turn.
+pub(super) const AI_SURPLUS: i32 = 1500;
+/// Task 18: the most refineries the depth AI owns through surplus spending
+/// (its own build list stops at two, so at most two extra). Without a cap the
+/// playtest AI fills its base with 18 refineries and wins after 2 waves; see
+/// the Task 18 note on `KESTREL_DEFENDED_WAVES` in scenario.rs.
+pub(super) const AI_SURPLUS_REFINERIES: usize = 4;
+
 /// Task 15: the depth weapon of an entity of `kind` whose balance weapon is
 /// `base`. `AntiArmor` teams also engage air (at [`depth_air_damage_pct`]);
 /// every other weapon is unchanged. Callers apply it under depth only (see
@@ -214,6 +234,13 @@ pub(super) struct DepthUnit {
     /// its wave target on every pass) skips the search; another tile, a
     /// successful search or any halt clears it.
     pub(super) breach_failed: Option<(u16, u16)>,
+    /// Task 18: ticks left of this building's repair job (0 when none). Each
+    /// tick heals its share of `max_hp / 5`; cleared when the building dies or
+    /// is sold, and never inherited by a reused slot.
+    pub(super) repair_ticks: u32,
+    /// Task 18: ticks until this building may be repaired again (0 when it
+    /// may). Set to [`REPAIR_COOLDOWN`] by an accepted repair order.
+    pub(super) repair_cd: u32,
 }
 
 impl DepthUnit {
@@ -261,6 +288,9 @@ impl DepthUnit {
             }
             None => h.write_u64(0),
         }
+        // Task 18 (appended).
+        h.write_u64(u64::from(self.repair_ticks));
+        h.write_u64(u64::from(self.repair_cd));
     }
 }
 
@@ -622,6 +652,13 @@ impl Sim {
                     e.dp.forced = None;
                     e.dp.queue.clear();
                 }
+            }
+        }
+        // Task 18: a dead or sold building's repair job ends with it.
+        for &slot in freed {
+            if let Some(e) = self.entities.get_mut(slot as usize) {
+                e.dp.repair_ticks = 0;
+                e.dp.repair_cd = 0;
             }
         }
     }
@@ -1536,6 +1573,126 @@ impl Sim {
         }
         let t = [DOC_WEAPONS, DOC_ARMOR, DOC_VITALITY][usize::from(track)];
         c.doctrine_levels[t] += 1;
+    }
+}
+
+/// Task 18: the depth economy. Refineries cost more with each one owned, and a
+/// repair is a job that heals over [`REPAIR_TICKS`] with a cooldown. Both are
+/// the single source Task 23's perks adjust.
+impl Sim {
+    /// The money `owner` pays to build `kind`: under depth a Refinery costs its
+    /// base plus [`REFINERY_STEP`] for each refinery `owner` already has (alive
+    /// or under construction; a sold one stops counting at once). Every other
+    /// kind, and every kind with depth off, costs [`Sim::building_cost`].
+    #[must_use]
+    pub fn depth_building_cost(&self, owner: PlayerId, kind: BuildingKind) -> Fixed {
+        let base = self.building_cost(kind);
+        if !self.is_depth() || kind != BuildingKind::Refinery {
+            return base;
+        }
+        let refineries = self
+            .entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && e.hp > Fixed::ZERO
+                    && e.owner == owner
+                    && e.kind == Kind::Building(BuildingKind::Refinery)
+            })
+            .count();
+        base + Fixed::from_int(REFINERY_STEP * i32::try_from(refineries).unwrap_or(0))
+    }
+
+    /// The money `owner` pays up front for a depth repair of a `kind`
+    /// building: a tenth of its price, at least [`REPAIR_MIN_COST`].
+    #[must_use]
+    pub fn depth_repair_cost(&self, owner: PlayerId, kind: BuildingKind) -> Fixed {
+        let _ = owner;
+        let tenth = self.balance.building(kind).money_cost / Fixed::from_int(10);
+        let floor = Fixed::from_int(REPAIR_MIN_COST);
+        if tenth > floor {
+            tenth
+        } else {
+            floor
+        }
+    }
+
+    /// Ticks until living building `id` may be repaired again under depth (0
+    /// when it may now). `None` with depth off, for units and for unknown or
+    /// dead ids. Read-only.
+    #[must_use]
+    pub fn repair_cooldown(&self, id: EntityId) -> Option<u32> {
+        if !self.is_depth() {
+            return None;
+        }
+        self.entities
+            .get(id.0 as usize)
+            .filter(|e| e.alive && matches!(e.kind, Kind::Building(_)))
+            .map(|e| e.dp.repair_cd)
+    }
+
+    /// Starts a repair job on `owner`'s damaged building (depth only; the
+    /// classic instant repair stays in `apply_repair`). Refused while the
+    /// building's cooldown runs, at full health, and when `owner` cannot pay
+    /// [`Sim::depth_repair_cost`], which is charged up front.
+    pub(super) fn apply_depth_repair(&mut self, owner: PlayerId, building: EntityId) {
+        let idx = building.0 as usize;
+        let Some(kind) = self.entities.get(idx).and_then(|e| match e.kind {
+            Kind::Building(kind)
+                if e.alive
+                    && e.hp > Fixed::ZERO
+                    && e.owner == owner
+                    && e.dp.repair_cd == 0
+                    && e.dp.repair_ticks == 0
+                    && e.hp < self.balance.building(kind).max_hp =>
+            {
+                Some(kind)
+            }
+            _ => None,
+        }) else {
+            return;
+        };
+        let cost = self.depth_repair_cost(owner, kind);
+        let p = usize::from(owner.0);
+        if self.civs[p].money < cost {
+            return;
+        }
+        self.civs[p].money = self.civs[p].money - cost;
+        let dp = &mut self.entities[idx].dp;
+        dp.repair_ticks = REPAIR_TICKS;
+        dp.repair_cd = REPAIR_COOLDOWN;
+    }
+
+    /// Advances every depth repair job one tick and counts down the repair
+    /// cooldowns. A job heals `max_hp / 5` in [`REPAIR_TICKS`] equal integer
+    /// shares of the running total (so the whole chunk lands exactly), capped
+    /// at full health, where it ends early. Runs after `clear_dead`, so only
+    /// living buildings are touched.
+    pub(super) fn run_depth_repairs(&mut self) {
+        let total = i64::from(REPAIR_TICKS);
+        for e in &mut self.entities {
+            if !e.alive || (e.dp.repair_ticks == 0 && e.dp.repair_cd == 0) {
+                continue;
+            }
+            e.dp.repair_cd = e.dp.repair_cd.saturating_sub(1);
+            let Kind::Building(kind) = e.kind else {
+                e.dp.repair_ticks = 0;
+                continue;
+            };
+            if e.dp.repair_ticks == 0 {
+                continue;
+            }
+            let max = self.balance.building(kind).max_hp;
+            let chunk = (max / Fixed::from_int(5)).to_bits();
+            let done = total - i64::from(e.dp.repair_ticks);
+            let heal = Fixed::from_bits(chunk * (done + 1) / total - chunk * done / total);
+            let healed = e.hp + heal;
+            e.hp = if healed < max { healed } else { max };
+            e.dp.repair_ticks -= 1;
+            if e.hp >= max {
+                e.dp.repair_ticks = 0;
+            }
+        }
     }
 }
 
@@ -5307,5 +5464,341 @@ mod tests {
         );
         assert!(casts[0] + casts[1] >= 1, "no ability was cast");
         assert!(levels[0].iter().sum::<u16>() >= 1, "no upgrade was bought");
+    }
+
+    // ---------------------------------------------------------------- Task 18
+
+    /// The first tile `owner` may build on (row-major), as the bridge's
+    /// construction zone reports it.
+    fn first_build_tile(s: &Sim, owner: PlayerId) -> (u16, u16) {
+        for y in 0..s.map().height() {
+            for x in 0..s.map().width() {
+                if s.construction_allowed_at(owner, x, y) {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("no buildable tile");
+    }
+
+    fn refineries(s: &Sim, owner: PlayerId) -> Vec<EntityId> {
+        s.views()
+            .into_iter()
+            .filter(|v| {
+                v.owner == owner
+                    && matches!(v.kind, EntityKindView::Building(BuildingKind::Refinery))
+            })
+            .map(|v| v.id)
+            .collect()
+    }
+
+    #[test]
+    fn each_refinery_costs_fifty_more_and_selling_one_lowers_the_next_price() {
+        let mut s = kestrel_reach(3);
+        let base = s.building_cost(BuildingKind::Refinery);
+        let step = Fixed::from_int(50);
+        // Kestrel opens with one refinery, so the next one is the second.
+        assert_eq!(refineries(&s, P0).len(), 1);
+        assert_eq!(
+            s.depth_building_cost(P0, BuildingKind::Refinery),
+            base + step
+        );
+        // Other kinds and the other side's count are unaffected.
+        assert_eq!(
+            s.depth_building_cost(P0, BuildingKind::Barracks),
+            s.building_cost(BuildingKind::Barracks)
+        );
+        s.grant_money(P0, Fixed::from_int(2000));
+        let (x, y) = first_build_tile(&s, P0);
+        let build = [Command::Build {
+            owner: P0,
+            kind: BuildingKind::Refinery,
+            x,
+            y,
+        }];
+        assert_eq!(
+            spent(&mut s, &build),
+            base + step,
+            "the second refinery costs base + 50"
+        );
+        assert_eq!(
+            refineries(&s, P0).len(),
+            2,
+            "the second refinery was not placed"
+        );
+        // Under construction counts: the third is base + 100.
+        assert_eq!(
+            s.depth_building_cost(P0, BuildingKind::Refinery),
+            base + step + step
+        );
+        let (x, y) = first_build_tile(&s, P0);
+        let build = [Command::Build {
+            owner: P0,
+            kind: BuildingKind::Refinery,
+            x,
+            y,
+        }];
+        assert_eq!(
+            spent(&mut s, &build),
+            base + step + step,
+            "the third costs base + 100"
+        );
+        assert_eq!(refineries(&s, P0).len(), 3);
+        // Selling one lowers the next price by 50 again.
+        let sold = refineries(&s, P0)[2];
+        s.step(&[Command::Sell {
+            owner: P0,
+            building: sold,
+        }]);
+        assert_eq!(refineries(&s, P0).len(), 2);
+        assert_eq!(
+            s.depth_building_cost(P0, BuildingKind::Refinery),
+            base + step + step
+        );
+        // A short purse is refused at the escalated price.
+        s.civs[0].money = base + step;
+        let (x, y) = first_build_tile(&s, P0);
+        s.step(&[Command::Build {
+            owner: P0,
+            kind: BuildingKind::Refinery,
+            x,
+            y,
+        }]);
+        assert_eq!(
+            refineries(&s, P0).len(),
+            2,
+            "built below the escalated price"
+        );
+        // Classic Kestrel (depth off) keeps the flat price.
+        let classic = kestrel_reach_classic(3);
+        assert_eq!(
+            classic.depth_building_cost(P0, BuildingKind::Refinery),
+            classic.building_cost(BuildingKind::Refinery)
+        );
+    }
+
+    /// A damaged depth Command Center with `money` in the purse, in an arena.
+    fn repair_arena(money: i32) -> (Sim, EntityId) {
+        let mut s = depth_arena();
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 10, 10);
+        s.entities[cc.0 as usize].hp = Fixed::from_int(400);
+        s.grant_money(P0, Fixed::from_int(money));
+        (s, cc)
+    }
+
+    /// Steps `s` with `cmds` and a clone of it with nothing; returns what the
+    /// commands cost `P0` (the arena's own economy moves both alike).
+    fn spent(s: &mut Sim, cmds: &[Command]) -> Fixed {
+        let mut twin = s.clone();
+        twin.step(&[]);
+        s.step(cmds);
+        twin.money(P0) - s.money(P0)
+    }
+
+    fn repair(building: EntityId) -> [Command; 1] {
+        [Command::Repair {
+            owner: P0,
+            building,
+        }]
+    }
+
+    #[test]
+    fn a_depth_repair_heals_gradually_costs_at_least_25_and_has_a_cooldown() {
+        let (mut s, cc) = repair_arena(1000);
+        let max = s.balance.building(BuildingKind::CommandCenter).max_hp;
+        let chunk = max / Fixed::from_int(5);
+        let start = Fixed::from_int(400);
+        // The Command Center costs nothing to build, so the floor applies.
+        assert_eq!(
+            spent(&mut s, &repair(cc)),
+            Fixed::from_int(super::REPAIR_MIN_COST)
+        );
+        let hp = hp_of(&s, cc);
+        assert!(hp > start, "nothing healed on the first tick");
+        assert!(
+            hp < start + chunk / Fixed::from_int(10),
+            "healed at once: {hp:?}"
+        );
+        let mut last = hp;
+        for _ in 1..super::REPAIR_TICKS {
+            s.step(&[]);
+            let now = hp_of(&s, cc);
+            assert!(now >= last, "repair lost hp");
+            last = now;
+        }
+        assert_eq!(hp_of(&s, cc), start + chunk, "max_hp / 5 over the job");
+        s.step(&[]);
+        assert_eq!(hp_of(&s, cc), start + chunk, "healed past the job");
+        // On cooldown until 450 ticks after the order: refused, nothing spent.
+        let mut steps = super::REPAIR_TICKS + 1;
+        while steps < super::REPAIR_COOLDOWN {
+            assert_eq!(
+                spent(&mut s, &repair(cc)),
+                Fixed::ZERO,
+                "restarted at step {steps}"
+            );
+            steps += 1;
+        }
+        assert_eq!(hp_of(&s, cc), start + chunk);
+        assert_eq!(
+            spent(&mut s, &repair(cc)),
+            Fixed::from_int(super::REPAIR_MIN_COST)
+        );
+        assert!(
+            hp_of(&s, cc) > start + chunk,
+            "no restart after the cooldown"
+        );
+        // Dearer buildings pay a tenth of their price.
+        let mut a = depth_arena();
+        let field = a.add_building(P0, BuildingKind::Airfield, 10, 10);
+        let price = a.building_cost(BuildingKind::Airfield);
+        a.entities[field.0 as usize].hp = Fixed::from_int(100);
+        a.grant_money(P0, Fixed::from_int(1000));
+        let floor = Fixed::from_int(super::REPAIR_MIN_COST);
+        let tenth = price / Fixed::from_int(10);
+        assert!(tenth > floor, "pick a dearer building for this check");
+        assert_eq!(spent(&mut a, &repair(field)), tenth);
+        // A short purse starts nothing.
+        let (mut p, cc) = repair_arena(super::REPAIR_MIN_COST - 2);
+        assert_eq!(spent(&mut p, &repair(cc)), Fixed::ZERO);
+        assert_eq!(hp_of(&p, cc), start);
+        assert_eq!(p.repair_cooldown(cc), Some(0));
+    }
+
+    #[test]
+    fn a_repair_job_ends_cleanly_when_its_building_dies_or_is_sold() {
+        for sell in [false, true] {
+            let mut s = depth_arena();
+            let lab = s.add_building(P0, BuildingKind::ResearchLab, 10, 10);
+            s.entities[lab.0 as usize].hp = Fixed::from_int(50);
+            s.grant_money(P0, Fixed::from_int(1000));
+            s.step(&[Command::Repair {
+                owner: P0,
+                building: lab,
+            }]);
+            assert!(s.entities[lab.0 as usize].dp.repair_ticks > 0);
+            s.step(&[]);
+            if sell {
+                s.step(&[Command::Sell {
+                    owner: P0,
+                    building: lab,
+                }]);
+            } else {
+                s.entities[lab.0 as usize].hp = Fixed::ZERO;
+                s.step(&[]);
+            }
+            let e = &s.entities[lab.0 as usize];
+            assert!(!e.alive);
+            assert_eq!((e.dp.repair_ticks, e.dp.repair_cd), (0, 0), "job leaked");
+            assert_eq!(s.repair_cooldown(lab), None);
+            for _ in 0..200 {
+                s.step(&[]);
+            }
+            // The slot is reused by a fresh building: no inherited job.
+            let next = s.add_building(P0, BuildingKind::Barracks, 12, 12);
+            assert_eq!(next, lab, "slot was not reused");
+            let full = s.entities[next.0 as usize].hp;
+            s.step(&[]);
+            assert_eq!(s.entities[next.0 as usize].hp, full);
+            assert_eq!(s.repair_cooldown(next), Some(0));
+        }
+    }
+
+    #[test]
+    fn survival_and_classic_repair_still_heal_a_fifth_at_once() {
+        // Earthfront without depth (Survival's rules): cost max(price/10, 5),
+        // max_hp / 5 in one tick, no cooldown.
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        let cc = s.add_building(P0, BuildingKind::CommandCenter, 10, 10);
+        s.entities[cc.0 as usize].hp = Fixed::from_int(400);
+        s.grant_money(P0, Fixed::from_int(100));
+        let chunk = s.balance.building(BuildingKind::CommandCenter).max_hp / Fixed::from_int(5);
+        assert_eq!(spent(&mut s, &repair(cc)), Fixed::from_int(5));
+        assert_eq!(hp_of(&s, cc), Fixed::from_int(400) + chunk);
+        assert_eq!(spent(&mut s, &repair(cc)), Fixed::from_int(5));
+        assert_eq!(hp_of(&s, cc), Fixed::from_int(400) + chunk + chunk);
+        assert_eq!(s.repair_cooldown(cc), None, "no depth state without depth");
+        assert!(!survival(7).is_depth());
+    }
+
+    #[test]
+    fn the_depth_ai_spends_surplus_on_extra_refineries_up_to_its_cap() {
+        let mut s = kestrel_reach(3);
+        let base = s.command_center_pos(P0).unwrap();
+        let surplus = |s: &Sim, budget: i32, built: bool| {
+            let mut c = Vec::new();
+            s.earthfront_ai_surplus(P0, base, Fixed::from_int(budget), built, &mut c);
+            c
+        };
+        assert!(surplus(&s, super::AI_SURPLUS - 1, false).is_empty());
+        let c = surplus(&s, super::AI_SURPLUS, false);
+        assert!(
+            matches!(
+                c.as_slice(),
+                [Command::Build {
+                    kind: BuildingKind::Refinery,
+                    ..
+                }]
+            ),
+            "{c:?}"
+        );
+        assert!(surplus(&s, 5000, true).is_empty(), "two builds in one pass");
+        // A refinery under construction waits for the next pass.
+        s.grant_money(P0, Fixed::from_int(5000));
+        s.step(&c);
+        assert_eq!(refineries(&s, P0).len(), 2);
+        assert!(
+            surplus(&s, 5000, false).is_empty(),
+            "a second site while one builds"
+        );
+        // At the cap nothing more is bought, whatever the purse.
+        let mut full = kestrel_reach(3);
+        for _ in 0..3 {
+            let (x, y) = first_build_tile(&full, P0);
+            full.add_building(P0, BuildingKind::Refinery, x, y);
+        }
+        assert_eq!(refineries(&full, P0).len(), super::AI_SURPLUS_REFINERIES);
+        let mut c = Vec::new();
+        full.earthfront_ai_surplus(P0, base, Fixed::from_int(9000), false, &mut c);
+        assert!(c.is_empty(), "{c:?}");
+    }
+
+    /// `(tick, money)` every 1800 steps, refineries, Upgrades levels, winner.
+    type BankedCurve = (Vec<(u64, i64)>, usize, [u16; 3], Option<PlayerId>);
+
+    /// The defended Kestrel playtest for 18,000 fixed steps (10:00 at 30 Hz):
+    /// `P0`'s money every 1800 ticks, its refinery count and Upgrades levels.
+    fn banked_credits_curve(seed: u64) -> BankedCurve {
+        let mut s = kestrel_reach(seed);
+        let mut curve = Vec::new();
+        for step in 1..=18_000u64 {
+            let mut c = s.ai_commands(P0);
+            c.extend(Scenario::KestrelReach.host_commands(&s));
+            s.step(&c);
+            if step % 1800 == 0 {
+                curve.push((s.tick(), s.money(P0).to_int_floor()));
+            }
+        }
+        (
+            curve,
+            refineries(&s, P0).len(),
+            s.upgrade_levels(P0),
+            s.winner(),
+        )
+    }
+
+    #[test]
+    fn banked_credits_at_ten_minutes_stay_under_2500() {
+        let (curve, refs, levels, winner) = banked_credits_curve(3);
+        std::eprintln!(
+            "banked credits curve {curve:?}; refineries {refs}; upgrades {levels:?}; winner {winner:?}"
+        );
+        // A match decided before 18,000 stops its tick: the last entry is then
+        // the purse the playtest AI ended with.
+        let &(tick, money) = curve.last().unwrap();
+        std::eprintln!("money(P0) at tick {tick}: {money}");
+        assert!(money < 2500, "P0 banks {money} at tick {tick}");
+        assert!(refs <= super::AI_SURPLUS_REFINERIES, "{refs} refineries");
     }
 }

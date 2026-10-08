@@ -1743,7 +1743,7 @@ impl Sim {
     fn can_afford_building(&self, player: PlayerId, kind: BuildingKind) -> bool {
         let p = usize::from(player.0);
         let st = self.balance.building(kind);
-        self.civs[p].money >= st.money_cost
+        self.civs[p].money >= self.depth_building_cost(player, kind)
             && (self.earthfront || self.civs[p].energy >= st.energy_cost)
             && (self.earthfront || self.civs[p].labour >= st.labour_cost)
     }
@@ -2594,6 +2594,10 @@ impl Sim {
         self.run_combat();
         self.run_status();
         self.clear_dead();
+        if self.is_depth() {
+            // Kestrel depth: repair jobs heal and cooldowns run (depth.rs).
+            self.run_depth_repairs();
+        }
         self.run_conquest();
         self.tick += 1;
     }
@@ -2817,17 +2821,20 @@ impl Sim {
             .tile(i32::from(x), i32::from(y))
             .is_some_and(|t| t.buildable);
         let st = self.balance.building(kind);
+        // Task 18: under depth a Refinery costs more for each one owned; with
+        // depth off this is `st.money_cost`.
+        let money_cost = self.depth_building_cost(owner, kind);
         let p = usize::from(owner.0);
         let unlocked = self.civs[p].unlocked_buildings & (1 << kind.index()) != 0;
         if unlocked
             && buildable
             && self.can_build_on(owner, x, y)
             && self.under_building_cap(x, y)
-            && self.civs[p].money >= st.money_cost
+            && self.civs[p].money >= money_cost
             && (self.earthfront || self.civs[p].energy >= st.energy_cost)
             && (self.earthfront || self.civs[p].labour >= st.labour_cost)
         {
-            self.civs[p].money = self.civs[p].money - st.money_cost;
+            self.civs[p].money = self.civs[p].money - money_cost;
             if !self.earthfront {
                 self.civs[p].energy = self.civs[p].energy - st.energy_cost;
                 self.civs[p].labour = self.civs[p].labour - st.labour_cost;
@@ -2922,6 +2929,11 @@ impl Sim {
     }
 
     fn apply_repair(&mut self, owner: PlayerId, building: EntityId) {
+        if self.is_depth() {
+            // Task 18: a repair job over time with a cooldown (depth.rs).
+            self.apply_depth_repair(owner, building);
+            return;
+        }
         let idx = building.0 as usize;
         let Some((kind, hp)) = self.entities.get(idx).and_then(|e| match e.kind {
             Kind::Building(kind) if e.alive && e.hp > Fixed::ZERO && e.owner == owner => {

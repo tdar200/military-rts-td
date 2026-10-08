@@ -1088,39 +1088,20 @@ impl Sim {
             None
         };
         let mut budget = self.money(player);
-        if let Some(kind) = desired
-            .filter(|&k| budget >= self.building_cost(k) && self.building_unlocked(player, k))
-        {
-            let mut candidates = Vec::new();
-            for y in 0..self.map.height() {
-                for x in 0..self.map.width() {
-                    let point = super::tile_center(x, y);
-                    let distance = (point - base).length_squared();
-                    if distance < Fixed::from_int(64)
-                        && self
-                            .map
-                            .tile(i32::from(x), i32::from(y))
-                            .is_some_and(|t| t.buildable)
-                        && self.earthfront_build_reachable(player, x, y)
-                        && self
-                            .entities
-                            .iter()
-                            .filter(|e| e.alive && matches!(e.kind, Kind::Building(_)))
-                            .all(|e| (e.pos - point).length_squared() >= Fixed::from_int(3))
-                    {
-                        candidates.push((distance, y, x));
-                    }
-                }
-            }
-            candidates.sort_unstable();
-            if let Some(&(_, y, x)) = candidates.first() {
+        // Task 18: `depth_building_cost` is `building_cost` with depth off.
+        let mut built = false;
+        if let Some(kind) = desired.filter(|&k| {
+            budget >= self.depth_building_cost(player, k) && self.building_unlocked(player, k)
+        }) {
+            if let Some((x, y)) = self.earthfront_ai_site(player, base) {
                 commands.push(Command::Build {
                     owner: player,
                     kind,
                     x,
                     y,
                 });
-                budget = budget - self.building_cost(kind);
+                budget = budget - self.depth_building_cost(player, kind);
+                built = true;
             }
         }
         if let Some(tech_id) = self.suggested_research(player) {
@@ -1252,10 +1233,84 @@ impl Sim {
                         owner: player,
                         track,
                     });
+                    budget = budget - Fixed::from_bits(bits);
+                }
+            }
+            // Task 18: money still above the surplus line (Upgrades capped
+            // for the era, nothing else to buy) goes on an extra refinery at
+            // its escalating price, one at a time, so the AI does not bank.
+            self.earthfront_ai_surplus(player, base, budget, built, &mut commands);
+        }
+        commands
+    }
+
+    /// The tile the Earthfront AI builds on next: the buildable tile nearest
+    /// its base (within 8) that it may reach and that keeps clear of every
+    /// structure. Ties go to the lower row, then the lower column.
+    fn earthfront_ai_site(&self, player: PlayerId, base: Vec2) -> Option<(u16, u16)> {
+        let mut candidates = Vec::new();
+        for y in 0..self.map.height() {
+            for x in 0..self.map.width() {
+                let point = super::tile_center(x, y);
+                let distance = (point - base).length_squared();
+                if distance < Fixed::from_int(64)
+                    && self
+                        .map
+                        .tile(i32::from(x), i32::from(y))
+                        .is_some_and(|t| t.buildable)
+                    && self.earthfront_build_reachable(player, x, y)
+                    && self
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && matches!(e.kind, Kind::Building(_)))
+                        .all(|e| (e.pos - point).length_squared() >= Fixed::from_int(3))
+                {
+                    candidates.push((distance, y, x));
                 }
             }
         }
-        commands
+        candidates.sort_unstable();
+        candidates.first().map(|&(_, y, x)| (x, y))
+    }
+
+    /// Kestrel depth (Task 18): when the money left after this pass's orders
+    /// is still above [`super::depth::AI_SURPLUS`], nothing else was placed
+    /// this pass, no refinery is under construction and the AI owns fewer than
+    /// [`super::depth::AI_SURPLUS_REFINERIES`], order one more refinery (its
+    /// price rises by 50 with each).
+    pub(super) fn earthfront_ai_surplus(
+        &self,
+        player: PlayerId,
+        base: Vec2,
+        budget: Fixed,
+        built: bool,
+        commands: &mut Vec<Command>,
+    ) {
+        let kind = BuildingKind::Refinery;
+        let price = self.depth_building_cost(player, kind);
+        let pending = self.entities.iter().any(|e| {
+            e.alive
+                && e.owner == player
+                && e.kind == Kind::Building(kind)
+                && e.construction_remaining > 0
+        });
+        if built
+            || pending
+            || self.count_alive_buildings(player, kind) >= super::depth::AI_SURPLUS_REFINERIES
+            || budget < Fixed::from_int(super::depth::AI_SURPLUS)
+            || budget < price
+            || !self.building_unlocked(player, kind)
+        {
+            return;
+        }
+        if let Some((x, y)) = self.earthfront_ai_site(player, base) {
+            commands.push(Command::Build {
+                owner: player,
+                kind,
+                x,
+                y,
+            });
+        }
     }
 }
 

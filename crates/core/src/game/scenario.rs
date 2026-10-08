@@ -2233,6 +2233,14 @@ mod tests {
     ///   at 4501, 9901 and 15301). Casting alone (AI Upgrades switched off)
     ///   gives 4995 and t=11927 after 2 waves: the Upgrades spending is what
     ///   slows the defended win.
+    /// - Task 18 (refineries cost 50 more for each one owned, repair over time
+    ///   with a cooldown, the AI spends money above 1500 on extra refineries up
+    ///   to 4): the undefended base still falls at t=4930; the playtest AI
+    ///   still wins after 3 waves, at t=18067 -> t=16792. Without the surplus
+    ///   refineries the dearer second refinery alone shifts the defended run
+    ///   enough that it is overrun at t=21291 after 4 waves; with uncapped
+    ///   surplus refineries it builds 18 and wins at t=13081 after 2 waves.
+    ///   The match is sensitive to small spending changes either way.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
@@ -2242,7 +2250,8 @@ mod tests {
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
         // so there is no founding step. Measured: it falls at t=4930 (wave one
-        // spawns at 4500; 4995 before abilities and Upgrades, Task 17; 4975
+        // spawns at 4500; unchanged by the Task 18 economy; 4995 before
+        // abilities and Upgrades, Task 17; 4975
         // at Task 12; 4980 before depth separation, Task 12; 4959 before
         // depth auto-acquire, Task 11; before the rework it fell at t=3159).
         let mut s = kestrel_reach(3);
