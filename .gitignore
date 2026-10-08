@@ -23,3 +23,4 @@
 tools/qa/__pycache__/
 tools/ui/__pycache__/
 tools/audio/__pycache__/
+tools/ci/__pycache__/

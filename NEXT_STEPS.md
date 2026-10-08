@@ -4,7 +4,8 @@ The deterministic core, AI, a three-map scenario roster (Lane Defense, Open Clas
 Crossroads) with an in-game map-select screen, shells (desktop + web + touch),
 server re-sim, deterministic lockstep PvP core, data-driven balance, spatial-grid
 combat, recycling, save/replay, and shell polish (build ghost, wave countdown,
-tracers) are all implemented, tested (101 tests), and committed.
+tracers) are all implemented, tested, and committed (run `cargo test --workspace` and the
+Godot suite to see the current counts).
 
 The items below are scoped and ready, but deliberately left for focused follow-up
 rather than rushed in at the end of a long session - each is a self-contained piece

@@ -18,7 +18,7 @@ Launch from the repository with `./run-3d.sh`. The script builds the authoritati
 
 ## Controls
 
-Godot: WASD pans, Z/E rotates, wheel zooms, F focuses selection, Home returns to base. Left-click or drag selects; right-click issues contextual orders; A issues attack-move (an on-screen banner shows it is armed; right-click the destination, Esc or the roster's Cancel button disarms); the structure panel's Set rally button arms the next left click as the rally point (no new key); F2 selects the whole army; Esc (with nothing armed) opens the pause menu, which really stops the simulation (the client writes `pause.flag`, the bridge skips stepping while it exists) and offers Resume, Controls, Terrain guide (the ground table as cards), Restart mission (returns to the title with a fresh mission) and Quit game, the last two after a confirmation; M opens the strategic map (the real ground layer, regions, borders and the expected wave route; the simulation keeps running; Esc or M closes it); F1 opens the controls reference, which lists exactly the keys in `godot3d/scripts/ui/keybinds.gd`; . selects the next idle crew and centres the camera on it. Use Build, Units, Orders and Science panels for the full roster. U repairs and Delete sells. Survival has no fog of war; Kestrel Reach has a presentation-only one (2026-10-06), off with `EARTHFRONT_FOG=0`.
+Godot: the arrow keys pan (so do the cursor at a screen edge and a middle-button drag), Z/E rotates, wheel zooms, F focuses selection, Home returns to base. Left-click or drag selects; right-click issues contextual orders; A issues attack-move (an on-screen banner shows it is armed; right-click the destination, Esc or the roster's Cancel button disarms); the structure panel's Set rally button arms the next left click as the rally point (no new key); F2 selects the whole army; Ctrl with 1 to 9 saves a control group and 1 to 9 recalls it; Esc (with nothing armed) opens the pause menu, which really stops the simulation (the client writes `pause.flag`, the bridge skips stepping while it exists) and offers Resume, Controls, Terrain guide (the ground table as cards), Settings (volumes, fog of war, window mode), Restart mission (returns to the title with a fresh mission) and Quit game, the last two after a confirmation; M opens the strategic map (the real ground layer, regions, borders and the expected wave route; the simulation keeps running; Esc or M closes it); F1 opens the controls reference, which lists exactly the keys in `godot3d/scripts/ui/keybinds.gd`; . selects the next idle crew and centres the camera on it. Use Build, Units, Orders and Science panels for the full roster. U repairs and Delete sells. Survival has no fog of war; Kestrel Reach has a presentation-only one (2026-10-06), off with `EARTHFRONT_FOG=0`.
 
 ## Technical boundaries
 
@@ -26,7 +26,7 @@ The ruleset lives in `crates/core/src/game/earthfront.rs`, integrated with the d
 
 Implemented electricity uses a shared faction grid, not simulated cables. Supply uses local path connectivity and abstract distribution, not individually routed trucks, fuel or spare-part inventories. Crew is support capacity rather than a demographic simulation. Research deployment is represented by factory prerequisites and prototype reservations; individual industrial retrofits are future work. Some new buildings reuse existing artwork.
 
-Planetary governance, interstellar travel, cosmic warfare, the full 200-technology catalogue and population evolution are design content, not accessible campaign systems. The legacy sandbox remains available separately. Current balance is a prototype: automated victory is possible within minutes; a polished 25–40 minute human mission requires further playtesting.
+Planetary governance, interstellar travel, cosmic warfare, the full 200-technology catalogue and population evolution are design content, not accessible campaign systems. The legacy sandbox remains available separately. Current balance is a prototype: automated victory is possible within minutes; a polished 25-40 minute human mission requires further playtesting.
 
 ## Reproducible verification
 
@@ -40,7 +40,7 @@ Core tests exercise conservation, power loss, research infrastructure, productio
 
 ## Industrial follow-up validation
 
-The bounded-storage and single-factory prototype pass passed 272 workspace tests (one existing balance test remains ignored), strict Clippy, wasm compilation and Godot editor parsing. Three accelerated AI matches—seeds 2026, 3 and 42—reached human Core Node victories in 397, 412 and 414 seconds respectively. These are automated outcomes, not evidence of target mission pacing or human difficulty balance.
+The bounded-storage and single-factory prototype pass passed 272 workspace tests (one existing balance test remains ignored), strict Clippy, wasm compilation and Godot editor parsing. Three accelerated AI matches (seeds 2026, 3 and 42) reached human Core Node victories in 397, 412 and 414 seconds respectively. These are automated outcomes, not evidence of target mission pacing or human difficulty balance.
 
 New regression cases cover partial unloading without loss, a destroyed receiving refinery, one reserved factory alongside continuing tank production, reassignment after factory destruction, and the boundary between parallel theory and serial physical validation.
 
@@ -48,7 +48,7 @@ New regression cases cover partial unloading without loss, a destroyed receiving
 
 The Earth operation now includes two relay outposts, each guarded by a gun turret, anti-air battery and anti-armour team. The original 90-second grace period and three-minute wave interval remain. The first wave contains up to ten units with both relays operating, or six without them; later base escalation is capped at 24 plus relay support, with the existing active-force ceiling still applied. Wave strength is support capacity, not a damage multiplier.
 
-Initial automated results: seed 2026 won at 427 seconds after destroying both relays; seed 42 won at 445 seconds; seed 3 destroyed both relays but lost its headquarters at 482 seconds. These results add an assault sequence and a meaningful defeat case, but do not meet the intended 25–40-minute mission pacing. Economy expansion and campaign balance remain unfinished.
+Initial automated results: seed 2026 won at 427 seconds after destroying both relays; seed 42 won at 445 seconds; seed 3 destroyed both relays but lost its headquarters at 482 seconds. These results add an assault sequence and a meaningful defeat case, but do not meet the intended 25-40-minute mission pacing. Economy expansion and campaign balance remain unfinished.
 
 Relay tests cover actual wave counts with and without power, destruction, reuse of an entity slot by an ordinary depot, deterministic role hashing, and Core victory while a relay survives. Relay identity is a scenario role on the authoritative entity, never inferred from its name or model.
 
