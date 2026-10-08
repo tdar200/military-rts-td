@@ -2554,7 +2554,8 @@ func _orderable(unit: Node3D) -> bool:
 
 
 func _order_units() -> Array:
-	return selected_units.filter(func(unit: Node3D) -> bool: return _orderable(unit))
+	# Untyped: a selected node that died this frame is a freed Object, which a typed `unit: Node3D` cannot take.
+	return selected_units.filter(func(unit) -> bool: return is_instance_valid(unit) and _orderable(unit))
 
 
 func _say(text: String) -> void:
@@ -2869,10 +2870,24 @@ func _write_bridge_upgrade(track: int) -> bool:
 	return true
 
 
+## Kestrel (kestrel-depth Task 18): why `node` cannot start a repair now, or "" when it can. A repair is a job over 5 s
+## with a 15 s cooldown from the order; the snapshot's `repair_cd` counts it down. Survival never carries the key and its
+## repair is instant, so it is never held back here.
+func _repair_block(node: Node) -> String:
+	if not world_art_on or not is_instance_valid(node):
+		return ""
+	return "REPAIR RECHARGING" if int(node.get_meta("repair_cd", 0)) > 0 else ""
+
+
 func _write_bridge_structure_action(verb: String) -> void:
 	if not is_instance_valid(selected) or String(selected.get_meta("category", "unit")) != "building":
 		objective_label.text = "SELECT AN OWNED STRUCTURE FIRST"
 		return
+	if verb == "repair":
+		var block := _repair_block(selected)
+		if block != "":
+			_deny(block, "READY IN %d S" % ceili(float(int(selected.get_meta("repair_cd", 0))) / TICKS_PER_SECOND))
+			return
 	_append_bridge_command("%s,%d" % [verb, int(selected.get_meta("bridge_id"))])
 	objective_label.text = "%s ORDER TRANSMITTED" % verb.to_upper()
 	if verb == "sell":
@@ -3437,6 +3452,8 @@ func _sync_bridge_entities(entities: Array) -> void:
 		entity_node.set_meta("production_duration", int(entity_data.get("production_duration", 0)))
 		if entity_data.has("stance"):
 			entity_node.set_meta("stance", String(entity_data["stance"]))  # Kestrel's own units only (the bridge sends no other)
+		if entity_data.has("repair_cd"):  # Task 18, Kestrel's own buildings: ticks until a repair may start again
+			entity_node.set_meta("repair_cd", int(entity_data["repair_cd"]))
 		if entity_data.has("queue"):  # Task 14, the same units: legs waiting, and the route still to walk while any wait
 			entity_node.set_meta("queue", int(entity_data["queue"]))
 			entity_node.set_meta("route", entity_data.get("route", []))

@@ -1049,7 +1049,7 @@ func _build_vm(now: float, deficit: int) -> Dictionary:
 	var chips: Array = []
 	var money := {"label": "Material", "value": str(g.bridge_money)}
 	if not armed.is_empty():
-		money["note"] = "planned -%d" % armed[4]
+		money["note"] = "planned -%d" % _card_cost(armed)
 		money["note_tone"] = "warn"
 	chips.append(money)
 	var power := {"label": "Power", "value": "%d / %d kW" % [g.bridge_power_demand, g.bridge_power_generation], "warn": deficit > 0}
@@ -1090,6 +1090,19 @@ func _armed_card() -> Array:
 	return []
 
 
+## A build card's material price: its own, except the Refinery on Kestrel, whose price rises by 50 with each one the
+## player owns (Task 18); the snapshot's `depth.refinery_cost` carries it, the same lookup as the funds check
+## (FeedbackEvents.build_cost). Survival's snapshot has no depth block, so its cards keep their prices.
+func _card_cost(card: Array) -> int:
+	if String(card[1]) == "Refinery":
+		var snap: Variant = g.get("bridge_snapshot")
+		if snap is Dictionary:
+			var depth: Variant = snap.get("depth", null)
+			if depth is Dictionary and depth.has("refinery_cost"):
+				return int(depth["refinery_cost"])
+	return int(card[4])
+
+
 func _card_block_reason(card: Array) -> String:
 	if not g.bridge_active or not g.bridge_unlocked_buildings.has(card[1]):
 		return "Not researched"
@@ -1100,8 +1113,8 @@ func _build_alert_rows(armed: Array) -> Array:
 	var rows: Array = []
 	for a in _alerts:
 		rows.append({"tone": a["tone"] if a["tone"] != "cyan" else "", "icon": "warning" if a["tone"] != "cyan" else "clock", "text": a["title"]})
-	if not armed.is_empty() and g.bridge_money < armed[4]:
-		rows.append({"tone": "warn", "icon": "clock", "text": "%s: materials %d short" % [armed[2], armed[4] - g.bridge_money]})
+	if not armed.is_empty() and g.bridge_money < _card_cost(armed):
+		rows.append({"tone": "warn", "icon": "clock", "text": "%s: materials %d short" % [armed[2], _card_cost(armed) - g.bridge_money]})
 	return rows
 
 
@@ -1149,13 +1162,14 @@ func _build_body() -> Dictionary:
 	var cards: Array = []
 	for card in BUILD_CARDS:
 		var reason := _card_block_reason(card)
-		var entry := {"id": card[0], "name": card[2], "sprite": _card_sprite(card), "key": card[3], "cost": _cost_line(card[4], card[5]), "prereq": card[6]}
+		var cost := _card_cost(card)
+		var entry := {"id": card[0], "name": card[2], "sprite": _card_sprite(card), "key": card[3], "cost": _cost_line(cost, card[5]), "prereq": card[6]}
 		if reason != "":
 			entry["locked"] = true
 			entry["prereq"] = reason
-		elif g.bridge_money < card[4]:
+		elif g.bridge_money < cost:
 			entry["short"] = true
-			entry["prereq"] = "Need %d more material" % (card[4] - g.bridge_money)
+			entry["prereq"] = "Need %d more material" % (cost - g.bridge_money)
 		if g.build_mode == card[1]:
 			entry["selected"] = true
 		cards.append(entry)
@@ -1175,15 +1189,16 @@ static func _cost_line(material: int, kw: int) -> String:
 
 func _placement(card: Array, added_kw: int) -> Dictionary:
 	var valid: bool = g.build_cursor_valid()
-	var affordable: bool = g.bridge_money >= card[4]
+	var cost := _card_cost(card)
+	var affordable: bool = g.bridge_money >= cost
 	var tone := "good" if valid and affordable else "bad"
-	var status := "Valid and affordable" if valid and affordable else ("Invalid location" if not valid else "Materials %d short" % (card[4] - g.bridge_money))
+	var status := "Valid and affordable" if valid and affordable else ("Invalid location" if not valid else "Materials %d short" % (cost - g.bridge_money))
 	var generation: int = g.bridge_power_generation + maxi(-added_kw, 0)
 	var after := _projection(generation, g.bridge_power_demand, maxi(added_kw, 0))
-	var note := "Click to place. Available material falls from %d to %d." % [g.bridge_money, g.bridge_money - card[4]] if affordable else "Short by %d material." % (card[4] - g.bridge_money)
+	var note := "Click to place. Available material falls from %d to %d." % [g.bridge_money, g.bridge_money - cost] if affordable else "Short by %d material." % (cost - g.bridge_money)
 	return {
 		"sprite": _card_sprite(card), "tone": tone, "status": status, "title": "%s / Preview" % card[2],
-		"costs": [{"cap": "Materials", "value": str(card[4])}, {"cap": "Power", "value": "%s kW" % ("+%d" % -card[5] if card[5] < 0 else str(card[5])), "tone": "warn" if after["over"] > 0 else ""}],
+		"costs": [{"cap": "Materials", "value": str(cost)}, {"cap": "Power", "value": "%s kW" % ("+%d" % -card[5] if card[5] < 0 else str(card[5])), "tone": "warn" if after["over"] > 0 else ""}],
 		"note": note,
 		"grid": {"value": after["value"], "tone": after["tone"], "note": "after commissioning", "segments": after["segments"], "marker": after["marker"],
 			"lead": "%d kW over capacity." % after["over"] if after["over"] > 0 else "", "text": "Defence keeps priority; industry shares the deficit." if after["over"] > 0 else ""},
