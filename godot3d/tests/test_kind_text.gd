@@ -80,6 +80,7 @@ func test_the_build_and_train_toasts_on_a_live_scene(t) -> void:
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(RUNTIME))
 		scene.runtime_directory = RUNTIME
 		scene.bridge_active = true
+		scene.bridge_money = 1000  # kestrel-depth Task 7: Kestrel refuses an order it cannot pay for before sending it
 		scene.objective_label = Label.new()
 		scene._create_materials()
 		scene._write_bridge_build("GunTurret", Vector3.ZERO)

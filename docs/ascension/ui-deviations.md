@@ -897,8 +897,20 @@ decisions are checked by tests and by the pool's `[audio]` log (`EARTHFRONT_AUDI
   and cooldowns are unchanged.
 - Sounds that come with an effect (hits, deaths, collapses, shots) are asked for only when WorldFx actually drew the effect,
   so they share its view culling and caps, and a snapshot delivered twice does not sound twice.
-- The cues Survival also has map to the nearest new sound: deploy to `select`, science complete to `build_complete`, a
-  win to `build_complete`, a loss to `wave_inbound`, the ten-second wave warning to `alert`.
+- The cues Survival also has map to the nearest new sound: deploy to `select`, the ten-second wave warning to `alert`;
+  since kestrel-depth Task 7 science complete plays `research_complete`, a win `victory_sting` and a loss `defeat_sting`
+  (both stings duck Ambient and Music like the wave call). Survival's tones keep their arguments.
+- Kestrel feedback (kestrel-depth Task 7, `scripts/ui/feedback_events.gd`, pure): once per new snapshot tick the game
+  derives power lost and restored (`power_down` / `power_up` and a toast), the 45 s wave warning (`alert` 6 dB down
+  under the HUD's existing "Enemy signal detected" toast), a wave cleared (`wave_cleared`), units under attack (`alert`
+  under its own 10 s cooldown key, toast at most every 10 s of sim time) and finished production (one toast and one
+  acknowledgement per kind per poll, "3 Riflemen ready", in place of the per-unit "Unit ready"). All placeless. A train
+  or build order the client knows the sim would drop for lack of materials is not sent: `denied` and "N materials
+  short" (orders sent since the last snapshot count as spent). Rally points click, a placed foundation plays
+  `place_thunk`, and a train with no producer, an invalid foundation or a rally on the wrong building play `denied`.
+  Under fog a wave counts as cleared only after as many attackers as the HUD announced died where the player could see
+  their cell and its neighbours; an attacker that vanished beside the dark is never counted, so the cue may stay silent
+  but never claims what the fog hides. Survival has none of this (no funds check, no derived events).
 - UI click and hover cover the HUD's own buttons (`hud.action` and the hovered `BaseButton` inside the HUD), not the pause
   and research menus. UI sounds still play while the sim is paused; effects and loops pause and resume.
 - `tools/ui/run_cap.sh` now passes `--audio-driver Dummy` (`launch_ui.py` already did), pinned by

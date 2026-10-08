@@ -265,6 +265,50 @@ func test_global_cues_are_centred(t) -> void:
 	t.eq(d.request("nope", MID, 1.0)["reason"], "unknown", "an unknown id plays nothing")
 
 
+## kestrel-depth Task 7: the eight event cues Task 6 added (and the shared "unit_attacked" key) have their own cooldowns
+## and voice caps; nothing in the manifest falls back to the defaults any more.
+func test_every_one_shot_has_a_cooldown_and_a_voice_cap(t) -> void:
+	for s in _manifest()["sounds"]:
+		var id := String(s["id"])
+		t.ok(Director.COOLDOWN.has(id), "%s has a cooldown entry" % id)
+		if not bool(s["loop"]):
+			t.ok(Director.ID_VOICES.has(id), "%s has a voice cap" % id)
+	t.eq(float(Director.COOLDOWN["unit_attacked"]), 10.0, "units under attack: at most one alert per 10 s")
+	for id in ["denied", "place_thunk", "power_down", "power_up", "wave_cleared", "research_complete", "victory_sting", "defeat_sting"]:
+		t.eq(int(Director.ID_VOICES[id]), 1, "%s never doubles" % id)
+	t.ok(float(Director.COOLDOWN["denied"]) <= 0.5, "a denied order answers every quick retry but never buzzes")
+	t.ok(float(Director.COOLDOWN["victory_sting"]) >= 3.0 and float(Director.COOLDOWN["defeat_sting"]) >= 3.0, "a sting sounds once")
+
+
+## The volume override (the 45 s wave warning is the alert 6 dB down) and the cooldown key (units under attack share the
+## alert sound but hold their own 10 s window, on top of the alert's own).
+func test_a_request_may_trim_its_volume_and_name_its_cooldown_key(t) -> void:
+	var d := _director()
+	var quiet: Dictionary = d.request("alert", Vector3.INF, 1.0, {"volume_db": -6.0})
+	t.ok(quiet["play"], "the trimmed alert plays")
+	t.near(float(quiet["volume_db"]), _base("alert") - 6.0, 1e-6, "6 dB under its base")
+	t.near(float(d.request("power_up", Vector3.INF, 1.0)["volume_db"]), _base("power_up"), 1e-6, "no option: the base level")
+	var d2 := _director()
+	t.ok(d2.request("alert", Vector3.INF, 1.0, {"key": "unit_attacked"})["play"], "units under attack sound the alert")
+	var again: Dictionary = d2.request("alert", Vector3.INF, 5.0, {"key": "unit_attacked"})
+	t.ok(not again["play"] and again["reason"] == "cooldown", "4 s later the same key waits")
+	t.ok(d2.request("alert", Vector3.INF, 5.0)["play"], "while a structure alert (the plain key) may sound after its 2.5 s")
+	t.ok(d2.request("alert", Vector3.INF, 10.5)["play"], "another structure alert at 10.5 s")
+	t.eq(d2.request("alert", Vector3.INF, 11.5, {"key": "unit_attacked"})["reason"], "cooldown", "the key also waits out the alert's own window")
+	t.ok(d2.request("alert", Vector3.INF, 10.51 + Director.COOLDOWN["alert"], {"key": "unit_attacked"})["play"], "then plays")
+
+
+## The two stings duck Ambient and Music for as long as they sound, like the wave and the alerts.
+func test_the_stings_duck_the_ambience(t) -> void:
+	for id in ["victory_sting", "defeat_sting"]:
+		t.ok(id in Director.DUCKS, "%s ducks" % id)
+		var d := _director()
+		var r: Dictionary = d.request(id, Vector3.INF, 1.0)
+		t.ok(r["play"], "%s plays" % id)
+		t.near(d.duck_db(1.0 + float(r["duration"]) - 0.05), Director.DUCK_DB, 1e-6, "%s holds the duck to its end" % id)
+		t.ok(d.duck_db(1.0 + float(r["duration"]) + Director.DUCK_RECOVER + 0.01) == 0.0, "then recovers")
+
+
 func test_zooming_out_lowers_world_sounds_a_little(t) -> void:
 	var d := _director()
 	var near: float = d.request("cannon", MID, 1.0)["volume_db"]

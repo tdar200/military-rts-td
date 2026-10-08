@@ -30,6 +30,12 @@ const COOLDOWN := {
 	"select": 0.12, "ack_infantry": 0.3, "ack_vehicle": 0.3, "ack_air": 0.3,
 	"alert": 2.5, "build_complete": 0.8, "wave_inbound": 3.0,
 	"rotor_loop": 0.1, "tread_loop": 0.1, "foot_loop": 0.1,
+	# kestrel-depth Task 7: the event cues. A denied order answers a quick retry; power and wave news are rare by nature
+	# and a flicker across the threshold must not chatter; a sting sounds once per match end.
+	"denied": 0.35, "place_thunk": 0.15, "power_down": 4.0, "power_up": 4.0, "wave_cleared": 3.0,
+	"research_complete": 1.0, "victory_sting": 5.0, "defeat_sting": 5.0,
+	# a cooldown key, not a sound: units under attack sound the alert at most once per 10 s (request's "key" option)
+	"unit_attacked": 10.0,
 }
 ## At most this many of one sound at once.
 const ID_VOICES := {
@@ -38,6 +44,8 @@ const ID_VOICES := {
 	"ui_click": 1, "ui_hover": 1,
 	"select": 1, "ack_infantry": 1, "ack_vehicle": 1, "ack_air": 1,
 	"alert": 1, "build_complete": 1, "wave_inbound": 1,
+	"denied": 1, "place_thunk": 1, "power_down": 1, "power_up": 1, "wave_cleared": 1,
+	"research_complete": 1, "victory_sting": 1, "defeat_sting": 1,
 }
 ## At most this many of one category at once (the non-UI caps sum to 15, inside the pool's 16 SFX players).
 const CATEGORY_VOICES := {"weapon": 6, "impact": 5, "voice": 2, "alert": 2, "ui": 2}
@@ -49,7 +57,7 @@ const PRIORITY := {"loop": 0, "weapon": 1, "impact": 2, "ui": 3, "voice": 3, "al
 const ROOM := {1: 10, 2: 13}
 const SFX_VOICES := 16
 ## These duck Ambient and Music: DUCK_DB for as long as they sound (DUCK_HOLD_MIN at least), then back over DUCK_RECOVER.
-const DUCKS := ["explosion_large", "collapse", "alert", "wave_inbound"]
+const DUCKS := ["explosion_large", "collapse", "alert", "wave_inbound", "victory_sting", "defeat_sting"]
 const DUCK_DB := -9.0
 const DUCK_HOLD_MIN := 0.5
 const DUCK_RECOVER := 1.5
@@ -100,7 +108,10 @@ func set_paused(on: bool) -> void:
 ## Whether the one-shot `id` at `at` (Vector3.INF for a global cue) starts at `now`, and how. A refusal is
 ## {play: false, id, reason} with reason unknown, loop, paused, offscreen, cooldown, voices, priority or rate; it changes
 ## nothing, so a refused request never uses up a cooldown. While paused only the HUD's own sounds play.
-func request(id: String, at: Vector3, now: float) -> Dictionary:
+## `opts` (kestrel-depth Task 7): "volume_db" trims this play against the sound's level (the 45 s wave warning is the
+## alert 6 dB down); "key" names a cooldown of its own (COOLDOWN[key]) held on top of the sound's (units under attack
+## share the alert but repeat at most every 10 s).
+func request(id: String, at: Vector3, now: float, opts := {}) -> Dictionary:
 	var s: Dictionary = _sounds.get(id, {})
 	if s.is_empty():
 		return _no(id, "unknown")
@@ -113,6 +124,9 @@ func request(id: String, at: Vector3, now: float) -> Dictionary:
 	if not bool(place["heard"]):
 		return _no(id, "offscreen")
 	if _last.has(id) and now - float(_last[id]) < float(COOLDOWN.get(id, 0.0)):
+		return _no(id, "cooldown")
+	var key := String(opts.get("key", id))
+	if key != id and _last.has(key) and now - float(_last[key]) < float(COOLDOWN.get(key, 0.0)):
 		return _no(id, "cooldown")
 	_prune(now)
 	if active_voices(id, now) >= int(ID_VOICES.get(id, 1)) or active_voices(category, now) >= int(CATEGORY_VOICES.get(category, 1)):
@@ -131,11 +145,13 @@ func request(id: String, at: Vector3, now: float) -> Dictionary:
 	starts.append(now)
 	_starts[category] = starts
 	_last[id] = now
+	_last[key] = now
 	if id in DUCKS:
 		_duck_until = maxf(_duck_until, now + maxf(DUCK_HOLD_MIN, length))
 	var pan := float(place["pan"])
 	var bus := "UI" if category == "ui" else _pan_bus(pan)
-	return {"play": true, "id": id, "category": category, "volume_db": float(s["base_volume_db"]) + float(place["db"]),
+	return {"play": true, "id": id, "category": category,
+		"volume_db": float(s["base_volume_db"]) + float(place["db"]) + float(opts.get("volume_db", 0.0)),
 		"pan": pan, "bus": bus, "pitch": pitch, "priority": priority, "duration": length}
 
 

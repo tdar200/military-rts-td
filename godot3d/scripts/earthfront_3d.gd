@@ -27,6 +27,7 @@ const AudioPool := preload("res://scripts/audio/audio_pool.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
 const AlertPings := preload("res://scripts/ui/alert_pings.gd")
 const Settings := preload("res://scripts/ui/settings.gd")
+const FeedbackEvents := preload("res://scripts/ui/feedback_events.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -209,6 +210,15 @@ var probe_intel_given := false
 ## Set by _restart_mission for its 0.35 s wait: the bridge restarts at once, and the old scene must not read the new sim's
 ## tick-0 snapshot (every unit missing from the fresh start would die with an explosion and a sound). Review M3.
 var _restarting := false
+## Kestrel feedback (kestrel-depth Task 7): FeedbackEvents' memo (cleared when the tick goes back, so a restart re-arms every
+## one-shot cue), and the materials spent by orders sent since the last new snapshot (the sim has not counted them yet).
+var feedback_state: Dictionary = {}
+var _funds_pending := 0
+## The toast colour per feedback event (the HUD maps it to its cyan, warn or bad tone).
+const FEEDBACK_COLORS := {
+	"power_down": Color("ffd071"), "power_up": Color("65e4da"), "wave_cleared": Color("65e4da"),
+	"unit_attacked": Color("ff5968"), "production_complete": Color("65e4da"),
+}
 var end_screen_shown := false
 var camera_shake := 0.0
 var alert_cooldown := 0.0
@@ -1734,6 +1744,7 @@ func _try_place_build(build_ground: Vector3) -> void:
 		build_mode = ""
 	else:
 		objective_label.text = "INVALID FOUNDATION \u2014 CHOOSE OPEN TERRAIN"
+		_sfx("denied")
 
 
 func _update_selection_box(current: Vector2) -> void:
@@ -1939,6 +1950,7 @@ func recall_control_group(group: int) -> void:
 func arm_rally() -> void:
 	if not is_instance_valid(selected) or String(selected.get_meta("kind_name", "")) not in ["Barracks", "Refinery", "VehicleFactory", "Airfield"]:
 		objective_label.text = "SELECT A BARRACKS OR REFINERY TO SET A RALLY POINT"
+		_sfx("denied")
 		return
 	rally_armed = true
 	attack_move_armed = false
@@ -2362,22 +2374,27 @@ func _write_bridge_train(kind_name: String) -> void:
 		producers.push_front(selected)
 	for node in producers:
 		if is_instance_valid(node) and int(node.get_meta("team", -1)) == HUMAN and String(node.get_meta("kind_name", "")) == producer_kind and int(node.get_meta("construction", 0)) == 0:
+			if world_art_on and not _funds_ok(FeedbackEvents.unit_cost(kind_name), kind_name):
+				return
 			_append_bridge_command("train,%d,%s" % [int(node.get_meta("bridge_id")), kind_name])
 			objective_label.text = "%s ORDER SENT TO %s" % [_kind_text(kind_name), _kind_text(producer_kind)]
 			return
 	objective_label.text = "BUILD %s BEFORE TRAINING THIS UNIT" % _kind_text(producer_kind)
+	_sfx("denied")
 
 
 func _write_bridge_rally(producer: Node3D, ground: Vector3) -> void:
 	var kind_name := String(producer.get_meta("kind_name", ""))
 	if kind_name not in ["Barracks", "Refinery", "VehicleFactory", "Airfield"]:
 		objective_label.text = "SELECT A BARRACKS OR REFINERY TO SET A RALLY POINT"
+		_sfx("denied")
 		return
 	var simulation_bits := _world_to_sim_bits(ground)
 	var simulation_x_bits := simulation_bits.x
 	var simulation_z_bits := simulation_bits.y
 	_append_bridge_command("rally,%d,%d,%d" % [int(producer.get_meta("bridge_id")), simulation_x_bits, simulation_z_bits])
 	objective_label.text = "RALLY POINT UPDATED"
+	_sfx("ui_click")
 	_show_move_marker(ground, false)
 
 
@@ -2412,10 +2429,27 @@ func _write_bridge_structure_action(verb: String) -> void:
 func _write_bridge_build(kind_name: String, ground: Vector3) -> void:
 	if not bridge_active:
 		return
+	if world_art_on and not _funds_ok(FeedbackEvents.build_cost(kind_name, bridge_snapshot), kind_name):
+		return
 	var tile := _world_to_tile(ground)
 	_append_bridge_command("build,%s,%d,%d" % [kind_name, tile.x, tile.y])
 	objective_label.text = "%s FOUNDATION ORDERED" % _kind_text(kind_name)
+	_sfx("place_thunk")
 	_show_move_marker(ground, false)
+
+
+## Kestrel (kestrel-depth Task 7): the sim silently drops an order it cannot pay for, so the client checks first. Short:
+## nothing is sent, the denied sound plays and a toast says how many materials are missing. Paid: the cost is counted as
+## spent until the next snapshot, so quick repeats inside one poll are checked against what is really left. A cost of -1
+## (a kind without a deck card) is never refused here.
+func _funds_ok(cost: int, kind_name: String) -> bool:
+	var short := FeedbackEvents.funds_short(cost, bridge_money - _funds_pending)
+	if short > 0:
+		_show_notification("%d MATERIALS SHORT" % short, "%s COSTS %d" % [_kind_text(kind_name), cost], Color("ffd071"))
+		_sfx("denied")
+		return false
+	_funds_pending += maxi(cost, 0)
+	return true
 
 
 func _write_bridge_research(tech_id := -1) -> void:
@@ -2471,6 +2505,7 @@ func _poll_bridge(delta: float) -> void:
 	var previous_era := bridge_era
 	var previous_waves := bridge_waves
 	var previous_winner := bridge_winner
+	var previous_snapshot := bridge_snapshot
 	if not bridge_active:
 		bridge_active = true
 		for preview_unit in units.duplicate():
@@ -2556,6 +2591,7 @@ func _poll_bridge(delta: float) -> void:
 		wave_warning_level = 0
 	if world_art_on:
 		_probe_intel()
+		_kestrel_feedback(previous_snapshot, parsed)
 	if bridge_winner >= 0 and previous_winner < 0:
 		_show_end_screen(bridge_winner)
 
@@ -2862,7 +2898,7 @@ func _sync_bridge_entities(entities: Array) -> void:
 			if bridge_initialized and not _fog_quiet_arrival(entity_data, destination, bridge_id):
 				ui.session_log.unit_added(kind_name, owner, category)
 				_deploy_effect(destination, owner)
-				if owner == HUMAN and category == "unit":
+				if owner == HUMAN and category == "unit" and not world_art_on:  # Kestrel: one toast per batch (_kestrel_feedback)
 					_show_notification("UNIT READY", _kind_text(kind_name) + " REPORTING FOR DUTY", Color("65e4da"))
 					_cue(AudioDirector.ack_for(kind_name), 620.0, 0.1, 0.1, 90.0)
 		var bridge_motion := destination - entity_node.position
@@ -3375,6 +3411,32 @@ func _probe_intel() -> void:
 		_sfx("alert")
 
 
+## Kestrel feedback (kestrel-depth Task 7): FeedbackEvents' reading of the last two snapshots (power lost and restored,
+## the 45 s wave warning, a wave cleared, units under attack, finished production in batches) becomes toasts and placeless
+## director requests. Once per new tick: a re-delivered snapshot (or a paused sim, whose tick stands still) says nothing,
+## a tick going back (a restarted sim) clears the memo so every one-shot is armed again, and nothing is said once the
+## match is decided (the end screen's sting has it). _poll_bridge reads nothing during the restart wait.
+func _kestrel_feedback(previous: Dictionary, snap: Dictionary) -> void:
+	var tick := int(snap.get("tick", 0))
+	var before := int(previous.get("tick", -1))
+	if tick != before:
+		_funds_pending = 0  # a new snapshot: the sim's own count of materials includes every order it has taken
+	if previous.is_empty() or tick < before:
+		feedback_state.clear()
+		return
+	if tick == before or bridge_winner >= 0:
+		return
+	for e in FeedbackEvents.derive(previous, snap, feedback_state):
+		if String(e["toast"]) != "":
+			_show_notification(String(e["toast"]), String(e["body"]), FEEDBACK_COLORS.get(String(e["id"]), Color("65e4da")))
+		var opts := {}
+		if float(e["volume_db"]) != 0.0:
+			opts["volume_db"] = float(e["volume_db"])
+		if String(e["key"]) != String(e["sound"]):
+			opts["key"] = String(e["key"])
+		_sfx(String(e["sound"]), Vector3.INF, 0.0, opts)
+
+
 ## Kestrel: a human structure lost HP. Task 2 found that idle riflemen never react to a structure under fire, so the player
 ## is told: a throttled "<kind> under attack" toast (live_adapter.structure_attacked, which also keeps the position and cell
 ## for the minimap) and, with it, the hit alert's shake and tone (which then holds alert_cooldown like any human hit).
@@ -3434,13 +3496,14 @@ func _audio_on() -> bool:
 
 
 ## One cue through the director: `at` a ground point (Vector3.INF for a global cue), `delay` seconds from now (a shot
-## replayed at its own tick's rhythm). Nothing without Kestrel sound; the pool plays what the director lets through.
-func _sfx(id: String, at := Vector3.INF, delay := 0.0) -> void:
+## replayed at its own tick's rhythm), `opts` the director's volume trim and cooldown key (AudioDirector.request). Nothing
+## without Kestrel sound; the pool plays what the director lets through.
+func _sfx(id: String, at := Vector3.INF, delay := 0.0, opts := {}) -> void:
 	if id == "" or not _audio_on():
 		return
 	if at.is_finite() and not fog_view.seen_recently(at):
 		return  # Kestrel fog: a sound placed where the player cannot see is never heard
-	var r: Dictionary = audio.request(id, at, time_alive + delay)
+	var r: Dictionary = audio.request(id, at, time_alive + delay) if opts.is_empty() else audio.request(id, at, time_alive + delay, opts)
 	if audio_pool != null and bool(r.get("play", false)):
 		audio_pool.play(r, delay)
 
@@ -3908,14 +3971,14 @@ func _science_pulse() -> void:
 	for node in bridge_nodes.values():
 		if is_instance_valid(node) and int(node.get_meta("team", -1)) == HUMAN:
 			_deploy_effect(node.position, HUMAN)
-	_cue("build_complete", 430.0, 0.22, 0.14, 520.0)
+	_cue("research_complete", 430.0, 0.22, 0.14, 520.0)
 
 
 func _show_end_screen(winner: int) -> void:
 	if end_screen_shown:
 		return
 	end_screen_shown = true
-	_cue("build_complete" if winner == HUMAN else "wave_inbound", 360.0 if winner == HUMAN else 120.0, 0.34, 0.18, 420.0 if winner == HUMAN else -50.0)
+	_cue("victory_sting" if winner == HUMAN else "defeat_sting", 360.0 if winner == HUMAN else 120.0, 0.34, 0.18, 420.0 if winner == HUMAN else -50.0)
 	ui.show_debrief()
 
 
