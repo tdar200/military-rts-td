@@ -17,8 +17,8 @@ use rts_core::game::sim::{
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
 use rts_server::bridge_protocol::{
-    accept_lines, build_match, parse_scenario, read_command_lines, read_match_config, step_frame,
-    MatchConfig, ReplayRecorder,
+    accept_lines, build_match, parse_scenario, parse_speed, read_command_lines, read_match_config,
+    read_replay_text, step_frame, MatchConfig, ReplayPlayback, ReplayPlayer, ReplayRecorder,
 };
 
 #[cfg(test)]
@@ -1291,6 +1291,9 @@ struct RuntimePaths {
     pause: PathBuf,
     /// The next match's settings, written by the client before a restart.
     match_config: PathBuf,
+    /// Task 25: the playback speed the client asks for (`0`, `0.5`, `1`, `2`,
+    /// `4` or `8`); read every frame while a replay plays, 1x when missing.
+    replay_speed: PathBuf,
 }
 
 impl RuntimePaths {
@@ -1302,6 +1305,7 @@ impl RuntimePaths {
             restart: output.with_file_name("restart.flag"),
             pause: output.with_file_name("pause.flag"),
             match_config: output.with_file_name("match.json"),
+            replay_speed: output.with_file_name("replay_speed.txt"),
         }
     }
 }
@@ -1313,15 +1317,18 @@ struct Options {
     frame_limit: u64,
     scenario: Scenario,
     dump_snapshot: Option<PathBuf>,
+    /// Task 25: a replay file to play back as the boot match.
+    replay: Option<PathBuf>,
 }
 
-/// Parses `[--scenario S] [--dump-snapshot P] [output [frame_limit]]`. Flags (also
+/// Parses `[--scenario S] [--dump-snapshot P] [--replay F] [output [frame_limit]]`. Flags (also
 /// as `--flag=value`) may appear anywhere; they are stripped before the positional
 /// arguments (arg 1 = output path, arg 2 = frame limit) are read.
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut positional = Vec::new();
     let mut scenario = Scenario::KestrelReach;
     let mut dump_snapshot = None;
+    let mut replay = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -1331,14 +1338,14 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             _ => (arg.clone(), None),
         };
         match flag.as_str() {
-            "--scenario" | "--dump-snapshot" => {
+            "--scenario" | "--dump-snapshot" | "--replay" => {
                 let value = inline
                     .or_else(|| args.next())
                     .ok_or_else(|| format!("{flag} needs a value"))?;
-                if flag == "--scenario" {
-                    scenario = parse_scenario(&value)?;
-                } else {
-                    dump_snapshot = Some(PathBuf::from(value));
+                match flag.as_str() {
+                    "--scenario" => scenario = parse_scenario(&value)?,
+                    "--dump-snapshot" => dump_snapshot = Some(PathBuf::from(value)),
+                    _ => replay = Some(PathBuf::from(value)),
                 }
             }
             _ if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
@@ -1356,7 +1363,67 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             .unwrap_or(u64::MAX),
         scenario,
         dump_snapshot,
+        replay,
     })
+}
+
+/// Task 25: `snapshot` with `"replay":{"speed":S,"tick":T,"end":E}` appended as
+/// its last top-level key (playback only; every other snapshot is untouched).
+fn with_replay_block(mut snapshot: String, speed: f32, tick: u64, end: u64) -> String {
+    debug_assert!(snapshot.ends_with('}'));
+    snapshot.pop();
+    write!(
+        snapshot,
+        ",\"replay\":{{\"speed\":{speed},\"tick\":{tick},\"end\":{end}}}}}"
+    )
+    .expect("string write");
+    snapshot
+}
+
+/// Task 25: the playback speed in `replay_speed.txt` ([`parse_speed`]; 1x when
+/// the file is missing or unreadable).
+fn read_replay_speed(path: &Path) -> f32 {
+    std::fs::read_to_string(path).map_or(1.0, |text| parse_speed(&text))
+}
+
+/// Task 25: one stepped playback frame. The client's orders are drained and
+/// dropped (a replay plays only its own lines), then the replay steps as many
+/// ticks as `replay_speed.txt` asks, recording each tick's shots. Returns the
+/// speed used.
+fn playback_frame(
+    playback: &mut ReplayPlayback,
+    sim: &mut Sim,
+    paths: &RuntimePaths,
+    shots: &mut ShotWindow,
+) -> f32 {
+    drop(read_command_lines(&paths.commands));
+    let speed = read_replay_speed(&paths.replay_speed);
+    playback.frame(sim, speed, |sim| {
+        shots.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
+    });
+    speed
+}
+
+/// Task 25: the mission `config` asks for: its live match, or, when it names a
+/// replay, that replay's own match and its playback. A replay that cannot be
+/// read or parsed is logged and the live match is built instead.
+fn open_mission(config: &MatchConfig) -> (Sim, Option<ReplayPlayback>) {
+    if let Some(path) = &config.replay {
+        match read_replay_text(path).and_then(|text| ReplayPlayer::new(&text)) {
+            Ok(player) => {
+                eprintln!("godot-bridge: playing back {}", path.display());
+                let playback = ReplayPlayback::new(player);
+                return (playback.build(), Some(playback));
+            }
+            Err(error) => {
+                eprintln!(
+                    "godot-bridge: replay not played: {}: {error}",
+                    path.display()
+                );
+            }
+        }
+    }
+    (build_match(config), None)
 }
 
 /// Task 24: opens the starting mission's replay when `config` names a
@@ -1377,6 +1444,56 @@ fn stop_replay(recorder: &mut ReplayRecorder, sim: &Sim) {
     }
 }
 
+/// Task 25: the fog a mission presents: the client's choice (or, in playback,
+/// the fog the replay's player had), under the environment kill switch.
+fn mission_fog(fog_enabled: bool, config: &MatchConfig, playback: Option<&ReplayPlayback>) -> bool {
+    fog_enabled && playback.map_or_else(|| config.fog.unwrap_or(true), |p| p.player().header().fog)
+}
+
+/// Task 25: the scenario a mission steps: the replay's own when it plays one.
+fn mission_scenario(config: &MatchConfig, playback: Option<&ReplayPlayback>) -> Scenario {
+    playback.map_or(config.scenario, |p| p.player().header().scenario)
+}
+
+/// Task 25: the boot mission: `scenario`'s boot match, or the `--replay`
+/// recording's playback. A `--replay` file that cannot be played ends the
+/// bridge (exit 2) rather than silently starting a live match.
+fn boot_mission(
+    scenario: Scenario,
+    replay: Option<PathBuf>,
+) -> (MatchConfig, Sim, Option<ReplayPlayback>) {
+    let mut config = MatchConfig::boot(scenario);
+    if let Some(path) = replay {
+        if let Err(error) = read_replay_text(&path).and_then(|text| ReplayPlayer::new(&text)) {
+            eprintln!("godot-bridge: --replay {}: {error}", path.display());
+            std::process::exit(2);
+        }
+        config.replay = Some(path);
+    }
+    let (sim, playback) = open_mission(&config);
+    (config, sim, playback)
+}
+
+/// Task 25: the playback's `(speed, END tick)` for the snapshot's `replay` block.
+fn replay_view(playback: &ReplayPlayback, paths: &RuntimePaths) -> (f32, u64) {
+    (read_replay_speed(&paths.replay_speed), playback.end_tick())
+}
+
+/// One frame's snapshot, with the `replay` block when `replay` is given.
+fn frame_snapshot(
+    sim: &Sim,
+    supply_cache: &mut SupplyLinkCache,
+    shots: &mut ShotWindow,
+    fog: &mut FogState,
+    replay: Option<(f32, u64)>,
+) -> String {
+    let snapshot = snapshot_json_with(sim, supply_cache.get(sim), shots, fog);
+    match replay {
+        Some((speed, end)) => with_replay_block(snapshot, speed, sim.tick(), end),
+        None => snapshot,
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let options = match parse_args(std::env::args().skip(1)) {
         Ok(options) => options,
@@ -1390,20 +1507,23 @@ fn main() -> std::io::Result<()> {
         frame_limit,
         mut scenario,
         dump_snapshot,
+        replay,
     } = options;
 
     // The presentation fog kill switch is read once, here; a running bridge never re-reads it.
     let fog_enabled = fog_enabled_from(std::env::var_os("EARTHFRONT_FOG").as_deref());
-    // The running match's config (the boot match records no replay: no `replay_dir`).
-    let mut config = MatchConfig::boot(scenario);
-    let mut sim = build_match(&config);
+    // The running match's config (the boot match records no replay: no
+    // `replay_dir`), the match shown and, Task 25, its playback when it is a replay.
+    let (mut config, mut sim, mut playback) = boot_mission(scenario, replay);
+    scenario = mission_scenario(&config, playback.as_ref());
     if let Some(path) = dump_snapshot {
         // One frame of the chosen scenario's initial snapshot, for Godot test fixtures.
-        let snapshot = snapshot_json_with(
+        let snapshot = frame_snapshot(
             &sim,
-            &supply_links_json(&sim),
+            &mut SupplyLinkCache::new(),
             &mut ShotWindow::new(),
-            &mut FogState::new(fog_enabled),
+            &mut FogState::new(mission_fog(fog_enabled, &config, playback.as_ref())),
+            playback.as_ref().map(|p| (1.0, p.end_tick())),
         );
         return write_atomic(&path, &snapshot);
     }
@@ -1422,7 +1542,7 @@ fn main() -> std::io::Result<()> {
     let mut mission_started = false;
     let mut supply_cache = SupplyLinkCache::new();
     let mut shots = ShotWindow::new();
-    let mut fog = FogState::new(fog_enabled);
+    let mut fog = FogState::new(mission_fog(fog_enabled, &config, playback.as_ref()));
     // Task 24: the running mission's replay (when `match.json` names a `replay_dir`).
     let mut recorder = ReplayRecorder::new();
 
@@ -1439,56 +1559,61 @@ fn main() -> std::io::Result<()> {
             // The client may switch the map (and the fog) for the next match; with no
             // `match.json` the current scenario restarts as before.
             // Task 20: at its seed and difficulty preset (2026 and Normal by default).
+            // Task 25: a `replay` in `match.json` plays that recording instead.
             config = read_match_config(&paths.match_config, scenario);
-            scenario = config.scenario;
-            sim = build_match(&config);
+            (sim, playback) = open_mission(&config);
+            scenario = mission_scenario(&config, playback.as_ref());
             mission_started = false;
             supply_cache = SupplyLinkCache::new();
             shots.clear();
             // Explored ground and remembered enemy structures belong to the old match.
             // The environment kill switch always wins over the client's fog choice.
-            fog = FogState::new(fog_enabled && config.fog.unwrap_or(true));
+            fog = FogState::new(mission_fog(fog_enabled, &config, playback.as_ref()));
         }
-        if !mission_started {
-            if paths.start.exists() {
-                let _ = std::fs::remove_file(&paths.start);
-                mission_started = true;
-                // Task 24: the mission's replay opens now.
-                let fog_on = fog_enabled && config.fog.unwrap_or(true);
+        if !mission_started && paths.start.exists() {
+            let _ = std::fs::remove_file(&paths.start);
+            mission_started = true;
+            // Task 24: the mission's replay opens now (Task 25: never while a
+            // replay plays back).
+            if playback.is_none() {
+                let fog_on = mission_fog(fog_enabled, &config, None);
                 start_replay(&mut recorder, &config, fog_on, &sim);
-            } else {
-                write_atomic(
-                    &paths.snapshot,
-                    &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
-                )?;
-                std::thread::sleep(frame_time);
-                continue;
             }
         }
-        if paths.pause.exists() {
-            // Paused: no step, no commands taken (they wait for the resume), the same snapshot stays current.
+        if !mission_started || paths.pause.exists() {
+            // Before Deploy, or paused: no step, no commands taken (they wait for
+            // the resume), the same snapshot stays current.
+            let replay = playback.as_ref().map(|p| replay_view(p, &paths));
             write_atomic(
                 &paths.snapshot,
-                &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
+                &frame_snapshot(&sim, &mut supply_cache, &mut shots, &mut fog, replay),
             )?;
             std::thread::sleep(frame_time);
             continue;
         }
         let started = Instant::now();
-        // Orders on enemies the last fogged frame did not show never reach the sim
-        // (nor the replay, which logs only the lines applied).
-        let accepted = accept_lines(read_command_lines(&paths.commands), |command| {
-            fog.admits(command)
-        });
-        // Host commands, then the player's (bridge_protocol::step_frame, the body
-        // replay recording and verification share).
-        if let Err(error) = step_frame(&mut sim, scenario, accepted, &mut recorder) {
-            eprintln!("godot-bridge: replay stopped: {error}");
-        }
-        shots.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
+        let replay = if let Some(p) = playback.as_mut() {
+            // Task 25: playback steps the recording at the client's speed and
+            // ignores the client's orders; it never records a new replay.
+            let speed = playback_frame(p, &mut sim, &paths, &mut shots);
+            Some((speed, p.end_tick()))
+        } else {
+            // Orders on enemies the last fogged frame did not show never reach the sim
+            // (nor the replay, which logs only the lines applied).
+            let accepted = accept_lines(read_command_lines(&paths.commands), |command| {
+                fog.admits(command)
+            });
+            // Host commands, then the player's (bridge_protocol::step_frame, the body
+            // replay recording and verification share).
+            if let Err(error) = step_frame(&mut sim, scenario, accepted, &mut recorder) {
+                eprintln!("godot-bridge: replay stopped: {error}");
+            }
+            shots.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
+            None
+        };
         write_atomic(
             &paths.snapshot,
-            &snapshot_json_with(&sim, supply_cache.get(&sim), &mut shots, &mut fog),
+            &frame_snapshot(&sim, &mut supply_cache, &mut shots, &mut fog, replay),
         )?;
         std::thread::sleep(frame_time.saturating_sub(started.elapsed()));
     }
@@ -1499,9 +1624,9 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_match, fog_enabled_from, parse_args, sight_radius, snapshot_json, snapshot_json_with,
-        supply_links_json, BuildingKind, Command, EntityId, FogState, PlayerId, RuntimePaths,
-        ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
+        build_match, fog_enabled_from, parse_args, playback_frame, sight_radius, snapshot_json,
+        snapshot_json_with, supply_links_json, with_replay_block, BuildingKind, Command, EntityId,
+        FogState, PlayerId, RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
     use rts_core::game::sim::Difficulty;
@@ -3485,5 +3610,132 @@ mod tests {
         // Unoptimised test build on a loaded machine: 300 updates well under 3 s
         // (a release bridge does one per 33 ms frame).
         assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+    }
+
+    // ---- Task 25: `--replay` playback ----
+
+    /// A short Kestrel recording (seed 43, a `stop` at tick 5) made through the
+    /// bridge's frame body, as text.
+    fn record_kestrel(dir: &std::path::Path, frames: u32) -> String {
+        use rts_server::bridge_protocol::{accept_lines, step_frame, MatchConfig, ReplayRecorder};
+        let cfg = MatchConfig {
+            seed: 43,
+            replay_dir: Some(dir.to_path_buf()),
+            ..MatchConfig::boot(Scenario::KestrelReach)
+        };
+        let mut sim = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        let path = recorder.start(&cfg, true, &sim).unwrap().unwrap();
+        for _ in 0..frames {
+            let lines = if sim.tick() == 5 {
+                vec![format!("stop,{}", human_infantry(&sim).0)]
+            } else {
+                Vec::new()
+            };
+            step_frame(
+                &mut sim,
+                cfg.scenario,
+                accept_lines(lines, |_| true),
+                &mut recorder,
+            )
+            .unwrap();
+        }
+        recorder.stop(&sim).unwrap();
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn replay_flag_names_a_recording_to_play_back() {
+        let o = parse_args(args(&["--replay", "/r/a.rpl", "out.json"])).unwrap();
+        assert_eq!(o.replay, Some(std::path::PathBuf::from("/r/a.rpl")));
+        assert_eq!(o.output, std::path::PathBuf::from("out.json"));
+        let o = parse_args(args(&["out.json", "--replay=/r/b.rpl", "3"])).unwrap();
+        assert_eq!(o.replay, Some(std::path::PathBuf::from("/r/b.rpl")));
+        assert_eq!(o.frame_limit, 3);
+        assert_eq!(parse_args(args(&[])).unwrap().replay, None);
+        assert!(parse_args(args(&["--replay"])).is_err());
+    }
+
+    /// A playback frame drains and drops the client's packets, steps as many
+    /// ticks as `replay_speed.txt` asks (1x when it is missing) and plays the
+    /// recording exactly as a pure playback does.
+    #[test]
+    fn a_playback_frame_ignores_client_packets_and_steps_at_the_file_speed() {
+        use rts_server::bridge_protocol::{ReplayPlayback, ReplayPlayer};
+        let root = std::env::temp_dir().join(format!("earthfront-playback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("commands")).unwrap();
+        let paths = RuntimePaths::from_output(&root.join("snapshot.json"));
+        assert_eq!(paths.replay_speed, root.join("replay_speed.txt"));
+        let text = record_kestrel(&root.join("replays"), 60);
+        let mut playback = ReplayPlayback::new(ReplayPlayer::new(&text).unwrap());
+        let mut pure = ReplayPlayback::new(ReplayPlayer::new(&text).unwrap());
+        let mut sim = playback.build();
+        let mut twin = pure.build();
+        let mut shots = ShotWindow::new();
+        let packet = root.join("commands").join("0001.cmd");
+        let unit = human_infantry(&sim).0;
+        std::fs::write(
+            &packet,
+            format!("move,{unit},65536,65536\nstance,{unit},hold\n"),
+        )
+        .unwrap();
+        std::fs::write(&paths.commands, format!("move,{unit},131072,65536\n")).unwrap();
+        std::fs::write(&paths.replay_speed, "8\n").unwrap();
+        let speed = playback_frame(&mut playback, &mut sim, &paths, &mut shots);
+        assert!((speed - 8.0).abs() < f32::EPSILON);
+        assert_eq!(sim.tick(), 8);
+        assert!(
+            !packet.exists() && !paths.commands.exists(),
+            "client orders are drained"
+        );
+        pure.frame(&mut twin, 8.0, |_| {});
+        assert_eq!(
+            sim.state_hash(),
+            twin.state_hash(),
+            "client orders are ignored"
+        );
+        std::fs::remove_file(&paths.replay_speed).unwrap();
+        let speed = playback_frame(&mut playback, &mut sim, &paths, &mut shots);
+        assert!((speed - 1.0).abs() < f32::EPSILON);
+        assert_eq!(sim.tick(), 9);
+        std::fs::write(&paths.replay_speed, "0").unwrap();
+        playback_frame(&mut playback, &mut sim, &paths, &mut shots);
+        assert_eq!(sim.tick(), 9, "speed 0 holds");
+        std::fs::write(&paths.replay_speed, "8").unwrap();
+        for _ in 0..20 {
+            playback_frame(&mut playback, &mut sim, &paths, &mut shots);
+        }
+        assert_eq!(sim.tick(), 60, "the playback holds at END");
+        assert_eq!(
+            sim.state_hash(),
+            ReplayPlayer::new(&text).unwrap().expected_hash()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Only a playback snapshot ends with `"replay":{"speed","tick","end"}`;
+    /// a live Kestrel or Survival snapshot never carries the key.
+    #[test]
+    fn only_playback_snapshots_carry_the_replay_block() {
+        let sim = build_match(&rts_server::bridge_protocol::MatchConfig::boot(
+            Scenario::KestrelReach,
+        ));
+        let plain = snapshot_json(&sim);
+        assert!(!plain.contains("\"replay\""));
+        let mut survival = Scenario::Survival.build(7);
+        survival.set_balance(rts_data::load_default());
+        assert!(!snapshot_json(&survival).contains("\"replay\""));
+        let json = with_replay_block(plain.clone(), 0.5, 9, 60);
+        assert!(json_ok(&json), "{}", &json[json.len() - 80..]);
+        assert_eq!(
+            json,
+            format!(
+                "{},\"replay\":{{\"speed\":0.5,\"tick\":9,\"end\":60}}}}",
+                &plain[..plain.len() - 1]
+            )
+        );
+        assert!(with_replay_block(plain, 8.0, 0, 0)
+            .ends_with(",\"replay\":{\"speed\":8,\"tick\":0,\"end\":0}}"));
     }
 }

@@ -38,6 +38,17 @@
 //! Re-simulating `header.scenario` at `header.seed` with its options and the
 //! shipped balance, stepping the host commands plus the logged lines of each
 //! tick from 0 to the `END` tick, reproduces the `END` hash and score.
+//!
+//! # Verification and playback (Task 25)
+//!
+//! [`verify`] (the `verify-run` binary) re-simulates a replay headless and
+//! compares the tick, hash and score it reaches with the file's `END`. The
+//! bridge's `--replay <file>` (or a `replay` path in `match.json`) plays one
+//! back through the normal snapshot path with [`ReplayPlayback`], at the speed
+//! in `replay_speed.txt` ([`parse_speed`]). Both read the file with
+//! [`ReplayPlayer`], which treats it as untrusted input, and both step through
+//! [`step_tick`], the body the live bridge steps through, so recording,
+//! verification and playback cannot drift.
 
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
@@ -323,6 +334,10 @@ pub struct MatchConfig {
     /// Task 24: where this match's replay goes (the client's `user://replays`,
     /// globalized). Only an absolute path is taken; `None` records nothing.
     pub replay_dir: Option<PathBuf>,
+    /// Task 25: a replay file to play back instead of a live match (an
+    /// absolute path, as `replay_dir`; the bridge's `--replay` sets it for
+    /// the boot match). The replay's own header names the match it plays.
+    pub replay: Option<PathBuf>,
 }
 
 /// Task 20: the seed of a match whose `match.json` gives none (or a malformed one).
@@ -341,6 +356,7 @@ impl MatchConfig {
             run: false,
             perk_pool: DEFAULT_RUN_POOL,
             replay_dir: None,
+            replay: None,
         }
     }
 }
@@ -388,10 +404,11 @@ fn raw_json_value<'a>(text: &'a str, key: &str) -> Option<RawValue<'a>> {
     None
 }
 
-/// Task 24: `dir` as a replay directory, only when it is an absolute path with
-/// no JSON escape in it (the hand parser reads strings raw, so a backslash
-/// would name another directory). `res://`, `user://` and relative paths are
-/// refused: the bridge never writes beside its runtime files or the game.
+/// Task 24: `dir` as a replay directory (Task 25: or a replay file), only when
+/// it is an absolute path with no JSON escape in it (the hand parser reads
+/// strings raw, so a backslash would name another path). `res://`, `user://`
+/// and relative paths are refused: the bridge never writes beside its runtime
+/// files or the game.
 fn replay_dir_from(dir: &str) -> Option<PathBuf> {
     let path = Path::new(dir);
     (!dir.contains('\\') && path.is_absolute()).then(|| path.to_path_buf())
@@ -435,6 +452,10 @@ pub fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
     // Task 24: a quoted absolute directory for the replay.
     if let Some(RawValue::Quoted(dir)) = raw_json_value(text, "replay_dir") {
         config.replay_dir = replay_dir_from(dir);
+    }
+    // Task 25: a quoted absolute replay file to play back.
+    if let Some(RawValue::Quoted(file)) = raw_json_value(text, "replay") {
+        config.replay = replay_dir_from(file);
     }
     config
 }
@@ -532,11 +553,14 @@ pub struct ReplayHeader {
 /// A run of ASCII digits (no sign, no space) as a number.
 fn digits<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {
     if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("{key}: '{value}' is not an unsigned integer"));
+        return Err(format!(
+            "{key}: '{}' is not an unsigned integer",
+            clip(value)
+        ));
     }
     value
         .parse()
-        .map_err(|_| format!("{key}: '{value}' is out of range"))
+        .map_err(|_| format!("{key}: '{}' is out of range", clip(value)))
 }
 
 /// `true` or `false`.
@@ -917,12 +941,414 @@ pub fn step_frame(
 ) -> std::io::Result<()> {
     let (lines, player): (Vec<String>, Vec<Command>) = accepted.into_iter().unzip();
     recorder.before_step(sim, &lines);
-    // Host commands (survey AI, alien AI, scenario script) from the one shared
-    // builder, so headless tests and replay verification step the same list.
+    step_tick(sim, scenario, player);
+    recorder.after_step(sim)
+}
+
+/// One tick of `scenario`: the host commands ([`Scenario::host_commands`],
+/// the one builder of the survey AI, alien AI and scenario script) followed by
+/// the player's, then the step.
+///
+/// The single stepping body: the live bridge ([`step_frame`]), playback
+/// ([`ReplayPlayback::frame`]) and [`verify`] all step through it, so the three
+/// cannot drift apart.
+pub fn step_tick(sim: &mut Sim, scenario: Scenario, player: Vec<Command>) {
     let mut commands = scenario.host_commands(sim);
     commands.extend(player);
     sim.step(&commands);
-    recorder.after_step(sim)
+}
+
+/// The most ticks a replay may span (its `END` tick).
+///
+/// A replay is untrusted input: the cap bounds the work of [`verify`] and
+/// playback. 400,000 ticks is 3 h 42 min at 30 Hz, five times the longest
+/// 12-wave run measured (about 75,000 ticks).
+pub const VERIFY_MAX_TICKS: u64 = 400_000;
+
+/// The largest replay file read, in bytes (64 MiB). A real recording logs a
+/// few lines per order (Task 24 measured 311 bytes for a 200-tick session).
+pub const VERIFY_MAX_BYTES: usize = 64 << 20;
+
+/// The text of the replay file at `path`, read whole but never more than
+/// [`VERIFY_MAX_BYTES`].
+///
+/// # Errors
+///
+/// A message when the file cannot be opened or read, is larger than the cap
+/// or is not UTF-8.
+pub fn read_replay_text(path: &Path) -> Result<String, String> {
+    use std::io::Read as _;
+    let file = File::open(path).map_err(|e| format!("cannot open: {e}"))?;
+    let mut bytes = Vec::new();
+    file.take(VERIFY_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("cannot read: {e}"))?;
+    if bytes.len() > VERIFY_MAX_BYTES {
+        return Err(format!("larger than {VERIFY_MAX_BYTES} bytes"));
+    }
+    String::from_utf8(bytes).map_err(|_| "not UTF-8 text".to_owned())
+}
+
+/// At most the first 60 characters of an untrusted line, for a message.
+fn clip(line: &str) -> String {
+    let mut clipped: String = line.chars().take(60).collect();
+    if clipped.len() < line.len() {
+        clipped.push_str("...");
+    }
+    clipped
+}
+
+/// An optionally negative run of ASCII digits (`-` then digits; no `+`).
+fn signed(key: &str, value: &str) -> Result<i64, String> {
+    digits::<u64>(key, value.strip_prefix('-').unwrap_or(value))?;
+    value
+        .parse()
+        .map_err(|_| format!("{key}: '{}' is out of range", clip(value)))
+}
+
+/// A parsed replay: the match its header names, its player commands by tick,
+/// and the `END` it claims.
+///
+/// The file is untrusted. [`ReplayPlayer::new`] accepts exactly what
+/// [`ReplayWriter`] produces and refuses everything else with a message, never
+/// a panic:
+/// - the header must parse ([`ReplayHeader::parse`]: an unknown scenario or
+///   difficulty is refused) and its balance must be this build's
+///   ([`balance_hash`]);
+/// - after the header's blank line, each line is `T <tick> <line>` or the
+///   one `END <tick> <hash> <score>`, which comes last (a duplicate `END`, a
+///   line after it, a blank or unknown line is refused);
+/// - `T` ticks are unsigned decimal, never decrease and lie before the `END`
+///   tick; each line must parse as a protocol line ([`parse_command_line`],
+///   which also drops hostile order points), since the writer logs only lines
+///   that parsed;
+/// - a file without an `END` (truncated, or torn mid-write) is refused: with
+///   no claimed end state there is nothing to verify against;
+/// - the `END` tick is at most [`VERIFY_MAX_TICKS`] and the text at most
+///   [`VERIFY_MAX_BYTES`].
+///
+/// The header's `fog` is ignored: the logged lines already passed the fog
+/// filter, so replaying them needs no fog state.
+#[derive(Debug)]
+pub struct ReplayPlayer {
+    header: ReplayHeader,
+    /// `(tick, command)` in file order (ticks never decrease).
+    commands: Vec<(u64, Command)>,
+    end_tick: u64,
+    expected_hash: u64,
+    expected_score: i64,
+}
+
+impl ReplayPlayer {
+    /// Parses and checks a replay (see the type docs).
+    ///
+    /// # Errors
+    ///
+    /// A message naming the first problem found.
+    pub fn new(text: &str) -> Result<Self, String> {
+        Self::parse(text, VERIFY_MAX_TICKS)
+    }
+
+    fn parse(text: &str, max_ticks: u64) -> Result<Self, String> {
+        if text.len() > VERIFY_MAX_BYTES {
+            return Err(format!("larger than {VERIFY_MAX_BYTES} bytes"));
+        }
+        let header = ReplayHeader::parse(text)?;
+        if header.balance != balance_hash() {
+            return Err(format!(
+                "refused: recorded under balance {}, this build ships balance {}",
+                header.balance,
+                balance_hash()
+            ));
+        }
+        // The body follows the header's blank line (the header parsed, so
+        // the magic and its key lines come first).
+        let mut lines = text.lines();
+        lines
+            .by_ref()
+            .take_while(|line| !line.is_empty())
+            .for_each(drop);
+        let mut commands: Vec<(u64, Command)> = Vec::new();
+        let mut end: Option<(u64, u64, i64)> = None;
+        for line in lines {
+            if end.is_some() {
+                return Err(if line.starts_with("END") {
+                    "two END lines (a replay has one END, last)".to_owned()
+                } else {
+                    format!("'{}' follows END (END comes last)", clip(line))
+                });
+            }
+            if let Some(rest) = line.strip_prefix("T ") {
+                let (tick, raw) = rest
+                    .split_once(' ')
+                    .ok_or_else(|| format!("'{}' is not T <tick> <line>", clip(line)))?;
+                let tick: u64 = digits("T tick", tick)?;
+                if commands.last().is_some_and(|&(last, _)| tick < last) {
+                    return Err(format!("T {tick} comes after a later tick"));
+                }
+                let command = parse_command_line(raw)
+                    .ok_or_else(|| format!("T {tick}: '{}' is not a command line", clip(raw)))?;
+                commands.push((tick, command));
+            } else if let Some(rest) = line.strip_prefix("END ") {
+                let mut fields = rest.split(' ');
+                let (Some(tick), Some(hash), Some(score), None) =
+                    (fields.next(), fields.next(), fields.next(), fields.next())
+                else {
+                    return Err(format!("'{}' is not END <tick> <hash> <score>", clip(line)));
+                };
+                end = Some((
+                    digits("END tick", tick)?,
+                    digits("END hash", hash)?,
+                    signed("END score", score)?,
+                ));
+            } else {
+                return Err(format!("unknown line '{}'", clip(line)));
+            }
+        }
+        let (end_tick, expected_hash, expected_score) =
+            end.ok_or("no END line: the file is truncated")?;
+        if end_tick > max_ticks {
+            return Err(format!(
+                "END tick {end_tick} is beyond the verify limit of {max_ticks} ticks"
+            ));
+        }
+        if let Some(&(tick, _)) = commands.last() {
+            if tick >= end_tick {
+                return Err(format!("T {tick} is not before END {end_tick}"));
+            }
+        }
+        Ok(Self {
+            header,
+            commands,
+            end_tick,
+            expected_hash,
+            expected_score,
+        })
+    }
+
+    /// The replay's header.
+    #[must_use]
+    pub const fn header(&self) -> &ReplayHeader {
+        &self.header
+    }
+
+    /// The `END` tick: the last stepped tick of the recording.
+    #[must_use]
+    pub const fn end_tick(&self) -> u64 {
+        self.end_tick
+    }
+
+    /// The state hash the `END` line claims.
+    #[must_use]
+    pub const fn expected_hash(&self) -> u64 {
+        self.expected_hash
+    }
+
+    /// The score the `END` line claims.
+    #[must_use]
+    pub const fn expected_score(&self) -> i64 {
+        self.expected_score
+    }
+
+    /// The match the header names, as a config (no replay directory: a
+    /// replayed match is never recorded again).
+    #[must_use]
+    pub fn match_config(&self) -> MatchConfig {
+        let h = &self.header;
+        MatchConfig {
+            fog: Some(h.fog),
+            seed: h.seed,
+            difficulty: h.difficulty,
+            run: h.run,
+            perk_pool: h.perk_pool,
+            ..MatchConfig::boot(h.scenario)
+        }
+    }
+
+    /// The header's match at tick 0, with the shipped balance ([`build_match`]).
+    #[must_use]
+    pub fn build(&self) -> Sim {
+        build_match(&self.match_config())
+    }
+
+    /// The player's commands logged at `tick`, in file order.
+    #[must_use]
+    pub fn commands_for(&self, tick: u64) -> Vec<Command> {
+        let from = self.commands.partition_point(|&(t, _)| t < tick);
+        self.commands[from..]
+            .iter()
+            .take_while(|&&(t, _)| t == tick)
+            .map(|(_, command)| command.clone())
+            .collect()
+    }
+
+    /// Whether `sim` has reached the end of the recording: the `END` tick, or
+    /// a decided match (the recorder closes the file at the first decided
+    /// tick, in every scenario; an Earthfront mission also stops its tick).
+    #[must_use]
+    pub fn is_done(&self, sim: &Sim) -> bool {
+        sim.tick() >= self.end_tick || sim.winner().is_some()
+    }
+
+    /// Steps `sim` one tick with the commands logged at its tick ([`step_tick`]).
+    pub fn step(&self, sim: &mut Sim) {
+        step_tick(sim, self.header.scenario, self.commands_for(sim.tick()));
+    }
+}
+
+/// The playback speeds and the half ticks each adds per frame: 0 pauses, 0.5
+/// steps every other frame, 8 steps eight ticks a frame.
+const SPEEDS: [(f32, u32); 6] = [(0.0, 0), (0.5, 1), (1.0, 2), (2.0, 4), (4.0, 8), (8.0, 16)];
+
+/// The playback speed in `replay_speed.txt`: 0, 0.5, 1, 2, 4 or 8 (surrounding
+/// space ignored); anything else is 1.
+#[must_use]
+pub fn parse_speed(text: &str) -> f32 {
+    text.trim()
+        .parse::<f32>()
+        .ok()
+        .and_then(|value| {
+            SPEEDS
+                .iter()
+                .find(|(speed, _)| (speed - value).abs() < f32::EPSILON)
+        })
+        .map_or(1.0, |&(speed, _)| speed)
+}
+
+/// A replay being played back by the bridge, one frame at a time.
+#[derive(Debug)]
+pub struct ReplayPlayback {
+    player: ReplayPlayer,
+    /// Half ticks carried to the next frame (0.5x).
+    half_ticks: u32,
+}
+
+impl ReplayPlayback {
+    /// Plays `player` from tick 0.
+    #[must_use]
+    pub const fn new(player: ReplayPlayer) -> Self {
+        Self {
+            player,
+            half_ticks: 0,
+        }
+    }
+
+    /// The replay played.
+    #[must_use]
+    pub const fn player(&self) -> &ReplayPlayer {
+        &self.player
+    }
+
+    /// The `END` tick, where the playback stops and holds.
+    #[must_use]
+    pub const fn end_tick(&self) -> u64 {
+        self.player.end_tick
+    }
+
+    /// The replay's match at tick 0.
+    #[must_use]
+    pub fn build(&self) -> Sim {
+        self.player.build()
+    }
+
+    /// One 33 ms frame at `speed` ([`parse_speed`] values; another value
+    /// counts as 1): steps `sim` 0 to 8 ticks through [`ReplayPlayer::step`],
+    /// calling `after_step` after each, and holds once the recording's end
+    /// is reached. Speed changes how many ticks a frame steps, never which
+    /// commands a tick gets. Returns the ticks stepped.
+    pub fn frame(&mut self, sim: &mut Sim, speed: f32, mut after_step: impl FnMut(&Sim)) -> u32 {
+        let half = SPEEDS
+            .iter()
+            .find(|(s, _)| (s - speed).abs() < f32::EPSILON)
+            .map_or(2, |&(_, half)| half);
+        self.half_ticks += half;
+        let ticks = self.half_ticks / 2;
+        self.half_ticks %= 2;
+        let mut stepped = 0;
+        for _ in 0..ticks {
+            if self.player.is_done(sim) {
+                self.half_ticks = 0;
+                break;
+            }
+            self.player.step(sim);
+            after_step(sim);
+            stepped += 1;
+        }
+        stepped
+    }
+}
+
+/// The result of re-simulating a replay ([`verify`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VerifyReport {
+    /// The tick the re-simulation reached.
+    pub ticks: u64,
+    /// The state hash it reached.
+    pub hash: u64,
+    /// The hash the file's `END` claims.
+    pub expected_hash: u64,
+    /// The score it reached (the depth score's total, 0 without depth).
+    pub score: i64,
+    /// The score the file's `END` claims.
+    pub expected_score: i64,
+    /// The tick the file's `END` claims.
+    pub expected_ticks: u64,
+}
+
+impl VerifyReport {
+    /// Whether the re-simulation reproduced the claimed tick, hash and score.
+    #[must_use]
+    pub const fn ok(&self) -> bool {
+        self.ticks == self.expected_ticks
+            && self.hash == self.expected_hash
+            && self.score == self.expected_score
+    }
+}
+
+/// Re-simulates a replay headless and reports what it reached against the
+/// `END` the file claims.
+///
+/// The header's match is rebuilt (`header.scenario.build_with(header.seed,
+/// MatchOptions { difficulty, run, perk_pool })` with the shipped balance; no
+/// settings or meta file is read), then each tick steps the host commands plus
+/// that tick's logged lines ([`step_tick`], the bridge's own body) up to the
+/// `END` tick, or until the match is decided.
+///
+/// A logged command goes through the core's own guards exactly as it did live
+/// (ownership, cost, cooldown, draft, coordinate range): a command the core
+/// refuses is a silent no-op, live and replayed alike. A tampered line the
+/// core now accepts or refuses differently changes the state, so the report
+/// mismatches. Verification proves the file is consistent with its `END`; the
+/// `END` itself is not signed.
+///
+/// # Errors
+///
+/// A message when the file cannot be verified at all ([`ReplayPlayer::new`]:
+/// malformed, too long, or recorded under another balance).
+pub fn verify(text: &str) -> Result<VerifyReport, String> {
+    verify_with_limit(text, VERIFY_MAX_TICKS)
+}
+
+/// [`verify`] with another tick cap (tests bound their work with it).
+fn verify_with_limit(text: &str, max_ticks: u64) -> Result<VerifyReport, String> {
+    let player = ReplayPlayer::parse(text, max_ticks)?;
+    let mut sim = player.build();
+    // At most END steps, so the loop ends even if the tick stops advancing.
+    for _ in 0..player.end_tick {
+        if player.is_done(&sim) {
+            break;
+        }
+        player.step(&mut sim);
+    }
+    let (ticks, hash, score) = end_state(&sim);
+    Ok(VerifyReport {
+        ticks,
+        hash,
+        expected_hash: player.expected_hash,
+        score,
+        expected_score: player.expected_score,
+        expected_ticks: player.end_tick,
+    })
 }
 
 #[cfg(test)]
@@ -1982,5 +2408,502 @@ mod tests {
         recorder.stop(&sim).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Task 25: verify, ReplayPlayer, playback speed ----
+
+    /// A folder under the workspace `target/` for one test, removed on drop.
+    struct TargetTempDir(PathBuf);
+
+    impl Drop for TargetTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TargetTempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn tempdir_in_target(name: &str) -> TargetTempDir {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TargetTempDir(dir)
+    }
+
+    /// The id of the human's first rifle (0 when it has none).
+    fn first_rifle(sim: &Sim) -> u32 {
+        sim.views()
+            .into_iter()
+            .find(|v| {
+                v.owner == PlayerId(0)
+                    && matches!(
+                        v.kind,
+                        rts_core::game::sim::EntityKindView::Unit(UnitKind::Infantry)
+                    )
+            })
+            .map_or(0, |v| v.id.0)
+    }
+
+    /// Task 25's scripted player: protocol lines only. An `attack` alone at
+    /// every 60th tick up to 600 (so `T 600 attack,` is the only line of tick
+    /// 600 and moving it keeps the ticks in order); the last one sends the
+    /// rifle far east and the `stop` at 640 freezes it mid-route, so moving
+    /// that order by one tick moves where the rifle stands for good. Then a
+    /// stance cycle, more `stop`s, a `perk` pick the core refuses (no draft
+    /// is pending) every 300 ticks, a real pick whenever a draft is pending,
+    /// and a junk line the parser drops.
+    fn t25_lines(sim: &Sim) -> Vec<String> {
+        let t = sim.tick();
+        let rifle = first_rifle(sim);
+        let mut lines = Vec::new();
+        if t > 0 && t <= 600 && t.is_multiple_of(60) {
+            let (x, z) = match t {
+                600 => (30, 9),
+                _ if (t / 60).is_multiple_of(2) => (12, 12),
+                _ => (9, 14),
+            };
+            lines.push(format!("attack,{rifle},{},{}", x << 16, z << 16));
+        }
+        if t % 60 == 20 {
+            let stance = ["defensive", "aggressive", "hold"][usize::try_from(t / 60 % 3).unwrap()];
+            lines.push(format!("stance,{rifle},{stance}"));
+        }
+        if t % 120 == 40 {
+            lines.push(format!("stop,{rifle}"));
+        }
+        if t % 300 == 150 {
+            lines.push(format!("perk,{}", t / 300 % 12));
+            lines.push("junk,9".to_owned());
+        }
+        if t % 30 == 10 {
+            if let Some([first, ..]) = sim.depth_draft() {
+                lines.push(format!("perk,{first}"));
+            }
+        }
+        lines
+    }
+
+    /// Records `frames` bridge frames of `scenario` at `seed` (Normal; a run
+    /// with the default pool when `run`) into `dir` through the bridge's
+    /// stepped-frame body ([`step_frame`] with a [`ReplayRecorder`]), and
+    /// returns the replay text.
+    fn record_test_match(
+        dir: &Path,
+        scenario: Scenario,
+        seed: u64,
+        run: bool,
+        frames: u32,
+    ) -> String {
+        let cfg = MatchConfig {
+            seed,
+            run,
+            replay_dir: Some(dir.to_path_buf()),
+            ..MatchConfig::boot(scenario)
+        };
+        let mut sim = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        let path = recorder
+            .start(&cfg, true, &sim)
+            .unwrap()
+            .expect("recording");
+        for _ in 0..frames {
+            let accepted = accept_lines(t25_lines(&sim), |_| true);
+            step_frame(&mut sim, scenario, accepted, &mut recorder).expect("recording");
+        }
+        recorder.stop(&sim).unwrap();
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    /// Plays `text` back through [`ReplayPlayback::frame`] at `speed` until it
+    /// holds at its END: the `(tick, hash)` after every stepped tick.
+    fn play_back(text: &str, speed: f32) -> Vec<(u64, u64)> {
+        let mut playback = ReplayPlayback::new(ReplayPlayer::new(text).unwrap());
+        let mut sim = playback.build();
+        let mut seen = Vec::new();
+        let mut idle_frames = 0;
+        while idle_frames < 4 {
+            let stepped =
+                playback.frame(&mut sim, speed, |s| seen.push((s.tick(), s.state_hash())));
+            idle_frames = if stepped == 0 { idle_frames + 1 } else { 0 };
+        }
+        seen
+    }
+
+    #[test]
+    fn recorded_bridge_run_verifies_headless() {
+        let dir = tempdir_in_target("verify_round_trip");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 77, /* run */ true, 3000);
+        assert!(
+            text.contains("\nT 600 attack,"),
+            "the scripted player was recorded"
+        );
+        assert!(
+            text.contains(" perk,"),
+            "refused perk picks are recorded too"
+        );
+        let r = verify(&text).unwrap();
+        assert!(r.ok(), "{r:?}");
+        assert_eq!(r.ticks, 3000);
+    }
+
+    #[test]
+    fn tampered_replay_fails() {
+        let dir = tempdir_in_target("verify_tamper");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 77, false, 3000);
+        // The untampered file passes, so a failure below is the tamper's.
+        assert!(verify(&text).unwrap().ok());
+        let bad = text.replacen("T 600 attack,", "T 601 attack,", 1);
+        assert_ne!(bad, text, "the tamper changed the file");
+        let r = verify(&bad).unwrap();
+        assert!(!r.ok(), "{r:?}");
+        let bad_end = text
+            .rsplit_once("END")
+            .map(|(a, _)| format!("{a}END 3000 1 0\n"))
+            .unwrap();
+        assert!(!verify(&bad_end).unwrap().ok());
+    }
+
+    #[test]
+    fn playback_at_8x_equals_1x() {
+        let dir = tempdir_in_target("verify_speed");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 9, false, 2000);
+        let one = play_back(&text, 1.0);
+        assert_eq!(one.len(), 2000, "every tick is stepped once");
+        assert_eq!(one, play_back(&text, 8.0));
+        assert_eq!(play_back(&text, 0.5), one);
+        assert_eq!(play_back(&text, 2.0), one);
+        assert_eq!(play_back(&text, 4.0), one);
+        let end = ReplayPlayer::new(&text).unwrap();
+        assert_eq!(one.last(), Some(&(2000, end.expected_hash())));
+    }
+
+    #[test]
+    fn verify_reads_pool_from_header_only() {
+        let dir = tempdir_in_target("verify_pool");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 5, true, 3000);
+        // no settings or meta file is consulted: the header pool alone rebuilds the run
+        assert!(text.contains("perk_pool="));
+        assert!(verify(&text).unwrap().ok());
+        // Another pool in the header is another run: it no longer verifies.
+        let other = text.replacen("perk_pool=255", "perk_pool=4095", 1);
+        assert_ne!(other, text);
+        assert!(!verify(&other).unwrap().ok());
+    }
+
+    /// The speed control file: 0 (pause), 0.5, 1, 2, 4 and 8; anything else is 1.
+    #[test]
+    fn parse_speed_takes_the_six_speeds_and_falls_back_to_one() {
+        for (text, want) in [
+            ("0", 0.0),
+            ("0.5", 0.5),
+            ("1", 1.0),
+            ("2", 2.0),
+            ("4", 4.0),
+            ("8\n", 8.0),
+            (" 4 ", 4.0),
+            ("8.0", 8.0),
+        ] {
+            assert!((parse_speed(text) - want).abs() < f32::EPSILON, "{text:?}");
+        }
+        for text in [
+            "", "3", "16", "-1", "0.25", "NaN", "inf", "fast", "8x", "1e9",
+        ] {
+            assert!((parse_speed(text) - 1.0).abs() < f32::EPSILON, "{text:?}");
+        }
+    }
+
+    /// 0.5x steps on every other frame, 8x eight ticks a frame, 0 holds, and
+    /// the playback holds at END whatever the speed.
+    /// The recorder closes a replay at the first decided tick (its `END` is the
+    /// winning tick), and `ReplayPlayer::is_done` stops on a winner, so a
+    /// decided match verifies and plays back to exactly that tick.
+    #[test]
+    fn a_decided_match_verifies_and_plays_back_to_its_winning_tick() {
+        let dir = tempdir_in_target("verify_decided");
+        let cfg = MatchConfig {
+            seed: 3,
+            difficulty: Difficulty::Hard,
+            replay_dir: Some(dir.0.clone()),
+            ..MatchConfig::boot(Scenario::KestrelReach)
+        };
+        let mut sim = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        let path = recorder.start(&cfg, true, &sim).unwrap().unwrap();
+        // Undefended on Hard the base falls near t=4006 (Task 24's recipe).
+        run_frames(&mut sim, cfg.scenario, &mut recorder, 4600);
+        let won_at = sim.tick();
+        assert!(
+            sim.winner().is_some() && won_at < 4600,
+            "decided at {won_at}"
+        );
+        let text = std::fs::read_to_string(path).unwrap();
+        let report = verify(&text).unwrap();
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.ticks, won_at);
+        let seen = play_back(&text, 8.0);
+        assert_eq!(seen.last(), Some(&(won_at, sim.state_hash())));
+    }
+
+    #[test]
+    fn playback_frames_step_by_speed_and_hold_at_end() {
+        let dir = tempdir_in_target("verify_frames");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 9, false, 40);
+        let mut playback = ReplayPlayback::new(ReplayPlayer::new(&text).unwrap());
+        let mut sim = playback.build();
+        let mut frame = |speed: f32| playback.frame(&mut sim, speed, |_| {});
+        assert_eq!(
+            [frame(0.5), frame(0.5), frame(0.5), frame(0.5)],
+            [0, 1, 0, 1]
+        );
+        assert_eq!(frame(0.0), 0);
+        assert_eq!(frame(8.0), 8);
+        assert_eq!(frame(1.0), 1);
+        assert_eq!(frame(4.0), 4);
+        assert_eq!(frame(8.0), 8);
+        assert_eq!(frame(8.0), 8);
+        // 31 stepped; the END at 40 caps the next frames.
+        assert_eq!(frame(8.0), 8);
+        assert_eq!(frame(8.0), 1);
+        assert_eq!(frame(8.0), 0);
+        assert_eq!(frame(1.0), 0);
+        assert_eq!(sim.tick(), 40);
+        assert_eq!(sim.tick(), playback.end_tick());
+    }
+
+    #[test]
+    fn replay_player_groups_lines_by_tick() {
+        let text = format!(
+            "{}T 3 stop,1\nT 3 hold,2\nT 9 perk,4\nEND 00000000000000000012 00000000000000000001 -0000000000000000003\n",
+            header(4).to_text()
+        );
+        let player = ReplayPlayer::new(&text).unwrap();
+        assert_eq!(player.end_tick(), 12);
+        assert_eq!(player.expected_hash(), 1);
+        assert_eq!(player.expected_score(), -3);
+        assert_eq!(player.header().seed, 4);
+        let three = player.commands_for(3);
+        assert!(matches!(
+            three.as_slice(),
+            [
+                Command::Stop {
+                    unit: EntityId(1),
+                    ..
+                },
+                Command::HoldPosition {
+                    unit: EntityId(2),
+                    ..
+                }
+            ]
+        ));
+        assert!(matches!(
+            player.commands_for(9).as_slice(),
+            [Command::ChoosePerk { perk: 4, .. }]
+        ));
+        for tick in [0, 2, 4, 8, 10, 12, u64::MAX] {
+            assert!(player.commands_for(tick).is_empty(), "{tick}");
+        }
+    }
+
+    /// The file is untrusted: every malformed or hostile variant is refused
+    /// with a message, never a panic.
+    #[test]
+    fn verify_refuses_malformed_and_hostile_files() {
+        let head = header(4).to_text();
+        let end = "END 00000000000000000012 00000000000000000001 00000000000000000000\n";
+        let good = format!("{head}T 3 stop,1\n{end}");
+        assert!(ReplayPlayer::new(&good).is_ok());
+        assert!(
+            ReplayPlayer::new(&format!("{head}END 12 1 -3\n")).is_ok(),
+            "unpadded numbers parse"
+        );
+        let min = i64::MIN;
+        let bad = [
+            String::new(),
+            "RPL0\n".to_owned(),
+            good.replacen("RPL1", "rpl1", 1),
+            good.replacen("scenario=kestrel", "scenario=atlantis", 1),
+            good.replacen("difficulty=hard", "difficulty=nightmare", 1),
+            good.replacen(&format!("balance={}", balance_hash()), "balance=1", 1),
+            // truncated: no END at all, or a torn END
+            head.clone(),
+            format!("{head}T 3 stop,1\n"),
+            format!("{head}T 3 stop,1\nEND 0000000000"),
+            // two ENDs, a line after END
+            format!("{head}{end}{end}"),
+            format!("{head}{end}T 3 stop,1\n"),
+            // non-monotonic ticks, a line at or past END
+            format!("{head}T 5 stop,1\nT 4 stop,1\n{end}"),
+            format!("{head}T 12 stop,1\n{end}"),
+            format!("{head}T 13 stop,1\n{end}"),
+            // malformed or hostile T lines
+            format!("{head}T 99999999999999999999999 stop,1\n{end}"),
+            format!("{head}T -3 stop,1\n{end}"),
+            format!("{head}T +3 stop,1\n{end}"),
+            format!("{head}T 3\n{end}"),
+            format!("{head}T 3 \n{end}"),
+            format!("{head}T 3 junk,1\n{end}"),
+            format!("{head}T 3 move,1,{min},0\n{end}"),
+            format!("{head}T  3 stop,1\n{end}"),
+            // malformed END lines, an absurd END tick
+            format!("{head}END 12 1\n"),
+            format!("{head}END 12 1 0 0\n"),
+            format!("{head}END x 1 0\n"),
+            format!("{head}END 12 1 +0\n"),
+            format!("{head}END 12 18446744073709551616 0\n"),
+            format!("{head}END 12 1 9223372036854775808\n"),
+            format!("{head}END 400001 1 0\n"),
+            format!("{head}END 18446744073709551615 1 0\n"),
+            // unknown or blank body lines
+            format!("{head}X 3 stop,1\n{end}"),
+            format!("{head}\n{end}"),
+        ];
+        for text in &bad {
+            let err = ReplayPlayer::new(text).expect_err(text);
+            assert!(!err.is_empty());
+            assert!(verify(text).is_err(), "{text:?}");
+        }
+        // The documented cap itself is accepted (it only bounds the work).
+        assert_eq!(
+            ReplayPlayer::new(&format!("{head}END {VERIFY_MAX_TICKS} 1 0\n"))
+                .unwrap()
+                .end_tick(),
+            400_000
+        );
+        assert!(verify(&"T".repeat(VERIFY_MAX_BYTES + 1)).is_err());
+    }
+
+    /// A command the core refuses (here: selling a building that does not
+    /// exist, a perk with no draft pending) is a no-op when replayed, exactly
+    /// as it would have been live: inserted into
+    /// a recording it changes nothing, so the replay still verifies.
+    #[test]
+    fn an_inserted_command_the_core_refuses_changes_nothing() {
+        let dir = tempdir_in_target("verify_refused");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 12, false, 300);
+        assert!(verify(&text).unwrap().ok());
+        let with_refused = text.replacen("\n\n", "\n\nT 7 sell,99999\nT 8 perk,3\n", 1);
+        assert_ne!(with_refused, text);
+        assert!(verify(&with_refused).unwrap().ok());
+    }
+
+    /// Deterministic fuzzing over mutations of a real recording: verify never
+    /// panics, whatever the bytes (each run capped at 1500 ticks for speed;
+    /// the cap itself is the documented guard against absurd END ticks).
+    #[test]
+    fn mutated_recordings_never_panic_the_verifier() {
+        let dir = tempdir_in_target("verify_fuzz");
+        let text = record_test_match(&dir, Scenario::KestrelReach, 31, true, 400);
+        assert!(verify(&text).unwrap().ok());
+        let base: Vec<&str> = text.lines().collect();
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % u64::try_from(bound.max(1)).unwrap()).unwrap()
+        };
+        let (mut refused, mut matched, mut mismatched) = (0, 0, 0);
+        for round in 0..400 {
+            let mut lines: Vec<String> = base.iter().map(|l| (*l).to_owned()).collect();
+            let at = next(lines.len());
+            match round % 10 {
+                0 => {
+                    lines.remove(at);
+                }
+                1 => {
+                    let copy = lines[at].clone();
+                    lines.insert(next(lines.len()), copy);
+                }
+                2 => {
+                    let other = next(lines.len());
+                    lines.swap(at, other);
+                }
+                3 => {
+                    // one byte becomes a digit, a letter, a sign or a space
+                    let mut bytes = lines[at].clone().into_bytes();
+                    if !bytes.is_empty() {
+                        let i = next(bytes.len());
+                        bytes[i] = b"0123456789-+ ,xT\t"[next(17)];
+                    }
+                    lines[at] = String::from_utf8(bytes).unwrap();
+                }
+                4 => {
+                    // a torn line (the recording is ASCII)
+                    let cut = next(lines[at].len() + 1);
+                    lines[at].truncate(cut);
+                }
+                5 => lines.truncate(at),
+                6 => lines.insert(at, format!("T {} stop,{}", next(2000), next(50))),
+                7 => {
+                    let huge = ["18446744073709551615", "99999999999999999999999", "-1", ""];
+                    lines.insert(at, format!("T {} stop,1", huge[next(4)]));
+                }
+                8 => {
+                    let end = format!(
+                        "END {} {} {}",
+                        ["400001", "1499", "0", "18446744073709551615"][next(4)],
+                        next(1000),
+                        ["0", "-5", "9223372036854775807", "-9223372036854775808"][next(4)]
+                    );
+                    lines.push(end);
+                }
+                _ => {
+                    let junk = [
+                        "",
+                        "END",
+                        "T",
+                        "RPL1",
+                        "seed=1",
+                        "T 1 move,1,9223372036854775807,0",
+                    ];
+                    lines.insert(at, junk[next(junk.len())].to_owned());
+                }
+            }
+            let mutated = lines.join("\n") + "\n";
+            match verify_with_limit(&mutated, 1500) {
+                Err(_) => refused += 1,
+                Ok(report) if report.ok() => matched += 1,
+                Ok(_) => mismatched += 1,
+            }
+        }
+        assert_eq!(refused + matched + mismatched, 400);
+        assert!(
+            refused > 100 && mismatched > 0,
+            "{refused} {matched} {mismatched}"
+        );
+    }
+
+    /// Task 25: `match.json` may name a replay to play back (an absolute
+    /// path, as `replay_dir`); anything else plays no replay.
+    #[test]
+    fn match_config_parses_an_absolute_replay_file() {
+        let c = parse_match_config(
+            r#"{"scenario":"kestrel","replay":"/tmp/r/1_kestrel_7.rpl","replay_dir":"/tmp/r"}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!(c.replay, Some(PathBuf::from("/tmp/r/1_kestrel_7.rpl")));
+        assert_eq!(c.replay_dir, Some(PathBuf::from("/tmp/r")));
+        for bad in [
+            r#"{"scenario":"kestrel","replay_dir":"/tmp/r"}"#,
+            r#"{"replay":"r.rpl"}"#,
+            r#"{"replay":"user://replays/a.rpl"}"#,
+            r#"{"replay":7}"#,
+            r#"{"replay":""}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                parse_match_config(bad, Scenario::KestrelReach).replay,
+                None,
+                "{bad}"
+            );
+        }
+        assert_eq!(MatchConfig::boot(Scenario::KestrelReach).replay, None);
     }
 }
