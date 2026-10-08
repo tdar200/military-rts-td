@@ -1,7 +1,7 @@
 extends RefCounted
-## The player's settings: the only code that opens `user://settings.cfg` (sections audio, video, game; later tasks add
-## coach and run). Every function takes the file path so tests use their own (user://test_<name>/...); nothing is ever
-## written under res://. Values are flat keys "section/name" with the defaults() shape: a missing or corrupt file reads
+## The player's settings: the only code that opens `user://settings.cfg` (sections audio, video, game and coach, the
+## Kestrel coach's "never show again" read by kestrel_coach.gd; a later task adds run). Every function takes the file
+## path so tests use their own (user://test_<name>/...); nothing is ever written under res://. Values are flat keys "section/name" with the defaults() shape: a missing or corrupt file reads
 ## as the defaults, a wrong type falls back to the default and a volume is clamped to 0..1.
 ##
 ## Volumes act on the buses of default_bus_layout.tres (linear 0..1 to dB, 0 mutes the bus). The audio pool's duck of the
@@ -21,7 +21,7 @@ const DUCK_META := "settings_duck_db"
 
 
 static func defaults() -> Dictionary:
-	return {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed"}
+	return {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false}
 
 
 ## The file's values over the defaults. Missing file, unreadable or malformed text: the defaults.

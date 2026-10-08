@@ -48,7 +48,9 @@ func _execute(action: Dictionary) -> void:
 		match String(item.get("type", "")):
 			"key":
 				var code := OS.find_keycode_from_string(String(item.get("key", "")))
-				for down in [true, false]:
+				# A tap by default; "down": true only presses and "up": true only releases, so a key can be held across actions.
+				var states := [true] if bool(item.get("down", false)) else ([false] if bool(item.get("up", false)) else [true, false])
+				for down in states:
 					var event := InputEventKey.new()
 					event.keycode = code
 					event.physical_keycode = code

@@ -93,7 +93,7 @@ static func groups(kestrel := false) -> Array:
 		_row("Rotate", [KEY_Z, KEY_E], "camera_rotate_left"),
 		_row("Zoom", ["Wheel"], "MOUSE_BUTTON_WHEEL_UP"),
 		_row("Drag pan", ["Middle drag"], "_drag_pan("),
-		_row("Focus selection", [FOCUS]),
+		_row("Focus, hold to follow", [FOCUS]),
 		_row("Jump to base", [HOME]),
 	]
 	if kestrel:
@@ -115,7 +115,7 @@ static func groups(kestrel := false) -> Array:
 			_row("Select all army", [SELECT_ARMY]),
 			_row("Select idle crew", [SELECT_IDLE]),
 			_row("Save control group", ["Ctrl", PLUS, GROUPS], "event.ctrl_pressed"),
-			_row("Recall control group", [GROUPS]),
+			_row("Recall group, twice to centre", [GROUPS]),
 		]},
 		{"name": "Build", "rows": build_rows},
 		{"name": "Defences", "rows": defence_rows},

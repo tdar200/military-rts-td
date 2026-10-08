@@ -29,6 +29,7 @@ const BuildingStates := preload("res://scripts/world/building_states.gd")
 const AlertPings := preload("res://scripts/ui/alert_pings.gd")
 const Settings := preload("res://scripts/ui/settings.gd")
 const FeedbackEvents := preload("res://scripts/ui/feedback_events.gd")
+const KestrelCoach := preload("res://scripts/ui/kestrel_coach.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -245,6 +246,21 @@ var camera_focus_target := Vector3(16.7, 0.0, 10.0)
 var camera_focus_zoom := 12.2
 var camera_cinematic := 0.0
 var last_dust_time := 0.0
+## A second press of the same group key within this many seconds centres the camera on the group (Task 9).
+const GROUP_TAP_WINDOW := 0.35
+## F held this long (seconds) turns the tap's focus into a follow of the selection's centre until F comes up.
+const FOLLOW_HOLD := 0.25
+## True while held F follows the selection (_camera_step); any pan input, F up or an empty selection ends it.
+var camera_following := false
+var _focus_held := false  # F is down and no pan has cancelled this hold
+var _focus_hold_time := 0.0  # seconds F has been down, counted by _camera_step
+var _group_tap_index := -1  # the last group key tapped and when (time_alive), for _group_tap
+var _group_tap_at := -INF
+## Kestrel onboarding coach (KestrelCoach): the lesson the player is on, "Hide" for this match (a restart reloads the scene
+## and shows it again), and the saved "never show again" (coach/never_show, read by _load_coach from settings_path).
+var coach_step: String = KestrelCoach.STEPS[0]
+var coach_hidden := false
+var coach_never := false
 
 
 func _ready() -> void:
@@ -263,6 +279,7 @@ func _ready() -> void:
 	var saved := Settings.load_from(settings_path)
 	Settings.apply_audio(saved)
 	Settings.apply_window(saved)
+	_load_coach()
 	_setup_audio()
 	_build_terrain()
 	_build_ui()
@@ -1581,6 +1598,18 @@ func _update_camera_controls(delta: float) -> void:
 ## camera really has (camera_view_target). Yaw is locked north-up on Kestrel (the mock is north-up, shadows assume it).
 func _camera_step(delta: float, motion: Vector3, aspect: float, rotate_axis: float) -> void:
 	camera_aspect = aspect
+	if _focus_held:
+		if motion.length() > 0.0:
+			_end_follow()  # a pan wins: the camera stays where the player takes it until F is pressed again
+		else:
+			_focus_hold_time += delta
+			camera_following = _focus_hold_time >= FOLLOW_HOLD
+	if camera_following:
+		var centre := _selection_centre()
+		if centre.is_finite():
+			camera_focus_target = centre
+		else:
+			_end_follow()  # the selection is gone: nothing to follow
 	if motion.length() > 0.0:
 		camera_focus_target += motion.normalized() * delta * camera_focus_zoom * 0.48
 	camera_target = camera_target.lerp(camera_focus_target, 1.0 - exp(-delta * 7.5))
@@ -1605,6 +1634,64 @@ func _drag_pan(relative: Vector2, view_height := 1080.0) -> Vector3:
 	var right := Vector3(cos(camera_yaw), 0, -sin(camera_yaw))
 	var toward_camera := Vector3(-right.z, 0, right.x)
 	return -(right * relative.x + toward_camera * (relative.y / WorldArt.PITCH_SIN)) * per_px
+
+
+## F down (`down`) focuses the selection at once, as F always did, and starts timing a hold for _camera_step; F up ends
+## the hold and any follow it started.
+func _focus_key(down: bool) -> void:
+	_end_follow()
+	if not down:
+		return
+	_focus_held = true
+	if is_instance_valid(selected):
+		camera_focus_target = _node_point(selected)
+		camera_focus_zoom = float(WorldArt.CAMERA.focus_zoom) if world_art_on else 8.2
+		camera_cinematic = 0.8
+
+
+## Stops a hold-F follow (a pan, a drag, a jump, F up). The camera stays where it is.
+func _end_follow() -> void:
+	camera_following = false
+	_focus_held = false
+	_focus_hold_time = 0.0
+
+
+## The mean position of the live selected nodes (the player's own units and buildings), Vector3.INF when none is left.
+func _selection_centre() -> Vector3:
+	return _centre_of(selected_units)
+
+
+func _centre_of(nodes: Array) -> Vector3:
+	var sum := Vector3.ZERO
+	var n := 0
+	for node in nodes:
+		if is_instance_valid(node) and node is Node3D:
+			sum += _node_point(node)
+			n += 1
+	return sum / float(n) if n > 0 else Vector3.INF
+
+
+func _node_point(node: Node3D) -> Vector3:
+	return node.global_position if node.is_inside_tree() else node.position
+
+
+## A number key recall at `now` (time_alive). True when it is the same group as the tap before it and within
+## GROUP_TAP_WINDOW: the caller centres on the group. A centring tap starts the count over, so a third quick tap only recalls.
+func _group_tap(index: int, now: float) -> bool:
+	var twice := index == _group_tap_index and now - _group_tap_at <= GROUP_TAP_WINDOW
+	_group_tap_index = -1 if twice else index
+	_group_tap_at = now
+	return twice
+
+
+## Centres the camera on control group `group`'s live units (the zoom stays). False when the group holds none.
+func _centre_on_group(group: int) -> bool:
+	var centre := _centre_of(control_groups.get(group, []))
+	if not centre.is_finite():
+		return false
+	_end_follow()
+	camera_focus_target = centre
+	return true
 
 
 func _art_bounds() -> Rect2:
@@ -1650,6 +1737,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
 			camera_focus_zoom = minf(_zoom_limits().y, camera_focus_zoom + 1.25)
 		elif event.button_index == MOUSE_BUTTON_MIDDLE and event.pressed:
+			_end_follow()
 			pan_drag_from = event.position  # _input follows the drag (also over the HUD) and ends it on release
 		elif event.button_index == MOUSE_BUTTON_LEFT:
 			if event.pressed:
@@ -1679,13 +1767,19 @@ func _unhandled_input(event: InputEvent) -> void:
 				if String(selected.get_meta("category", "unit")) == "building":
 					_write_bridge_rally(selected, ground)
 				else:
+					var ordered := false
 					for unit in selected_units:
 						if not is_instance_valid(unit) or String(unit.get_meta("category", "unit")) != "unit":
 							continue
 						if bridge_active and bool(unit.get_meta("bridge_controlled", false)):
 							_write_bridge_move(unit, ground, attack_move_armed)
+							ordered = ordered or int(unit.get_meta("team", -1)) == HUMAN
 						else:
 							unit.set_meta("manual_target", ground)
+					if ordered and attack_move_armed:
+						_coach_event("attack_move_sent")
+					elif ordered:
+						_coach_event("move_sent")
 					_show_move_marker(ground, attack_move_armed)
 					_show_order_path(selected_units, ground, attack_move_armed)
 					_order_ack()
@@ -1716,8 +1810,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.ctrl_pressed:
 				control_groups[group] = selected_units.duplicate()
 				objective_label.text = "CONTROL GROUP %d ASSIGNED" % group
+				_group_tap_index = -1  # an assignment is no first tap
 			else:
 				recall_control_group(group)
+				if _group_tap(group, time_alive) and _centre_on_group(group):
+					objective_label.text = "CONTROL GROUP %d CENTRED" % group
 		elif Keybinds.TRAIN.has(event.keycode):
 			_write_bridge_train(Keybinds.TRAIN[event.keycode])
 		elif event.keycode == Keybinds.ABILITY:
@@ -1730,11 +1827,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_arm_build(Keybinds.BUILD[event.keycode])
 		elif event.keycode == Keybinds.SCIENCE:
 			_toggle_science_panel()
-		elif event.keycode == Keybinds.FOCUS and is_instance_valid(selected):
-			camera_focus_target = selected.global_position
-			camera_focus_zoom = float(WorldArt.CAMERA.focus_zoom) if world_art_on else 8.2
-			camera_cinematic = 0.8
+		elif event.keycode == Keybinds.FOCUS:
+			_focus_key(true)  # a tap focuses as before; held past FOLLOW_HOLD it follows (F up reaches _input)
 		elif event.keycode == Keybinds.HOME:
+			_end_follow()
 			camera_focus_target = home_focus()
 			camera_focus_zoom = _zoom_default()
 		elif event.keycode == Keybinds.JUMP_ALERT:
@@ -1952,6 +2048,43 @@ func recall_control_group(group: int) -> void:
 		objective_label.text = "CONTROL GROUP %d RECALLED" % group
 
 
+## Reads the saved "never show again" for the coach (a fresh scene: first launch, a restart, a new operation).
+func _load_coach() -> void:
+	coach_never = KestrelCoach.never_show(settings_path)
+
+
+## One of the player's own orders (selected units, a move, a foundation, a train order, an attack-move) for the coach.
+## Kestrel only. The lesson it finishes moves the coach on; the last one saves "never show again", so a finished coach
+## does not come back on the next launch.
+func _coach_event(event: String) -> void:
+	if not world_art_on:
+		return
+	var was := coach_step
+	coach_step = KestrelCoach.advance(coach_step, event)
+	if coach_step == "done" and was != "done" and not coach_never:
+		coach_never = true
+		KestrelCoach.dismiss(settings_path)
+
+
+## The coach card for the HUD ({} when nothing shows): the lesson's hint with the objective line it serves, its number
+## and the lesson count. Kestrel only, in a running match (deployed, no winner), until hidden or never shown again.
+func coach_card() -> Dictionary:
+	if coach_hidden or not mission_deployed or bridge_winner >= 0 or not KestrelCoach.visible(coach_step, coach_never, world_art_on):
+		return {}
+	var card := KestrelCoach.hint_for(coach_step, kestrel_objectives)
+	card["index"] = KestrelCoach.STEPS.find(coach_step) + 1
+	card["count"] = KestrelCoach.EVENTS.size()
+	return card
+
+
+## The card's buttons: Hide (`forever` false) for this match, Never show again (`forever` true) saved for every launch.
+func coach_dismiss(forever: bool) -> void:
+	coach_hidden = true
+	if forever and not coach_never:
+		coach_never = true
+		KestrelCoach.dismiss(settings_path)
+
+
 ## Structure panel's Set rally: the next left click on the map sets the selected producer's rally point (the existing
 ## `rally` bridge command; right click on the map does the same). Esc cancels.
 func arm_rally() -> void:
@@ -1987,6 +2120,10 @@ func _set_selection(selection: Array) -> void:
 		selection_ring = _mesh(torus, materials.glass, selected.position + Vector3.UP * 0.04)
 	selection_ring.visible = true
 	_sfx("select")
+	for node in selected_units:
+		if int(node.get_meta("team", -1)) == HUMAN and String(node.get_meta("category", "unit")) == "unit":
+			_coach_event("selected_units")
+			break
 	if world_art_on:  # the boards' selection ellipse round the painted base (_place_selection_ring)
 		_place_selection_ring(true)
 	var category := String(selected.get_meta("category", "unit"))
@@ -2057,6 +2194,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouse:
 		pointer_position = (event as InputEventMouse).position
 		pointer_known = true
+	# F up ends a hold-F follow wherever the pointer is (the HUD, a menu): a release is never missed.
+	if event is InputEventKey and event.keycode == Keybinds.FOCUS and not event.pressed:
+		_focus_key(false)
 	if pan_drag_from.is_finite():
 		# A middle drag that started on the world pans until the button comes up, even across the HUD, which would eat
 		# the motion before _unhandled_input; a pause or modal opening mid-drag ends it.
@@ -2066,6 +2206,7 @@ func _input(event: InputEvent) -> void:
 			if ui == null or ui.world_blocked():
 				pan_drag_from = Vector2.INF
 			else:
+				_end_follow()
 				camera_focus_target += _drag_pan(event.position - pan_drag_from, get_viewport().get_visible_rect().size.y)
 				pan_drag_from = event.position
 
@@ -2087,6 +2228,7 @@ func minimap_jump(point: Vector3) -> void:
 	if not world_art_on or not point.is_finite():
 		return
 	var focus := WorldArt.clamp_focus(Vector3(point.x, 0.0, point.z), _zoom_limits().x, camera_aspect, float(WorldArt.CAMERA.yaw), _art_bounds())
+	_end_follow()
 	camera_focus_target = focus
 	camera_target = focus
 	camera_cinematic = 0.0
@@ -2385,6 +2527,7 @@ func _write_bridge_train(kind_name: String) -> void:
 				return
 			_append_bridge_command("train,%d,%s" % [int(node.get_meta("bridge_id")), kind_name])
 			objective_label.text = "%s ORDER SENT TO %s" % [_kind_text(kind_name), _kind_text(producer_kind)]
+			_coach_event("train_sent")
 			return
 	objective_label.text = "BUILD %s BEFORE TRAINING THIS UNIT" % _kind_text(producer_kind)
 	_sfx("denied")
@@ -2441,6 +2584,7 @@ func _write_bridge_build(kind_name: String, ground: Vector3) -> void:
 	var tile := _world_to_tile(ground)
 	_append_bridge_command("build,%s,%d,%d" % [kind_name, tile.x, tile.y])
 	objective_label.text = "%s FOUNDATION ORDERED" % _kind_text(kind_name)
+	_coach_event("build_sent")
 	_sfx("place_thunk")
 	_show_move_marker(ground, false)
 

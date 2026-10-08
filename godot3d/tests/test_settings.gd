@@ -60,7 +60,7 @@ func test_corrupt_file_gives_defaults(t) -> void:
 
 
 func test_defaults_missing_file_and_bad_values(t) -> void:
-	t.eq(Settings.defaults(), {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed"}, "the brief's defaults")
+	t.eq(Settings.defaults(), {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false}, "the brief's defaults, plus Task 9's coach bit")
 	t.eq(Settings.load_from("user://test_settings/none.cfg"), Settings.defaults(), "a missing file reads as the defaults")
 	DirAccess.make_dir_recursive_absolute("user://test_settings")
 	var f := FileAccess.open(P, FileAccess.WRITE)

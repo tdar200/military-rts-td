@@ -56,6 +56,7 @@ const GAMEPLAY_KEYS := {
 	"colony_ledger": ["ledger"],
 	"army_orders": ["army"],
 	"alert_chips": ["idle", "alert"],
+	"coach": ["coach"],
 	"minimap_lenses": ["lens"],
 	"grid_projection": ["power_grid"],
 	"enemy_intel": ["enemy"],
@@ -68,6 +69,13 @@ const GAMEPLAY_KEYS := {
 	"control_groups": ["control_groups"],
 	"attack_move_banner": ["armed"],
 }
+
+## The Kestrel coach card's slot (kestrel-depth Task 9): the right column under the idle and next-alert chips (y 248 to
+## 278, x from 1548) and above the build deck panel (y 494) and the deck tabs (y 770). The left column (briefing,
+## objectives, wave panel, control groups, territory card and the alert toasts at x 12 to 312) and the top centre
+## (attack-move banner, power tip, wave card) are never used, so the card cannot cover the objective card or a toast.
+## The card grows down from the top of the slot and is never taller than it.
+const COACH_RECT := Rect2(1548, 288, 360, 196)
 
 ## Where the live minimap is drawn. A layout that builds its own slot (core assault) sets this; once that layout's nodes
 ## are removed the Hud's own slot is used again, so the host never holds a freed node.
@@ -111,6 +119,7 @@ func _register_gameplay() -> void:
 	register_section("colony_ledger", func(layer: Control, slice: Variant) -> void: ColonyLedger.build(layer, slice))
 	register_section("army_orders", func(layer: Control, slice: Variant) -> void: ArmyOrders.build(layer, slice, emit))
 	register_section("alert_chips", func(layer: Control, slice: Variant) -> void: AlertChips.build(layer, slice, emit))
+	register_section("coach", func(layer: Control, slice: Variant) -> void: _build_coach(layer, slice.get("coach", {}) if slice is Dictionary else {}))
 	register_section("minimap_lenses", func(layer: Control, slice: Variant) -> void: MinimapLenses.build(layer, slice, emit))
 	# Boards 2 and 3. The cards float over the map, so they come last (on top of the panels).
 	register_section("grid_projection", func(layer: Control, slice: Variant) -> void: GridProjection.build(layer, slice))
@@ -366,6 +375,52 @@ func _build_power_tip(root: Control, vm: Dictionary) -> void:
 	focus.pressed.connect(_emit.bind("focus_power", null))
 	build.pressed.connect(_emit.bind("build_power", null))
 	panel.size.y = (btn_y + 36.0 + 14.0 + 1.0) - 76.0
+	panel.queue_redraw()
+
+
+# ---------------------------------------------------------------- Kestrel coach
+
+## The coach's hint card in COACH_RECT: "Coach n / 5" with the lesson's key caps on the right, the title, the body (two
+## lines at most), the objective line the lesson serves (when there is one) and two buttons, Hide (coach_hide: this match)
+## and Never show again (coach_never: saved). The card itself ignores the mouse, so a click on it reaches the world; only
+## the two buttons take a click, and like every HoloButton they never take keyboard focus. Nothing without a vm.
+func _build_coach(root: Control, vm: Variant) -> void:
+	if not (vm is Dictionary) or (vm as Dictionary).is_empty():
+		return
+	var x := COACH_RECT.position.x
+	var top := COACH_RECT.position.y
+	var w := COACH_RECT.size.x
+	var cx := x + 15.0
+	var cw := w - 30.0
+	var panel := K.panel(root, x, top, w, 10.0, "panel", {"border": T.CYAN})
+	panel.name = "Coach"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var y := top + 13.0
+	K.text(root, "Coach %d / %d" % [int(vm.get("index", 1)), int(vm.get("count", 5))], {"x": cx, "y": y + 3.0, "f": "mono", "px": 12, "sp": 0.12, "col": T.CYAN, "up": true})
+	var kx := cx + cw
+	var keys: Array = vm.get("keys", [])
+	for i in range(keys.size() - 1, -1, -1):
+		var cap := K.key(root, str(keys[i]), 0, y, {"border": T.LINE, "col": T.TEXT})
+		kx -= cap.size.x
+		cap.position.x = roundf(kx)
+		kx -= 4.0
+	y += 30.0
+	var title := K.text(root, str(vm.get("title", "")), {"x": cx, "y": y, "w": cw, "f": "disp", "wt": 600, "px": 20, "sp": 0.04, "col": T.TEXT_HI, "up": true})
+	y += title.size.y + 6.0
+	var body := K.text(root, str(vm.get("body", "")), {"x": cx, "y": y, "w": cw, "px": 14, "lh": 18.5, "col": T.TEXT, "wrap": true})
+	y += minf(body.size.y, 37.0) + 6.0
+	var objective := str(vm.get("objective", ""))
+	if objective != "":
+		var line := K.text(root, objective, {"x": cx, "y": y, "w": cw, "px": 13, "col": T.CYAN_HI})
+		y += line.size.y + 6.0
+	y += 2.0
+	var never := K.button(root, "Never show again", 0, y, {"min_h": 24, "px": 13, "pad": 10})
+	var hide := K.button(root, "Hide", 0, y, {"min_h": 24, "px": 13, "pad": 10})
+	never.position.x = roundf(cx + cw - never.size.x)
+	hide.position.x = roundf(never.position.x - 8.0 - hide.size.x)
+	hide.pressed.connect(_emit.bind("coach_hide", null))
+	never.pressed.connect(_emit.bind("coach_never", null))
+	panel.size.y = minf(y + never.size.y + 13.0 - top, COACH_RECT.size.y)
 	panel.queue_redraw()
 
 

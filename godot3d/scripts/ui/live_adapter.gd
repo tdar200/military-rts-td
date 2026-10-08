@@ -191,6 +191,12 @@ func hud_vm(now: float) -> Dictionary:
 	if vm.get("build_top") is Dictionary:
 		vm["build_top"] = (vm["build_top"] as Dictionary).duplicate()
 		vm["build_top"]["hint"] = Keybinds.CONTROLS_HINT
+	# The Kestrel coach card (earthfront_3d.coach_card, {} when nothing shows) in the main and build layouts; the core
+	# assault layout has its own chrome on the right and shows none.
+	if g.has_method("coach_card") and not assault_active():
+		var coach: Dictionary = g.coach_card()
+		if not coach.is_empty():
+			vm["coach"] = coach
 	return vm
 
 
@@ -1216,6 +1222,10 @@ func on_action(name: String, arg: Variant) -> void:
 			var ui = g.get("ui")
 			if ui != null and ui.has_method("open_controls"):
 				ui.open_controls()
+		"coach_hide", "coach_never":
+			# The coach card's buttons: Hide for this match, Never show again saved (earthfront_3d.coach_dismiss).
+			if g.has_method("coach_dismiss"):
+				g.coach_dismiss(name == "coach_never")
 		"minimap_layer", "speed":
 			pass
 
