@@ -1,0 +1,1986 @@
+//! The Godot bridge's text protocol, shared by the `godot-bridge` binary and
+//! replay tools (Task 24): the player's command lines, the client's
+//! `match.json`, and replay files.
+//!
+//! # Replay files
+//!
+//! A replay is a text file named `<unix seconds>_<scenario>_<seed>.rpl` (a
+//! `_2`, `_3`, ... suffix when that name is taken) in the absolute directory
+//! `match.json` names as `replay_dir`:
+//!
+//! ```text
+//! RPL1
+//! version=0.1.0
+//! scenario=kestrel
+//! seed=77
+//! difficulty=normal
+//! run=true
+//! perk_pool=255
+//! fog=true
+//! balance=<FNV-1a 64 of the shipped balance.ron>
+//!
+//! T <tick> <raw player line>
+//! END <tick> <state hash> <score>
+//! ```
+//!
+//! The `END` numbers are zero-padded to 20 characters so the line keeps one
+//! width as it is rewritten (see [`ReplayWriter::checkpoint`]).
+//!
+//! A `T` line is one player line the bridge applied, against `sim.tick()`
+//! before the step that applied it, in the order applied. Only player lines
+//! are logged: the host commands (survey AI, alien AI, scenario script) are
+//! rebuilt by [`Scenario::host_commands`]. Only lines that parsed and passed
+//! the bridge's fog filter are logged, so a replay applies its lines as they
+//! stand and never needs the fog state (`fog` in the header is informational:
+//! the presentation the player saw). `END` is the state after the last
+//! stepped tick: the bridge rewrites it after every step, so the file ends
+//! with a current `END` whether the match is won, restarted, quit or killed.
+//! Re-simulating `header.scenario` at `header.seed` with its options and the
+//! shipped balance, stepping the host commands plus the logged lines of each
+//! tick from 0 to the `END` tick, reproduces the `END` hash and score.
+
+use std::fmt::Write as _;
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write as _};
+use std::path::{Path, PathBuf};
+
+use rts_core::fixed::Fixed;
+use rts_core::game::perk::DEFAULT_RUN_POOL;
+use rts_core::game::scenario::{MatchOptions, Scenario};
+use rts_core::game::sim::{
+    order_point_in_range, Command, Difficulty, EntityId, PlayerId, Sim, Stance,
+};
+use rts_core::game::stats::{BuildingKind, UnitKind};
+use rts_core::vec::Vec2;
+
+/// The `<x_bits>,<z_bits>` world point of an order line, or `None` when a
+/// field is missing, malformed or outside
+/// [`rts_core::game::sim::ORDER_COORD_LIMIT`] (P2 review
+/// M5: raw bits such as `i64::MIN` overflow the fixed-point maths; the sim
+/// drops such points too).
+fn order_point<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Option<Vec2> {
+    let x_bits = fields.next()?.parse::<i64>().ok()?;
+    let z_bits = fields.next()?.parse::<i64>().ok()?;
+    let point = Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits));
+    order_point_in_range(point).then_some(point)
+}
+
+/// The player's command for one text line, or `None` for a malformed or
+/// unknown line.
+///
+/// Lines read `move,<id>,<x_bits>,<z_bits>`, `perk,<id>` and so on. Every
+/// order is the human's (`PlayerId(0)`); fields after the ones a line kind
+/// reads are ignored.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "a flat one-arm-per-line-kind parser, moved unchanged from the bridge (Task 24)"
+)]
+pub fn parse_command_line(line: &str) -> Option<Command> {
+    let mut fields = line.split(',');
+    match fields.next()? {
+        "move" | "attack" => {
+            let mode = line.starts_with("attack,");
+            let unit = fields.next()?.parse::<u32>().ok()?;
+            let target = order_point(&mut fields)?;
+            Some(if mode {
+                Command::AttackMove {
+                    owner: PlayerId(0),
+                    unit: EntityId(unit),
+                    target,
+                }
+            } else {
+                Command::Move {
+                    owner: PlayerId(0),
+                    unit: EntityId(unit),
+                    target,
+                }
+            })
+        }
+        "train" => {
+            let barracks = fields.next()?.parse::<u32>().ok()?;
+            let kind = match fields.next()? {
+                "Harvester" => UnitKind::Harvester,
+                "Infantry" => UnitKind::Infantry,
+                "Tank" => UnitKind::Tank,
+                "AntiArmor" => UnitKind::AntiArmor,
+                "Helicopter" => UnitKind::Helicopter,
+                "Capital" => UnitKind::Capital,
+                _ => return None,
+            };
+            Some(Command::Train {
+                owner: PlayerId(0),
+                barracks: EntityId(barracks),
+                kind,
+            })
+        }
+        "build" => {
+            let kind = match fields.next()? {
+                "PowerPlant" => BuildingKind::PowerPlant,
+                "Refinery" => BuildingKind::Refinery,
+                "Barracks" => BuildingKind::Barracks,
+                "GunTurret" => BuildingKind::GunTurret,
+                "AaTurret" => BuildingKind::AaTurret,
+                "Wall" => BuildingKind::Wall,
+                "ResearchLab" => BuildingKind::ResearchLab,
+                "AntimatterPlant" => BuildingKind::AntimatterPlant,
+                "VehicleFactory" => BuildingKind::VehicleFactory,
+                "Airfield" => BuildingKind::Airfield,
+                "SupplyDepot" => BuildingKind::SupplyDepot,
+                "Battery" => BuildingKind::Battery,
+                _ => return None,
+            };
+            let x = fields.next()?.parse::<u16>().ok()?;
+            let y = fields.next()?.parse::<u16>().ok()?;
+            Some(Command::Build {
+                owner: PlayerId(0),
+                kind,
+                x,
+                y,
+            })
+        }
+        "research" => {
+            let tech_id = fields.next()?.parse::<u32>().ok()?;
+            Some(Command::Research {
+                owner: PlayerId(0),
+                tech_id,
+            })
+        }
+        "rally" | "ability" => {
+            let ability = line.starts_with("ability,");
+            let entity = fields.next()?.parse::<u32>().ok()?;
+            let target = order_point(&mut fields)?;
+            Some(if ability {
+                Command::UseAbility {
+                    owner: PlayerId(0),
+                    unit: EntityId(entity),
+                    target,
+                }
+            } else {
+                Command::SetRally {
+                    owner: PlayerId(0),
+                    producer: EntityId(entity),
+                    target,
+                }
+            })
+        }
+        "repair" | "sell" => {
+            let repair = line.starts_with("repair,");
+            let building = EntityId(fields.next()?.parse::<u32>().ok()?);
+            Some(if repair {
+                Command::Repair {
+                    owner: PlayerId(0),
+                    building,
+                }
+            } else {
+                Command::Sell {
+                    owner: PlayerId(0),
+                    building,
+                }
+            })
+        }
+        // Depth orders (Kestrel). The sim ignores them on any other map.
+        "stop" | "hold" => {
+            let hold = line.starts_with("hold,");
+            let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+            Some(if hold {
+                Command::HoldPosition {
+                    owner: PlayerId(0),
+                    unit,
+                }
+            } else {
+                Command::Stop {
+                    owner: PlayerId(0),
+                    unit,
+                }
+            })
+        }
+        "stance" => {
+            let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+            let stance = Stance::from_name(fields.next()?)?;
+            Some(Command::SetStance {
+                owner: PlayerId(0),
+                unit,
+                stance,
+            })
+        }
+        "target" => {
+            let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+            let target = EntityId(fields.next()?.parse::<u32>().ok()?);
+            Some(Command::AttackTarget {
+                owner: PlayerId(0),
+                unit,
+                target,
+            })
+        }
+        // Shift-queued waypoints (Kestrel): `qmove`/`qattack,<id>,<x_bits>,<z_bits>`.
+        "qmove" | "qattack" => {
+            let attack_move = line.starts_with("qattack,");
+            let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
+            let target = order_point(&mut fields)?;
+            Some(Command::QueueMove {
+                owner: PlayerId(0),
+                unit,
+                target,
+                attack_move,
+            })
+        }
+        // Upgrades (Kestrel, Task 17): `upgrade,<track>` buys the next
+        // level (0 weapons, 1 armour, 2 vitality); the core refuses
+        // the forge, the cap and an empty purse.
+        "upgrade" => {
+            let track = fields.next()?.parse::<u8>().ok()?;
+            Some(Command::Ascend {
+                owner: PlayerId(0),
+                track,
+            })
+        }
+        // Run drafts (Kestrel, Task 23): `perk,<id>` takes a perk
+        // from the pending draft; the core ignores any other id.
+        "perk" => {
+            let perk = fields.next()?.parse::<u32>().ok()?;
+            Some(Command::ChoosePerk {
+                owner: PlayerId(0),
+                perk,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Takes every pending player line, raw and in order.
+///
+/// The legacy command file at `path` comes first, then the packets (`*.cmd`)
+/// of the `commands` directory beside it in name order. Each file is removed
+/// once read.
+#[must_use]
+pub fn read_command_lines(path: &Path) -> Vec<String> {
+    // Legacy single-file input remains readable for older tools. The player client
+    // publishes immutable packets with atomic rename, so polling cannot unlink an
+    // open append stream or consume half an order.
+    let mut contents = std::fs::read_to_string(path).unwrap_or_default();
+    let _ = std::fs::remove_file(path);
+    let directory = path.with_file_name("commands");
+    let mut packets: Vec<_> = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|packet| packet.extension().is_some_and(|ext| ext == "cmd"))
+        .collect();
+    packets.sort();
+    for packet in packets {
+        if let Ok(text) = std::fs::read_to_string(&packet) {
+            contents.push_str(&text);
+            contents.push('\n');
+            let _ = std::fs::remove_file(packet);
+        }
+    }
+    contents.lines().map(str::to_owned).collect()
+}
+
+/// Every pending player command ([`read_command_lines`] then
+/// [`parse_command_line`]; malformed lines are dropped).
+#[must_use]
+pub fn take_commands(path: &Path) -> Vec<Command> {
+    read_command_lines(path)
+        .iter()
+        .filter_map(|line| parse_command_line(line))
+        .collect()
+}
+
+/// The lines that parse and that `admit` lets through (the bridge's fog
+/// filter), each with its command, in order: what a stepped frame applies
+/// and what a replay logs.
+pub fn accept_lines(
+    lines: Vec<String>,
+    mut admit: impl FnMut(&Command) -> bool,
+) -> Vec<(String, Command)> {
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let command = parse_command_line(&line)?;
+            admit(&command).then_some((line, command))
+        })
+        .collect()
+}
+
+/// The match the client asked for in `match.json`.
+///
+/// A key that is missing or malformed keeps its default (`fog: None` means
+/// "as the environment says"; Task 20: seed 2026, difficulty Normal, the match
+/// the bridge always built).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MatchConfig {
+    pub scenario: Scenario,
+    pub fog: Option<bool>,
+    pub seed: u64,
+    pub difficulty: Difficulty,
+    /// Task 23: a roguelite run (Kestrel only), false by default.
+    pub run: bool,
+    /// Task 23: the run's perk pool bitmask, `DEFAULT_RUN_POOL` (0xFF) by default.
+    pub perk_pool: u32,
+    /// Task 24: where this match's replay goes (the client's `user://replays`,
+    /// globalized). Only an absolute path is taken; `None` records nothing.
+    pub replay_dir: Option<PathBuf>,
+}
+
+/// Task 20: the seed of a match whose `match.json` gives none (or a malformed one).
+pub const DEFAULT_SEED: u64 = 2026;
+
+impl MatchConfig {
+    /// `scenario` with every other key at its default: the boot match, and the
+    /// fallback for a missing or malformed `match.json`.
+    #[must_use]
+    pub const fn boot(scenario: Scenario) -> Self {
+        Self {
+            scenario,
+            fog: None,
+            seed: DEFAULT_SEED,
+            difficulty: Difficulty::Normal,
+            run: false,
+            perk_pool: DEFAULT_RUN_POOL,
+            replay_dir: None,
+        }
+    }
+}
+
+/// Task 20: the sim for `cfg` (its scenario at its seed and difficulty, with the
+/// shipped balance), as the bridge builds it at boot and on every restart.
+#[must_use]
+pub fn build_match(cfg: &MatchConfig) -> Sim {
+    let mut sim = cfg.scenario.build_with(
+        cfg.seed,
+        MatchOptions {
+            difficulty: cfg.difficulty,
+            run: cfg.run,
+            perk_pool: cfg.perk_pool,
+        },
+    );
+    sim.set_balance(rts_data::load_default());
+    sim
+}
+
+/// One raw value of a flat JSON object: a quoted string (no escapes) or a bare token.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RawValue<'a> {
+    Quoted(&'a str),
+    Bare(&'a str),
+}
+
+/// The raw value of `"key":` in a flat JSON object (first occurrence used as a key).
+fn raw_json_value<'a>(text: &'a str, key: &str) -> Option<RawValue<'a>> {
+    let needle = format!("\"{key}\"");
+    let mut from = 0;
+    while let Some(found) = text[from..].find(&needle) {
+        let after = from + found + needle.len();
+        from = after;
+        let Some(rest) = text[after..].trim_start().strip_prefix(':') else {
+            continue; // the same text as a value, not a key
+        };
+        let rest = rest.trim_start();
+        if let Some(quoted) = rest.strip_prefix('"') {
+            return quoted.find('"').map(|end| RawValue::Quoted(&quoted[..end]));
+        }
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
+        return Some(RawValue::Bare(rest[..end].trim()));
+    }
+    None
+}
+
+/// Task 24: `dir` as a replay directory, only when it is an absolute path with
+/// no JSON escape in it (the hand parser reads strings raw, so a backslash
+/// would name another directory). `res://`, `user://` and relative paths are
+/// refused: the bridge never writes beside its runtime files or the game.
+fn replay_dir_from(dir: &str) -> Option<PathBuf> {
+    let path = Path::new(dir);
+    (!dir.contains('\\') && path.is_absolute()).then(|| path.to_path_buf())
+}
+
+/// Parses `match.json` (a flat JSON object written by the client).
+///
+/// Unknown keys are ignored; a malformed value keeps that key's default; text
+/// that is not an object yields `fallback` with the environment's fog.
+#[must_use]
+pub fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
+    let mut config = MatchConfig::boot(fallback);
+    let text = text.trim();
+    if !(text.starts_with('{') && text.ends_with('}')) {
+        return config;
+    }
+    if let Some(RawValue::Quoted(name)) = raw_json_value(text, "scenario") {
+        config.scenario = parse_scenario(name).unwrap_or(fallback);
+    }
+    config.fog = match raw_json_value(text, "fog") {
+        Some(RawValue::Bare("true")) => Some(true),
+        Some(RawValue::Bare("false")) => Some(false),
+        _ => None,
+    };
+    // Task 20: a bare unsigned integer seed and a quoted preset name.
+    if let Some(RawValue::Bare(seed)) = raw_json_value(text, "seed") {
+        if seed.bytes().all(|b| b.is_ascii_digit()) {
+            config.seed = seed.parse().unwrap_or(DEFAULT_SEED);
+        }
+    }
+    if let Some(RawValue::Quoted(name)) = raw_json_value(text, "difficulty") {
+        config.difficulty = Difficulty::from_name(name).unwrap_or_default();
+    }
+    // Task 23: a bare boolean run flag and a bare unsigned integer pool.
+    config.run = matches!(raw_json_value(text, "run"), Some(RawValue::Bare("true")));
+    if let Some(RawValue::Bare(pool)) = raw_json_value(text, "perk_pool") {
+        if pool.bytes().all(|b| b.is_ascii_digit()) {
+            config.perk_pool = pool.parse().unwrap_or(DEFAULT_RUN_POOL);
+        }
+    }
+    // Task 24: a quoted absolute directory for the replay.
+    if let Some(RawValue::Quoted(dir)) = raw_json_value(text, "replay_dir") {
+        config.replay_dir = replay_dir_from(dir);
+    }
+    config
+}
+
+/// Reads and parses `match.json`; a missing or unreadable file yields `fallback`.
+#[must_use]
+pub fn read_match_config(path: &Path, fallback: Scenario) -> MatchConfig {
+    std::fs::read_to_string(path).map_or_else(
+        |_| MatchConfig::boot(fallback),
+        |text| parse_match_config(&text, fallback),
+    )
+}
+
+/// Maps a `--scenario` value to a scenario (Kestrel Reach is the default).
+///
+/// # Errors
+///
+/// Any name other than `kestrel` or `survival`, with a message naming it.
+pub fn parse_scenario(value: &str) -> Result<Scenario, String> {
+    match value {
+        "survival" => Ok(Scenario::Survival),
+        "kestrel" => Ok(Scenario::KestrelReach),
+        other => Err(format!(
+            "unknown scenario '{other}' (expected 'kestrel' or 'survival')"
+        )),
+    }
+}
+
+/// FNV-1a 64 of the shipped balance (`rts_data::DEFAULT_RON`, the balance the
+/// bridge loads): a replay recorded under other numbers cannot verify.
+#[must_use]
+pub fn balance_hash() -> u64 {
+    rts_data::DEFAULT_RON
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+}
+
+/// The first line of every replay file (the format version).
+pub const REPLAY_MAGIC: &str = "RPL1";
+
+/// The server version a replay records (`version=` in its header).
+pub const REPLAY_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The scenarios a replay header names, by key.
+const SCENARIO_KEYS: [(Scenario, &str); 5] = [
+    (Scenario::KestrelReach, "kestrel"),
+    (Scenario::Survival, "survival"),
+    (Scenario::LaneDefense, "lane_defense"),
+    (Scenario::OpenClash, "open_clash"),
+    (Scenario::Crossroads, "crossroads"),
+];
+
+/// The header and file-name key of `scenario` (`kestrel`, `survival`, ...).
+#[must_use]
+pub fn scenario_key(scenario: Scenario) -> &'static str {
+    SCENARIO_KEYS
+        .iter()
+        .find(|(s, _)| *s == scenario)
+        .map_or("unknown", |(_, key)| key)
+}
+
+/// The header keys, in file order.
+const HEADER_KEYS: [&str; 8] = [
+    "version",
+    "scenario",
+    "seed",
+    "difficulty",
+    "run",
+    "perk_pool",
+    "fog",
+    "balance",
+];
+
+/// Everything a replay needs to rebuild its match: the header of a replay
+/// file (see the module docs).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ReplayHeader {
+    /// The recording server's version ([`REPLAY_VERSION`]).
+    pub version: String,
+    pub scenario: Scenario,
+    pub seed: u64,
+    pub difficulty: Difficulty,
+    pub run: bool,
+    /// The run's perk pool as `match.json` gave it (the sim masks it).
+    pub perk_pool: u32,
+    /// The presentation fog the player had. Informational: the logged lines
+    /// already passed the fog filter.
+    pub fog: bool,
+    /// [`balance_hash`] of the balance the match ran under.
+    pub balance: u64,
+}
+
+/// A run of ASCII digits (no sign, no space) as a number.
+fn digits<T: std::str::FromStr>(key: &str, value: &str) -> Result<T, String> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("{key}: '{value}' is not an unsigned integer"));
+    }
+    value
+        .parse()
+        .map_err(|_| format!("{key}: '{value}' is out of range"))
+}
+
+/// `true` or `false`.
+fn boolean(key: &str, value: &str) -> Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(format!("{key}: '{other}' is not true or false")),
+    }
+}
+
+impl ReplayHeader {
+    /// The header of a replay of `cfg`'s match, with the fog the player has,
+    /// this server's version and the shipped balance.
+    #[must_use]
+    pub fn for_match(cfg: &MatchConfig, fog: bool) -> Self {
+        Self {
+            version: REPLAY_VERSION.to_owned(),
+            scenario: cfg.scenario,
+            seed: cfg.seed,
+            difficulty: cfg.difficulty,
+            run: cfg.run,
+            perk_pool: cfg.perk_pool,
+            fog,
+            balance: balance_hash(),
+        }
+    }
+
+    /// The header as it opens a replay file: `RPL1`, one `key=value` line per
+    /// field, then the blank line that ends the header.
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        format!(
+            "{REPLAY_MAGIC}\nversion={}\nscenario={}\nseed={}\ndifficulty={}\nrun={}\n\
+             perk_pool={}\nfog={}\nbalance={}\n\n",
+            self.version,
+            scenario_key(self.scenario),
+            self.seed,
+            self.difficulty.name(),
+            self.run,
+            self.perk_pool,
+            self.fog,
+            self.balance,
+        )
+    }
+
+    /// Reads the header of a replay (the whole file or just its header): the
+    /// `RPL1` line, then `key=value` lines up to the first blank line.
+    ///
+    /// # Errors
+    ///
+    /// A message when the magic line is missing, a key is unknown, repeated
+    /// or missing, or a value is malformed. Nothing is defaulted: a header
+    /// either names its whole match or is refused.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let mut lines = text.lines();
+        if lines.next() != Some(REPLAY_MAGIC) {
+            return Err(format!(
+                "not a replay: the first line is not {REPLAY_MAGIC}"
+            ));
+        }
+        let mut values: [Option<&str>; HEADER_KEYS.len()] = [None; HEADER_KEYS.len()];
+        for line in lines.take_while(|line| !line.is_empty()) {
+            let (key, value) = line
+                .split_once('=')
+                .ok_or_else(|| format!("malformed header line '{line}'"))?;
+            let slot = HEADER_KEYS
+                .iter()
+                .position(|k| *k == key)
+                .ok_or_else(|| format!("unknown header key '{key}'"))?;
+            if values[slot].replace(value).is_some() {
+                return Err(format!("header key '{key}' appears twice"));
+            }
+        }
+        let get = |key: &str| {
+            HEADER_KEYS
+                .iter()
+                .position(|k| *k == key)
+                .and_then(|slot| values[slot])
+                .ok_or_else(|| format!("header key '{key}' is missing"))
+        };
+        let version = get("version")?;
+        if version.is_empty() {
+            return Err("version is empty".to_owned());
+        }
+        let scenario = get("scenario")?;
+        let scenario = SCENARIO_KEYS
+            .iter()
+            .find(|(_, key)| *key == scenario)
+            .map(|(s, _)| *s)
+            .ok_or_else(|| format!("scenario: unknown '{scenario}'"))?;
+        let difficulty = get("difficulty")?;
+        Ok(Self {
+            version: version.to_owned(),
+            scenario,
+            seed: digits("seed", get("seed")?)?,
+            difficulty: Difficulty::from_name(difficulty)
+                .ok_or_else(|| format!("difficulty: unknown '{difficulty}'"))?,
+            run: boolean("run", get("run")?)?,
+            perk_pool: digits("perk_pool", get("perk_pool")?)?,
+            fog: boolean("fog", get("fog")?)?,
+            balance: digits("balance", get("balance")?)?,
+        })
+    }
+}
+
+/// Writes one replay file (see the module docs).
+///
+/// Lines given to [`ReplayWriter::tick`] are held until the next [`ReplayWriter::checkpoint`]
+/// (or [`ReplayWriter::finish`]), which appends them and rewrites the closing
+/// `END` line, so the file on disk always ends with the `END` of the last
+/// checkpoint. Once finished, every call is a no-op.
+#[derive(Debug)]
+pub struct ReplayWriter {
+    file: File,
+    path: PathBuf,
+    /// Byte offset of the closing `END` line (the end of the logged lines).
+    end_at: u64,
+    /// `T` lines not yet on disk.
+    pending: String,
+    finished: bool,
+}
+
+impl ReplayWriter {
+    /// Creates `<unix seconds>_<scenario>_<seed>.rpl` in `dir` (created if
+    /// missing) and writes `header`.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` when `dir` is not an absolute path (nothing is created);
+    /// any I/O error creating the directory or the file.
+    pub fn create(dir: &Path, header: &ReplayHeader) -> std::io::Result<Self> {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        Self::create_at(dir, header, secs)
+    }
+
+    /// [`ReplayWriter::create`] at a given unix time. A name already taken
+    /// (two matches in the same second) gets the first free `_2`, `_3`, ...
+    /// suffix; an existing file is never opened.
+    ///
+    /// # Errors
+    ///
+    /// As [`ReplayWriter::create`]; `AlreadyExists` after 1000 taken names.
+    pub fn create_at(dir: &Path, header: &ReplayHeader, unix_secs: u64) -> std::io::Result<Self> {
+        if !dir.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("replay directory '{}' is not absolute", dir.display()),
+            ));
+        }
+        std::fs::create_dir_all(dir)?;
+        let stem = format!(
+            "{unix_secs}_{}_{}",
+            scenario_key(header.scenario),
+            header.seed
+        );
+        for n in 1..=1000_u32 {
+            let path = if n == 1 {
+                dir.join(format!("{stem}.rpl"))
+            } else {
+                dir.join(format!("{stem}_{n}.rpl"))
+            };
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    let text = header.to_text();
+                    file.write_all(text.as_bytes())?;
+                    return Ok(Self {
+                        file,
+                        path,
+                        end_at: text.len() as u64,
+                        pending: String::new(),
+                        finished: false,
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("every replay name for {stem} is taken"),
+        ))
+    }
+
+    /// The file being written.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Logs the player lines applied at `tick` (`sim.tick()` before the
+    /// step), as `T <tick> <line>`. Control characters are dropped, so each
+    /// order stays one file line (in a line that parsed they can only sit in
+    /// ignored trailing fields); a line left empty is skipped.
+    pub fn tick(&mut self, tick: u64, lines: &[String]) {
+        if self.finished {
+            return;
+        }
+        for line in lines {
+            let clean: String = line.chars().filter(|c| !c.is_control()).collect();
+            if !clean.is_empty() {
+                let _ = writeln!(self.pending, "T {tick} {clean}");
+            }
+        }
+    }
+
+    /// Appends the held lines and rewrites the closing line as
+    /// `END <tick> <hash> <score>` (the state after the last step).
+    ///
+    /// The three numbers are zero-padded to 20 characters (`-` first for a
+    /// negative score), so every `END` line has one width: the held lines
+    /// and the new `END` go down in one write over the old `END`, the file
+    /// never shrinks and no truncation is needed, so a kill at any moment
+    /// leaves a whole `END` last. Readers parse the numbers as plain integers.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error; the file may then lack its `END`.
+    pub fn checkpoint(&mut self, tick: u64, hash: u64, score: i64) -> std::io::Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        let mut chunk = std::mem::take(&mut self.pending);
+        let logged = chunk.len() as u64;
+        let _ = writeln!(chunk, "END {tick:020} {hash:020} {score:020}");
+        self.file.seek(SeekFrom::Start(self.end_at))?;
+        self.file.write_all(chunk.as_bytes())?;
+        self.end_at += logged;
+        Ok(())
+    }
+
+    /// The last [`ReplayWriter::checkpoint`]: the file is complete and later
+    /// calls write nothing.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error writing or flushing the file.
+    pub fn finish(&mut self, tick: u64, hash: u64, score: i64) -> std::io::Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+        self.checkpoint(tick, hash, score)?;
+        self.finished = true;
+        self.file.flush()
+    }
+
+    /// Whether [`ReplayWriter::finish`] ran.
+    #[must_use]
+    pub const fn is_finished(&self) -> bool {
+        self.finished
+    }
+}
+
+/// `(tick, state hash, score)` of `sim` as an `END` line records it (the score
+/// is the depth score's total, 0 without depth).
+fn end_state(sim: &Sim) -> (u64, u64, i64) {
+    (
+        sim.tick(),
+        sim.state_hash(),
+        sim.depth_score().map_or(0, |score| score.total),
+    )
+}
+
+/// The bridge's replay of the running mission.
+///
+/// It is off until a mission starts with a `replay_dir`, and finished on a
+/// winner, a restart or exit. An I/O
+/// failure turns it off (the error is returned for the bridge to log) and
+/// never touches the match.
+#[derive(Debug, Default)]
+pub struct ReplayRecorder {
+    writer: Option<ReplayWriter>,
+}
+
+impl ReplayRecorder {
+    /// A recorder that records nothing yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { writer: None }
+    }
+
+    /// The mission of `cfg` starts on `sim` (with presentation fog `fog`):
+    /// any open replay is finished first, then a new one is opened when `cfg`
+    /// has a `replay_dir`. Returns the new file's path (`None`: not recording).
+    ///
+    /// # Errors
+    ///
+    /// The I/O error that kept the replay from opening; the recorder is off.
+    pub fn start(
+        &mut self,
+        cfg: &MatchConfig,
+        fog: bool,
+        sim: &Sim,
+    ) -> std::io::Result<Option<PathBuf>> {
+        self.stop(sim)?;
+        let Some(dir) = &cfg.replay_dir else {
+            return Ok(None);
+        };
+        let mut writer = ReplayWriter::create(dir, &ReplayHeader::for_match(cfg, fog))?;
+        let (tick, hash, score) = end_state(sim);
+        writer.checkpoint(tick, hash, score)?;
+        let path = writer.path().to_path_buf();
+        self.writer = Some(writer);
+        Ok(Some(path))
+    }
+
+    /// Whether a replay is open.
+    #[must_use]
+    pub const fn is_recording(&self) -> bool {
+        self.writer.is_some()
+    }
+
+    /// Logs the player lines about to be applied to `sim` (against
+    /// `sim.tick()`, before the step). Nothing is logged once the match is
+    /// decided: its tick no longer advances.
+    pub fn before_step(&mut self, sim: &Sim, lines: &[String]) {
+        if sim.winner().is_some() {
+            return;
+        }
+        if let Some(writer) = &mut self.writer {
+            writer.tick(sim.tick(), lines);
+        }
+    }
+
+    /// After a step: rewrites the `END` line with `sim`'s state, and finishes
+    /// the replay once the match is decided.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error that ended the recording; the recorder is off.
+    pub fn after_step(&mut self, sim: &Sim) -> std::io::Result<()> {
+        let Some(writer) = &mut self.writer else {
+            return Ok(());
+        };
+        let (tick, hash, score) = end_state(sim);
+        let result = if sim.winner().is_some() {
+            writer.finish(tick, hash, score)
+        } else {
+            writer.checkpoint(tick, hash, score)
+        };
+        if result.is_err() || writer.is_finished() {
+            self.writer = None;
+        }
+        result
+    }
+
+    /// Finishes the open replay, if any, with `sim`'s state (a restart or
+    /// exit); the recorder is then off.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error finishing the file.
+    pub fn stop(&mut self, sim: &Sim) -> std::io::Result<()> {
+        self.writer.take().map_or(Ok(()), |mut writer| {
+            let (tick, hash, score) = end_state(sim);
+            writer.finish(tick, hash, score)
+        })
+    }
+}
+
+/// One stepped bridge frame.
+///
+/// The accepted player lines ([`accept_lines`]) are logged against
+/// `sim.tick()`, then the sim steps the host commands
+/// ([`Scenario::host_commands`]) followed by the player's, and the replay's
+/// `END` follows the new state. The step happens whatever the recorder does.
+///
+/// # Errors
+///
+/// A recording I/O error (the recorder is then off; the step still happened).
+pub fn step_frame(
+    sim: &mut Sim,
+    scenario: Scenario,
+    accepted: Vec<(String, Command)>,
+    recorder: &mut ReplayRecorder,
+) -> std::io::Result<()> {
+    let (lines, player): (Vec<String>, Vec<Command>) = accepted.into_iter().unzip();
+    recorder.before_step(sim, &lines);
+    // Host commands (survey AI, alien AI, scenario script) from the one shared
+    // builder, so headless tests and replay verification step the same list.
+    let mut commands = scenario.host_commands(sim);
+    commands.extend(player);
+    sim.step(&commands);
+    recorder.after_step(sim)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rts_core::game::stats::{BuildingKind, UnitKind};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn qa_concurrent_command_transport_preserves_every_order() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let root =
+            std::env::temp_dir().join(format!("earthfront-transport-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("commands.txt");
+        std::fs::create_dir_all(root.join("commands")).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let producer_done = done.clone();
+        let producer_path = path.clone();
+        let producer = std::thread::spawn(move || {
+            for id in 0..1000 {
+                let packet = producer_path
+                    .with_file_name("commands")
+                    .join(format!("{id:020}.cmd"));
+                let temporary = packet.with_extension("next");
+                std::fs::write(&temporary, format!("move,{id},0,0\n")).unwrap();
+                std::fs::rename(temporary, packet).unwrap();
+                std::thread::sleep(std::time::Duration::from_micros(100));
+            }
+            producer_done.store(true, Ordering::SeqCst);
+        });
+        let mut received = Vec::new();
+        while !done.load(Ordering::SeqCst) {
+            received.extend(take_commands(&path));
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
+        producer.join().unwrap();
+        received.extend(take_commands(&path));
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(received.len(), 1000, "concurrent player orders were lost");
+    }
+
+    #[test]
+    fn match_config_parses_and_falls_back() {
+        let c = parse_match_config(
+            r#"{"scenario":"survival","seed":7,"difficulty":"hard","fog":false}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!(c.scenario, Scenario::Survival);
+        assert_eq!(c.fog, Some(false));
+        let c = parse_match_config("not json", Scenario::KestrelReach);
+        assert_eq!((c.scenario, c.fog), (Scenario::KestrelReach, None));
+        let c = parse_match_config(
+            r#"{"scenario":"mars","fog":"maybe"}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!((c.scenario, c.fog), (Scenario::KestrelReach, None));
+        let c = read_match_config(
+            std::path::Path::new("/nonexistent/match.json"),
+            Scenario::Survival,
+        );
+        assert_eq!(c.scenario, Scenario::Survival);
+        assert_eq!((c.seed, c.difficulty), (2026, Difficulty::Normal));
+    }
+
+    /// Task 20: `seed` (a bare unsigned integer) and `difficulty` (a quoted
+    /// preset name); anything malformed keeps 2026 and Normal.
+    #[test]
+    fn match_config_parses_seed_and_difficulty_and_falls_back() {
+        let c = parse_match_config(
+            r#"{"scenario":"kestrel","seed":7,"difficulty":"hard","fog":true}"#,
+            Scenario::Survival,
+        );
+        assert_eq!(c.scenario, Scenario::KestrelReach);
+        assert_eq!((c.seed, c.difficulty), (7, Difficulty::Hard));
+        let c = parse_match_config(
+            r#"{"seed":2147483646,"difficulty":"easy"}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!((c.seed, c.difficulty), (2_147_483_646, Difficulty::Easy));
+        for bad in [
+            r#"{"seed":"7"}"#,
+            r#"{"seed":-5}"#,
+            r#"{"seed":1.5}"#,
+            r#"{"seed":abc}"#,
+            r#"{"seed":}"#,
+            r#"{"seed":184467440737095516160}"#,
+            r#"{"scenario":"kestrel"}"#,
+        ] {
+            let c = parse_match_config(bad, Scenario::KestrelReach);
+            assert_eq!(c.seed, 2026, "{bad}");
+        }
+        for bad in [
+            r#"{"difficulty":"brutal"}"#,
+            r#"{"difficulty":"Hard"}"#,
+            r#"{"difficulty":2}"#,
+            r#"{"difficulty":""}"#,
+            r#"{"scenario":"kestrel"}"#,
+        ] {
+            let c = parse_match_config(bad, Scenario::KestrelReach);
+            assert_eq!(c.difficulty, Difficulty::Normal, "{bad}");
+        }
+        let c = parse_match_config("[1,2]", Scenario::KestrelReach);
+        assert_eq!((c.seed, c.difficulty), (2026, Difficulty::Normal));
+    }
+
+    /// Task 20: the bridge builds the match `match.json` asks for: Kestrel at
+    /// its seed and preset, Survival at its seed (the preset ignored).
+    #[test]
+    fn the_bridge_builds_the_configured_seed_and_difficulty() {
+        use rts_core::game::scenario::{kestrel_reach_with, MatchOptions};
+        let cfg = parse_match_config(
+            r#"{"scenario":"kestrel","seed":99,"difficulty":"easy","fog":true}"#,
+            Scenario::Survival,
+        );
+        let sim = build_match(&cfg);
+        let want = kestrel_reach_with(
+            99,
+            MatchOptions {
+                difficulty: Difficulty::Easy,
+                ..MatchOptions::default()
+            },
+        );
+        assert_eq!(sim.state_hash(), {
+            let mut w = want;
+            w.set_balance(rts_data::load_default());
+            w.state_hash()
+        });
+        assert_eq!((sim.seed(), sim.difficulty()), (99, Difficulty::Easy));
+        let cfg = parse_match_config(
+            r#"{"scenario":"survival","seed":5,"difficulty":"hard"}"#,
+            Scenario::KestrelReach,
+        );
+        let sim = build_match(&cfg);
+        let mut want = Scenario::Survival.build(5);
+        want.set_balance(rts_data::load_default());
+        assert_eq!(sim.state_hash(), want.state_hash());
+        // The boot match (no match.json) is the old `build(2026)`.
+        let boot = MatchConfig::boot(Scenario::KestrelReach);
+        let mut old = Scenario::KestrelReach.build(2026);
+        old.set_balance(rts_data::load_default());
+        assert_eq!(build_match(&boot).state_hash(), old.state_hash());
+    }
+
+    #[test]
+    fn godot_command_file_supports_rts_orders() {
+        let path =
+            std::env::temp_dir().join(format!("earthfront-commands-{}.txt", std::process::id()));
+        std::fs::write(
+            &path,
+            "move,7,65536,131072\nattack,8,196608,262144\ntrain,9,Tank\nbuild,Barracks,4,5\nresearch,20\nrally,9,327680,393216\nability,7,458752,524288\nrepair,11\nsell,12\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 9);
+        assert!(matches!(
+            commands[0],
+            Command::Move {
+                unit: EntityId(7),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[1],
+            Command::AttackMove {
+                unit: EntityId(8),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[2],
+            Command::Train {
+                barracks: EntityId(9),
+                kind: UnitKind::Tank,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[3],
+            Command::Build {
+                kind: BuildingKind::Barracks,
+                x: 4,
+                y: 5,
+                ..
+            }
+        ));
+        assert!(matches!(commands[4], Command::Research { tech_id: 20, .. }));
+        assert!(matches!(
+            commands[5],
+            Command::SetRally {
+                producer: EntityId(9),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[6],
+            Command::UseAbility {
+                unit: EntityId(7),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[7],
+            Command::Repair {
+                building: EntityId(11),
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[8],
+            Command::Sell {
+                building: EntityId(12),
+                ..
+            }
+        ));
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn godot_command_file_supports_depth_orders() {
+        use rts_core::game::sim::Stance;
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-depth-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "stop,7\nhold,8\nstance,9,defensive\ntarget,10,44\n\
+             stop,x\nhold,\nstance,9,Defensive\nstance,9\nstance,x,hold\n\
+             target,10\ntarget,10,y\ntarget,-1,3\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 4, "malformed depth lines are dropped");
+        assert!(matches!(
+            commands[0],
+            Command::Stop {
+                owner: PlayerId(0),
+                unit: EntityId(7)
+            }
+        ));
+        assert!(matches!(
+            commands[1],
+            Command::HoldPosition {
+                owner: PlayerId(0),
+                unit: EntityId(8)
+            }
+        ));
+        assert!(matches!(
+            commands[2],
+            Command::SetStance {
+                owner: PlayerId(0),
+                unit: EntityId(9),
+                stance: Stance::Defensive
+            }
+        ));
+        assert!(matches!(
+            commands[3],
+            Command::AttackTarget {
+                owner: PlayerId(0),
+                unit: EntityId(10),
+                target: EntityId(44)
+            }
+        ));
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn godot_command_file_supports_upgrades() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-upgrade-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "upgrade,0\nupgrade,2\nupgrade,3\n\
+             upgrade,x\nupgrade,\nupgrade\nupgrade,-1\nupgrade,256\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        // The forge (3) parses; the core refuses it (Task 17).
+        assert_eq!(commands.len(), 3, "malformed upgrade lines are dropped");
+        for (command, want) in commands.iter().zip([0u8, 2, 3]) {
+            assert!(
+                matches!(*command, Command::Ascend { owner: PlayerId(0), track } if track == want),
+                "{command:?}"
+            );
+        }
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn godot_command_file_supports_perk_picks() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-perk-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "perk,4\nperk,0\nperk,11\nperk,4294967295\n\
+             perk,x\nperk,\nperk\nperk,-1\nperk,4294967296\nperk,1.5\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        // Any u32 parses; the core takes only an id in the pending draft (Task 23).
+        assert_eq!(commands.len(), 4, "malformed perk lines are dropped");
+        for (command, want) in commands.iter().zip([4u32, 0, 11, u32::MAX]) {
+            assert!(
+                matches!(*command, Command::ChoosePerk { owner: PlayerId(0), perk } if perk == want),
+                "{command:?}"
+            );
+        }
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    /// Task 23: `run` (bare true/false) and `perk_pool` (a bare unsigned
+    /// integer); anything malformed keeps false and the default pool (0xFF).
+    #[test]
+    fn match_config_parses_run_and_perk_pool_and_falls_back() {
+        let c = parse_match_config(
+            r#"{"scenario":"kestrel","seed":7,"run":true,"perk_pool":4095}"#,
+            Scenario::Survival,
+        );
+        assert_eq!((c.run, c.perk_pool, c.seed), (true, 4095, 7));
+        let c = parse_match_config(r#"{"run":false,"perk_pool":0}"#, Scenario::KestrelReach);
+        assert_eq!((c.run, c.perk_pool), (false, 0));
+        let boot = MatchConfig::boot(Scenario::KestrelReach);
+        assert_eq!((boot.run, boot.perk_pool), (false, 0xFF));
+        for bad in [
+            r#"{"run":"true"}"#,
+            r#"{"run":1}"#,
+            r#"{"run":}"#,
+            r#"{"run":TRUE}"#,
+            r#"{"scenario":"kestrel"}"#,
+        ] {
+            assert!(
+                !parse_match_config(bad, Scenario::KestrelReach).run,
+                "{bad}"
+            );
+        }
+        for bad in [
+            r#"{"perk_pool":"255"}"#,
+            r#"{"perk_pool":-1}"#,
+            r#"{"perk_pool":0xFF}"#,
+            r#"{"perk_pool":4294967296}"#,
+            r#"{"perk_pool":}"#,
+            r#"{"run":true}"#,
+        ] {
+            let c = parse_match_config(bad, Scenario::KestrelReach);
+            assert_eq!(c.perk_pool, 0xFF, "{bad}");
+        }
+        let c = parse_match_config("not json", Scenario::KestrelReach);
+        assert_eq!((c.run, c.perk_pool), (false, 0xFF));
+    }
+
+    #[test]
+    fn godot_command_file_supports_queued_waypoints() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-queue-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "qmove,7,65536,-131072\nqattack,8,196608,262144\n\
+             qmove,x,1,2\nqmove,7,1\nqattack,8,1,y\nqmove,-1,1,2\nqattack,\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 2, "malformed queue lines are dropped");
+        assert!(matches!(
+            commands[0],
+            Command::QueueMove {
+                owner: PlayerId(0),
+                unit: EntityId(7),
+                attack_move: false,
+                target
+            } if target.x.to_bits() == 65536 && target.y.to_bits() == -131_072
+        ));
+        assert!(matches!(
+            commands[1],
+            Command::QueueMove {
+                owner: PlayerId(0),
+                unit: EntityId(8),
+                attack_move: true,
+                target
+            } if target.x.to_bits() == 196_608 && target.y.to_bits() == 262_144
+        ));
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    /// P2 review M5: a point line whose raw bits lie outside any map (up to
+    /// `i64::MIN`, which used to panic `hex::from_world` in a debug verifier)
+    /// is dropped like any malformed line; points at the limit still parse.
+    #[test]
+    fn godot_command_file_drops_hostile_order_points() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-hostile-commands-{}.txt",
+            std::process::id()
+        ));
+        let limit = rts_core::game::sim::ORDER_COORD_LIMIT.to_bits();
+        let min = i64::MIN;
+        let max = i64::MAX;
+        let over = limit + 1;
+        std::fs::write(
+            &path,
+            format!(
+                "qmove,7,{min},0\nqattack,7,0,{max}\nmove,7,{min},{min}\n\
+                 attack,7,{over},0\nrally,3,0,-{over}\nability,7,{max},0\n\
+                 qmove,7,{limit},-{limit}\nmove,7,65536,65536\n"
+            ),
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 2, "hostile point lines are dropped");
+        assert!(matches!(
+            commands[0],
+            Command::QueueMove { target, .. }
+                if target.x.to_bits() == limit && target.y.to_bits() == -limit
+        ));
+        assert!(matches!(commands[1], Command::Move { .. }));
+    }
+
+    #[test]
+    fn godot_command_file_covers_the_complete_combat_roster() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-roster-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "train,9,AntiArmor\ntrain,9,Helicopter\ntrain,9,Capital\nbuild,AaTurret,1,2\nbuild,Wall,2,3\nbuild,ResearchLab,3,4\nbuild,AntimatterPlant,4,5\n",
+        )
+        .expect("write complete-roster fixture");
+        let commands = take_commands(&path);
+        assert_eq!(commands.len(), 7);
+        assert!(matches!(
+            commands[0],
+            Command::Train {
+                kind: UnitKind::AntiArmor,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[1],
+            Command::Train {
+                kind: UnitKind::Helicopter,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[2],
+            Command::Train {
+                kind: UnitKind::Capital,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[3],
+            Command::Build {
+                kind: BuildingKind::AaTurret,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[4],
+            Command::Build {
+                kind: BuildingKind::Wall,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[5],
+            Command::Build {
+                kind: BuildingKind::ResearchLab,
+                ..
+            }
+        ));
+        assert!(matches!(
+            commands[6],
+            Command::Build {
+                kind: BuildingKind::AntimatterPlant,
+                ..
+            }
+        ));
+        assert!(!path.exists(), "bridge consumes the roster file atomically");
+    }
+    // ---- Task 24: the shared parser, the replay header, writer and recorder ----
+
+    /// A fresh scratch directory for one test (removed by the test).
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("earthfront-replay-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Every `.rpl` file in `dir`, sorted by name.
+    fn replays_in(dir: &Path) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "rpl"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
+    }
+
+    fn header(seed: u64) -> ReplayHeader {
+        ReplayHeader {
+            version: REPLAY_VERSION.to_owned(),
+            scenario: Scenario::KestrelReach,
+            seed,
+            difficulty: Difficulty::Hard,
+            run: true,
+            perk_pool: 511,
+            fog: false,
+            balance: balance_hash(),
+        }
+    }
+
+    /// `(tick, hash, score)` of the `END` line that closes `text`.
+    fn end_of(text: &str) -> (u64, u64, i64) {
+        let last = text.lines().last().expect("a last line");
+        let mut f = last.strip_prefix("END ").expect("END last").split(' ');
+        let tick = f.next().unwrap().parse().unwrap();
+        let hash = f.next().unwrap().parse().unwrap();
+        let score = f.next().unwrap().parse().unwrap();
+        assert!(f.next().is_none(), "{last}");
+        (tick, hash, score)
+    }
+
+    /// Re-simulates a replay from its text alone: the header's match, then per
+    /// tick the host commands and the `T` lines of that tick, up to the END
+    /// tick. Returns the end `(tick, hash, score)` it reached.
+    fn replay(text: &str) -> (u64, u64, i64) {
+        let h = ReplayHeader::parse(text).expect("header");
+        assert_eq!(h.balance, balance_hash());
+        let cfg = MatchConfig {
+            scenario: h.scenario,
+            seed: h.seed,
+            difficulty: h.difficulty,
+            run: h.run,
+            perk_pool: h.perk_pool,
+            ..MatchConfig::boot(h.scenario)
+        };
+        let mut sim = build_match(&cfg);
+        let (end, ..) = end_of(text);
+        let body = text
+            .split_once("\n\n")
+            .expect("blank line after the header")
+            .1;
+        let mut lines: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+        for line in body.lines() {
+            if let Some(rest) = line.strip_prefix("T ") {
+                let (tick, raw) = rest.split_once(' ').expect("T <tick> <line>");
+                lines
+                    .entry(tick.parse().unwrap())
+                    .or_default()
+                    .push(raw.to_owned());
+            }
+        }
+        assert!(lines.keys().all(|&t| t < end), "a T line at or after END");
+        for tick in 0..end {
+            assert_eq!(sim.tick(), tick);
+            let mut commands = h.scenario.host_commands(&sim);
+            for raw in lines.get(&tick).into_iter().flatten() {
+                commands.push(parse_command_line(raw).expect("a recorded line parses"));
+            }
+            sim.step(&commands);
+        }
+        (
+            sim.tick(),
+            sim.state_hash(),
+            sim.depth_score().map_or(0, |s| s.total),
+        )
+    }
+
+    /// A scripted player: orders for the human's first rifle and a perk pick
+    /// whenever a draft is pending, every 37th tick, plus junk lines the
+    /// parser drops.
+    fn scripted_lines(sim: &Sim) -> Vec<String> {
+        let t = sim.tick();
+        if t % 37 != 5 {
+            return Vec::new();
+        }
+        let rifle = sim
+            .views()
+            .into_iter()
+            .find(|v| {
+                v.owner == PlayerId(0)
+                    && matches!(
+                        v.kind,
+                        rts_core::game::sim::EntityKindView::Unit(UnitKind::Infantry)
+                    )
+            })
+            .map_or(0, |v| v.id.0);
+        let mut lines = vec![
+            format!("attack,{rifle},{},{}", 20 << 16, 22 << 16),
+            "junk,1,2".to_owned(),
+            format!("stance,{rifle},defensive"),
+        ];
+        if t % 74 == 5 {
+            lines.push(format!("stop,{rifle}"));
+        }
+        if let Some([first, ..]) = sim.depth_draft() {
+            lines.push(format!("perk,{first}"));
+        }
+        lines
+    }
+
+    /// The bridge's stepped-frame body over `frames` frames: the player's
+    /// lines (parsed, the malformed ones dropped) through [`step_frame`].
+    fn run_frames(sim: &mut Sim, scenario: Scenario, recorder: &mut ReplayRecorder, frames: u32) {
+        for _ in 0..frames {
+            let accepted = accept_lines(scripted_lines(sim), |_| true);
+            step_frame(sim, scenario, accepted, recorder).expect("recording");
+        }
+    }
+
+    #[test]
+    fn read_command_lines_returns_the_legacy_file_then_sorted_packets_raw() {
+        let dir = scratch("lines");
+        let path = dir.join("commands.txt");
+        std::fs::create_dir_all(dir.join("commands")).unwrap();
+        std::fs::write(&path, "stop,1\nnot a command\n").unwrap();
+        std::fs::write(dir.join("commands").join("0002.cmd"), "hold,3").unwrap();
+        std::fs::write(dir.join("commands").join("0001.cmd"), "perk,4\n").unwrap();
+        std::fs::write(dir.join("commands").join("0003.next"), "stop,9\n").unwrap();
+        let lines = read_command_lines(&path);
+        // As before the move: a packet ending in a newline leaves an empty line.
+        assert_eq!(lines, ["stop,1", "not a command", "perk,4", "", "hold,3"]);
+        assert!(!path.exists());
+        assert!(!dir.join("commands").join("0001.cmd").exists());
+        assert!(
+            dir.join("commands").join("0003.next").exists(),
+            "a half-written packet waits"
+        );
+        assert_eq!(
+            lines.iter().filter_map(|l| parse_command_line(l)).count(),
+            3
+        );
+        assert!(read_command_lines(&path).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accept_lines_keeps_parsed_admitted_lines_in_order() {
+        let lines = ["stop,1", "junk", "target,2,9", "hold,3", "target,2,8"]
+            .map(str::to_owned)
+            .to_vec();
+        let accepted = accept_lines(lines, |c| {
+            !matches!(
+                c,
+                Command::AttackTarget {
+                    target: EntityId(9),
+                    ..
+                }
+            )
+        });
+        let raw: Vec<&str> = accepted.iter().map(|(line, _)| line.as_str()).collect();
+        assert_eq!(raw, ["stop,1", "hold,3", "target,2,8"]);
+        for (line, command) in &accepted {
+            assert_eq!(
+                format!("{:?}", parse_command_line(line)),
+                format!("{:?}", Some(command))
+            );
+        }
+    }
+
+    #[test]
+    fn balance_hash_is_stable_and_covers_the_shipped_balance() {
+        assert_eq!(balance_hash(), balance_hash());
+        let fnv = rts_data::DEFAULT_RON
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            });
+        assert_eq!(balance_hash(), fnv);
+    }
+
+    #[test]
+    fn replay_header_round_trips_and_refuses_malformed_text() {
+        let h = header(77);
+        let text = h.to_text();
+        assert_eq!(
+            text,
+            format!(
+                "RPL1\nversion={REPLAY_VERSION}\nscenario=kestrel\nseed=77\ndifficulty=hard\nrun=true\n\
+                 perk_pool=511\nfog=false\nbalance={}\n\n",
+                balance_hash()
+            )
+        );
+        assert_eq!(ReplayHeader::parse(&text), Ok(h.clone()));
+        let survival = ReplayHeader {
+            scenario: Scenario::Survival,
+            difficulty: Difficulty::Normal,
+            run: false,
+            fog: true,
+            ..h.clone()
+        };
+        assert_eq!(ReplayHeader::parse(&survival.to_text()), Ok(survival));
+        // A whole replay parses too (the header stops at the blank line).
+        assert_eq!(
+            ReplayHeader::parse(&format!("{text}T 0 stop,1\nEND 1 2 3\n")),
+            Ok(h)
+        );
+        let bad = [
+            String::new(),
+            text.replacen("RPL1", "RPL2", 1),
+            text.replacen("seed=77", "seed=+77", 1),
+            text.replacen("seed=77", "seed=-1", 1),
+            text.replacen("seed=77", "seed=", 1),
+            text.replacen("difficulty=hard", "difficulty=Hard", 1),
+            text.replacen("run=true", "run=1", 1),
+            text.replacen("perk_pool=511", "perk_pool=4294967296", 1),
+            text.replacen("fog=false", "fog=no", 1),
+            text.replacen("scenario=kestrel", "scenario=mars", 1),
+            text.replacen("version=", "versio=", 1),
+            text.replacen("seed=77\n", "", 1),
+            text.replacen("seed=77\n", "seed=77\nseed=78\n", 1),
+            text.replacen("fog=false\n", "fog=false\nnonsense\n", 1),
+            text.replacen(&format!("version={REPLAY_VERSION}"), "version=", 1),
+        ];
+        for b in &bad {
+            assert!(ReplayHeader::parse(b).is_err(), "{b:?}");
+        }
+    }
+
+    #[test]
+    fn replay_writer_produces_the_exact_format() {
+        let dir = scratch("format");
+        let h = header(77);
+        let mut w = ReplayWriter::create(&dir, &h).unwrap();
+        let path = w.path().to_path_buf();
+        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+        let (secs, rest) = name.split_once('_').unwrap();
+        assert!(
+            secs.bytes().all(|b| b.is_ascii_digit()) && !secs.is_empty(),
+            "{name}"
+        );
+        assert_eq!(rest, "kestrel_77.rpl");
+        w.tick(0, &["stop,5".to_owned(), "perk,4".to_owned()]);
+        w.tick(1, &[]);
+        // Control characters only ride in ignored trailing fields of a parsed
+        // line; they are stripped so the file keeps one line per order.
+        w.tick(3, &["move,7,65536,65536,\r".to_owned()]);
+        w.finish(10, 12345, 678).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "{}T 0 stop,5\nT 0 perk,4\nT 3 move,7,65536,65536,\n\
+                 END 00000000000000000010 00000000000000012345 00000000000000000678\n",
+                h.to_text()
+            )
+        );
+        // Finished: later calls write nothing.
+        w.tick(11, &["stop,1".to_owned()]);
+        w.finish(12, 1, 1).unwrap();
+        drop(w);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_checkpoint_keeps_one_end_line_last() {
+        let dir = scratch("checkpoint");
+        let h = header(5);
+        let mut w = ReplayWriter::create(&dir, &h).unwrap();
+        let path = w.path().to_path_buf();
+        w.checkpoint(0, 99_999_999_999, 1234).unwrap();
+        w.tick(0, &["hold,2".to_owned()]);
+        w.checkpoint(1, 7, 0).unwrap();
+        w.checkpoint(2, 8, -3).unwrap();
+        // Dropped mid-match (the bridge exits or is killed between frames):
+        // the file already ends with the END of the last stepped tick.
+        drop(w);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!(
+                "{}T 0 hold,2\nEND 00000000000000000002 00000000000000000008 -0000000000000000003\n",
+                h.to_text()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The END line has one width for every value, so rewriting it never
+    /// shrinks the file: each checkpoint is one write over the old END, with
+    /// no truncation a kill could interrupt.
+    #[test]
+    fn end_lines_have_one_width_and_the_file_never_shrinks() {
+        let dir = scratch("end-width");
+        let h = header(6);
+        let mut w = ReplayWriter::create(&dir, &h).unwrap();
+        let path = w.path().to_path_buf();
+        let mut last_len = 0;
+        for (tick, hash, score) in [
+            (u64::MAX, u64::MAX, i64::MAX),
+            (0, 0, i64::MIN),
+            (1, 9, -1),
+            (2, 10, 0),
+        ] {
+            w.checkpoint(tick, hash, score).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let end = text.lines().last().unwrap();
+            assert_eq!(end.len(), 66, "{end}");
+            assert_eq!(end_of(&text), (tick, hash, score));
+            assert!(text.len() >= last_len);
+            last_len = text.len();
+        }
+        assert_eq!(last_len, h.to_text().len() + 67);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_replays_in_the_same_second_do_not_overwrite_each_other() {
+        let dir = scratch("same-second");
+        let head = header(9);
+        let mut first = ReplayWriter::create_at(&dir, &head, 1_700_000_000).unwrap();
+        let mut second = ReplayWriter::create_at(&dir, &head, 1_700_000_000).unwrap();
+        let mut third = ReplayWriter::create(&dir, &head).unwrap();
+        let mut fourth = ReplayWriter::create(&dir, &head).unwrap();
+        assert_eq!(first.path(), dir.join("1700000000_kestrel_9.rpl"));
+        assert_eq!(second.path(), dir.join("1700000000_kestrel_9_2.rpl"));
+        assert_ne!(third.path(), fourth.path());
+        first.finish(1, 1, 1).unwrap();
+        second.finish(2, 2, 2).unwrap();
+        third.finish(3, 3, 3).unwrap();
+        fourth.finish(4, 4, 4).unwrap();
+        let ends: Vec<u64> = replays_in(&dir)
+            .iter()
+            .map(|p| end_of(&std::fs::read_to_string(p).unwrap()).0)
+            .collect();
+        assert_eq!(ends.len(), 4);
+        let mut sorted = ends;
+        sorted.sort_unstable();
+        assert_eq!(sorted, [1, 2, 3, 4]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replay_dir_must_be_absolute() {
+        let dir = scratch("relative");
+        let h = header(1);
+        for relative in [
+            "replays",
+            "./replays",
+            "res://replays",
+            "user://replays",
+            "",
+        ] {
+            let err = ReplayWriter::create(Path::new(relative), &h).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{relative}");
+        }
+        assert!(!Path::new("res:").exists() && !Path::new("user:").exists());
+        let cfg = |json: &str| parse_match_config(json, Scenario::KestrelReach).replay_dir;
+        let abs = dir.join("r");
+        assert_eq!(
+            cfg(&format!(
+                r#"{{"scenario":"kestrel","replay_dir":"{}"}}"#,
+                abs.display()
+            )),
+            Some(abs)
+        );
+        for bad in [
+            r#"{"scenario":"kestrel"}"#,
+            r#"{"replay_dir":"res://replays"}"#,
+            r#"{"replay_dir":"user://replays"}"#,
+            r#"{"replay_dir":"replays"}"#,
+            r#"{"replay_dir":"./replays"}"#,
+            r#"{"replay_dir":""}"#,
+            r#"{"replay_dir":/tmp/x}"#,
+            r#"{"replay_dir":"/tmp/a\"b"}"#,
+            r#"{"replay_dir":"C:\\replays"}"#,
+            "not json",
+        ] {
+            assert_eq!(cfg(bad), None, "{bad}");
+        }
+        assert_eq!(MatchConfig::boot(Scenario::KestrelReach).replay_dir, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_replay_dir_means_no_recording() {
+        let dir = scratch("none");
+        let cfg = parse_match_config(r#"{"scenario":"kestrel","seed":4}"#, Scenario::KestrelReach);
+        let mut sim = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        assert_eq!(recorder.start(&cfg, true, &sim).unwrap(), None);
+        assert!(!recorder.is_recording());
+        run_frames(&mut sim, cfg.scenario, &mut recorder, 40);
+        recorder.stop(&sim).unwrap();
+        assert!(replays_in(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unwritable_replay_dir_leaves_the_match_unrecorded_and_running() {
+        let dir = scratch("unwritable");
+        let blocker = dir.join("a-file");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let cfg = parse_match_config(
+            &format!(
+                r#"{{"scenario":"kestrel","seed":4,"replay_dir":"{}"}}"#,
+                blocker.join("replays").display()
+            ),
+            Scenario::KestrelReach,
+        );
+        assert!(cfg.replay_dir.is_some());
+        let mut sim = build_match(&cfg);
+        let mut twin = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        assert!(recorder.start(&cfg, true, &sim).is_err());
+        assert!(!recorder.is_recording());
+        run_frames(&mut sim, cfg.scenario, &mut recorder, 60);
+        run_frames(&mut twin, cfg.scenario, &mut ReplayRecorder::new(), 60);
+        assert_eq!(
+            sim.state_hash(),
+            twin.state_hash(),
+            "recording never changes the match"
+        );
+        assert!(recorder.stop(&sim).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recorded_match_replays_to_its_end_hash_and_score() {
+        let dir = scratch("round-trip");
+        let cfg = parse_match_config(
+            &format!(
+                r#"{{"scenario":"kestrel","seed":11,"difficulty":"easy","run":true,"perk_pool":4095,"replay_dir":"{}"}}"#,
+                dir.display()
+            ),
+            Scenario::KestrelReach,
+        );
+        let mut sim = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        let path = recorder
+            .start(&cfg, false, &sim)
+            .unwrap()
+            .expect("recording");
+        assert!(recorder.is_recording());
+        run_frames(&mut sim, cfg.scenario, &mut recorder, 1500);
+        // Mid-match the file already closes with the current END.
+        let mid = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            end_of(&mid),
+            (1500, sim.state_hash(), sim.depth_score().unwrap().total)
+        );
+        recorder.stop(&sim).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let h = ReplayHeader::parse(&text).unwrap();
+        assert_eq!(
+            (h.scenario, h.seed, h.difficulty, h.run, h.perk_pool, h.fog),
+            (
+                Scenario::KestrelReach,
+                11,
+                Difficulty::Easy,
+                true,
+                4095,
+                false
+            )
+        );
+        assert!(text.contains("\nT 5 attack,"), "player lines are logged");
+        assert!(!text.contains("junk"), "only parsed lines are logged");
+        let end = end_of(&text);
+        assert_eq!(
+            end,
+            (1500, sim.state_hash(), sim.depth_score().unwrap().total)
+        );
+        assert_eq!(replay(&text), end);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_restart_ends_the_old_replay_and_the_next_mission_opens_a_new_one() {
+        let dir = scratch("restart");
+        let json = |seed: u64| {
+            format!(
+                r#"{{"scenario":"kestrel","seed":{seed},"replay_dir":"{}"}}"#,
+                dir.display()
+            )
+        };
+        let mut recorder = ReplayRecorder::new();
+        let first = parse_match_config(&json(21), Scenario::KestrelReach);
+        let mut sim = build_match(&first);
+        let a = recorder.start(&first, true, &sim).unwrap().unwrap();
+        run_frames(&mut sim, first.scenario, &mut recorder, 200);
+        let first_end = (
+            sim.tick(),
+            sim.state_hash(),
+            sim.depth_score().unwrap().total,
+        );
+        // Restart: the bridge finishes the old file, rebuilds, and opens the
+        // next one when the new mission starts.
+        recorder.stop(&sim).unwrap();
+        assert!(!recorder.is_recording());
+        let second = parse_match_config(&json(22), Scenario::KestrelReach);
+        sim = build_match(&second);
+        let b = recorder.start(&second, true, &sim).unwrap().unwrap();
+        assert_ne!(a, b);
+        run_frames(&mut sim, second.scenario, &mut recorder, 100);
+        drop(recorder);
+        let text_a = std::fs::read_to_string(&a).unwrap();
+        let text_b = std::fs::read_to_string(&b).unwrap();
+        assert_eq!(end_of(&text_a), first_end);
+        assert_eq!(ReplayHeader::parse(&text_b).unwrap().seed, 22);
+        assert_eq!(end_of(&text_b).0, 100);
+        assert_eq!(replay(&text_a), end_of(&text_a));
+        assert_eq!(replay(&text_b), end_of(&text_b));
+        assert_eq!(replays_in(&dir).len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_decided_match_stops_logging_at_the_winning_tick() {
+        let dir = scratch("winner");
+        let cfg = parse_match_config(
+            &format!(
+                r#"{{"scenario":"kestrel","seed":3,"difficulty":"hard","replay_dir":"{}"}}"#,
+                dir.display()
+            ),
+            Scenario::KestrelReach,
+        );
+        let mut sim = build_match(&cfg);
+        let mut recorder = ReplayRecorder::new();
+        let path = recorder.start(&cfg, true, &sim).unwrap().unwrap();
+        // Undefended on Hard the base falls near t=4006; the bridge keeps
+        // stepping a decided match (its tick stops) and the player keeps
+        // sending lines.
+        run_frames(&mut sim, cfg.scenario, &mut recorder, 4600);
+        let won_at = sim.tick();
+        assert!(sim.winner().is_some(), "the undefended base fell");
+        assert!(won_at < 4600, "the tick stopped at {won_at}");
+        assert!(
+            !recorder.is_recording(),
+            "a decided match closes its replay"
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        let end = end_of(&text);
+        assert_eq!(
+            end,
+            (won_at, sim.state_hash(), sim.depth_score().unwrap().total)
+        );
+        assert_eq!(text.matches("\nEND ").count(), 1);
+        assert_eq!(replay(&text), end);
+        recorder.stop(&sim).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

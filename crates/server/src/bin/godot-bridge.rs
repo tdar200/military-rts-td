@@ -9,14 +9,17 @@ use rts_core::fixed::Fixed;
 use rts_core::game::hex;
 use rts_core::game::kestrel;
 use rts_core::game::map::{Deposit, Ground};
-use rts_core::game::perk::{DEFAULT_RUN_POOL, NO_PERK};
-use rts_core::game::scenario::{MatchOptions, Scenario};
+use rts_core::game::perk::NO_PERK;
+use rts_core::game::scenario::Scenario;
 use rts_core::game::sim::{
-    order_point_in_range, Command, Difficulty, EntityId, EntityKindView, EntityView, PlayerId, Sim,
-    Stance, SupplyState,
+    Command, EntityId, EntityKindView, EntityView, PlayerId, Sim, SupplyState,
 };
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
+use rts_server::bridge_protocol::{
+    accept_lines, build_match, parse_scenario, read_command_lines, read_match_config, step_frame,
+    MatchConfig, ReplayRecorder,
+};
 
 #[cfg(test)]
 fn snapshot_json(sim: &rts_core::game::sim::Sim) -> String {
@@ -1257,220 +1260,6 @@ fn write_queue(sim: &rts_core::game::sim::Sim, id: EntityId, out: &mut String) -
     Ok(())
 }
 
-/// The `<x_bits>,<z_bits>` world point of an order line, or `None` when a
-/// field is missing, malformed or outside
-/// [`rts_core::game::sim::ORDER_COORD_LIMIT`] (P2 review
-/// M5: raw bits such as `i64::MIN` overflow the fixed-point maths; the sim
-/// drops such points too).
-fn order_point<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Option<Vec2> {
-    let x_bits = fields.next()?.parse::<i64>().ok()?;
-    let z_bits = fields.next()?.parse::<i64>().ok()?;
-    let point = Vec2::new(Fixed::from_bits(x_bits), Fixed::from_bits(z_bits));
-    order_point_in_range(point).then_some(point)
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "a flat one-arm-per-line-kind parser; Task 24 moves it into bridge_protocol unchanged"
-)]
-fn take_commands(path: &Path) -> Vec<Command> {
-    // Legacy single-file input remains readable for older tools. The player client
-    // publishes immutable packets with atomic rename, so polling cannot unlink an
-    // open append stream or consume half an order.
-    let mut contents = std::fs::read_to_string(path).unwrap_or_default();
-    let _ = std::fs::remove_file(path);
-    let directory = path.with_file_name("commands");
-    let mut packets: Vec<_> = std::fs::read_dir(directory)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|packet| packet.extension().is_some_and(|ext| ext == "cmd"))
-        .collect();
-    packets.sort();
-    for packet in packets {
-        if let Ok(text) = std::fs::read_to_string(&packet) {
-            contents.push_str(&text);
-            contents.push('\n');
-            let _ = std::fs::remove_file(packet);
-        }
-    }
-    contents
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split(',');
-            match fields.next()? {
-                "move" | "attack" => {
-                    let mode = line.starts_with("attack,");
-                    let unit = fields.next()?.parse::<u32>().ok()?;
-                    let target = order_point(&mut fields)?;
-                    Some(if mode {
-                        Command::AttackMove {
-                            owner: PlayerId(0),
-                            unit: EntityId(unit),
-                            target,
-                        }
-                    } else {
-                        Command::Move {
-                            owner: PlayerId(0),
-                            unit: EntityId(unit),
-                            target,
-                        }
-                    })
-                }
-                "train" => {
-                    let barracks = fields.next()?.parse::<u32>().ok()?;
-                    let kind = match fields.next()? {
-                        "Harvester" => UnitKind::Harvester,
-                        "Infantry" => UnitKind::Infantry,
-                        "Tank" => UnitKind::Tank,
-                        "AntiArmor" => UnitKind::AntiArmor,
-                        "Helicopter" => UnitKind::Helicopter,
-                        "Capital" => UnitKind::Capital,
-                        _ => return None,
-                    };
-                    Some(Command::Train {
-                        owner: PlayerId(0),
-                        barracks: EntityId(barracks),
-                        kind,
-                    })
-                }
-                "build" => {
-                    let kind = match fields.next()? {
-                        "PowerPlant" => BuildingKind::PowerPlant,
-                        "Refinery" => BuildingKind::Refinery,
-                        "Barracks" => BuildingKind::Barracks,
-                        "GunTurret" => BuildingKind::GunTurret,
-                        "AaTurret" => BuildingKind::AaTurret,
-                        "Wall" => BuildingKind::Wall,
-                        "ResearchLab" => BuildingKind::ResearchLab,
-                        "AntimatterPlant" => BuildingKind::AntimatterPlant,
-                        "VehicleFactory" => BuildingKind::VehicleFactory,
-                        "Airfield" => BuildingKind::Airfield,
-                        "SupplyDepot" => BuildingKind::SupplyDepot,
-                        "Battery" => BuildingKind::Battery,
-                        _ => return None,
-                    };
-                    let x = fields.next()?.parse::<u16>().ok()?;
-                    let y = fields.next()?.parse::<u16>().ok()?;
-                    Some(Command::Build {
-                        owner: PlayerId(0),
-                        kind,
-                        x,
-                        y,
-                    })
-                }
-                "research" => {
-                    let tech_id = fields.next()?.parse::<u32>().ok()?;
-                    Some(Command::Research {
-                        owner: PlayerId(0),
-                        tech_id,
-                    })
-                }
-                "rally" | "ability" => {
-                    let ability = line.starts_with("ability,");
-                    let entity = fields.next()?.parse::<u32>().ok()?;
-                    let target = order_point(&mut fields)?;
-                    Some(if ability {
-                        Command::UseAbility {
-                            owner: PlayerId(0),
-                            unit: EntityId(entity),
-                            target,
-                        }
-                    } else {
-                        Command::SetRally {
-                            owner: PlayerId(0),
-                            producer: EntityId(entity),
-                            target,
-                        }
-                    })
-                }
-                "repair" | "sell" => {
-                    let repair = line.starts_with("repair,");
-                    let building = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    Some(if repair {
-                        Command::Repair {
-                            owner: PlayerId(0),
-                            building,
-                        }
-                    } else {
-                        Command::Sell {
-                            owner: PlayerId(0),
-                            building,
-                        }
-                    })
-                }
-                // Depth orders (Kestrel). The sim ignores them on any other map.
-                "stop" | "hold" => {
-                    let hold = line.starts_with("hold,");
-                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    Some(if hold {
-                        Command::HoldPosition {
-                            owner: PlayerId(0),
-                            unit,
-                        }
-                    } else {
-                        Command::Stop {
-                            owner: PlayerId(0),
-                            unit,
-                        }
-                    })
-                }
-                "stance" => {
-                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    let stance = Stance::from_name(fields.next()?)?;
-                    Some(Command::SetStance {
-                        owner: PlayerId(0),
-                        unit,
-                        stance,
-                    })
-                }
-                "target" => {
-                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    let target = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    Some(Command::AttackTarget {
-                        owner: PlayerId(0),
-                        unit,
-                        target,
-                    })
-                }
-                // Shift-queued waypoints (Kestrel): `qmove`/`qattack,<id>,<x_bits>,<z_bits>`.
-                "qmove" | "qattack" => {
-                    let attack_move = line.starts_with("qattack,");
-                    let unit = EntityId(fields.next()?.parse::<u32>().ok()?);
-                    let target = order_point(&mut fields)?;
-                    Some(Command::QueueMove {
-                        owner: PlayerId(0),
-                        unit,
-                        target,
-                        attack_move,
-                    })
-                }
-                // Upgrades (Kestrel, Task 17): `upgrade,<track>` buys the next
-                // level (0 weapons, 1 armour, 2 vitality); the core refuses
-                // the forge, the cap and an empty purse.
-                "upgrade" => {
-                    let track = fields.next()?.parse::<u8>().ok()?;
-                    Some(Command::Ascend {
-                        owner: PlayerId(0),
-                        track,
-                    })
-                }
-                // Run drafts (Kestrel, Task 23): `perk,<id>` takes a perk
-                // from the pending draft; the core ignores any other id.
-                "perk" => {
-                    let perk = fields.next()?.parse::<u32>().ok()?;
-                    Some(Command::ChoosePerk {
-                        owner: PlayerId(0),
-                        perk,
-                    })
-                }
-                _ => None,
-            }
-        })
-        .collect()
-}
-
 fn clear_command_packets(path: &Path) -> std::io::Result<()> {
     let directory = path.with_file_name("commands");
     std::fs::create_dir_all(&directory)?;
@@ -1517,125 +1306,6 @@ impl RuntimePaths {
     }
 }
 
-/// The match the client asked for in `match.json`. A key that is missing or
-/// malformed keeps its default (`fog: None` means "as the environment says";
-/// Task 20: seed 2026, difficulty Normal, the match the bridge always built).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct MatchConfig {
-    scenario: Scenario,
-    fog: Option<bool>,
-    seed: u64,
-    difficulty: Difficulty,
-    /// Task 23: a roguelite run (Kestrel only), false by default.
-    run: bool,
-    /// Task 23: the run's perk pool bitmask, `DEFAULT_RUN_POOL` (0xFF) by default.
-    perk_pool: u32,
-}
-
-/// Task 20: the seed of a match whose `match.json` gives none (or a malformed one).
-const DEFAULT_SEED: u64 = 2026;
-
-impl MatchConfig {
-    /// `scenario` with every other key at its default: the boot match, and the
-    /// fallback for a missing or malformed `match.json`.
-    const fn boot(scenario: Scenario) -> Self {
-        Self {
-            scenario,
-            fog: None,
-            seed: DEFAULT_SEED,
-            difficulty: Difficulty::Normal,
-            run: false,
-            perk_pool: DEFAULT_RUN_POOL,
-        }
-    }
-}
-
-/// Task 20: the sim for `cfg` (its scenario at its seed and difficulty, with the
-/// shipped balance), as the bridge builds it at boot and on every restart.
-fn build_match(cfg: &MatchConfig) -> Sim {
-    let mut sim = cfg.scenario.build_with(
-        cfg.seed,
-        MatchOptions {
-            difficulty: cfg.difficulty,
-            run: cfg.run,
-            perk_pool: cfg.perk_pool,
-        },
-    );
-    sim.set_balance(rts_data::load_default());
-    sim
-}
-
-/// One raw value of a flat JSON object: a quoted string (no escapes) or a bare token.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum RawValue<'a> {
-    Quoted(&'a str),
-    Bare(&'a str),
-}
-
-/// The raw value of `"key":` in a flat JSON object (first occurrence used as a key).
-fn raw_json_value<'a>(text: &'a str, key: &str) -> Option<RawValue<'a>> {
-    let needle = format!("\"{key}\"");
-    let mut from = 0;
-    while let Some(found) = text[from..].find(&needle) {
-        let after = from + found + needle.len();
-        from = after;
-        let Some(rest) = text[after..].trim_start().strip_prefix(':') else {
-            continue; // the same text as a value, not a key
-        };
-        let rest = rest.trim_start();
-        if let Some(quoted) = rest.strip_prefix('"') {
-            return quoted.find('"').map(|end| RawValue::Quoted(&quoted[..end]));
-        }
-        let end = rest.find([',', '}']).unwrap_or(rest.len());
-        return Some(RawValue::Bare(rest[..end].trim()));
-    }
-    None
-}
-
-/// Parses `match.json` (a flat JSON object written by the client). Unknown keys are
-/// ignored; a malformed value keeps that key's default; text that is not an object
-/// yields `fallback` with the environment's fog.
-fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
-    let mut config = MatchConfig::boot(fallback);
-    let text = text.trim();
-    if !(text.starts_with('{') && text.ends_with('}')) {
-        return config;
-    }
-    if let Some(RawValue::Quoted(name)) = raw_json_value(text, "scenario") {
-        config.scenario = parse_scenario(name).unwrap_or(fallback);
-    }
-    config.fog = match raw_json_value(text, "fog") {
-        Some(RawValue::Bare("true")) => Some(true),
-        Some(RawValue::Bare("false")) => Some(false),
-        _ => None,
-    };
-    // Task 20: a bare unsigned integer seed and a quoted preset name.
-    if let Some(RawValue::Bare(seed)) = raw_json_value(text, "seed") {
-        if seed.bytes().all(|b| b.is_ascii_digit()) {
-            config.seed = seed.parse().unwrap_or(DEFAULT_SEED);
-        }
-    }
-    if let Some(RawValue::Quoted(name)) = raw_json_value(text, "difficulty") {
-        config.difficulty = Difficulty::from_name(name).unwrap_or_default();
-    }
-    // Task 23: a bare boolean run flag and a bare unsigned integer pool.
-    config.run = matches!(raw_json_value(text, "run"), Some(RawValue::Bare("true")));
-    if let Some(RawValue::Bare(pool)) = raw_json_value(text, "perk_pool") {
-        if pool.bytes().all(|b| b.is_ascii_digit()) {
-            config.perk_pool = pool.parse().unwrap_or(DEFAULT_RUN_POOL);
-        }
-    }
-    config
-}
-
-/// Reads and parses `match.json`; a missing or unreadable file yields `fallback`.
-fn read_match_config(path: &Path, fallback: Scenario) -> MatchConfig {
-    std::fs::read_to_string(path).map_or_else(
-        |_| MatchConfig::boot(fallback),
-        |text| parse_match_config(&text, fallback),
-    )
-}
-
 /// Parsed command line: the two historical positional arguments plus the flags.
 #[derive(Debug)]
 struct Options {
@@ -1643,17 +1313,6 @@ struct Options {
     frame_limit: u64,
     scenario: Scenario,
     dump_snapshot: Option<PathBuf>,
-}
-
-/// Maps a `--scenario` value to a scenario (Kestrel Reach is the default).
-fn parse_scenario(value: &str) -> Result<Scenario, String> {
-    match value {
-        "survival" => Ok(Scenario::Survival),
-        "kestrel" => Ok(Scenario::KestrelReach),
-        other => Err(format!(
-            "unknown scenario '{other}' (expected 'kestrel' or 'survival')"
-        )),
-    }
 }
 
 /// Parses `[--scenario S] [--dump-snapshot P] [output [frame_limit]]`. Flags (also
@@ -1700,6 +1359,24 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
     })
 }
 
+/// Task 24: opens the starting mission's replay when `config` names a
+/// `replay_dir`; an I/O error is logged and the mission runs unrecorded.
+fn start_replay(recorder: &mut ReplayRecorder, config: &MatchConfig, fog: bool, sim: &Sim) {
+    match recorder.start(config, fog, sim) {
+        Ok(Some(path)) => eprintln!("godot-bridge: recording {}", path.display()),
+        Ok(None) => {}
+        Err(error) => eprintln!("godot-bridge: replay not recorded: {error}"),
+    }
+}
+
+/// Task 24: finishes the running mission's replay (a restart or exit); an I/O
+/// error is logged and the bridge runs on.
+fn stop_replay(recorder: &mut ReplayRecorder, sim: &Sim) {
+    if let Err(error) = recorder.stop(sim) {
+        eprintln!("godot-bridge: replay not finished: {error}");
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let options = match parse_args(std::env::args().skip(1)) {
         Ok(options) => options,
@@ -1717,7 +1394,9 @@ fn main() -> std::io::Result<()> {
 
     // The presentation fog kill switch is read once, here; a running bridge never re-reads it.
     let fog_enabled = fog_enabled_from(std::env::var_os("EARTHFRONT_FOG").as_deref());
-    let mut sim = build_match(&MatchConfig::boot(scenario));
+    // The running match's config (the boot match records no replay: no `replay_dir`).
+    let mut config = MatchConfig::boot(scenario);
+    let mut sim = build_match(&config);
     if let Some(path) = dump_snapshot {
         // One frame of the chosen scenario's initial snapshot, for Godot test fixtures.
         let snapshot = snapshot_json_with(
@@ -1744,6 +1423,8 @@ fn main() -> std::io::Result<()> {
     let mut supply_cache = SupplyLinkCache::new();
     let mut shots = ShotWindow::new();
     let mut fog = FogState::new(fog_enabled);
+    // Task 24: the running mission's replay (when `match.json` names a `replay_dir`).
+    let mut recorder = ReplayRecorder::new();
 
     for _ in 0..frame_limit {
         if paths.restart.exists() {
@@ -1753,10 +1434,12 @@ fn main() -> std::io::Result<()> {
             let _ = std::fs::remove_file(&paths.commands);
             let _ = std::fs::remove_file(&paths.pause);
             clear_command_packets(&paths.commands)?;
+            // The old mission's replay ends here, at its last stepped tick.
+            stop_replay(&mut recorder, &sim);
             // The client may switch the map (and the fog) for the next match; with no
             // `match.json` the current scenario restarts as before.
             // Task 20: at its seed and difficulty preset (2026 and Normal by default).
-            let config = read_match_config(&paths.match_config, scenario);
+            config = read_match_config(&paths.match_config, scenario);
             scenario = config.scenario;
             sim = build_match(&config);
             mission_started = false;
@@ -1770,6 +1453,9 @@ fn main() -> std::io::Result<()> {
             if paths.start.exists() {
                 let _ = std::fs::remove_file(&paths.start);
                 mission_started = true;
+                // Task 24: the mission's replay opens now.
+                let fog_on = fog_enabled && config.fog.unwrap_or(true);
+                start_replay(&mut recorder, &config, fog_on, &sim);
             } else {
                 write_atomic(
                     &paths.snapshot,
@@ -1789,14 +1475,16 @@ fn main() -> std::io::Result<()> {
             continue;
         }
         let started = Instant::now();
-        let mut player_commands = take_commands(&paths.commands);
-        // Orders on enemies the last fogged frame did not show never reach the sim.
-        player_commands.retain(|command| fog.admits(command));
-        // Host commands (survey AI, alien AI, scenario script) from the one shared
-        // builder, so headless tests and replay verification step the same list.
-        let mut commands = scenario.host_commands(&sim);
-        commands.extend(player_commands);
-        sim.step(&commands);
+        // Orders on enemies the last fogged frame did not show never reach the sim
+        // (nor the replay, which logs only the lines applied).
+        let accepted = accept_lines(read_command_lines(&paths.commands), |command| {
+            fog.admits(command)
+        });
+        // Host commands, then the player's (bridge_protocol::step_frame, the body
+        // replay recording and verification share).
+        if let Err(error) = step_frame(&mut sim, scenario, accepted, &mut recorder) {
+            eprintln!("godot-bridge: replay stopped: {error}");
+        }
         shots.record(sim.tick(), sim.recent_attacks(), sim.winner().is_some());
         write_atomic(
             &paths.snapshot,
@@ -1804,19 +1492,20 @@ fn main() -> std::io::Result<()> {
         )?;
         std::thread::sleep(frame_time.saturating_sub(started.elapsed()));
     }
+    stop_replay(&mut recorder, &sim);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_match, fog_enabled_from, parse_args, parse_match_config, read_match_config,
-        sight_radius, snapshot_json, snapshot_json_with, supply_links_json, take_commands,
-        BuildingKind, Command, EntityId, FogState, MatchConfig, PlayerId, RuntimePaths, ShotWindow,
-        SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
+        build_match, fog_enabled_from, parse_args, sight_radius, snapshot_json, snapshot_json_with,
+        supply_links_json, BuildingKind, Command, EntityId, FogState, PlayerId, RuntimePaths,
+        ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
     use rts_core::game::sim::Difficulty;
+    use rts_server::bridge_protocol::parse_match_config;
 
     /// Value of the string field `"key":"..."` (first occurrence).
     fn extract_str(json: &str, key: &str) -> String {
@@ -1850,44 +1539,6 @@ mod tests {
             })
             .expect("a human infantry unit")
             .id
-    }
-
-    #[test]
-    fn qa_concurrent_command_transport_preserves_every_order() {
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        };
-        let root =
-            std::env::temp_dir().join(format!("earthfront-transport-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("commands.txt");
-        std::fs::create_dir_all(root.join("commands")).unwrap();
-        let done = Arc::new(AtomicBool::new(false));
-        let producer_done = done.clone();
-        let producer_path = path.clone();
-        let producer = std::thread::spawn(move || {
-            for id in 0..1000 {
-                let packet = producer_path
-                    .with_file_name("commands")
-                    .join(format!("{id:020}.cmd"));
-                let temporary = packet.with_extension("next");
-                std::fs::write(&temporary, format!("move,{id},0,0\n")).unwrap();
-                std::fs::rename(temporary, packet).unwrap();
-                std::thread::sleep(std::time::Duration::from_micros(100));
-            }
-            producer_done.store(true, Ordering::SeqCst);
-        });
-        let mut received = Vec::new();
-        while !done.load(Ordering::SeqCst) {
-            received.extend(take_commands(&path));
-            std::thread::sleep(std::time::Duration::from_micros(100));
-        }
-        producer.join().unwrap();
-        received.extend(take_commands(&path));
-        let _ = std::fs::remove_dir_all(&root);
-        assert_eq!(received.len(), 1000, "concurrent player orders were lost");
     }
 
     #[test]
@@ -2153,108 +1804,6 @@ mod tests {
         assert_eq!(snap(&sim, &mut window).len(), bytes);
     }
 
-    #[test]
-    fn match_config_parses_and_falls_back() {
-        let c = parse_match_config(
-            r#"{"scenario":"survival","seed":7,"difficulty":"hard","fog":false}"#,
-            Scenario::KestrelReach,
-        );
-        assert_eq!(c.scenario, Scenario::Survival);
-        assert_eq!(c.fog, Some(false));
-        let c = parse_match_config("not json", Scenario::KestrelReach);
-        assert_eq!((c.scenario, c.fog), (Scenario::KestrelReach, None));
-        let c = parse_match_config(
-            r#"{"scenario":"mars","fog":"maybe"}"#,
-            Scenario::KestrelReach,
-        );
-        assert_eq!((c.scenario, c.fog), (Scenario::KestrelReach, None));
-        let c = read_match_config(
-            std::path::Path::new("/nonexistent/match.json"),
-            Scenario::Survival,
-        );
-        assert_eq!(c.scenario, Scenario::Survival);
-        assert_eq!((c.seed, c.difficulty), (2026, Difficulty::Normal));
-    }
-
-    /// Task 20: `seed` (a bare unsigned integer) and `difficulty` (a quoted
-    /// preset name); anything malformed keeps 2026 and Normal.
-    #[test]
-    fn match_config_parses_seed_and_difficulty_and_falls_back() {
-        let c = parse_match_config(
-            r#"{"scenario":"kestrel","seed":7,"difficulty":"hard","fog":true}"#,
-            Scenario::Survival,
-        );
-        assert_eq!(c.scenario, Scenario::KestrelReach);
-        assert_eq!((c.seed, c.difficulty), (7, Difficulty::Hard));
-        let c = parse_match_config(
-            r#"{"seed":2147483646,"difficulty":"easy"}"#,
-            Scenario::KestrelReach,
-        );
-        assert_eq!((c.seed, c.difficulty), (2_147_483_646, Difficulty::Easy));
-        for bad in [
-            r#"{"seed":"7"}"#,
-            r#"{"seed":-5}"#,
-            r#"{"seed":1.5}"#,
-            r#"{"seed":abc}"#,
-            r#"{"seed":}"#,
-            r#"{"seed":184467440737095516160}"#,
-            r#"{"scenario":"kestrel"}"#,
-        ] {
-            let c = parse_match_config(bad, Scenario::KestrelReach);
-            assert_eq!(c.seed, 2026, "{bad}");
-        }
-        for bad in [
-            r#"{"difficulty":"brutal"}"#,
-            r#"{"difficulty":"Hard"}"#,
-            r#"{"difficulty":2}"#,
-            r#"{"difficulty":""}"#,
-            r#"{"scenario":"kestrel"}"#,
-        ] {
-            let c = parse_match_config(bad, Scenario::KestrelReach);
-            assert_eq!(c.difficulty, Difficulty::Normal, "{bad}");
-        }
-        let c = parse_match_config("[1,2]", Scenario::KestrelReach);
-        assert_eq!((c.seed, c.difficulty), (2026, Difficulty::Normal));
-    }
-
-    /// Task 20: the bridge builds the match `match.json` asks for: Kestrel at
-    /// its seed and preset, Survival at its seed (the preset ignored).
-    #[test]
-    fn the_bridge_builds_the_configured_seed_and_difficulty() {
-        use rts_core::game::scenario::{kestrel_reach_with, MatchOptions};
-        let cfg = parse_match_config(
-            r#"{"scenario":"kestrel","seed":99,"difficulty":"easy","fog":true}"#,
-            Scenario::Survival,
-        );
-        let sim = build_match(&cfg);
-        let want = kestrel_reach_with(
-            99,
-            MatchOptions {
-                difficulty: Difficulty::Easy,
-                ..MatchOptions::default()
-            },
-        );
-        assert_eq!(sim.state_hash(), {
-            let mut w = want;
-            w.set_balance(rts_data::load_default());
-            w.state_hash()
-        });
-        assert_eq!((sim.seed(), sim.difficulty()), (99, Difficulty::Easy));
-        let cfg = parse_match_config(
-            r#"{"scenario":"survival","seed":5,"difficulty":"hard"}"#,
-            Scenario::KestrelReach,
-        );
-        let sim = build_match(&cfg);
-        let mut want = Scenario::Survival.build(5);
-        want.set_balance(rts_data::load_default());
-        assert_eq!(sim.state_hash(), want.state_hash());
-        // The boot match (no match.json) is the old `build(2026)`.
-        let boot = MatchConfig::boot(Scenario::KestrelReach);
-        let mut old = Scenario::KestrelReach.build(2026);
-        old.set_balance(rts_data::load_default());
-        assert_eq!(build_match(&boot).state_hash(), old.state_hash());
-    }
-
     /// Task 20: the Kestrel depth block ends with the match's difficulty and
     /// seed; Survival's snapshot never carries either.
     #[test]
@@ -2504,217 +2053,6 @@ mod tests {
         assert!(parse_args(args(&["--scenario"])).is_err());
         assert!(parse_args(args(&["--dump-snapshot"])).is_err());
         assert!(parse_args(args(&["--bogus"])).is_err());
-    }
-
-    #[test]
-    fn godot_command_file_supports_rts_orders() {
-        let path =
-            std::env::temp_dir().join(format!("earthfront-commands-{}.txt", std::process::id()));
-        std::fs::write(
-            &path,
-            "move,7,65536,131072\nattack,8,196608,262144\ntrain,9,Tank\nbuild,Barracks,4,5\nresearch,20\nrally,9,327680,393216\nability,7,458752,524288\nrepair,11\nsell,12\n",
-        )
-        .expect("write command fixture");
-        let commands = take_commands(&path);
-        assert_eq!(commands.len(), 9);
-        assert!(matches!(
-            commands[0],
-            Command::Move {
-                unit: EntityId(7),
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[1],
-            Command::AttackMove {
-                unit: EntityId(8),
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[2],
-            Command::Train {
-                barracks: EntityId(9),
-                kind: UnitKind::Tank,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[3],
-            Command::Build {
-                kind: BuildingKind::Barracks,
-                x: 4,
-                y: 5,
-                ..
-            }
-        ));
-        assert!(matches!(commands[4], Command::Research { tech_id: 20, .. }));
-        assert!(matches!(
-            commands[5],
-            Command::SetRally {
-                producer: EntityId(9),
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[6],
-            Command::UseAbility {
-                unit: EntityId(7),
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[7],
-            Command::Repair {
-                building: EntityId(11),
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[8],
-            Command::Sell {
-                building: EntityId(12),
-                ..
-            }
-        ));
-        assert!(!path.exists(), "bridge consumes the order file atomically");
-    }
-
-    #[test]
-    fn godot_command_file_supports_depth_orders() {
-        use rts_core::game::sim::Stance;
-        let path = std::env::temp_dir().join(format!(
-            "earthfront-depth-commands-{}.txt",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            "stop,7\nhold,8\nstance,9,defensive\ntarget,10,44\n\
-             stop,x\nhold,\nstance,9,Defensive\nstance,9\nstance,x,hold\n\
-             target,10\ntarget,10,y\ntarget,-1,3\n",
-        )
-        .expect("write command fixture");
-        let commands = take_commands(&path);
-        assert_eq!(commands.len(), 4, "malformed depth lines are dropped");
-        assert!(matches!(
-            commands[0],
-            Command::Stop {
-                owner: PlayerId(0),
-                unit: EntityId(7)
-            }
-        ));
-        assert!(matches!(
-            commands[1],
-            Command::HoldPosition {
-                owner: PlayerId(0),
-                unit: EntityId(8)
-            }
-        ));
-        assert!(matches!(
-            commands[2],
-            Command::SetStance {
-                owner: PlayerId(0),
-                unit: EntityId(9),
-                stance: Stance::Defensive
-            }
-        ));
-        assert!(matches!(
-            commands[3],
-            Command::AttackTarget {
-                owner: PlayerId(0),
-                unit: EntityId(10),
-                target: EntityId(44)
-            }
-        ));
-        assert!(!path.exists(), "bridge consumes the order file atomically");
-    }
-
-    #[test]
-    fn godot_command_file_supports_upgrades() {
-        let path = std::env::temp_dir().join(format!(
-            "earthfront-upgrade-commands-{}.txt",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            "upgrade,0\nupgrade,2\nupgrade,3\n\
-             upgrade,x\nupgrade,\nupgrade\nupgrade,-1\nupgrade,256\n",
-        )
-        .expect("write command fixture");
-        let commands = take_commands(&path);
-        // The forge (3) parses; the core refuses it (Task 17).
-        assert_eq!(commands.len(), 3, "malformed upgrade lines are dropped");
-        for (command, want) in commands.iter().zip([0u8, 2, 3]) {
-            assert!(
-                matches!(*command, Command::Ascend { owner: PlayerId(0), track } if track == want),
-                "{command:?}"
-            );
-        }
-        assert!(!path.exists(), "bridge consumes the order file atomically");
-    }
-
-    #[test]
-    fn godot_command_file_supports_perk_picks() {
-        let path = std::env::temp_dir().join(format!(
-            "earthfront-perk-commands-{}.txt",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            "perk,4\nperk,0\nperk,11\nperk,4294967295\n\
-             perk,x\nperk,\nperk\nperk,-1\nperk,4294967296\nperk,1.5\n",
-        )
-        .expect("write command fixture");
-        let commands = take_commands(&path);
-        // Any u32 parses; the core takes only an id in the pending draft (Task 23).
-        assert_eq!(commands.len(), 4, "malformed perk lines are dropped");
-        for (command, want) in commands.iter().zip([4u32, 0, 11, u32::MAX]) {
-            assert!(
-                matches!(*command, Command::ChoosePerk { owner: PlayerId(0), perk } if perk == want),
-                "{command:?}"
-            );
-        }
-        assert!(!path.exists(), "bridge consumes the order file atomically");
-    }
-
-    /// Task 23: `run` (bare true/false) and `perk_pool` (a bare unsigned
-    /// integer); anything malformed keeps false and the default pool (0xFF).
-    #[test]
-    fn match_config_parses_run_and_perk_pool_and_falls_back() {
-        let c = parse_match_config(
-            r#"{"scenario":"kestrel","seed":7,"run":true,"perk_pool":4095}"#,
-            Scenario::Survival,
-        );
-        assert_eq!((c.run, c.perk_pool, c.seed), (true, 4095, 7));
-        let c = parse_match_config(r#"{"run":false,"perk_pool":0}"#, Scenario::KestrelReach);
-        assert_eq!((c.run, c.perk_pool), (false, 0));
-        let boot = MatchConfig::boot(Scenario::KestrelReach);
-        assert_eq!((boot.run, boot.perk_pool), (false, 0xFF));
-        for bad in [
-            r#"{"run":"true"}"#,
-            r#"{"run":1}"#,
-            r#"{"run":}"#,
-            r#"{"run":TRUE}"#,
-            r#"{"scenario":"kestrel"}"#,
-        ] {
-            assert!(
-                !parse_match_config(bad, Scenario::KestrelReach).run,
-                "{bad}"
-            );
-        }
-        for bad in [
-            r#"{"perk_pool":"255"}"#,
-            r#"{"perk_pool":-1}"#,
-            r#"{"perk_pool":0xFF}"#,
-            r#"{"perk_pool":4294967296}"#,
-            r#"{"perk_pool":}"#,
-            r#"{"run":true}"#,
-        ] {
-            let c = parse_match_config(bad, Scenario::KestrelReach);
-            assert_eq!(c.perk_pool, 0xFF, "{bad}");
-        }
-        let c = parse_match_config("not json", Scenario::KestrelReach);
-        assert_eq!((c.run, c.perk_pool), (false, 0xFF));
     }
 
     /// Task 23: the bridge builds a run when `match.json` asks for one, and
@@ -2972,73 +2310,6 @@ mod tests {
         assert!(!survival.contains("repair_cd"));
     }
 
-    #[test]
-    fn godot_command_file_supports_queued_waypoints() {
-        let path = std::env::temp_dir().join(format!(
-            "earthfront-queue-commands-{}.txt",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            "qmove,7,65536,-131072\nqattack,8,196608,262144\n\
-             qmove,x,1,2\nqmove,7,1\nqattack,8,1,y\nqmove,-1,1,2\nqattack,\n",
-        )
-        .expect("write command fixture");
-        let commands = take_commands(&path);
-        assert_eq!(commands.len(), 2, "malformed queue lines are dropped");
-        assert!(matches!(
-            commands[0],
-            Command::QueueMove {
-                owner: PlayerId(0),
-                unit: EntityId(7),
-                attack_move: false,
-                target
-            } if target.x.to_bits() == 65536 && target.y.to_bits() == -131_072
-        ));
-        assert!(matches!(
-            commands[1],
-            Command::QueueMove {
-                owner: PlayerId(0),
-                unit: EntityId(8),
-                attack_move: true,
-                target
-            } if target.x.to_bits() == 196_608 && target.y.to_bits() == 262_144
-        ));
-        assert!(!path.exists(), "bridge consumes the order file atomically");
-    }
-
-    /// P2 review M5: a point line whose raw bits lie outside any map (up to
-    /// `i64::MIN`, which used to panic `hex::from_world` in a debug verifier)
-    /// is dropped like any malformed line; points at the limit still parse.
-    #[test]
-    fn godot_command_file_drops_hostile_order_points() {
-        let path = std::env::temp_dir().join(format!(
-            "earthfront-hostile-commands-{}.txt",
-            std::process::id()
-        ));
-        let limit = rts_core::game::sim::ORDER_COORD_LIMIT.to_bits();
-        let min = i64::MIN;
-        let max = i64::MAX;
-        let over = limit + 1;
-        std::fs::write(
-            &path,
-            format!(
-                "qmove,7,{min},0\nqattack,7,0,{max}\nmove,7,{min},{min}\n\
-                 attack,7,{over},0\nrally,3,0,-{over}\nability,7,{max},0\n\
-                 qmove,7,{limit},-{limit}\nmove,7,65536,65536\n"
-            ),
-        )
-        .expect("write command fixture");
-        let commands = take_commands(&path);
-        assert_eq!(commands.len(), 2, "hostile point lines are dropped");
-        assert!(matches!(
-            commands[0],
-            Command::QueueMove { target, .. }
-                if target.x.to_bits() == limit && target.y.to_bits() == -limit
-        ));
-        assert!(matches!(commands[1], Command::Move { .. }));
-    }
-
     /// P2 review M1: the bridge passes a `target` order to the sim only when
     /// the fogged snapshot the player last saw showed that enemy live, so a
     /// hand-written line cannot probe or chase a hidden enemy id; with the fog
@@ -3200,71 +2471,6 @@ mod tests {
         // Survival has no depth, so it never mentions a stance.
         let survival = snapshot_json(&Scenario::Survival.build(2026));
         assert!(!survival.contains("\"stance\""));
-    }
-
-    #[test]
-    fn godot_command_file_covers_the_complete_combat_roster() {
-        let path = std::env::temp_dir().join(format!(
-            "earthfront-roster-commands-{}.txt",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            "train,9,AntiArmor\ntrain,9,Helicopter\ntrain,9,Capital\nbuild,AaTurret,1,2\nbuild,Wall,2,3\nbuild,ResearchLab,3,4\nbuild,AntimatterPlant,4,5\n",
-        )
-        .expect("write complete-roster fixture");
-        let commands = take_commands(&path);
-        assert_eq!(commands.len(), 7);
-        assert!(matches!(
-            commands[0],
-            Command::Train {
-                kind: UnitKind::AntiArmor,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[1],
-            Command::Train {
-                kind: UnitKind::Helicopter,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[2],
-            Command::Train {
-                kind: UnitKind::Capital,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[3],
-            Command::Build {
-                kind: BuildingKind::AaTurret,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[4],
-            Command::Build {
-                kind: BuildingKind::Wall,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[5],
-            Command::Build {
-                kind: BuildingKind::ResearchLab,
-                ..
-            }
-        ));
-        assert!(matches!(
-            commands[6],
-            Command::Build {
-                kind: BuildingKind::AntimatterPlant,
-                ..
-            }
-        ));
-        assert!(!path.exists(), "bridge consumes the roster file atomically");
     }
 
     // ---- Presentation fog of war (Kestrel only) ----
