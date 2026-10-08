@@ -207,6 +207,94 @@
       "character": "four low 55 Hz pulses under a tone rising from 220 Hz",
       "peak_dbfs": -7.61,
       "loudness_dbfs": -15.0
+    },
+    {
+      "id": "denied",
+      "file": "denied.wav",
+      "duration_s": 0.22,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "ui",
+      "character": "two short low rough square buzzes, F#3 then E-flat3: order refused",
+      "peak_dbfs": -21.41,
+      "loudness_dbfs": -26.0
+    },
+    {
+      "id": "place_thunk",
+      "file": "place_thunk.wav",
+      "duration_s": 0.26,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "ui",
+      "character": "soft low knock with a falling thump and a faint plate ring: building placed",
+      "peak_dbfs": -13.21,
+      "loudness_dbfs": -25.01
+    },
+    {
+      "id": "power_down",
+      "file": "power_down.wav",
+      "duration_s": 0.8,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "relay clunk then a tone spinning down from 480 Hz with a slowing brownout stutter",
+      "peak_dbfs": -13.63,
+      "loudness_dbfs": -17.0
+    },
+    {
+      "id": "power_up",
+      "file": "power_up.wav",
+      "duration_s": 0.7,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "tone winding up from B2 to B4 under an opening filter, then a B5 online blip",
+      "peak_dbfs": -13.6,
+      "loudness_dbfs": -18.0
+    },
+    {
+      "id": "wave_cleared",
+      "file": "wave_cleared.wav",
+      "duration_s": 1.2,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "soft horn cadence, G major resolving to a held C major",
+      "peak_dbfs": -7.75,
+      "loudness_dbfs": -16.0
+    },
+    {
+      "id": "research_complete",
+      "file": "research_complete.wav",
+      "duration_s": 0.9,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "quick bright square run C6 to C7, then a shimmering held C7",
+      "peak_dbfs": -10.3,
+      "loudness_dbfs": -18.0
+    },
+    {
+      "id": "victory_sting",
+      "file": "victory_sting.wav",
+      "duration_s": 2.2,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "horn pickup C5 E5 G5 into a held C major chord with a timpani hit",
+      "peak_dbfs": -7.59,
+      "loudness_dbfs": -15.0
+    },
+    {
+      "id": "defeat_sting",
+      "file": "defeat_sting.wav",
+      "duration_s": 2.4,
+      "loop": false,
+      "base_volume_db": 0.0,
+      "category": "alert",
+      "character": "dark horn line falling G4 E-flat4 C4 into a low C minor chord and a boom",
+      "peak_dbfs": -7.18,
+      "loudness_dbfs": -15.0
     }
   ]
 }

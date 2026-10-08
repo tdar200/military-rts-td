@@ -46,7 +46,7 @@ func _base(id: String) -> float:
 
 func test_every_manifest_id_loads_as_a_stream(t) -> void:
 	var m := _manifest()
-	t.eq(m["sounds"].size(), 18, "the eighteen generated sounds")
+	t.eq(m["sounds"].size(), 26, "the twenty-six generated sounds (kestrel-depth Task 6 added eight event cues)")
 	t.eq(Pool.load_manifest(), m, "the pool reads the same manifest")
 	var d := _director()
 	for s in m["sounds"]:
@@ -112,7 +112,7 @@ func test_the_pool_owns_sixteen_sfx_players_a_ui_player_and_the_loops(t) -> void
 	var players := pool.find_children("*", "AudioStreamPlayer", false, false)
 	t.eq(players.size(), Pool.SFX_VOICES + 1 + Director.LOOP_IDS.size(), "16 SFX + 1 UI + one per loop")
 	t.eq(Pool.SFX_VOICES, 16, "sixteen SFX voices")
-	t.eq(pool.streams.size(), 18, "every stream preloaded at setup")
+	t.eq(pool.streams.size(), _manifest()["sounds"].size(), "every stream preloaded at setup")
 	for id in Director.LOOP_IDS:
 		t.eq((pool.get_node(String(id).to_pascal_case()) as AudioStreamPlayer).stream, pool.streams[id], "%s has its own player" % id)
 	var d := _director()

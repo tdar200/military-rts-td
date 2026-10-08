@@ -1,4 +1,5 @@
-"""Synthesise the Kestrel sound set (plan 2026-10-06-kestrel-next-level, Task 4; spec section P3).
+"""Synthesise the Kestrel sound set (plan 2026-10-06-kestrel-next-level, Task 4; spec section P3; eight event cues
+added by plan 2026-10-07-kestrel-depth, Task 6).
 Deterministic: numpy only, fixed seeds (PCG64 uniform draws), no network, no samples. CC0 by construction.
 Usage: python3 tools/audio/build_sfx.py [OUT_DIR]   (default godot3d/assets/audio/sfx/)
 Writes one 16-bit mono 44100 Hz WAV per sound plus sfx_manifest.json, then prints a loudness table.
@@ -438,6 +439,112 @@ def wave_inbound():
     return pulse + rise
 
 
+# ---------------------------------------------------------------- event cues (plan 2026-10-07-kestrel-depth, Task 6)
+
+def horn(bright, vib_hz=0.0, vib_depth=0.0):
+    """A soft brass-like timbre for tone_note: a saw spectrum rolled off above `bright` Hz, optional slow vibrato."""
+    def timbre(f):
+        if vib_depth:
+            f = f * (1.0 + vib_depth * np.sin(2 * np.pi * vib_hz * t_axis(len(f))))
+        f0 = float(f.mean())
+        return additive(f, lambda k: (1.0 / k) / math.sqrt(1.0 + (k * f0 / bright) ** 4), 9000.0)
+    return timbre
+
+
+def denied():
+    n = n_of(0.22)
+    def buzz(f):  # a square with a rough minor-second partner, darkened
+        return svf(square(f, 6000) + 0.45 * square(f * 1.0595, 6000), 1800, 0.8)
+    return (tone_note(n, 185.0, 0.0, 0.08, attack=0.003, tau=0.2, release=0.008, timbre=buzz)
+            + tone_note(n, 155.56, 0.11, 0.095, attack=0.003, tau=0.2, release=0.012, timbre=buzz))
+
+
+def place_thunk():
+    n = n_of(0.26)
+    t = t_axis(n)
+    body = sine(95 + 130 * np.exp(-t / 0.025)) * env(n, 0.001, 0.05) * 0.5
+    body += band(white(n, 131), 50, 300) * env(n, 0.001, 0.035) * 0.3
+    # the knock and plate carry it on small speakers, which barely reproduce the low body
+    knock = band(white(n, 132), 200, 1600) * env(n, 0.0005, 0.018) * 2.0
+    clack = band(white(n, 133), 2500, 8000) * env(n, 0.0002, 0.002) * 0.12
+    plate = np.sin(2 * np.pi * 640 * t) * env(n, 0.001, 0.04) * 0.25  # a metal plate settling
+    return body + knock + clack + plate
+
+
+def power_down():
+    n = n_of(0.80)
+    t = t_axis(n)
+    f = 110 + 370 * np.exp(-t / 0.22)  # spins down from 480 Hz towards 110 Hz
+    osc = np.sin(2 * np.pi * phase(f)) + 0.6 * saw(f, 7000)
+    body = svf(osc, 400 + 4000 * np.exp(-t / 0.25), 1.2)
+    flicker = 1.0 - 0.35 * (0.5 + 0.5 * np.tanh(6 * np.sin(2 * np.pi * phase(14 - 8 * t))))  # a slowing brownout stutter
+    shape = np.minimum(t / 0.01, 1.0) * np.clip((0.78 - t) / 0.3, 0.0, 1.0)
+    relay = band(white(n, 141), 1500, 9000) * env(n, 0.0001, 0.002) * 0.5 + sine(90 + 60 * np.exp(-t / 0.02)) * env(n, 0.001, 0.03) * 0.5
+    return body * flicker * shape + relay
+
+
+def power_up():
+    n = n_of(0.70)
+    t = t_axis(n)
+    f = 123.47 * 4.0 ** np.minimum(t / 0.45, 1.0)  # winds up from B2 to B4, then holds
+    osc = np.sin(2 * np.pi * phase(f)) + 0.5 * saw(f, 7000)
+    body = svf(osc, 500 + 5000 * np.minimum(t / 0.45, 1.0), 1.2) * np.minimum(t / 0.03, 1.0) * np.clip((0.68 - t) / 0.25, 0.0, 1.0)
+    ready = tone_note(n, 987.77, 0.45, 0.24, attack=0.003, tau=0.08, release=0.03) * 0.5  # a B5 "online" blip
+    return body * 0.8 + ready
+
+
+def wave_cleared():
+    n = n_of(1.20)
+    timbre = horn(2200, 5.0, 0.003)
+    out = np.zeros(n)
+    for f, a in ((196.0, 0.5), (392.0, 1.0), (493.88, 0.7), (587.33, 0.6)):  # G major (the dominant)
+        out += tone_note(n, f, 0.0, 0.34, attack=0.03, tau=0.6, release=0.04, timbre=timbre) * a
+    for f, a in ((261.63, 0.5), (523.25, 1.0), (659.26, 0.8), (783.99, 0.6)):  # resolving to C major
+        out += tone_note(n, f, 0.36, 0.82, attack=0.025, tau=0.7, release=0.35, timbre=timbre) * a
+    return out
+
+
+def research_complete():
+    n = n_of(0.90)
+    t = t_axis(n)
+    blip = lambda f: square(f, 9000, tilt=1.8)
+    out = np.zeros(n)
+    for i, f in enumerate((1046.5, 1318.51, 1567.98, 2093.0)):  # a quick C major run up two octaves
+        out += tone_note(n, f, i * 0.045, 0.04, attack=0.002, tau=0.05, release=0.008, timbre=blip) * 0.7
+    held = (np.sin(2 * np.pi * 2093.0 * t) + np.sin(2 * np.pi * 2099.0 * t) + 0.6 * np.sin(2 * np.pi * 1046.5 * t)) * env(n, 0.01, 0.25, delay=0.18)
+    sparkle = band(white(n, 151), 5000, 10000) * env(n, 0.02, 0.15, delay=0.18) * 0.05
+    return out + 0.5 * held + sparkle
+
+
+def victory_sting():
+    n = n_of(2.20)
+    t = t_axis(n)
+    timbre = horn(2600, 5.2, 0.004)
+    out = np.zeros(n)
+    for i, f in enumerate((523.25, 659.26, 783.99)):  # C5 E5 G5 pickup
+        out += tone_note(n, f, i * 0.12, 0.1, attack=0.008, tau=0.3, release=0.02, timbre=timbre) * 0.8
+    for f, a in ((130.81, 0.5), (261.63, 0.6), (523.25, 1.0), (659.26, 0.8), (783.99, 0.7), (1046.5, 0.45)):
+        out += tone_note(n, f, 0.40, 1.78, attack=0.02, tau=1.1, release=0.5, timbre=timbre) * a
+    timp = sine(65 + 35 * np.exp(-t / 0.05)) * env(n, 0.002, 0.3, delay=0.40) * 0.9
+    timp += band(white(n, 161), 40, 300) * env(n, 0.002, 0.08, delay=0.40) * 0.6
+    cymbal = band(white(n, 162), 4000, 12000) * env(n, 0.003, 0.5, delay=0.40) * np.clip((2.18 - t) / 0.5, 0.0, 1.0) * 0.06
+    return out + timp + cymbal
+
+
+def defeat_sting():
+    n = n_of(2.40)
+    t = t_axis(n)
+    timbre = horn(1000, 4.5, 0.003)
+    out = np.zeros(n)
+    for i, f in enumerate((392.0, 311.13, 261.63)):  # G4 E-flat4 C4, falling
+        out += tone_note(n, f, i * 0.32, 0.3, attack=0.02, tau=0.5, release=0.04, timbre=timbre) * 0.8
+    for f, a in ((65.41, 0.5), (130.81, 1.0), (155.56, 0.85), (196.0, 0.7)):  # a low C minor chord
+        out += tone_note(n, f, 0.96, 1.42, attack=0.04, tau=1.0, release=0.6, timbre=timbre) * a
+    boom = sine(40 + 25 * np.exp(-t / 0.08)) * env(n, 0.004, 0.4, delay=0.96) * 0.7
+    boom += band(white(n, 171), 25, 180) * env(n, 0.004, 0.3, delay=0.96) * 0.6
+    return out + boom
+
+
 # ---------------------------------------------------------------- the set
 
 # id: (builder, category, loudness target dBFS, base_volume_db, character)
@@ -460,6 +567,15 @@ SOUNDS = {
     "alert": (alert, "alert", -15.0, 0.0, "two-tone hi-lo warning, C6 and G5, three cycles"),
     "build_complete": (build_complete, "alert", -17.0, 0.0, "rising C major bell arpeggio ending on a held C6"),
     "wave_inbound": (wave_inbound, "alert", -15.0, 0.0, "four low 55 Hz pulses under a tone rising from 220 Hz"),
+    # kestrel-depth Task 6: cues for events that were silent
+    "denied": (denied, "ui", -26.0, 0.0, "two short low rough square buzzes, F#3 then E-flat3: order refused"),
+    "place_thunk": (place_thunk, "ui", -25.0, 0.0, "soft low knock with a falling thump and a faint plate ring: building placed"),
+    "power_down": (power_down, "alert", -17.0, 0.0, "relay clunk then a tone spinning down from 480 Hz with a slowing brownout stutter"),
+    "power_up": (power_up, "alert", -18.0, 0.0, "tone winding up from B2 to B4 under an opening filter, then a B5 online blip"),
+    "wave_cleared": (wave_cleared, "alert", -16.0, 0.0, "soft horn cadence, G major resolving to a held C major"),
+    "research_complete": (research_complete, "alert", -18.0, 0.0, "quick bright square run C6 to C7, then a shimmering held C7"),
+    "victory_sting": (victory_sting, "alert", -15.0, 0.0, "horn pickup C5 E5 G5 into a held C major chord with a timpani hit"),
+    "defeat_sting": (defeat_sting, "alert", -15.0, 0.0, "dark horn line falling G4 E-flat4 C4 into a low C minor chord and a boom"),
 }
 
 
@@ -489,9 +605,9 @@ def build(out_dir=OUT, verbose=False):
                 "loudness": "loudest 50 ms RMS window, 10 ms hop, dBFS", "sounds": sounds}
     (out_dir / "sfx_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     if verbose:
-        print("%-16s %-7s %6s %7s %7s %7s %3s %8s" % ("id", "cat", "dur_s", "peak", "loud", "target", "lim", "bytes"))
+        print("%-17s %-7s %6s %7s %7s %7s %3s %8s" % ("id", "cat", "dur_s", "peak", "loud", "target", "lim", "bytes"))
         for r in rows:
-            print("%-16s %-7s %6.3f %7.2f %7.2f %7.1f %3d %8d" % r)
+            print("%-17s %-7s %6.3f %7.2f %7.2f %7.1f %3d %8d" % r)
         print("total %d bytes" % sum(r[-1] for r in rows))
     return manifest
 

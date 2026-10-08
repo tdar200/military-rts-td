@@ -1,4 +1,5 @@
-"""Tests for tools/audio/build_sfx.py (plan 2026-10-06-kestrel-next-level, Task 4).
+"""Tests for tools/audio/build_sfx.py (plan 2026-10-06-kestrel-next-level, Task 4; eight more ids in plan
+2026-10-07-kestrel-depth, Task 6).
 Run: cd tools/audio && python3 -m unittest test_build_sfx -v
 
 Nothing here plays audio: every check is offline analysis of the written WAV files (format, length, peak, DC, loudness,
@@ -9,11 +10,17 @@ import build_sfx as bs
 
 IDS = ["rifle", "cannon", "plasma_bolt", "explosion_small", "explosion_large", "collapse", "rotor_loop", "tread_loop",
        "foot_loop", "ui_click", "ui_hover", "select", "ack_infantry", "ack_vehicle", "ack_air", "alert", "build_complete",
-       "wave_inbound"]
+       "wave_inbound",
+       # kestrel-depth Task 6: cues for events that were silent
+       "denied", "place_thunk", "power_down", "power_up", "wave_cleared", "research_complete", "victory_sting",
+       "defeat_sting"]
+STINGS = ("victory_sting", "defeat_sting")
 CATEGORIES = {"weapon", "impact", "loop", "ui", "voice", "alert"}
 # stated duration range per category, seconds (inclusive)
 DURATION_RANGE = {"weapon": (0.15, 1.5), "impact": (0.5, 4.0), "loop": (1.0, 4.0), "ui": (0.02, 0.3),
                   "voice": (0.1, 0.6), "alert": (0.4, 2.0)}
+# the match-end stings are alerts with their own, longer range (they replace the reused cues on victory and defeat)
+ID_DURATION_RANGE = {sid: (1.5, 3.0) for sid in STINGS}
 SR = 44100
 PEAK_LIMIT = 10 ** (-1.0 / 20.0)  # -1 dBFS
 DC_LIMIT = 1e-3  # |mean| as a fraction of full scale (-60 dBFS)
@@ -59,6 +66,26 @@ def hf_energy(seg):
     spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)))) ** 2
     f = np.fft.rfftfreq(len(seg), 1 / SR)
     return float(spec[f > 6000].sum())
+
+
+def dominant(seg, lo=60.0, hi=2000.0):
+    """The strongest frequency in [lo, hi] of a Hann-windowed segment, Hz."""
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), 8 * len(seg)))
+    f = np.fft.rfftfreq(8 * len(seg), 1 / SR)
+    keep = (f >= lo) & (f <= hi)
+    return float(f[keep][np.argmax(spec[keep])])
+
+
+def level_at(seg, freq, width=0.015):
+    """Peak spectral magnitude within +-width (relative) of freq, relative to the segment's strongest bin under 4 kHz."""
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), 8 * len(seg)))
+    f = np.fft.rfftfreq(8 * len(seg), 1 / SR)
+    near = (f >= freq * (1 - width)) & (f <= freq * (1 + width))
+    return float(spec[near].max() / spec[f < 4000].max())
+
+
+def seg_at(x, a, b):
+    return x[int(a * SR):int(b * SR)]
 
 
 class SfxTests(unittest.TestCase):
@@ -172,7 +199,7 @@ class SfxTests(unittest.TestCase):
 
     def test_durations_in_category_range(self):
         for sid, s in self.sounds.items():
-            lo, hi = DURATION_RANGE[s["category"]]
+            lo, hi = ID_DURATION_RANGE.get(sid, DURATION_RANGE[s["category"]])
             d = len(self.x(sid)) / SR
             self.assertTrue(lo <= d <= hi, "%s lasts %.3f s, outside %s for %s" % (sid, d, (lo, hi), s["category"]))
 
@@ -332,6 +359,83 @@ class SfxTests(unittest.TestCase):
         tones = sorted(set(peaks))
         self.assertGreaterEqual(len(tones), 2, peaks)
         self.assertGreater(max(tones) / min(tones), 1.15, "two distinct tones %s" % tones)
+
+
+    # ---- kestrel-depth Task 6: the eight event cues
+
+    def test_new_cues_have_their_categories(self):
+        want = {"denied": "ui", "place_thunk": "ui", "power_down": "alert", "power_up": "alert", "wave_cleared": "alert",
+                "research_complete": "alert", "victory_sting": "alert", "defeat_sting": "alert"}
+        self.assertEqual({sid: self.sounds[sid]["category"] for sid in want}, want)
+        for sid in want:
+            self.assertFalse(self.sounds[sid]["loop"], sid)
+
+    def test_stings_last_1_5_to_3_s(self):
+        for sid in STINGS:
+            d = len(self.x(sid)) / SR
+            self.assertTrue(1.5 <= d <= 3.0, "%s lasts %.3f s" % (sid, d))
+
+    def test_denied_is_a_low_double_buzz(self):
+        """Two short low buzzes: well under the click's brightness, a fundamental below 300 Hz, and an RMS envelope
+        (5 ms bins) with two bursts separated by a dip at least 12 dB down."""
+        x = self.x("denied")
+        self.assertLess(centroid(x), 0.5 * centroid(self.x("ui_click")))
+        self.assertLess(dominant(x, 60, 2000), 300.0)
+        e = 20 * np.log10(np.sqrt((x[:len(x) // 220 * 220] ** 2).reshape(-1, 220).mean(axis=1)) + 1e-9)
+        on = e > e.max() - 12
+        bursts = int(on[0]) + int(np.sum(on[1:] & ~on[:-1]))
+        self.assertEqual(bursts, 2, "denied bursts: %s" % on.astype(int).tolist())
+
+    def test_place_thunk_is_a_low_knock_that_decays(self):
+        x = self.x("place_thunk")
+        spec = np.abs(np.fft.rfft(x)) ** 2
+        f = np.fft.rfftfreq(len(x), 1 / SR)
+        self.assertGreater(spec[f < 300].sum() / spec.sum(), 0.3, "place_thunk has a low body")
+        self.assertGreater(spec[f >= 300].sum() / spec.sum(), 0.15, "and a knock that small speakers can play")
+        q = len(x) // 4
+        self.assertGreater(np.abs(x[:q]).mean(), 4 * np.abs(x[-q:]).mean(), "place_thunk decays")
+        self.assertLess(centroid(x), centroid(self.x("ui_click")))
+
+    def test_power_down_falls_and_power_up_rises(self):
+        down, up = self.x("power_down"), self.x("power_up")
+        a, b = dominant(seg_at(down, 0.03, 0.15)), dominant(seg_at(down, 0.5, 0.65))
+        self.assertGreater(a, 1.8 * b, "power_down: %.0f Hz then %.0f Hz" % (a, b))
+        a, b = dominant(seg_at(up, 0.03, 0.15)), dominant(seg_at(up, 0.4, 0.5))
+        self.assertGreater(b, 1.8 * a, "power_up: %.0f Hz then %.0f Hz" % (a, b))
+        self.assertLess(len(up), len(self.x("wave_inbound")), "power_up is shorter than the wave warning")
+
+    def test_wave_cleared_resolves_dominant_to_tonic(self):
+        """A V to I cadence: the first chord's root is G4 (392 Hz) and the held last one is C5 (523 Hz)."""
+        x = self.x("wave_cleared")
+        self.assertAlmostEqual(dominant(seg_at(x, 0.03, 0.25), 300, 450), 392.0, delta=6.0)
+        last = seg_at(x, 0.55, 0.9)
+        self.assertAlmostEqual(dominant(last, 450, 600), 523.25, delta=6.0)
+        self.assertGreater(level_at(last, 659.26), 0.2, "the tonic chord carries its major third")
+
+    def test_research_complete_is_brighter_and_quicker_than_build_complete(self):
+        r, b = self.x("research_complete"), self.x("build_complete")
+        self.assertGreater(centroid(r), 1.3 * centroid(b))
+        spec = np.abs(np.fft.rfft(r)) ** 2
+        f = np.fft.rfftfreq(len(r), 1 / SR)
+        self.assertLess(spec[f > 6000].sum() / spec.sum(), 0.1, "bright from its tones, not from hiss")
+        self.assertGreater(dominant(seg_at(r, 0.0, 0.04), 400, 4000), 1000.0, "it opens high (C6)")
+
+    def test_victory_rises_to_a_major_chord_and_defeat_falls_to_a_minor_one(self):
+        v, d = self.x("victory_sting"), self.x("defeat_sting")
+        tail_v, tail_d = seg_at(v, 0.8, 1.6), seg_at(d, 1.0, 1.8)
+        root_v = dominant(tail_v, 450, 600)
+        self.assertAlmostEqual(root_v, 523.25, delta=6.0, msg="victory holds C5")
+        self.assertGreater(level_at(tail_v, 523.25 * 1.2599), 0.2, "victory chord has a major third")
+        self.assertGreater(dominant(tail_v, 300, 2000), dominant(seg_at(v, 0.02, 0.12), 300, 2000) * 0.99,
+                           "victory ends at or above where it starts")
+        self.assertGreater(dominant(seg_at(d, 0.02, 0.25), 200, 1000), 1.4 * dominant(tail_d, 100, 1000),
+                           "defeat ends lower than it starts")
+        self.assertGreater(level_at(tail_d, 130.81 * 1.1892), 0.2, "defeat chord has a minor third (E flat)")
+        self.assertLess(level_at(tail_d, 130.81 * 1.2599), 0.1, "and no major third")
+        self.assertLess(centroid(d), centroid(v), "defeat is darker than victory")
+        spec = np.abs(np.fft.rfft(d)) ** 2
+        f = np.fft.rfftfreq(len(d), 1 / SR)
+        self.assertGreater(spec[f < 300].sum() / spec.sum(), 0.2, "defeat sits low")
 
 
 if __name__ == "__main__":

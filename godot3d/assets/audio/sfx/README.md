@@ -6,10 +6,12 @@ CC0 by construction (public domain dedication, https://creativecommons.org/publi
 
 ## Contents
 
-- 18 WAV files, 16-bit mono 44100 Hz: weapons (`rifle`, `cannon`, `plasma_bolt`), impacts (`explosion_small`,
+- 26 WAV files, 16-bit mono 44100 Hz: weapons (`rifle`, `cannon`, `plasma_bolt`), impacts (`explosion_small`,
   `explosion_large`, `collapse`), seamless loops (`rotor_loop`, `tread_loop`, `foot_loop`), ui ticks (`ui_click`,
-  `ui_hover`), tonal unit barks (`select`, `ack_infantry`, `ack_vehicle`, `ack_air`; no speech) and alerts (`alert`,
-  `build_complete`, `wave_inbound`).
+  `ui_hover`, `denied` for a refused order, `place_thunk` for a placed building), tonal unit barks (`select`,
+  `ack_infantry`, `ack_vehicle`, `ack_air`; no speech) and alerts (`alert`, `build_complete`, `wave_inbound`,
+  `power_down`, `power_up`, `wave_cleared`, `research_complete`, and the match-end stings `victory_sting` and
+  `defeat_sting`, 2.2 and 2.4 s).
 - `sfx_manifest.json`: per sound the id, file, duration, loop flag, category (weapon, impact, loop, ui, voice, alert),
   a suggested `base_volume_db` trim for the player, a one-line character note, and the measured peak and loudness
   (loudest 50 ms RMS window, dBFS). The files already carry the mix hierarchy: weapons and impacts loudest, then alerts,
