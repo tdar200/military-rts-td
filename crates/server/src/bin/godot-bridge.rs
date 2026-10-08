@@ -9,6 +9,7 @@ use rts_core::fixed::Fixed;
 use rts_core::game::hex;
 use rts_core::game::kestrel;
 use rts_core::game::map::{Deposit, Ground};
+use rts_core::game::perk::{DEFAULT_RUN_POOL, NO_PERK};
 use rts_core::game::scenario::{MatchOptions, Scenario};
 use rts_core::game::sim::{
     order_point_in_range, Command, Difficulty, EntityId, EntityKindView, EntityView, PlayerId, Sim,
@@ -1090,6 +1091,30 @@ fn snapshot_json_with(
             )
             .expect("string write");
         }
+        // Task 23 appends the run (runs only): waves cleared, the pending
+        // draft's perk ids (null when none) and the pool.
+        if sim.is_run() {
+            write!(
+                out,
+                ",\"run\":{{\"wave\":{},\"draft\":",
+                sim.waves_cleared()
+            )
+            .expect("string write");
+            match sim.depth_draft() {
+                Some(draft) => {
+                    out.push('[');
+                    for (k, id) in draft.iter().filter(|&&id| id != NO_PERK).enumerate() {
+                        if k > 0 {
+                            out.push(',');
+                        }
+                        write!(out, "{id}").expect("string write");
+                    }
+                    out.push(']');
+                }
+                None => out.push_str("null"),
+            }
+            write!(out, ",\"pool\":{}}}", sim.perk_pool()).expect("string write");
+        }
         out.push('}');
     }
     out.push_str(",\"supply_links\":");
@@ -1431,6 +1456,15 @@ fn take_commands(path: &Path) -> Vec<Command> {
                         track,
                     })
                 }
+                // Run drafts (Kestrel, Task 23): `perk,<id>` takes a perk
+                // from the pending draft; the core ignores any other id.
+                "perk" => {
+                    let perk = fields.next()?.parse::<u32>().ok()?;
+                    Some(Command::ChoosePerk {
+                        owner: PlayerId(0),
+                        perk,
+                    })
+                }
                 _ => None,
             }
         })
@@ -1492,6 +1526,10 @@ struct MatchConfig {
     fog: Option<bool>,
     seed: u64,
     difficulty: Difficulty,
+    /// Task 23: a roguelite run (Kestrel only), false by default.
+    run: bool,
+    /// Task 23: the run's perk pool bitmask, `DEFAULT_RUN_POOL` (0xFF) by default.
+    perk_pool: u32,
 }
 
 /// Task 20: the seed of a match whose `match.json` gives none (or a malformed one).
@@ -1506,6 +1544,8 @@ impl MatchConfig {
             fog: None,
             seed: DEFAULT_SEED,
             difficulty: Difficulty::Normal,
+            run: false,
+            perk_pool: DEFAULT_RUN_POOL,
         }
     }
 }
@@ -1517,6 +1557,8 @@ fn build_match(cfg: &MatchConfig) -> Sim {
         cfg.seed,
         MatchOptions {
             difficulty: cfg.difficulty,
+            run: cfg.run,
+            perk_pool: cfg.perk_pool,
         },
     );
     sim.set_balance(rts_data::load_default());
@@ -1575,6 +1617,13 @@ fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
     }
     if let Some(RawValue::Quoted(name)) = raw_json_value(text, "difficulty") {
         config.difficulty = Difficulty::from_name(name).unwrap_or_default();
+    }
+    // Task 23: a bare boolean run flag and a bare unsigned integer pool.
+    config.run = matches!(raw_json_value(text, "run"), Some(RawValue::Bare("true")));
+    if let Some(RawValue::Bare(pool)) = raw_json_value(text, "perk_pool") {
+        if pool.bytes().all(|b| b.is_ascii_digit()) {
+            config.perk_pool = pool.parse().unwrap_or(DEFAULT_RUN_POOL);
+        }
     }
     config
 }
@@ -2182,6 +2231,7 @@ mod tests {
             99,
             MatchOptions {
                 difficulty: Difficulty::Easy,
+                ..MatchOptions::default()
             },
         );
         assert_eq!(sim.state_hash(), {
@@ -2214,6 +2264,7 @@ mod tests {
             9,
             MatchOptions {
                 difficulty: Difficulty::Hard,
+                ..MatchOptions::default()
             },
         ));
         assert!(
@@ -2600,6 +2651,131 @@ mod tests {
             );
         }
         assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    #[test]
+    fn godot_command_file_supports_perk_picks() {
+        let path = std::env::temp_dir().join(format!(
+            "earthfront-perk-commands-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "perk,4\nperk,0\nperk,11\nperk,4294967295\n\
+             perk,x\nperk,\nperk\nperk,-1\nperk,4294967296\nperk,1.5\n",
+        )
+        .expect("write command fixture");
+        let commands = take_commands(&path);
+        // Any u32 parses; the core takes only an id in the pending draft (Task 23).
+        assert_eq!(commands.len(), 4, "malformed perk lines are dropped");
+        for (command, want) in commands.iter().zip([4u32, 0, 11, u32::MAX]) {
+            assert!(
+                matches!(*command, Command::ChoosePerk { owner: PlayerId(0), perk } if perk == want),
+                "{command:?}"
+            );
+        }
+        assert!(!path.exists(), "bridge consumes the order file atomically");
+    }
+
+    /// Task 23: `run` (bare true/false) and `perk_pool` (a bare unsigned
+    /// integer); anything malformed keeps false and the default pool (0xFF).
+    #[test]
+    fn match_config_parses_run_and_perk_pool_and_falls_back() {
+        let c = parse_match_config(
+            r#"{"scenario":"kestrel","seed":7,"run":true,"perk_pool":4095}"#,
+            Scenario::Survival,
+        );
+        assert_eq!((c.run, c.perk_pool, c.seed), (true, 4095, 7));
+        let c = parse_match_config(r#"{"run":false,"perk_pool":0}"#, Scenario::KestrelReach);
+        assert_eq!((c.run, c.perk_pool), (false, 0));
+        let boot = MatchConfig::boot(Scenario::KestrelReach);
+        assert_eq!((boot.run, boot.perk_pool), (false, 0xFF));
+        for bad in [
+            r#"{"run":"true"}"#,
+            r#"{"run":1}"#,
+            r#"{"run":}"#,
+            r#"{"run":TRUE}"#,
+            r#"{"scenario":"kestrel"}"#,
+        ] {
+            assert!(
+                !parse_match_config(bad, Scenario::KestrelReach).run,
+                "{bad}"
+            );
+        }
+        for bad in [
+            r#"{"perk_pool":"255"}"#,
+            r#"{"perk_pool":-1}"#,
+            r#"{"perk_pool":0xFF}"#,
+            r#"{"perk_pool":4294967296}"#,
+            r#"{"perk_pool":}"#,
+            r#"{"run":true}"#,
+        ] {
+            let c = parse_match_config(bad, Scenario::KestrelReach);
+            assert_eq!(c.perk_pool, 0xFF, "{bad}");
+        }
+        let c = parse_match_config("not json", Scenario::KestrelReach);
+        assert_eq!((c.run, c.perk_pool), (false, 0xFF));
+    }
+
+    /// Task 23: the bridge builds a run when `match.json` asks for one, and
+    /// the Kestrel depth block then ends with `"run":{"wave","draft","pool"}`
+    /// (`wave` = waves cleared, `draft` the pending ids or null); a plain
+    /// match and Survival never carry it.
+    #[test]
+    fn a_run_match_reports_its_wave_draft_and_pool() {
+        use rts_core::game::scenario::{kestrel_reach_with, MatchOptions};
+        let cfg = parse_match_config(
+            r#"{"scenario":"kestrel","seed":3,"run":true,"perk_pool":511}"#,
+            Scenario::Survival,
+        );
+        let mut sim = build_match(&cfg);
+        let mut want = kestrel_reach_with(
+            3,
+            MatchOptions {
+                run: true,
+                perk_pool: 511,
+                ..MatchOptions::default()
+            },
+        );
+        want.set_balance(rts_data::load_default());
+        assert_eq!(sim.state_hash(), want.state_hash());
+        assert!(sim.is_run());
+        let json = snapshot_json(&sim);
+        assert!(
+            json.contains("\"grade\":\"D\"},\"run\":{\"wave\":0,\"draft\":null,\"pool\":511}},"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        for _ in 0..30_000 {
+            if sim.depth_draft().is_some() || sim.winner().is_some() {
+                break;
+            }
+            let mut cmds = sim.ai_commands(PlayerId(0));
+            cmds.extend(Scenario::KestrelReach.host_commands(&sim));
+            sim.step(&cmds);
+        }
+        let draft = sim.depth_draft().expect("the playtest cleared a wave");
+        let json = snapshot_json(&sim);
+        let ids: Vec<String> = draft
+            .iter()
+            .filter(|&&id| id != rts_core::game::perk::NO_PERK)
+            .map(ToString::to_string)
+            .collect();
+        let want = format!(
+            ",\"run\":{{\"wave\":{},\"draft\":[{}],\"pool\":511}}}},",
+            sim.waves_cleared(),
+            ids.join(",")
+        );
+        assert!(
+            json.contains(&want),
+            "{want} in {}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        let plain = snapshot_json(&Scenario::KestrelReach.build(3));
+        assert!(!plain.contains("\"run\""));
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("\"run\""));
+        assert!(!survival.contains("\"draft\""));
     }
 
     /// Task 21: the Kestrel depth block ends with the Core Node shield, true
@@ -3937,7 +4113,14 @@ mod tests {
         // removes up to its matching brace, and every other byte is identical
         // (both snapshots compared against Task 21's with the hash masked).
         // Was (27265, 0x6c7d_bcf2_78f9_0971) and (28515, 0x97e0_4af7_95bc_21c3).
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x6f74_db97_ef5d_c332));
+        //
+        // Re-pinned by Task 23 (run mode): the depth state now hashes the run
+        // flag, the perk pool, the pending draft and the drafts offered (false,
+        // 0, none and 0 here), so only the `hash` value changed; a non-run
+        // match writes no `"run"` object, and every other byte is identical
+        // (both snapshots compared against Task 22's with the hash masked).
+        // Was (27265, 0x6f74_db97_ef5d_c332) and (28515, 0x8924_a375_71e4_2f40).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x71d7_279a_e191_4947));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3960,7 +4143,9 @@ mod tests {
         // Task 20: the state hash in it is one digit shorter (28516 -> 28515);
         // with `"hash"` masked both snapshots are byte-identical to Task 19's.
         // Task 22: same length, a new `hash` value (see above).
-        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x8924_a375_71e4_2f40));
+        // Task 23: the state hash is one digit longer (28515 -> 28516); with
+        // `"hash"` masked the snapshot is byte-identical to Task 22's.
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xc0d2_9e04_0e38_c619));
     }
 
     #[test]
