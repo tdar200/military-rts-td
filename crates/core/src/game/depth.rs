@@ -116,6 +116,19 @@ pub(super) const LAST_TABLE_WAVE: u32 = 9;
 /// Before it the seeded doctrines pick only the target; the defender
 /// overrides (siege, anti-armour) still shape the mix.
 pub(super) const DOCTRINE_WAVE: u32 = 4;
+/// Task 21: the waves that must have spawned (the elite wave 6 among them)
+/// before the Core Node can take damage, with every relay down as well.
+pub const CORE_EXPOSED_WAVES: u32 = ELITE_WAVE + 1;
+/// Task 21: the supply the waves' attacker keeps as its home army in every
+/// era under depth (the classic target, 10 at era 0, grows to 24 at era 1).
+/// Its offence is the waves and the raids; the base army garrisons the Core
+/// Node. Measured in the Task 21 report: 8 to 12 hold the match window, 14
+/// and 24 do not.
+pub const ALIEN_ARMY_TARGET: u32 = 10;
+/// Task 21: the Upgrades levels per track the waves' attacker may own for
+/// each spawned wave (none before wave one, Task 20's gate). Unpaced it
+/// bought [6, 6, 6] the moment it reached era 1, after wave 2.
+pub const ALIEN_UPGRADES_PER_WAVE: u32 = 1;
 /// Task 19: ticks between the alien's era-0 raids (90 s).
 pub const RAID_PERIOD: u64 = 2700;
 /// Task 19: the supply the alien must have in use before it raids at era 0.
@@ -572,10 +585,30 @@ impl Sim {
     /// pre-wave probe stays a probe (bought from tick 0, Upgrades let the
     /// probe alone take an undefended base at t=4121); every other player
     /// always may. Its raids wait for wave one too ([`Sim::depth_raid`]).
+    ///
+    /// Task 21: the attacker is paced, one level per track for each spawned
+    /// wave ([`ALIEN_UPGRADES_PER_WAVE`]), so wave one's rule above is the
+    /// first step of this one.
     #[must_use]
-    pub(super) fn depth_ai_may_upgrade(&self, player: PlayerId) -> bool {
-        self.waves
-            .is_none_or(|cfg| cfg.attacker != player || self.wave_count > 0)
+    pub(super) fn depth_ai_may_upgrade(&self, player: PlayerId, track: u8) -> bool {
+        self.waves.is_none_or(|cfg| {
+            let level = self.upgrade_levels(player)[usize::from(track).min(2)];
+            cfg.attacker != player
+                || u32::from(level) < self.wave_count.saturating_mul(ALIEN_UPGRADES_PER_WAVE)
+        })
+    }
+
+    /// Task 21: the supply the Earthfront AI fills with its home army: 10 at
+    /// era 0 and 24 from era 1 (the classic targets), except that under
+    /// depth the waves' attacker stays at [`ALIEN_ARMY_TARGET`].
+    #[must_use]
+    pub(super) fn earthfront_army_target(&self, player: PlayerId) -> u32 {
+        let classic = if self.player_era(player) == 0 { 10 } else { 24 };
+        if self.is_depth() && self.waves.is_some_and(|cfg| cfg.attacker == player) {
+            classic.min(ALIEN_ARMY_TARGET)
+        } else {
+            classic
+        }
     }
 
     /// Task 19: spawned waves with no living unit left (0 without depth).
@@ -586,6 +619,33 @@ impl Sim {
         } else {
             0
         }
+    }
+
+    /// Task 21: whether the Core Node (the waves' attacker's Command Center)
+    /// ignores damage: under depth, while any of the attacker's relays is
+    /// operational or fewer than [`CORE_EXPOSED_WAVES`] waves have spawned.
+    /// Always false without depth (Survival and classic Kestrel). Derived
+    /// from hashed state only, so it adds nothing to the hash.
+    #[must_use]
+    pub fn core_node_shielded(&self) -> bool {
+        let Some(cfg) = self.waves else {
+            return false;
+        };
+        self.is_depth()
+            && (self.alien_relay_count(cfg.attacker, true) > 0
+                || self.wave_count < CORE_EXPOSED_WAVES)
+    }
+
+    /// Task 21: whether a hit on entity `j` is ignored by the Core Node
+    /// shield, given `shielded` = [`Sim::core_node_shielded`] read once per
+    /// pass: `j` is a Command Center of the waves' attacker.
+    #[must_use]
+    pub(super) fn depth_core_immune(&self, shielded: bool, j: usize) -> bool {
+        shielded
+            && self.waves.is_some_and(|cfg| {
+                let e = &self.entities[j];
+                e.owner == cfg.attacker && e.kind == Kind::Building(BuildingKind::CommandCenter)
+            })
     }
 
     /// Task 19: recounts [`DepthGlobal::waves_cleared`] after the tick's
@@ -6556,5 +6616,208 @@ mod tests {
         assert!((0..3).all(|w| !has(w, UnitKind::Helicopter)), "{waves:?}");
         assert!(has(3, UnitKind::Helicopter), "{waves:?}");
         assert!(has(5, UnitKind::Capital), "{waves:?}");
+    }
+
+    // ---- Task 21: the Core Node shield.
+
+    /// Task 21: the waves' attacker's Command Center (the Core Node).
+    fn core_of(s: &Sim) -> usize {
+        (0..s.entities.len())
+            .find(|&i| {
+                s.entities[i].alive
+                    && s.entities[i].owner == P1
+                    && s.entities[i].kind == Kind::Building(BuildingKind::CommandCenter)
+            })
+            .unwrap()
+    }
+
+    /// Task 21: clears the alien's units and turrets (its plants keep the
+    /// relays powered), kills its relays unless `keep_relays`, sets the
+    /// spawned wave count to `waves`, parks four human Tanks beside the Core
+    /// Node with it as their forced target (depth only; with depth off they
+    /// fire at it as the only thing in range) and runs 300 ticks. Returns the
+    /// Core Node's (HP before, HP after, shielded before).
+    fn fire_on_the_core(mut s: Sim, keep_relays: bool, waves: u32) -> (Fixed, Fixed, bool) {
+        use super::super::earthfront::ObjectiveRole;
+        let core = core_of(&s);
+        for e in &mut s.entities {
+            let relay = e.objective_role == ObjectiveRole::AlienRelay;
+            let doomed = matches!(e.kind, Kind::Unit(_))
+                || matches!(
+                    e.kind,
+                    Kind::Building(BuildingKind::GunTurret | BuildingKind::AaTurret)
+                )
+                || (relay && !keep_relays);
+            if e.alive && e.owner == P1 && doomed {
+                e.hp = Fixed::ZERO;
+            }
+        }
+        s.step(&[]);
+        s.wave_count = waves;
+        let at = s.entities[core].pos;
+        let tanks: Vec<EntityId> = (0..4)
+            .map(|k| {
+                s.add_unit(
+                    P0,
+                    UnitKind::Tank,
+                    at + Vec2::new(Fixed::from_int(-2), Fixed::from_ratio(k - 2, 2)),
+                )
+            })
+            .collect();
+        let orders: Vec<Command> = tanks
+            .iter()
+            .map(|&unit| Command::AttackTarget {
+                owner: P0,
+                unit,
+                target: EntityId(u32::try_from(core).unwrap()),
+            })
+            .collect();
+        let before = s.entities[core].hp;
+        let shielded = s.core_node_shielded();
+        s.step(&orders);
+        for _ in 0..300 {
+            s.step(&[]);
+        }
+        (before, s.entities[core].hp, shielded)
+    }
+
+    #[test]
+    fn the_core_node_takes_no_damage_while_a_relay_stands() {
+        // Both relays up, no wave yet; both relays up after wave 6; no relay
+        // but only five waves: every case keeps the Core Node whole.
+        for (keep, waves) in [(true, 0), (true, 6), (false, 5)] {
+            let (before, after, shielded) = fire_on_the_core(kestrel_reach(3), keep, waves);
+            assert!(shielded, "relays {keep} waves {waves}");
+            assert_eq!(before, after, "relays {keep} waves {waves}");
+        }
+        assert!(kestrel_reach(3).core_node_shielded());
+    }
+
+    #[test]
+    fn the_core_node_is_damageable_once_both_relays_fall_and_wave_six_spawned() {
+        let (before, after, shielded) = fire_on_the_core(kestrel_reach(3), false, 6);
+        assert!(!shielded);
+        assert!(after < before, "{before:?} -> {after:?}");
+    }
+
+    /// Task 21: a Barrage on the Core Node (alien units and turrets cleared,
+    /// relays killed unless `keep_relays`, `waves` spawned): its HP before
+    /// and after.
+    fn barrage_the_core(keep_relays: bool, waves: u32) -> (Fixed, Fixed) {
+        use super::super::earthfront::ObjectiveRole;
+        let mut s = kestrel_reach(3);
+        let core = core_of(&s);
+        for e in &mut s.entities {
+            let relay = e.objective_role == ObjectiveRole::AlienRelay;
+            if e.alive
+                && e.owner == P1
+                && (matches!(e.kind, Kind::Unit(_)) || (relay && !keep_relays))
+            {
+                e.hp = Fixed::ZERO;
+            }
+        }
+        s.step(&[]);
+        s.wave_count = waves;
+        s.civs[0].researched_techs.set(6);
+        let at = s.entities[core].pos;
+        let tank = s.add_unit(
+            P0,
+            UnitKind::Tank,
+            at + Vec2::new(Fixed::from_int(-4), Fixed::ZERO),
+        );
+        s.entities[tank.0 as usize].ammunition = 0;
+        let before = s.entities[core].hp;
+        s.step(&[cast(P0, tank, at)]);
+        assert!(
+            s.entities[tank.0 as usize].ability_cd > 0,
+            "the volley was cast"
+        );
+        (before, s.entities[core].hp)
+    }
+
+    #[test]
+    fn a_barrage_spares_the_shielded_core_node_only() {
+        let (before, after) = barrage_the_core(true, 6);
+        assert_eq!(before, after);
+        let (before, after) = barrage_the_core(false, 6);
+        assert!(after < before, "{before:?} -> {after:?}");
+    }
+
+    /// Task 21: under depth the waves' attacker keeps a ten-supply garrison
+    /// in every era (the classic target grows to 24 at era 1); the human
+    /// side and every non-depth match keep the classic targets.
+    #[test]
+    fn the_alien_garrison_stays_at_ten_supply_in_era_one() {
+        let mut s = kestrel_reach(3);
+        assert_eq!(s.earthfront_army_target(P1), 10);
+        assert_eq!(s.earthfront_army_target(P0), 10);
+        s.civs[0].era = 1;
+        s.civs[1].era = 1;
+        assert_eq!(s.earthfront_army_target(P1), super::ALIEN_ARMY_TARGET);
+        assert_eq!(s.earthfront_army_target(P0), 24);
+        for build in [kestrel_reach_classic, survival] {
+            let mut other = build(3);
+            other.civs[1].era = 1;
+            assert_eq!(other.earthfront_army_target(P1), 24);
+        }
+    }
+
+    /// Task 21: the alien buys at most one Upgrades level per track for each
+    /// spawned wave (none before wave one, as in Task 20), so its waves
+    /// harden with the match instead of maxing out at era 1. The human side
+    /// is not paced.
+    #[test]
+    fn the_alien_buys_at_most_one_upgrade_level_per_track_per_wave() {
+        let mut s = kestrel_reach(3);
+        let cc = (0..s.entities.len())
+            .find(|&i| {
+                s.entities[i].owner == P0
+                    && s.entities[i].kind == Kind::Building(BuildingKind::CommandCenter)
+            })
+            .unwrap();
+        // A rich alien, so money never limits it.
+        s.grant_money(P1, Fixed::from_int(50_000));
+        let mut peak = [0_u16; 3];
+        while s.waves_survived() < 3 && s.tick() < 20_000 {
+            s.entities[cc].hp = Fixed::from_int(1_000_000);
+            let c = Scenario::KestrelReach.host_commands(&s);
+            s.step(&c);
+            let levels = s.upgrade_levels(P1);
+            for t in 0..3 {
+                assert!(
+                    u32::from(levels[t]) <= s.waves_survived(),
+                    "t={} levels {levels:?} after {} waves",
+                    s.tick(),
+                    s.waves_survived()
+                );
+                peak[t] = peak[t].max(levels[t]);
+            }
+            if s.waves_survived() == 2 {
+                assert!(s.depth_ai_may_upgrade(P1, 0) == (levels[0] < 2));
+            }
+        }
+        assert_eq!(s.waves_survived(), 3);
+        assert!(
+            peak.iter().all(|&l| l >= 2),
+            "the paced alien still buys: {peak:?}"
+        );
+        assert!(
+            s.depth_ai_may_upgrade(P0, 0),
+            "the human side is never paced"
+        );
+    }
+
+    #[test]
+    fn survival_and_classic_core_nodes_are_never_shielded() {
+        for (build, seed) in [(survival as fn(u64) -> Sim, 7), (kestrel_reach_classic, 3)] {
+            let s = build(seed);
+            assert!(!s.core_node_shielded());
+            let (before, after, shielded) = fire_on_the_core(s, true, 0);
+            assert!(!shielded);
+            assert!(after < before, "{before:?} -> {after:?}");
+        }
+        let mut lane = lane_defense(3);
+        lane.step(&[]);
+        assert!(!lane.core_node_shielded());
     }
 }

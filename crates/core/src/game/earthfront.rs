@@ -1118,7 +1118,7 @@ impl Sim {
                 budget = budget - price;
             }
         }
-        let army_target: u32 = if self.player_era(player) == 0 { 10 } else { 24 };
+        let army_target = self.earthfront_army_target(player);
         let mut slots = army_target.saturating_sub(self.supply_used(player));
         // Kestrel depth (Task 19): the alien's era-0 raid, if one is due.
         let raid = self.depth_raid(player, base);
@@ -1241,7 +1241,7 @@ impl Sim {
         // attacker waits for wave one (`depth_ai_may_upgrade`).
         if self.is_depth() {
             let cheapest = (0..super::depth::UPGRADE_TRACKS)
-                .filter(|_| self.depth_ai_may_upgrade(player))
+                .filter(|&t| self.depth_ai_may_upgrade(player, t))
                 .filter_map(|t| self.upgrade_cost(player, t).map(|c| (c.to_bits(), t)))
                 .min();
             if let Some((bits, track)) = cheapest {

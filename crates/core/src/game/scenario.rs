@@ -2362,7 +2362,32 @@ mod tests {
     ///   (`difficulty_outcome_table`): Easy falls at 5843 / is overrun at
     ///   19028 after 3 waves; Hard falls at 4006 / is overrun at 13141 after
     ///   3 waves.
+    /// - Task 21 (the Core Node is shielded until both relays fall and wave 6
+    ///   has spawned; the alien keeps a 10-supply garrison in every era and
+    ///   buys at most one Upgrades level per track per spawned wave): the
+    ///   undefended base falls at t=4915 -> 4951, after wave one. The
+    ///   playtest AI now wins, at t=32857 after 6 waves (overrun at t=17127
+    ///   after 3 before): it takes the relays at t=13445 and t=17182, holds
+    ///   waves 3 to 6 and destroys the Core Node 1356 ticks after wave 6
+    ///   exposes it at t=31501. Seed 5 gives the same ticks: its seeded
+    ///   doctrines change only the targets of waves 1 and 2, and from wave 3
+    ///   on the defender's tanks make every wave the anti-armour override.
+    ///   The shield alone leaves the playtest overrun at t=17127; the
+    ///   garrison rule alone leaves it overrun at t=16552 after 3 waves; the
+    ///   pacing alone wins Normal at t=33798 but Easy is then overrun at
+    ///   t=19743 after 3 waves (the Task 21 report has the knob table).
+    ///
+    /// History of this test's numbers (undefended falls / playtest result,
+    /// seed 3, Normal): 4959 / 13622 win after 2 waves (Task 10), 4980 /
+    /// 17323 win after 3 (Task 11), 4975 / 12867 win after 2 (Task 12), 4995
+    /// / 12868 win after 2 (Tasks 13 to 16), 4930 / 18067 win after 3 (Task
+    /// 17), 4930 / 16792 win after 3 (Task 18), 4121 / 13048 win after 2
+    /// (Task 19), 4915 / overrun at 17127 after 3 (Task 20), 4951 / 32857 win
+    /// after 6 (Task 21, inside the 27,000 to 45,000 tick window).
     const KESTREL_DEFENDED_WAVES: u32 = 3;
+
+    /// Task 21: the 15 to 25 minute match window, in ticks at 30 per second.
+    const MATCH_WINDOW: core::ops::RangeInclusive<u64> = 27_000..=45_000;
 
     #[test]
     fn kestrel_reach_overruns_an_undefended_base_and_holds_with_the_playtest_defence() {
@@ -2371,8 +2396,9 @@ mod tests {
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
         // so there is no founding step. Hosted as the shell hosts it (Task 19:
-        // the alien AI is awake from tick 0). Measured: it falls at t=4915,
-        // after wave one (4121 before wave one at Task 19, when the alien
+        // the alien AI is awake from tick 0). Measured: it falls at t=4951,
+        // after wave one (4915 at Task 20, before the alien's Upgrades were
+        // paced by waves in Task 21; 4121 before wave one at Task 19, when the alien
         // bought Upgrades from tick 0; 4930 before Task 19; unchanged by the Task 18
         // economy; 4995 before abilities and Upgrades, Task 17; 4975
         // at Task 12; 4980 before depth separation, Task 12; 4959 before
@@ -2400,7 +2426,8 @@ mod tests {
         // against the waves; the beachhead AI acts once the first wave has spawned
         // and the scenario script runs the probe, mirroring the shell. The defence
         // must not be overrun before the third wave and must outlast the
-        // undefended base.
+        // undefended base. Task 21: it resolves inside the 15 to 25 minute
+        // window (`MATCH_WINDOW`), measured at t=32857, a human win.
         let mut s = kestrel_reach(3);
         let mut resolved_at = None;
         for t in 0..140_000u64 {
@@ -2421,6 +2448,105 @@ mod tests {
             resolved_at.is_none_or(|t| t > undefended_fell_at),
             "the playtest defence must outlast an undefended base"
         );
+        assert!(
+            s.winner().is_some() && MATCH_WINDOW.contains(&s.tick()),
+            "the playtest match must end inside the window: winner {:?} at t={}",
+            s.winner(),
+            s.tick()
+        );
+    }
+
+    /// Task 21: the playtest AI (the human side) against the alien on Normal
+    /// resolves inside the 15 to 25 minute window, 27,000 to 45,000 ticks,
+    /// on seeds 3 and 5. The Core Node shield means the human can only win
+    /// after both relays fall and wave 6 has spawned (tick 31,501 on Normal).
+    #[test]
+    fn playtest_match_ends_inside_15_to_25_minutes() {
+        for seed in [3, 5] {
+            let mut s = kestrel_reach(seed);
+            for _ in 0..60_000u64 {
+                let mut cmds = s.ai_commands(PlayerId(0));
+                cmds.extend(kestrel_shell_commands(&s));
+                s.step(&cmds);
+                if s.winner().is_some() {
+                    break;
+                }
+            }
+            std::eprintln!(
+                "seed {seed}: winner {:?} at t={} after {} waves",
+                s.winner(),
+                s.tick(),
+                s.waves_survived()
+            );
+            assert!(s.winner().is_some(), "seed {seed} never resolved");
+            assert!(
+                MATCH_WINDOW.contains(&s.tick()),
+                "seed {seed}: resolved at t={} (winner {:?})",
+                s.tick(),
+                s.winner()
+            );
+        }
+    }
+
+    /// Task 21: the match-length table for the report: per seed (3, 5) and
+    /// preset, the undefended fall and the defended playtest's waves, relay
+    /// losses, the Core Node's exposure and the result.
+    #[test]
+    #[ignore = "table: cargo test --release -p rts-core --offline depth_match_length_table -- --ignored --nocapture"]
+    fn depth_match_length_table() {
+        for seed in [3, 5] {
+            for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                let opts = MatchOptions { difficulty: d };
+                let mut s = kestrel_reach_with(seed, opts);
+                while s.winner().is_none() && s.tick() < 60_000 {
+                    let c = Scenario::KestrelReach.host_commands(&s);
+                    s.step(&c);
+                }
+                let undefended = (s.winner(), s.tick(), s.waves_survived());
+                let mut s = kestrel_reach_with(seed, opts);
+                let mut last = 0;
+                let mut relays = s.alien_relay_count(PlayerId(1), false);
+                let mut events = Vec::new();
+                let mut exposed = None;
+                while s.winner().is_none() && s.tick() < 60_000 {
+                    let mut c = s.ai_commands(PlayerId(0));
+                    c.extend(Scenario::KestrelReach.host_commands(&s));
+                    s.step(&c);
+                    if s.waves_survived() != last {
+                        last = s.waves_survived();
+                        events.push(alloc::format!(
+                            "w{last}@{} ({}) m{} u{}/{}",
+                            s.tick(),
+                            s.incoming_doctrine(),
+                            s.money(PlayerId(0)).to_int_floor(),
+                            s.unit_count(PlayerId(0)),
+                            s.unit_count(PlayerId(1)),
+                        ));
+                    }
+                    let r = s.alien_relay_count(PlayerId(1), false);
+                    if r != relays {
+                        relays = r;
+                        events.push(alloc::format!("relay{r}@{}", s.tick()));
+                    }
+                    if exposed.is_none() && !s.core_node_shielded() {
+                        exposed = Some(s.tick());
+                    }
+                }
+                std::eprintln!(
+                    "seed {seed} {d:?}: undefended {:?} at {} after {} | defended {:?} at {} \
+                     after {} waves, exposed {exposed:?}, up P0 {:?} P1 {:?} | {}",
+                    undefended.0,
+                    undefended.1,
+                    undefended.2,
+                    s.winner(),
+                    s.tick(),
+                    s.waves_survived(),
+                    s.upgrade_levels(PlayerId(0)),
+                    s.upgrade_levels(PlayerId(1)),
+                    events.join(" "),
+                );
+            }
+        }
     }
 
     #[test]
@@ -2588,8 +2714,15 @@ mod tests {
     /// Task 20: on every preset the undefended base (hosted as the shell hosts
     /// it) falls, and the playtest AI holds its floor (3 waves on Easy and
     /// Normal, 2 on Hard) or wins. Measured per preset in the Task 20 report.
+    ///
+    /// Task 21: the presets keep their order, Easy never worse for the
+    /// playtest than Normal and Normal never worse than Hard (a win ranks
+    /// above any number of waves held). Measured: Easy wins at t=39366 and
+    /// Normal at t=32857, both after 6 waves; Hard is overrun at t=17738
+    /// after 4.
     #[test]
     fn each_difficulty_resolves_and_the_playtest_ai_survives_its_floor() {
+        let mut ranks = Vec::new();
         for (d, floor) in [
             (Difficulty::Easy, 3),
             (Difficulty::Normal, 3),
@@ -2620,7 +2753,16 @@ mod tests {
                 "{d:?} overrun after {}",
                 s.waves_survived()
             );
+            ranks.push(if s.winner() == Some(PlayerId(0)) {
+                u32::MAX
+            } else {
+                s.waves_survived()
+            });
         }
+        assert!(
+            ranks[0] >= ranks[1] && ranks[1] >= ranks[2],
+            "Easy, Normal, Hard out of order: {ranks:?}"
+        );
     }
 
     /// Task 20: per preset, the undefended fall and the defended playtest

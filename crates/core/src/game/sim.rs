@@ -3348,8 +3348,16 @@ impl Sim {
                 // blast (buildings included — it is a siege tool). Kills credit
                 // the caster's veterancy, mirroring run_combat.
                 let mut kills = 0u32;
-                for e in &mut self.entities {
-                    if !e.alive || e.owner == owner {
+                // Kestrel depth (Task 21): the shielded Core Node is spared.
+                let spared: Vec<usize> = if self.core_node_shielded() {
+                    (0..self.entities.len())
+                        .filter(|&j| self.depth_core_immune(true, j))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for (j, e) in self.entities.iter_mut().enumerate() {
+                    if !e.alive || e.owner == owner || spared.contains(&j) {
                         continue;
                     }
                     if (e.pos - target).length_squared() > radius_sq {
@@ -4740,9 +4748,17 @@ impl Sim {
         // Kestrel depth: (victim, attacker) in damage order, for the
         // under-attack response once every hit has landed.
         let mut hits: Vec<(usize, usize)> = Vec::new();
+        // Kestrel depth (Task 21): the Core Node shield, read once per pass.
+        let core_shielded = depth && self.core_node_shielded();
         for (j, attacker, dmg, pierces) in damage {
             if depth {
                 hits.push((j, attacker));
+                if self.depth_core_immune(core_shielded, j) {
+                    // The hit still draws the defenders' response, but the
+                    // shielded Core Node takes no damage.
+                    self.entities[j].last_combat_tick = tick;
+                    continue;
+                }
             }
             let owner = self.entities[j].owner;
             let mit = armor[usize::from(owner.0)] + perk_mit[usize::from(owner.0)];
