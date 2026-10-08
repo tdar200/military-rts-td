@@ -20,8 +20,9 @@ func world_blocked() -> bool:
 	return false
 func set_tab(_tab: String) -> void:
 	pass
-func notify(_title: String, _body: String, _color: Color) -> void:
-	pass
+var notes: Array = []
+func notify(title: String, _body: String, _color: Color) -> void:
+	notes.append(title)
 func structure_attacked(_id: int, _kind: String, _pos: Vector3, _cell: Array) -> bool:
 	return true
 class Log:
@@ -364,3 +365,88 @@ func test_queued_routes_draw_pooled_markers_for_our_selection_only(t) -> void:
 	scene._update_queue_markers()
 	t.eq(scene.queue_drawn, 0, "nothing drawn off Kestrel")
 	_done(scene)
+
+
+# ------------------------------------------------------------------ Task 21: the Core Node's shield
+
+func _core_scene(shielded := true) -> Node3D:
+	var scene := _scene(true)
+	var core := _unit(scene, 900, "CommandCenter", 1, Vector2i(37, 8))
+	core["category"] = "building"
+	_place(scene, [core, _unit(scene, 750, "Infantry", 0, Vector2i(30, 9), "aggressive"), _unit(scene, 910, "CommandCenter", 0, Vector2i(8, 12))])
+	scene.bridge_nodes[910].set_meta("category", "building")
+	scene.bridge_snapshot = _snap()
+	scene.bridge_snapshot["depth"]["core_shielded"] = shielded
+	return scene
+
+
+func test_a_shield_ring_stands_on_the_seen_shielded_core_node_only(t) -> void:
+	var scene := _core_scene()
+	var core: Node3D = scene.bridge_nodes[900]
+	scene._update_core_shield(0.1)
+	var ring: MeshInstance3D = scene.core_shield_ring
+	t.ok(ring != null and ring.visible, "shielded and in sight: the ring stands")
+	t.ok(Vector2(ring.position.x - core.position.x, ring.position.z - core.position.z).length() < 2.0, "on the Core Node")
+	t.eq(ring.cast_shadow, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "no shadow")
+	scene._update_core_shield(0.1)
+	t.eq(scene.core_shield_ring, ring, "one ring, reused every frame")
+	t.eq(scene.get_children().filter(func(n): return n.name == "CoreShieldRing").size(), 1, "never a second one in the scene")
+	core.set_meta("remembered", true)
+	scene._update_core_shield(0.1)
+	t.ok(not ring.visible, "a remembered Core Node under the fog: no ring (its shield is not seen)")
+	core.set_meta("remembered", false)
+	scene.bridge_nodes.erase(900)
+	scene._update_core_shield(0.1)
+	t.ok(not ring.visible, "out of the snapshot (fogged, never seen): no ring")
+	scene.bridge_nodes[900] = core
+	scene._update_core_shield(0.1)
+	t.ok(ring.visible, "back in sight")
+	scene.bridge_snapshot["depth"]["core_shielded"] = false
+	scene._update_core_shield(0.1)
+	t.ok(not ring.visible, "the shield is down: no ring")
+	scene.bridge_snapshot.erase("depth")
+	scene._update_core_shield(0.1)
+	t.ok(not ring.visible, "no depth block: no ring")
+	_done(scene)
+
+
+func test_the_shield_ring_freezes_on_pause_and_never_shows_on_survival(t) -> void:
+	var scene := _core_scene()
+	scene._update_core_shield(0.1)
+	var ring: MeshInstance3D = scene.core_shield_ring
+	var size := ring.scale.x
+	scene._update_core_shield(0.5)
+	t.ok(absf(ring.scale.x - size) > 0.001, "it pulses while the sim runs")
+	t.eq(ring.rotation, Vector3.ZERO, "never turned: the ellipse stays aligned with the footprint")
+	scene.sim_paused = true
+	var held := ring.transform
+	scene.bridge_snapshot["depth"]["core_shielded"] = false
+	scene._update_core_shield(0.5)
+	t.ok(ring.visible, "paused: frozen as it stands, whatever the next snapshot says")
+	t.eq(ring.transform, held, "and not pulsing")
+	scene.sim_paused = false
+	scene._update_core_shield(0.1)
+	t.ok(not ring.visible, "unpaused: the shield is down")
+	scene.bridge_snapshot["depth"]["core_shielded"] = true
+	scene.world_art_on = false
+	scene._update_core_shield(0.1)
+	t.ok(not ring.visible, "Survival never draws it")
+	var src := (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
+	var process := src.substr(src.find("func _process(delta: float) -> void:"))
+	process = process.substr(0, process.find("\nfunc ", 10))
+	t.ok(process.contains("_update_core_shield(delta)"), "the frame loop runs it")
+	_done(scene)
+
+
+func test_targeting_the_shielded_core_node_warns_and_still_orders(t) -> void:
+	var scene := _core_scene()
+	scene._set_selection([scene.bridge_nodes[750]])
+	t.ok(scene._order_target(scene.bridge_nodes[900]), "the order is sent: the units close in for when it falls")
+	t.eq(_lines(), ["target,750,900"], "the focus line as ever")
+	t.eq(scene.ui.notes, ["CORE NODE SHIELDED"], "a toast says why the hits will do nothing")
+	scene.bridge_snapshot["depth"]["core_shielded"] = false
+	t.ok(scene._order_target(scene.bridge_nodes[900]), "exposed")
+	t.eq(scene.ui.notes.size(), 1, "no warning once the shield is down")
+	_lines()
+	_done(scene)
+

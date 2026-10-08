@@ -10,6 +10,7 @@ const AMMO_CAPACITY := 90.0
 const HUMAN := 0
 const MAX_MARKS := 24
 const VmGameplay = preload("res://scripts/ui/vm_gameplay.gd")
+const KestrelObjectives = preload("res://scripts/world/kestrel_objectives.gd")
 
 var g
 var engaged := false  # latched: once the alien core has been reached or hurt, the assault layout stays available
@@ -77,7 +78,7 @@ func vm(now: float, alerts: Array, tabs: Array, selection: Dictionary, attack_ar
 	var core := core_node()
 	var out := {
 		"as_top": _top(core),
-		"as_objective": {"cap": "Objective", "tag": "Operation Dawnshield", "title": "Destroy the Core Node", "body": "Ends the Earth operation. Relay destruction cuts reinforcements but is optional."},
+		"as_objective": {"cap": "Objective", "tag": "Operation Dawnshield", "title": "Destroy the Core Node", "body": _objective_body()},
 		"as_bottom": {"layers": [], "slot_fill": "#1f2219", "alerts": _alerts(now, alerts)},
 		"as_selection": _selection(selection),
 		"deck": {"body": {"kind": "assault_orders", "tabs": tabs, "orders": _orders(attack_armed), "hint": "Right-click a target while Attack-move is armed."}},
@@ -85,7 +86,7 @@ func vm(now: float, alerts: Array, tabs: Array, selection: Dictionary, attack_ar
 	}
 	if core != null:
 		var max_hp := maxf(1.0, float(core.get_meta("max_hp", 1.0)))
-		out["as_boss"] = {"name": "Alien Core Node", "hp_text": "%s / %s HP" % [_num(float(core.get_meta("hp", 0.0))), _num(max_hp)], "ratio": _ratio(core)}
+		out["as_boss"] = {"name": "Alien Core Node (shielded)" if _shielded() else "Alien Core Node", "hp_text": "%s / %s HP" % [_num(float(core.get_meta("hp", 0.0))), _num(max_hp)], "ratio": _ratio(core)}
 	var relays := _relays()
 	if not relays.is_empty():
 		out["as_relays"] = relays
@@ -93,6 +94,22 @@ func vm(now: float, alerts: Array, tabs: Array, selection: Dictionary, attack_ar
 	if not edge.is_empty():
 		out["as_edge"] = edge
 	return out
+
+
+## The bridge's depth.core_shielded (kestrel-depth Task 21); false without a depth block.
+func _shielded() -> bool:
+	var snap = g.get("bridge_snapshot")
+	return snap is Dictionary and KestrelObjectives.core_shielded(snap)
+
+
+## The objective card's body: classic Kestrel keeps its line; under depth it names the shield gate, or that it is down.
+func _objective_body() -> String:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary and KestrelObjectives.relays_required(snap)):
+		return "Ends the Earth operation. Relay destruction cuts reinforcements but is optional."
+	if KestrelObjectives.core_shielded(snap):
+		return "Shielded until both relays fall and the sixth expedition has spawned."
+	return "Shield down. Destroying it ends the Earth operation."
 
 
 func _top(core: Node3D) -> Dictionary:

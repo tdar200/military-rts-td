@@ -711,11 +711,15 @@ func _kestrel_card() -> Dictionary:
 		elif stage == items.size() + 1:
 			state = "active"
 		items.append({"t": str(o["detail"]) if state == "active" else str(o["title"]), "state": state})
-	if g.bridge_relays > 0 and _fogged():  # fog of war: how many still stand, never how many are powered
-		items.append({"t": "Optional: destroy alien relays (%d left)" % g.bridge_relays, "state": "done" if complete else ("active" if stage >= 4 else "todo")})
-	elif g.bridge_relays > 0:
-		items.append({"t": "Optional: disable alien relays (%d active)" % g.bridge_active_relays, "state": "done" if g.bridge_active_relays == 0 or complete else ("active" if stage >= 4 else "todo")})
 	var snap = g.get("bridge_snapshot")
+	# Under depth the relays gate the Core Node's shield (kestrel-depth Task 21), so the line drops "Optional".
+	var required := snap is Dictionary and KestrelObjectives.relays_required(snap)
+	if g.bridge_relays > 0 and _fogged():  # fog of war: how many still stand, never how many are powered
+		var standing := "Destroy alien relays (%d left)" if required else "Optional: destroy alien relays (%d left)"
+		items.append({"t": standing % g.bridge_relays, "state": "done" if complete else ("active" if stage >= 4 else "todo")})
+	elif g.bridge_relays > 0:
+		var powered := "Disable alien relays (%d active)" if required else "Optional: disable alien relays (%d active)"
+		items.append({"t": powered % g.bridge_active_relays, "state": "done" if g.bridge_active_relays == 0 or complete else ("active" if stage >= 4 else "todo")})
 	var cap := str(snap.get("map_name", "")) if snap is Dictionary else ""
 	return {"cap": cap if cap != "" else "Kestrel Reach", "items": items}
 

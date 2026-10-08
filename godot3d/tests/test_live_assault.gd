@@ -65,6 +65,24 @@ func test_layout_follows_the_orders_tab_only_once_engaged(t) -> void:
 	t.ok(vm.has("chips") and not vm.has("as_top"), "the Units tab keeps the main layout")
 
 
+func test_the_assault_card_names_the_core_shield_under_depth(t) -> void:
+	var g := _game()
+	var a: Array = _live(g)
+	var vm: Dictionary = a[1].vm(0.0, [], [], {}, false)
+	t.eq(vm["as_objective"]["body"], "Ends the Earth operation. Relay destruction cuts reinforcements but is optional.", "no depth block: the classic card")
+	t.eq(vm["as_boss"]["name"], "Alien Core Node", "classic boss name")
+	g.bridge_snapshot = {"depth": {"core_shielded": true}}
+	vm = a[1].vm(0.0, [], [], {}, false)
+	t.eq(vm["as_objective"]["body"], "Shielded until both relays fall and the sixth expedition has spawned.", "depth, shielded: the gate")
+	t.eq(vm["as_boss"]["name"], "Alien Core Node (shielded)", "the boss bar says the hits do nothing yet")
+	g.bridge_snapshot = {"depth": {"core_shielded": false}}
+	vm = a[1].vm(0.0, [], [], {}, false)
+	t.eq(vm["as_objective"]["body"], "Shield down. Destroying it ends the Earth operation.", "depth, exposed")
+	t.eq(vm["as_boss"]["name"], "Alien Core Node", "exposed boss name")
+	for n in g.bridge_nodes.values():
+		n.free()
+
+
 func test_numbers_and_missing_pieces(t) -> void:
 	var g := _game()
 	g.bridge_nodes[2].set_meta("hp", 4800.0)

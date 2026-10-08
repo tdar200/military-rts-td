@@ -190,7 +190,7 @@ func test_the_ford_is_held_after_a_quiet_spell_with_the_base_standing(t) -> void
 	t.eq(_done(rs[5]), [true, true, true, true, false], "quiet for QUIET_TICKS with the base alive: the ford is held")
 	t.eq(rs[5]["stage"], 5, "on to the Core Node")
 	t.eq(rs[5]["objectives"][3]["detail"], "Wave one held at Wyllow Ford", "the done ford line")
-	t.eq(rs[5]["detail"], "Destroy the Core Node at (37, 8)", "the core node's cell from the snapshot")
+	t.eq(rs[5]["detail"], KO.CORE_SHIELDED_DETAIL, "the fixture's Core Node is still shielded (depth.core_shielded)")
 
 
 func test_the_ford_needs_time_for_the_wave_to_arrive(t) -> void:
@@ -237,10 +237,13 @@ func test_surviving_wave_one_points_at_the_core_node(t) -> void:
 	t.eq(_done(r), [true, true, true, true, false], "the ford is held")
 	t.eq(r["stage"], 5, "last objective")
 	t.eq(r["objectives"][3]["detail"], "Wave one held at Wyllow Ford", "the done ford line")
-	t.eq(r["detail"], "Destroy the Core Node at (37, 8)", "the core node's cell from the snapshot")
-	var snap := _squad(_hauling(_snap()))
-	snap["tick"] = 5200
-	snap["waves_survived"] = 1
+	t.eq(r["detail"], "Destroy both relays and outlast the sixth expedition to expose the Core Node", "shielded: the gate, not the cell")
+	var exposed := _squad(_hauling(_snap()))
+	exposed["tick"] = 5200
+	exposed["waves_survived"] = 1
+	exposed["depth"]["core_shielded"] = false
+	t.eq(KO.evaluate(exposed, r)["detail"], "Destroy the Core Node at (37, 8)", "exposed: the core node's cell from the snapshot")
+	var snap := exposed.duplicate(true)
 	snap.erase("core_node")
 	t.eq(KO.evaluate(snap, r)["detail"], "Destroy the alien Core Node", "no cell in the snapshot, none invented")
 	var won := _squad(_hauling(_snap()))
@@ -248,6 +251,35 @@ func test_surviving_wave_one_points_at_the_core_node(t) -> void:
 	won["waves_survived"] = 1
 	won["winner"] = HUMAN
 	t.ok(KO.evaluate(won, r)["objectives"][4]["done"], "Break the Core Node: still done on a human win")
+
+
+func test_the_core_shield_reads_the_depth_block(t) -> void:
+	var snap := _snap()
+	t.ok(KO.core_shielded(snap), "the fixture: both relays stand at tick 0, so the Core Node is shielded")
+	snap["depth"]["core_shielded"] = false
+	t.ok(not KO.core_shielded(snap), "the bridge says exposed")
+	snap.erase("depth")
+	t.ok(not KO.core_shielded(snap), "no depth block (Survival, classic Kestrel): never shielded")
+	t.ok(not KO.core_shielded({}), "an empty snapshot is safe")
+	t.ok(not KO.core_shielded({"depth": "bad"}), "a malformed depth block is not a shield")
+
+
+func test_the_relays_are_required_only_under_depth(t) -> void:
+	var snap := _snap()
+	t.ok(KO.relays_required(snap), "the depth block carries core_shielded: the relays gate the Core Node")
+	snap["depth"]["core_shielded"] = false
+	t.ok(KO.relays_required(snap), "still a depth match once the shield is down")
+	snap.erase("depth")
+	t.ok(not KO.relays_required(snap), "no depth block: optional as before")
+	t.ok(not KO.relays_required({}), "an empty snapshot is safe")
+
+
+func test_a_won_match_names_the_core_node_destroyed_even_if_the_flag_lags(t) -> void:
+	var won := _squad(_hauling(_snap()))
+	won["tick"] = 33000
+	won["waves_survived"] = 6
+	won["winner"] = HUMAN
+	t.eq(KO.evaluate(won)["objectives"][4]["detail"], "Core Node destroyed", "done wins over the shield text")
 
 
 # ------------------------------------------------------------------ evaluator: the edge cases
@@ -346,11 +378,17 @@ func test_the_kestrel_card_shows_the_kestrel_stage_text(t) -> void:
 	var texts: Array = items.map(func(i): return i["t"])
 	t.eq(texts.slice(0, 5), ["Power the base", "Harvester heading for the ore beside the base", "Raise a squad", "Hold the ford", "Break the Core Node"], "titles, and the active objective's detail")
 	t.eq(items.slice(0, 5).map(func(i): return i["state"]), ["done", "active", "todo", "todo", "todo"], "states")
-	t.eq(items[5], {"t": "Optional: destroy alien relays (2 left)", "state": "todo"}, "the relay line after the Core Node, todo before the ford; under fog of war it counts the relays standing, never the powered ones")
+	t.eq(items[5], {"t": "Destroy alien relays (2 left)", "state": "todo"}, "the relay line after the Core Node, todo before the ford; under fog of war it counts the relays standing, never the powered ones; under depth the relays gate the Core Node's shield, so not optional")
 	var off: Array = _adapter(true)
 	off[0].use_kestrel(true)
 	var plain: Dictionary = off[1].hud_vm(0.0)["objectives"]["items"][5]
-	t.eq(plain["t"], "Optional: disable alien relays (%d active)" % off[0].bridge_active_relays, "fog off: the powered count as before")
+	t.eq(plain["t"], "Disable alien relays (%d active)" % off[0].bridge_active_relays, "fog off: the powered count as before")
+	var classic: Array = _adapter(true)
+	classic[0].bridge_snapshot.erase("depth")  # depth off (classic Kestrel): no shield, the relays stay optional
+	t.eq(classic[1].hud_vm(0.0)["objectives"]["items"][5]["t"], "Optional: destroy alien relays (2 left)", "classic: optional as before")
+	classic[0].use_kestrel(true)
+	classic[0].bridge_snapshot.erase("depth")
+	t.eq(classic[1].hud_vm(0.0)["objectives"]["items"][5]["t"], "Optional: disable alien relays (%d active)" % classic[0].bridge_active_relays, "classic, fog off: optional as before")
 	for legacy in Adapter.STAGE_DETAIL:
 		t.ok(not texts.has(legacy), "no Survival stage text on Kestrel: %s" % legacy)
 	t.ok(not texts.has("Establish a supplied base"), "no Survival group title either")

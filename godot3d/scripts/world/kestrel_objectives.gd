@@ -21,7 +21,9 @@ extends RefCounted
 ##                          never count. Two latches ride in the result and come back through `previous`: ford_spawn_tick
 ##                          (first tick with waves_survived >= 1) and ford_threat_tick (last tick an attacker was seen on
 ##                          the home side), plus ford_held itself, so a held ford stays held.
-##   5 Break the Core Node: winner == human.
+##   5 Break the Core Node: winner == human. While the snapshot's depth.core_shielded is true (kestrel-depth Task 21: a
+##                          relay stands or the sixth expedition has not spawned, so the sim spares the Core Node) the
+##                          detail names that gate instead of the Core Node's cell.
 ## Rule for a lost building (chosen and tested): before wave one the setup objectives 1 to 3 are judged live, so a destroyed
 ## Reactor honestly sends the card back to "Power the base". Once wave one has spawned the setup phase is over and 1 to 3
 ## stay done (a later power loss is the power tip's job, not an objective regression), so a mid-game load with two waves
@@ -38,6 +40,8 @@ const FORD_QUIET_TICKS := 300
 const TICKS_PER_SECOND := 30.0
 const IDS := ["power", "economy", "squad", "ford", "core"]
 const TITLES := ["Power the base", "Start the economy", "Raise a squad", "Hold the ford", "Break the Core Node"]
+## Stage 5's detail while the Core Node is shielded (kestrel-depth Task 21).
+const CORE_SHIELDED_DETAIL := "Destroy both relays and outlast the sixth expedition to expose the Core Node"
 
 
 ## {stage: 1..5, title, detail (the current objective's), complete, failed, economy_seen, ford_spawn_tick, ford_threat_tick,
@@ -190,7 +194,23 @@ static func _ford_detail(snap: Dictionary, ford: String) -> String:
 	return "Hold %s: first wave in %s" % [ford, clock(ceili(float(ticks) / TICKS_PER_SECOND))]
 
 
+## The bridge's depth.core_shielded (kestrel-depth Task 21). False with no depth block (Survival, classic Kestrel), a
+## malformed one, or an empty snapshot: only the sim's own word raises the shield.
+static func core_shielded(snap: Dictionary) -> bool:
+	var depth = snap.get("depth", null)
+	return depth is Dictionary and bool(depth.get("core_shielded", false))
+
+
+## A depth match (kestrel-depth Task 21): the depth block carries core_shielded, so the relays gate the Core Node's shield
+## and are no longer the optional side objective they are on classic Kestrel.
+static func relays_required(snap: Dictionary) -> bool:
+	var depth = snap.get("depth", null)
+	return depth is Dictionary and depth.has("core_shielded")
+
+
 static func _core_detail(snap: Dictionary) -> String:
+	if core_shielded(snap):
+		return CORE_SHIELDED_DETAIL
 	var core = snap.get("core_node", null)
 	if core is Array and core.size() >= 2:
 		return "Destroy the Core Node at (%d, %d)" % [int(core[0]), int(core[1])]

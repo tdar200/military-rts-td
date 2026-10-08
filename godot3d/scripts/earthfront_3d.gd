@@ -1447,6 +1447,7 @@ func _process(delta: float) -> void:
 	_update_units(delta)
 	_glide_bridge_nodes(delta)
 	_update_queue_markers()
+	_update_core_shield(delta)
 	_animate_unit_cards(delta)
 	_animate_world(delta)
 	if world_fx != null:
@@ -2620,6 +2621,9 @@ func _order_target(foe: Node3D) -> bool:
 	if ordered.is_empty():
 		return false
 	attack_move_armed = false
+	if foe == _seen_shielded_core():  # kestrel-depth Task 21: the order stands, but the hits will do nothing yet
+		_deny("CORE NODE SHIELDED", KestrelObjectives.CORE_SHIELDED_DETAIL.to_upper())
+		return true
 	_say("ATTACK TARGET \u2014 %d UNIT%s" % [ordered.size(), "" if ordered.size() == 1 else "S"])
 	_order_ack()
 	return true
@@ -2692,6 +2696,55 @@ func _update_queue_markers() -> void:
 	for index in range(segments, queue_segments.size()):
 		queue_segments[index].visible = false
 	queue_drawn = discs + segments
+
+
+## kestrel-depth Task 21: the one ring that marks the alien Core Node's shield (created on first use, then reused and
+## hidden when not wanted).
+var core_shield_ring: MeshInstance3D = null
+var core_shield_phase := 0.0
+
+
+## Every frame: a slowly pulsing translucent ellipse around the alien Core Node while the bridge says depth.core_shielded (a relay
+## stands or the sixth expedition has not spawned, so the sim spares it). Only on a Core Node the player sees now: a
+## remembered one under the fog, or one absent from the snapshot, carries none, so the ring tells nothing the sprite
+## does not. A paused game leaves it frozen as it stands; Survival (no world art, no depth block) never draws it.
+func _update_core_shield(delta: float) -> void:
+	if sim_paused:
+		return
+	var core := _seen_shielded_core()
+	if core == null:
+		if core_shield_ring != null:
+			core_shield_ring.visible = false
+		return
+	if core_shield_ring == null:
+		var mesh := TorusMesh.new()
+		mesh.inner_radius = 0.86
+		mesh.outer_radius = 1.0
+		mesh.rings = 64
+		mesh.ring_segments = 6
+		var glow := _transparent_material(Color(0.96, 0.34, 0.66, 0.5), Color("f45bb0"))
+		glow.no_depth_test = true  # drawn over the Core Node's sprite card, which would hide the far half of a ground ring
+		glow.render_priority = 1
+		core_shield_ring = _mesh(mesh, glow, Vector3.ZERO)
+		core_shield_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		core_shield_ring.name = "CoreShieldRing"
+	core_shield_phase = fmod(core_shield_phase + delta, TAU * 4.0)
+	var shape := _ring_shape(core)
+	var pulse := 1.0 + sin(core_shield_phase * 2.4) * 0.035
+	var centre: Vector3 = shape.centre
+	core_shield_ring.position = centre + Vector3.UP * 0.18
+	core_shield_ring.scale = Vector3(float(shape.rx) * 1.3 * pulse, 1.0, float(shape.rz) * 1.3 * pulse)
+	core_shield_ring.visible = true
+
+
+## The alien Core Node when it is shielded and in sight now (not a fog memory), else null.
+func _seen_shielded_core() -> Node3D:
+	if not world_art_on or not KestrelObjectives.core_shielded(bridge_snapshot):
+		return null
+	for node in bridge_nodes.values():
+		if is_instance_valid(node) and int(node.get_meta("team", HUMAN)) != HUMAN and String(node.get_meta("kind_name", "")) == "CommandCenter" and not bool(node.get_meta("remembered", false)):
+			return node
+	return null
 
 
 ## Pool slot `index` of `pool` (a disc or a unit-length segment), created on first use.
