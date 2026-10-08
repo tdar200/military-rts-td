@@ -40,7 +40,7 @@ func _kestrel(score: Dictionary, difficulty := "normal", winner := 0) -> Object:
 	return g
 
 
-const WIN := {"waves_held": 6, "destroyed": 19690, "lost": 12800, "victory_bonus": 1214, "total": 17504, "grade": "S"}
+const WIN := {"waves_held": 6, "destroyed": 19690, "lost": 12800, "victory_bonus": 1214, "total": 17504, "grade": "A"}
 
 
 # ------------------------------------------------------------------ the module
@@ -104,7 +104,7 @@ func test_debrief_shows_score_rows_grade_and_best(t) -> void:
 	var vm := LiveScreens.debrief_vm(g, SessionLog.new(), {"best": 17504, "new_best": true})
 	var sc: Dictionary = vm["score"]
 	t.eq(sc["total"], "17,504", "the total")
-	t.eq(sc["grade"], "S", "the grade")
+	t.eq(sc["grade"], "A", "the grade")
 	t.eq(sc["best"], "17,504", "the best")
 	t.eq(sc["new_best"], true, "flagged")
 	var labels: Array = sc["rows"].map(func(r): return r["label"])
@@ -112,7 +112,7 @@ func test_debrief_shows_score_rows_grade_and_best(t) -> void:
 	t.eq(labels, ["Waves held (6 x 500)", "Enemy value destroyed", "Losses (half of 12,800)", "Victory bonus", "Hard difficulty"], "the score rows")
 	t.eq(values, ["+3,000", "+19,690", "-6,400", "+1,214", "x1.5"], "their values")
 	# Without a record (no records file in use) the best is left out; a loss has no victory bonus row.
-	var loss := {"waves_held": 3, "destroyed": 10070, "lost": 12230, "victory_bonus": 0, "total": 8182, "grade": "A"}
+	var loss := {"waves_held": 3, "destroyed": 10070, "lost": 12230, "victory_bonus": 0, "total": 8182, "grade": "C"}
 	g = _kestrel(loss, "normal", 1)
 	vm = LiveScreens.debrief_vm(g, SessionLog.new())
 	t.ok(not vm["score"].has("best"), "no best without a record")
@@ -153,7 +153,7 @@ func test_the_score_block_fits_the_column_beside_every_other_block(t) -> void:
 		t.near(col.blocks["buttons"].position.y, 992.0, 0.01, "%d: the buttons stay pinned to the bottom of 1080" % winner)
 		t.ok(col.content_height <= 1080.0 + 0.01, "%d: nothing grows the column past 1080" % winner)
 		var texts := _texts(col)
-		t.ok(texts.has("S"), "%d: the grade" % winner)
+		t.ok(texts.has("A"), "%d: the grade" % winner)
 		t.ok(texts.has("17,504"), "%d: the total" % winner)
 		t.ok(texts.any(func(s): return s.contains("20,000")), "%d: the best" % winner)
 		t.ok(not texts.any(func(s): return s.to_upper() == "NEW BEST"), "%d: no flag when not a new best" % winner)
