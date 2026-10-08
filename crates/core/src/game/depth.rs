@@ -10,8 +10,12 @@
 //! their hash writes at the END of its `hash_into`, in task order, never
 //! reordering.
 
-use super::{attack_of, is_air_of, tile_center, EntityId, Kind, PlayerId, Sim, COMBAT_CELL};
+use super::{
+    attack_of, is_air_of, tile_center, EntityId, Kind, PlayerId, Sim, COMBAT_CELL, DOC_ARMOR,
+    DOC_VITALITY, DOC_WEAPONS,
+};
 use crate::fixed::Fixed;
+use crate::game::ability::AbilityKind;
 use crate::game::balance::Balance;
 use crate::game::hex;
 use crate::game::map::Map;
@@ -61,6 +65,22 @@ pub const BREACH_WALL_COST: i64 = 60;
 /// Task 16: path cost of breaking through any other defender structure, so a
 /// breach goes through a wall wherever one is about as close.
 pub const BREACH_BUILDING_COST: i64 = 120;
+
+/// Task 17: money price of the first level of an Upgrades track (weapons,
+/// armour, vitality); each level bought adds [`UPGRADE_STEP`].
+pub const UPGRADE_BASE: i32 = 150;
+/// Task 17: price rise per level already bought on that track.
+pub const UPGRADE_STEP: i32 = 100;
+/// Task 17: levels per track a player may hold at era 0.
+pub const UPGRADE_CAP_ERA0: u16 = 3;
+/// Task 17: levels per track at era 1 (Robotic Workcells, tech 7) and later.
+pub const UPGRADE_CAP_ERA1: u16 = 6;
+/// Task 17: the Upgrades tracks offered under depth, in `Ascend` track order
+/// (weapons, armour, vitality). The forge (track 3) is never offered.
+pub const UPGRADE_TRACKS: u8 = 3;
+/// Task 17: the Earthfront technology a `Barrage` needs under depth
+/// (Precision Manufacturing).
+pub(super) const BARRAGE_TECH: u32 = 6;
 
 /// Task 15: the depth weapon of an entity of `kind` whose balance weapon is
 /// `base`. `AntiArmor` teams also engage air (at [`depth_air_damage_pct`]);
@@ -1439,6 +1459,86 @@ impl DepthGrid {
     }
 }
 
+/// Task 17: abilities and the Upgrades tracks (the legacy Ascendancy
+/// doctrines, money only and capped per era) under depth. Upgrade levels live
+/// in the civ's `doctrine_levels` (already hashed), so no new state is added.
+impl Sim {
+    /// Whether `owner` may cast `kind` under depth: a `Barrage` needs
+    /// [`BARRAGE_TECH`] researched, an `EmpBurst` is always allowed (it rides
+    /// the gunship), a `NaniteField` comes with the Capital (its only carrier).
+    #[must_use]
+    pub(super) fn depth_ability_allowed(&self, owner: PlayerId, kind: AbilityKind) -> bool {
+        match kind {
+            AbilityKind::Barrage => self.civs[usize::from(owner.0)]
+                .researched_techs
+                .get(BARRAGE_TECH),
+            AbilityKind::EmpBurst | AbilityKind::NaniteField => true,
+        }
+    }
+
+    /// The cooldown an ability of base cooldown `base` starts for `owner`
+    /// under depth. The perk hook of Task 23; `base` for now.
+    #[must_use]
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        reason = "Task 23 reads the owner's perks here"
+    )]
+    pub(super) fn depth_ability_cooldown(&self, owner: PlayerId, base: u32) -> u32 {
+        let _ = owner;
+        base
+    }
+
+    /// `owner`'s Upgrades levels: weapons, armour, vitality.
+    #[must_use]
+    pub fn upgrade_levels(&self, owner: PlayerId) -> [u16; 3] {
+        let lv = &self.civs[usize::from(owner.0)].doctrine_levels;
+        [lv[DOC_WEAPONS], lv[DOC_ARMOR], lv[DOC_VITALITY]]
+    }
+
+    /// The level cap per Upgrades track for `owner` (its era decides).
+    fn upgrade_cap(&self, owner: PlayerId) -> u16 {
+        if self.civs[usize::from(owner.0)].era >= 1 {
+            UPGRADE_CAP_ERA1
+        } else {
+            UPGRADE_CAP_ERA0
+        }
+    }
+
+    /// The money price of `owner`'s next level on Upgrades `track`:
+    /// `UPGRADE_BASE + UPGRADE_STEP * level`. `None` at the era cap, for the
+    /// forge (track 3) or any other track, and without depth.
+    #[must_use]
+    pub fn upgrade_cost(&self, owner: PlayerId, track: u8) -> Option<Fixed> {
+        if !self.is_depth() || track >= UPGRADE_TRACKS {
+            return None;
+        }
+        let level = self.upgrade_levels(owner)[usize::from(track)];
+        (level < self.upgrade_cap(owner)).then(|| {
+            Fixed::from_int(UPGRADE_BASE) + Fixed::from_int(UPGRADE_STEP * i32::from(level))
+        })
+    }
+
+    /// Buys `owner`'s next level on Upgrades `track` (validate, then spend),
+    /// or grants it without charge when `free` (Task 23's perk). Refused for
+    /// the forge, at the era cap, without depth and, unless free, when the
+    /// owner cannot pay.
+    pub(super) fn apply_depth_upgrade(&mut self, owner: PlayerId, track: u8, free: bool) {
+        let Some(cost) = self.upgrade_cost(owner, track) else {
+            return;
+        };
+        let c = &mut self.civs[usize::from(owner.0)];
+        if !free {
+            if c.money < cost {
+                return;
+            }
+            c.money = c.money - cost;
+        }
+        let t = [DOC_WEAPONS, DOC_ARMOR, DOC_VITALITY][usize::from(track)];
+        c.doctrine_levels[t] += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1446,6 +1546,7 @@ mod tests {
         DEFENSIVE_LEASH, FORCED_TRACK, LEASH, QUEUE_CAP,
     };
     use crate::fixed::Fixed;
+    use crate::game::ability::AbilityKind;
     use crate::game::hex;
     use crate::game::map::Map;
     use crate::game::scenario::{
@@ -1556,6 +1657,11 @@ mod tests {
                     });
                 }
             }
+            // Task 17: one weapons Upgrade (era 0 price 150).
+            (1400, _, _) => out.push(Command::Ascend {
+                owner: PlayerId(0),
+                track: 0,
+            }),
             _ => {}
         }
         out
@@ -1572,6 +1678,8 @@ mod tests {
                 s.step(&c);
                 log.push(c);
             }
+            // Task 17: the scripted weapons Upgrade was bought.
+            assert_eq!(s.upgrade_levels(PlayerId(0))[0], 1);
             (s.state_hash(), log)
         };
         let (a, log) = run();
@@ -3666,6 +3774,11 @@ mod tests {
         if depth {
             s.enable_depth();
         }
+        duel_in(s, a, b)
+    }
+
+    /// [`duel`] in a prepared arena `s` (Task 17 buys upgrades first).
+    fn duel_in(mut s: Sim, a: &[(UnitKind, usize)], b: &[(UnitKind, usize)]) -> Duel {
         let side = |s: &mut Sim, owner: PlayerId, x0: i32, army: &[(UnitKind, usize)]| {
             let mut ids = Vec::new();
             let mut row = 0i32;
@@ -4874,5 +4987,325 @@ mod tests {
         assert_eq!(s.breach_searches, 1, "re-searched a hopeless target");
         s.step(&[attack_move(P1, rifle, hex::center(5, 22))]);
         assert_eq!(s.breach_searches, 2);
+    }
+
+    // ---- Task 17: abilities, the Capital at era 1 and Upgrades under depth.
+
+    /// Three alien rifles packed inside a 1.5 blast around `v(8, 10)`.
+    fn clump(s: &mut Sim) -> [EntityId; 3] {
+        [
+            s.add_unit(P1, UnitKind::Infantry, v(8, 10)),
+            s.add_unit(P1, UnitKind::Infantry, v(8, 11)),
+            s.add_unit(P1, UnitKind::Infantry, v(9, 10)),
+        ]
+    }
+
+    fn cast(owner: PlayerId, unit: EntityId, target: Vec2) -> Command {
+        Command::UseAbility {
+            owner,
+            unit,
+            target,
+        }
+    }
+
+    #[test]
+    fn a_depth_helicopter_emp_stuns_a_clump() {
+        let mut s = depth_arena();
+        // Distance 5 to the clump centre: inside EMP range (5).
+        let heli = s.add_unit(P0, UnitKind::Helicopter, v(3, 10));
+        let foes = clump(&mut s);
+        s.step(&[cast(P0, heli, v(8, 10))]);
+        for id in foes {
+            assert!(
+                s.entities[id.0 as usize].stun_ticks > 0,
+                "{id:?} not stunned"
+            );
+        }
+        assert!(s.entities[heli.0 as usize].ability_cd > 0);
+        assert!(s.depth_ability_allowed(P0, AbilityKind::EmpBurst));
+        assert!(s.depth_ability_allowed(P0, AbilityKind::NaniteField));
+        assert_eq!(s.depth_ability_cooldown(P0, 600), 600);
+    }
+
+    #[test]
+    fn a_depth_barrage_needs_precision_manufacturing() {
+        let mut s = depth_arena();
+        let tank = s.add_unit(P0, UnitKind::Tank, v(3, 10));
+        let foes = clump(&mut s);
+        let full = UnitKind::Infantry.stats().max_hp;
+        assert!(!s.depth_ability_allowed(P0, AbilityKind::Barrage));
+        s.step(&[cast(P0, tank, v(8, 10))]);
+        for id in foes {
+            assert_eq!(s.entities[id.0 as usize].hp, full, "barrage before tech 6");
+        }
+        assert_eq!(s.entities[tank.0 as usize].ability_cd, 0);
+        s.civs[0].researched_techs.set(6);
+        assert!(s.depth_ability_allowed(P0, AbilityKind::Barrage));
+        s.step(&[cast(P0, tank, v(8, 10))]);
+        for id in foes {
+            assert_eq!(
+                s.entities[id.0 as usize].hp,
+                full - Fixed::from_int(16),
+                "the volley lands once tech 6 is researched"
+            );
+        }
+        assert!(s.entities[tank.0 as usize].ability_cd > 0);
+    }
+
+    #[test]
+    fn earthfront_without_depth_still_refuses_abilities() {
+        for build in [survival, kestrel_reach_classic] {
+            let mut s = build(3);
+            let heli = s.add_unit(P0, UnitKind::Helicopter, v(3, 10));
+            let foes = clump(&mut s);
+            s.civs[0].researched_techs.set(6);
+            s.step(&[cast(P0, heli, v(8, 10))]);
+            for id in foes {
+                assert_eq!(s.entities[id.0 as usize].stun_ticks, 0);
+            }
+            assert_eq!(s.entities[heli.0 as usize].ability_cd, 0);
+        }
+    }
+
+    /// A finished `VehicleFactory` for `P0` with money to spare.
+    fn factory_arena(depth: bool) -> (Sim, EntityId) {
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        if depth {
+            s.enable_depth();
+        }
+        let factory = s.add_building(P0, BuildingKind::VehicleFactory, 10, 10);
+        s.civs[0].money = Fixed::from_int(5000);
+        (s, factory)
+    }
+
+    fn train_capital(s: &mut Sim, factory: EntityId) -> bool {
+        s.step(&[Command::Train {
+            owner: P0,
+            barracks: factory,
+            kind: UnitKind::Capital,
+        }]);
+        s.entities[factory.0 as usize]
+            .build_queue
+            .contains(&UnitKind::Capital)
+    }
+
+    #[test]
+    fn the_capital_trains_at_a_vehicle_factory_after_tech_7_under_depth_only() {
+        let (mut s, factory) = factory_arena(true);
+        assert!(!train_capital(&mut s, factory), "era 0 trained a Capital");
+        s.civs[0].researched_techs.set(7);
+        s.unlock_earthfront_tech(0, 7);
+        assert_eq!(s.player_era(P0), 1);
+        assert!(s.unit_unlocked(P0, UnitKind::Capital));
+        let before = s.money(P0);
+        assert!(train_capital(&mut s, factory), "era 1 refused the Capital");
+        assert_eq!(before - s.money(P0), s.unit_cost(UnitKind::Capital));
+        // Survival-style Earthfront (no depth): tech 7 still gives era 1, and
+        // even with the Capital unlocked by hand the era 3 rule refuses it.
+        let (mut e, factory) = factory_arena(false);
+        e.civs[0].researched_techs.set(7);
+        e.unlock_earthfront_tech(0, 7);
+        assert_eq!(e.player_era(P0), 1);
+        assert!(!e.unit_unlocked(P0, UnitKind::Capital));
+        e.civs[0].unlocked_units |= 1 << UnitKind::Capital.index();
+        assert!(!train_capital(&mut e, factory), "the era 3 rule was lifted");
+    }
+
+    fn upgrade(owner: PlayerId, track: u8) -> Command {
+        Command::Ascend { owner, track }
+    }
+
+    #[test]
+    fn upgrades_cost_money_cap_per_era_and_never_sell_the_forge() {
+        let mut s = depth_arena();
+        s.civs[0].money = Fixed::from_int(100_000);
+        assert_eq!(s.upgrade_levels(P0), [0, 0, 0]);
+        assert_eq!(s.upgrade_cost(P0, 3), None, "forge on sale");
+        let money = s.money(P0);
+        s.step(&[upgrade(P0, 3)]);
+        assert_eq!(s.money(P0), money, "forge charged");
+        assert_eq!(s.doctrine_level(P0, 3), 0, "forge bought");
+        // Era 0: three levels per track at 150, 250, 350.
+        for (level, cost) in [(0u16, 150), (1, 250), (2, 350)] {
+            assert_eq!(s.upgrade_levels(P0)[0], level);
+            assert_eq!(s.upgrade_cost(P0, 0), Some(Fixed::from_int(cost)));
+            let before = s.money(P0);
+            s.step(&[upgrade(P0, 0)]);
+            assert_eq!(before - s.money(P0), Fixed::from_int(cost));
+        }
+        assert_eq!(s.upgrade_cost(P0, 0), None, "era 0 cap is 3");
+        let capped = s.money(P0);
+        s.step(&[upgrade(P0, 0)]);
+        assert_eq!(s.upgrade_levels(P0), [3, 0, 0]);
+        assert_eq!(s.money(P0), capped);
+        // Era 1 raises the cap to 6.
+        s.civs[0].era = 1;
+        for cost in [450, 550, 650] {
+            assert_eq!(s.upgrade_cost(P0, 0), Some(Fixed::from_int(cost)));
+            s.step(&[upgrade(P0, 0)]);
+        }
+        assert_eq!(s.upgrade_levels(P0), [6, 0, 0]);
+        assert_eq!(s.upgrade_cost(P0, 0), None, "era 1 cap is 6");
+        s.step(&[upgrade(P0, 0)]);
+        assert_eq!(s.upgrade_levels(P0), [6, 0, 0]);
+        // Too poor: refused, nothing spent. A free level skips the price.
+        s.civs[0].money = Fixed::from_int(100);
+        s.step(&[upgrade(P0, 1)]);
+        assert_eq!(s.upgrade_levels(P0), [6, 0, 0]);
+        assert_eq!(s.money(P0), Fixed::from_int(100));
+        s.apply_depth_upgrade(P0, 1, true);
+        assert_eq!(s.upgrade_levels(P0), [6, 1, 0]);
+        assert_eq!(s.money(P0), Fixed::from_int(100));
+        s.apply_depth_upgrade(P0, 3, true);
+        assert_eq!(s.doctrine_level(P0, 3), 0, "a free forge level");
+    }
+
+    #[test]
+    fn earthfront_without_depth_still_refuses_ascend() {
+        for build in [survival, kestrel_reach_classic] {
+            let mut s = build(3);
+            s.civs[0].money = Fixed::from_int(100_000);
+            s.step(&[upgrade(P0, 0), upgrade(P0, 3)]);
+            assert_eq!(s.doctrine_level(P0, 0), 0);
+            assert_eq!(s.doctrine_level(P0, 3), 0);
+            assert_eq!(s.upgrade_cost(P0, 0), None);
+        }
+    }
+
+    #[test]
+    fn vitality_grants_shields_under_depth_only() {
+        let mut s = depth_arena();
+        s.apply_depth_upgrade(P0, 2, true);
+        let rifle = s.add_unit(P0, UnitKind::Infantry, v(5, 5));
+        assert_eq!(s.shield_max(P0), Fixed::from_int(8));
+        assert_eq!(s.entities[rifle.0 as usize].shield, Fixed::from_int(8));
+        assert_eq!(s.shield_max(P1), Fixed::ZERO);
+        // Without depth the Earthfront shield stays zero whatever the level.
+        let mut e = survival(3);
+        e.civs[0].doctrine_levels[2] = 2;
+        assert_eq!(e.shield_max(P0), Fixed::ZERO);
+    }
+
+    /// [`duel`] with `P0`'s upgrade levels (weapons, armour, vitality) and
+    /// `P1`'s bought for free first.
+    fn upgraded_duel(a: [u16; 3], b: [u16; 3], n: usize) -> Duel {
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        s.enable_depth();
+        for (owner, levels) in [(P0, a), (P1, b)] {
+            s.civs[usize::from(owner.0)].era = 1;
+            for (track, &n) in levels.iter().enumerate() {
+                for _ in 0..n {
+                    s.apply_depth_upgrade(owner, u8::try_from(track).unwrap(), true);
+                }
+            }
+        }
+        duel_in(s, &[(UnitKind::Infantry, n)], &[(UnitKind::Infantry, n)])
+    }
+
+    #[test]
+    fn one_weapons_upgrade_wins_the_rifle_duel() {
+        let rows: [([u16; 3], [u16; 3]); 9] = [
+            ([0, 0, 0], [0, 0, 0]),
+            ([1, 0, 0], [0, 0, 0]),
+            ([0, 0, 0], [1, 0, 0]),
+            ([2, 0, 0], [0, 0, 0]),
+            ([3, 0, 0], [0, 0, 0]),
+            ([0, 1, 0], [0, 0, 0]),
+            ([0, 3, 0], [0, 0, 0]),
+            ([0, 0, 1], [0, 0, 0]),
+            ([0, 0, 3], [0, 0, 0]),
+        ];
+        std::eprintln!("6 rifles vs 6 rifles, levels [weapons, armour, vitality]");
+        for (a, b) in rows {
+            let d = upgraded_duel(a, b, 6);
+            std::eprintln!(
+                "P0 {a:?} vs P1 {b:?}: left {} vs {}, ticks {}",
+                d.a_left,
+                d.b_left,
+                d.ticks
+            );
+        }
+        let up = upgraded_duel([1, 0, 0], [0, 0, 0], 6);
+        assert!(up.b_left == 0 && up.a_left >= 2, "{up:?}");
+        // Mirrored, so the side (P0 or P1, x 14 or x 19) is not the cause.
+        let down = upgraded_duel([0, 0, 0], [1, 0, 0], 6);
+        assert!(down.a_left == 0 && down.b_left >= 2, "{down:?}");
+    }
+
+    #[test]
+    fn the_depth_ai_waits_for_tech_6_before_a_barrage() {
+        let mut s = depth_arena();
+        s.add_building(P0, BuildingKind::CommandCenter, 2, 30);
+        s.add_unit(P0, UnitKind::Tank, v(3, 10));
+        clump(&mut s);
+        let casts = |s: &Sim| {
+            s.ai_commands(P0)
+                .iter()
+                .filter(|c| matches!(c, Command::UseAbility { .. }))
+                .count()
+        };
+        assert_eq!(casts(&s), 0, "barrage cast before tech 6");
+        s.civs[0].researched_techs.set(6);
+        assert_eq!(casts(&s), 1);
+        // Without depth the Earthfront AI casts nothing.
+        let mut e = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        e.enable_earthfront();
+        e.add_building(P0, BuildingKind::CommandCenter, 2, 30);
+        e.add_unit(P0, UnitKind::Tank, v(3, 10));
+        clump(&mut e);
+        e.civs[0].researched_techs.set(6);
+        assert!(!e
+            .ai_commands(P0)
+            .iter()
+            .any(|c| matches!(c, Command::UseAbility { .. })));
+    }
+
+    /// The defended Kestrel playtest (the playtest AI on `P0`, host commands
+    /// for the aliens) for 20,000 fixed steps: abilities cast and accepted
+    /// per side, upgrade levels bought, and the outcome.
+    fn ability_playtest(seed: u64) -> ([u32; 2], [[u16; 3]; 2], Option<PlayerId>, u64) {
+        let mut s = kestrel_reach(seed);
+        let mut casts = [0u32; 2];
+        for _ in 0..20_000 {
+            let mut c = s.ai_commands(P0);
+            c.extend(Scenario::KestrelReach.host_commands(&s));
+            let casters: Vec<(usize, usize)> = c
+                .iter()
+                .filter_map(|c| match *c {
+                    Command::UseAbility { owner, unit, .. } => {
+                        Some((usize::from(owner.0), unit.0 as usize))
+                    }
+                    _ => None,
+                })
+                .collect();
+            s.step(&c);
+            for (side, unit) in casters {
+                if s.entities[unit].ability_cd > 0 {
+                    casts[side] += 1;
+                }
+            }
+        }
+        (
+            casts,
+            [s.upgrade_levels(P0), s.upgrade_levels(P1)],
+            s.winner(),
+            s.tick(),
+        )
+    }
+
+    #[test]
+    fn the_depth_ai_casts_abilities_and_buys_upgrades_in_a_kestrel_playtest() {
+        let (casts, levels, winner, tick) = ability_playtest(3);
+        std::eprintln!(
+            "casts P0 {} P1 {}; upgrades P0 {:?} P1 {:?}; winner {winner:?} at {tick}",
+            casts[0],
+            casts[1],
+            levels[0],
+            levels[1]
+        );
+        assert!(casts[0] + casts[1] >= 1, "no ability was cast");
+        assert!(levels[0].iter().sum::<u16>() >= 1, "no upgrade was bought");
     }
 }

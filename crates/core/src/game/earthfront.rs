@@ -56,6 +56,10 @@ macro_rules! technology {
     };
 }
 
+/// Kestrel depth (Task 17): money the AI keeps in hand after an Upgrades
+/// purchase, so a level never starves the next unit.
+const AI_UPGRADE_RESERVE: i32 = 300;
+
 /// Maximum raw ore awaiting processing at one refinery.
 pub(super) const REFINERY_CAPACITY: u32 = 300;
 
@@ -507,6 +511,7 @@ impl Sim {
     }
 
     pub(super) fn unlock_earthfront_tech(&mut self, p: usize, id: u32) {
+        let depth = self.is_depth();
         let c = &mut self.civs[p];
         match id {
             0 => c.unlocked_units |= 1 << UnitKind::AntiArmor.index(),
@@ -520,7 +525,13 @@ impl Sim {
             }
             3 => c.unlocked_buildings |= 1 << BuildingKind::AaTurret.index(),
             4 => c.unlocked_buildings |= 1 << BuildingKind::Battery.index(),
-            7 => c.era = 1,
+            7 => {
+                c.era = 1;
+                // Kestrel depth (Task 17): the Capital is the era 1 late unit.
+                if depth {
+                    c.unlocked_units |= 1 << UnitKind::Capital.index();
+                }
+            }
             _ => {}
         }
     }
@@ -1031,6 +1042,11 @@ impl Sim {
             }
             return commands;
         }
+        // Kestrel depth (Task 17): the army casts its abilities (the legacy
+        // AI's rule, every 5th tick, gated by `depth_ability_allowed`).
+        if self.is_depth() {
+            self.ai_ability_casts(player, &mut commands);
+        }
         if !self.tick.is_multiple_of(30) {
             return commands;
         }
@@ -1219,6 +1235,22 @@ impl Sim {
                         owner: player,
                         unit: entity,
                         target,
+                    });
+                }
+            }
+        }
+        // Kestrel depth (Task 17): the money left after building, science and
+        // training buys the cheapest Upgrades level (lowest track on a tie),
+        // keeping a reserve; at most one level per AI pass.
+        if self.is_depth() {
+            let cheapest = (0..super::depth::UPGRADE_TRACKS)
+                .filter_map(|t| self.upgrade_cost(player, t).map(|c| (c.to_bits(), t)))
+                .min();
+            if let Some((bits, track)) = cheapest {
+                if budget >= Fixed::from_bits(bits) + Fixed::from_int(AI_UPGRADE_RESERVE) {
+                    commands.push(Command::Ascend {
+                        owner: player,
+                        track,
                     });
                 }
             }

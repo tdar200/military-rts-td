@@ -2226,6 +2226,13 @@ mod tests {
     ///   change only moves the depth hash. P2 overall (old -> new): undefended
     ///   falls at t=4959 -> 4995, the playtest AI wins at t=13622 -> 12868,
     ///   2 waves both times.
+    /// - Task 17 (abilities, the Capital at era 1, Upgrades; both AIs now
+    ///   cast and buy levels): the undefended base falls at t=4995 -> 4930
+    ///   (the alien AI buys Upgrades once wave one lands); the playtest AI
+    ///   still wins, at t=12868 after 2 waves -> t=18067 after 3 waves (waves
+    ///   at 4501, 9901 and 15301). Casting alone (AI Upgrades switched off)
+    ///   gives 4995 and t=11927 after 2 waves: the Upgrades spending is what
+    ///   slows the defended win.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
@@ -2234,8 +2241,9 @@ mod tests {
         // the enemy AI (+ the scripted probe and escalating waves once the grace
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
-        // so there is no founding step. Measured: it falls at t=4975 (wave one
-        // spawns at 4500; 4980 before depth separation, Task 12; 4959 before
+        // so there is no founding step. Measured: it falls at t=4930 (wave one
+        // spawns at 4500; 4995 before abilities and Upgrades, Task 17; 4975
+        // at Task 12; 4980 before depth separation, Task 12; 4959 before
         // depth auto-acquire, Task 11; before the rework it fell at t=3159).
         let mut s = kestrel_reach(3);
         assert!(!s.surveying());

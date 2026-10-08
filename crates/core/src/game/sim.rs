@@ -2843,7 +2843,10 @@ impl Sim {
     /// Queues a combat unit at a Barracks, or a Harvester at a Refinery, if the
     /// producer is owned and the resource, supply, unlock, and era checks pass.
     fn apply_train(&mut self, owner: PlayerId, barracks: EntityId, kind: UnitKind) {
-        if matches!(kind, UnitKind::Capital) && self.civs[usize::from(owner.0)].era < 3 {
+        // The Capital needs era 3; under the Kestrel depth rules (Task 17) it
+        // is the era 1 late unit (Robotic Workcells, tech 7, unlocks it).
+        let capital_era = if self.is_depth() { 1 } else { 3 };
+        if matches!(kind, UnitKind::Capital) && self.civs[usize::from(owner.0)].era < capital_era {
             return;
         }
         let st = self.balance.unit(kind);
@@ -3297,7 +3300,9 @@ impl Sim {
     /// Deterministic — fixed magnitudes, no RNG, order-independent per cast.
     fn apply_use_ability(&mut self, owner: PlayerId, unit: EntityId, target: Vec2) {
         use crate::game::ability::{ability_for, def, AbilityKind};
-        if self.earthfront {
+        // Earthfront has no abilities, except under the Kestrel depth rules
+        // (Task 17), where each is gated by `depth_ability_allowed`.
+        if self.earthfront && !self.is_depth() {
             return;
         }
         let idx = unit.0 as usize;
@@ -3310,6 +3315,9 @@ impl Sim {
         }
         let Kind::Unit(uk) = caster.kind else { return };
         let Some(kind) = ability_for(uk) else { return };
+        if self.is_depth() && !self.depth_ability_allowed(owner, kind) {
+            return;
+        }
         let d = def(kind);
         if (target - caster.pos).length_squared() > d.range * d.range {
             return;
@@ -3382,7 +3390,11 @@ impl Sim {
                 }
             }
         }
-        self.entities[idx].ability_cd = d.cooldown;
+        self.entities[idx].ability_cd = if self.is_depth() {
+            self.depth_ability_cooldown(owner, d.cooldown)
+        } else {
+            d.cooldown
+        };
     }
 
     /// Begins researching `tech_id`: validate prereqs (full DAG), the doctrine
@@ -3472,6 +3484,10 @@ impl Sim {
     /// tracks require a Research Lab. Validate-then-spend, mirroring `Research`.
     fn apply_ascend(&mut self, owner: PlayerId, track: u8) {
         if self.earthfront {
+            // Kestrel depth (Task 17): the money-only, era-capped Upgrades.
+            if self.is_depth() {
+                self.apply_depth_upgrade(owner, track, false);
+            }
             return;
         }
         let t = usize::from(track);
@@ -3582,6 +3598,11 @@ impl Sim {
     }
     fn player_shield_max(&self, p: PlayerId) -> Fixed {
         if self.earthfront {
+            // Kestrel depth (Task 17): the Vitality upgrade is the only
+            // Earthfront shield source (no grid riders on Earthfront).
+            if self.is_depth() {
+                return self.doctrine_shield_bonus(p);
+            }
             return Fixed::ZERO;
         }
         self.branch_rider(p, 5, GRID_SHIELD_PER_NODE) + self.doctrine_shield_bonus(p)
@@ -4887,58 +4908,16 @@ impl Sim {
     /// Rule-based commands for `player` this tick: follow a build order, train
     /// infantry from an idle barracks, and attack-move idle units toward the
     /// enemy base. Pure function of state (no RNG), so AI-vs-AI replays bit-for-bit.
-    #[must_use]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "AI command function covers build, train, research, and move logic; splitting adds indirection without clarity gain"
-    )]
-    pub fn ai_commands(&self, player: PlayerId) -> Vec<Command> {
-        if self.earthfront {
-            return self.earthfront_ai(player);
-        }
-        let mut cmds = Vec::new();
-
-        // Survey phase: the only move is founding. Pick the first buildable tile
-        // hex-adjacent to an Ore deposit (the colony-bonus site), falling back to
-        // the first buildable Ore tile. Everyone else holds until play begins.
-        if matches!(self.phase, GamePhase::Survey) {
-            if self.command_center_tile(player).is_none() {
-                let mut site: Option<(u16, u16)> = None;
-                'scan: for (dx, dy, d) in self.map.deposits() {
-                    if d.kind != crate::game::map::DepositKind::Ore {
-                        continue;
-                    }
-                    for ny in -1..=1i32 {
-                        for nx in -1..=1i32 {
-                            let tx = i32::from(dx) + nx;
-                            let ty = i32::from(dy) + ny;
-                            let (Ok(txu), Ok(tyu)) = (u16::try_from(tx), u16::try_from(ty)) else {
-                                continue;
-                            };
-                            if self.map.tile(tx, ty).is_some_and(|t| t.buildable)
-                                && crate::game::hex::distance((dx, dy), (txu, tyu)) == 1
-                            {
-                                site = Some((txu, tyu));
-                                break 'scan;
-                            }
-                        }
-                    }
-                }
-                let site = site
-                    .or_else(|| self.first_buildable_deposit(crate::game::map::DepositKind::Ore));
-                if let Some((x, y)) = site {
-                    cmds.push(Command::FoundBase {
-                        owner: player,
-                        x,
-                        y,
-                    });
-                }
-            }
-            return cmds;
-        }
-
+    /// The AI's tactical ability casts for `player` this tick, appended to
+    /// `cmds`: Barrage/EMP at the first enemy with at least 3 foes packed
+    /// inside the blast, Nanite Field when at least 2 nearby allies run below
+    /// half HP. At most one cast per tick, every 5th tick. Under the Kestrel
+    /// depth rules (Task 17) a caster whose ability is not yet allowed
+    /// (`depth_ability_allowed`) is skipped; with depth off this is the legacy
+    /// block of [`Sim::ai_commands`] unchanged.
+    fn ai_ability_casts(&self, player: PlayerId, cmds: &mut Vec<Command>) {
         // Abilities: cast the first ready tactical ability with a worthwhile
-        // target — Barrage/EMP at the first enemy with ≥ 3 foes packed inside the
+        // target: Barrage/EMP at the first enemy with ≥ 3 foes packed inside the
         // blast, Nanite Field when ≥ 2 nearby allies run below half HP. Index
         // order, fixed thresholds, no RNG; at most one cast per tick keeps the
         // command volume flat. Costs nothing, so it never fights the build budget.
@@ -4955,13 +4934,16 @@ impl Sim {
             let Some(kind) = crate::game::ability::ability_for(uk) else {
                 continue;
             };
+            if self.is_depth() && !self.depth_ability_allowed(player, kind) {
+                continue;
+            }
             let d = crate::game::ability::def(kind);
             let radius_sq = d.radius * d.radius;
             let range_sq = d.range * d.range;
             let unit_id = EntityId(u32::try_from(i).unwrap_or(u32::MAX));
             // EMP only affects stunnable units (not buildings / already-stunned /
             // immune targets), so its clump count and epicenter must match what
-            // the resolve would actually hit — otherwise casts are wasted.
+            // the resolve would actually hit, otherwise casts are wasted.
             let stunnable = |o: &Entity| {
                 matches!(o.kind, Kind::Unit(_)) && o.stun_ticks == 0 && o.stun_immunity == 0
             };
@@ -5019,6 +5001,59 @@ impl Sim {
                 }
             }
         }
+    }
+
+    #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "AI command function covers build, train, research, and move logic; splitting adds indirection without clarity gain"
+    )]
+    pub fn ai_commands(&self, player: PlayerId) -> Vec<Command> {
+        if self.earthfront {
+            return self.earthfront_ai(player);
+        }
+        let mut cmds = Vec::new();
+
+        // Survey phase: the only move is founding. Pick the first buildable tile
+        // hex-adjacent to an Ore deposit (the colony-bonus site), falling back to
+        // the first buildable Ore tile. Everyone else holds until play begins.
+        if matches!(self.phase, GamePhase::Survey) {
+            if self.command_center_tile(player).is_none() {
+                let mut site: Option<(u16, u16)> = None;
+                'scan: for (dx, dy, d) in self.map.deposits() {
+                    if d.kind != crate::game::map::DepositKind::Ore {
+                        continue;
+                    }
+                    for ny in -1..=1i32 {
+                        for nx in -1..=1i32 {
+                            let tx = i32::from(dx) + nx;
+                            let ty = i32::from(dy) + ny;
+                            let (Ok(txu), Ok(tyu)) = (u16::try_from(tx), u16::try_from(ty)) else {
+                                continue;
+                            };
+                            if self.map.tile(tx, ty).is_some_and(|t| t.buildable)
+                                && crate::game::hex::distance((dx, dy), (txu, tyu)) == 1
+                            {
+                                site = Some((txu, tyu));
+                                break 'scan;
+                            }
+                        }
+                    }
+                }
+                let site = site
+                    .or_else(|| self.first_buildable_deposit(crate::game::map::DepositKind::Ore));
+                if let Some((x, y)) = site {
+                    cmds.push(Command::FoundBase {
+                        owner: player,
+                        x,
+                        y,
+                    });
+                }
+            }
+            return cmds;
+        }
+
+        self.ai_ability_casts(player, &mut cmds);
 
         let Some(cc_tile) = self.command_center_tile(player) else {
             // No base left: no building/training — but the army above still casts
