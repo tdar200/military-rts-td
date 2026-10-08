@@ -9,10 +9,10 @@ use rts_core::fixed::Fixed;
 use rts_core::game::hex;
 use rts_core::game::kestrel;
 use rts_core::game::map::{Deposit, Ground};
-use rts_core::game::scenario::Scenario;
+use rts_core::game::scenario::{MatchOptions, Scenario};
 use rts_core::game::sim::{
-    order_point_in_range, Command, EntityId, EntityKindView, EntityView, PlayerId, Stance,
-    SupplyState,
+    order_point_in_range, Command, Difficulty, EntityId, EntityKindView, EntityView, PlayerId, Sim,
+    Stance, SupplyState,
 };
 use rts_core::game::stats::{BuildingKind, UnitKind};
 use rts_core::vec::Vec2;
@@ -1067,11 +1067,14 @@ fn snapshot_json_with(
                 None => out.push_str("null"),
             }
         }
+        // Task 20 appends the match's difficulty preset and seed.
         write!(
             out,
-            "],\"refinery_cost\":{}}}",
+            "],\"refinery_cost\":{},\"difficulty\":\"{}\",\"seed\":{}}}",
             sim.depth_building_cost(human, BuildingKind::Refinery)
-                .to_int_floor()
+                .to_int_floor(),
+            sim.difficulty().name(),
+            sim.seed()
         )
         .expect("string write");
     }
@@ -1467,11 +1470,43 @@ impl RuntimePaths {
 }
 
 /// The match the client asked for in `match.json`. A key that is missing or
-/// malformed keeps its default (`fog: None` means "as the environment says").
+/// malformed keeps its default (`fog: None` means "as the environment says";
+/// Task 20: seed 2026, difficulty Normal, the match the bridge always built).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct MatchConfig {
     scenario: Scenario,
     fog: Option<bool>,
+    seed: u64,
+    difficulty: Difficulty,
+}
+
+/// Task 20: the seed of a match whose `match.json` gives none (or a malformed one).
+const DEFAULT_SEED: u64 = 2026;
+
+impl MatchConfig {
+    /// `scenario` with every other key at its default: the boot match, and the
+    /// fallback for a missing or malformed `match.json`.
+    const fn boot(scenario: Scenario) -> Self {
+        Self {
+            scenario,
+            fog: None,
+            seed: DEFAULT_SEED,
+            difficulty: Difficulty::Normal,
+        }
+    }
+}
+
+/// Task 20: the sim for `cfg` (its scenario at its seed and difficulty, with the
+/// shipped balance), as the bridge builds it at boot and on every restart.
+fn build_match(cfg: &MatchConfig) -> Sim {
+    let mut sim = cfg.scenario.build_with(
+        cfg.seed,
+        MatchOptions {
+            difficulty: cfg.difficulty,
+        },
+    );
+    sim.set_balance(rts_data::load_default());
+    sim
 }
 
 /// One raw value of a flat JSON object: a quoted string (no escapes) or a bare token.
@@ -1505,10 +1540,7 @@ fn raw_json_value<'a>(text: &'a str, key: &str) -> Option<RawValue<'a>> {
 /// ignored; a malformed value keeps that key's default; text that is not an object
 /// yields `fallback` with the environment's fog.
 fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
-    let mut config = MatchConfig {
-        scenario: fallback,
-        fog: None,
-    };
+    let mut config = MatchConfig::boot(fallback);
     let text = text.trim();
     if !(text.starts_with('{') && text.ends_with('}')) {
         return config;
@@ -1521,16 +1553,22 @@ fn parse_match_config(text: &str, fallback: Scenario) -> MatchConfig {
         Some(RawValue::Bare("false")) => Some(false),
         _ => None,
     };
+    // Task 20: a bare unsigned integer seed and a quoted preset name.
+    if let Some(RawValue::Bare(seed)) = raw_json_value(text, "seed") {
+        if seed.bytes().all(|b| b.is_ascii_digit()) {
+            config.seed = seed.parse().unwrap_or(DEFAULT_SEED);
+        }
+    }
+    if let Some(RawValue::Quoted(name)) = raw_json_value(text, "difficulty") {
+        config.difficulty = Difficulty::from_name(name).unwrap_or_default();
+    }
     config
 }
 
 /// Reads and parses `match.json`; a missing or unreadable file yields `fallback`.
 fn read_match_config(path: &Path, fallback: Scenario) -> MatchConfig {
-    std::fs::read_to_string(path).map_or(
-        MatchConfig {
-            scenario: fallback,
-            fog: None,
-        },
+    std::fs::read_to_string(path).map_or_else(
+        |_| MatchConfig::boot(fallback),
         |text| parse_match_config(&text, fallback),
     )
 }
@@ -1616,8 +1654,7 @@ fn main() -> std::io::Result<()> {
 
     // The presentation fog kill switch is read once, here; a running bridge never re-reads it.
     let fog_enabled = fog_enabled_from(std::env::var_os("EARTHFRONT_FOG").as_deref());
-    let mut sim = scenario.build(2026);
-    sim.set_balance(rts_data::load_default());
+    let mut sim = build_match(&MatchConfig::boot(scenario));
     if let Some(path) = dump_snapshot {
         // One frame of the chosen scenario's initial snapshot, for Godot test fixtures.
         let snapshot = snapshot_json_with(
@@ -1655,10 +1692,10 @@ fn main() -> std::io::Result<()> {
             clear_command_packets(&paths.commands)?;
             // The client may switch the map (and the fog) for the next match; with no
             // `match.json` the current scenario restarts as before.
+            // Task 20: at its seed and difficulty preset (2026 and Normal by default).
             let config = read_match_config(&paths.match_config, scenario);
             scenario = config.scenario;
-            sim = scenario.build(2026);
-            sim.set_balance(rts_data::load_default());
+            sim = build_match(&config);
             mission_started = false;
             supply_cache = SupplyLinkCache::new();
             shots.clear();
@@ -1710,12 +1747,13 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        fog_enabled_from, parse_args, parse_match_config, read_match_config, sight_radius,
-        snapshot_json, snapshot_json_with, supply_links_json, take_commands, BuildingKind, Command,
-        EntityId, FogState, PlayerId, RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind,
-        SHOT_WINDOW_TICKS,
+        build_match, fog_enabled_from, parse_args, parse_match_config, read_match_config,
+        sight_radius, snapshot_json, snapshot_json_with, supply_links_json, take_commands,
+        BuildingKind, Command, EntityId, FogState, MatchConfig, PlayerId, RuntimePaths, ShotWindow,
+        SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
+    use rts_core::game::sim::Difficulty;
 
     /// Value of the string field `"key":"..."` (first occurrence).
     fn extract_str(json: &str, key: &str) -> String {
@@ -1853,11 +1891,12 @@ mod tests {
         // three prebuilt structures beside it are not served until the first supply beat.
         // The presentation fog mask (Task 6) sits between the supply links and the shots.
         // The depth Upgrades block (Task 17) sits between the core node and the links;
-        // Task 18 appends the next refinery's price to it.
+        // Task 18 appends the next refinery's price to it, Task 20 the match's
+        // difficulty and seed.
         let fog = extract_str(&json, "fog");
         assert!(json.ends_with(&format!(
             "\"core_node\":[37,8],\"depth\":{{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
-             \"refinery_cost\":200}},\
+             \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026}},\
              \"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
         )));
         assert!(json.starts_with("{\"schema\":5,"));
@@ -2070,6 +2109,108 @@ mod tests {
             Scenario::Survival,
         );
         assert_eq!(c.scenario, Scenario::Survival);
+        assert_eq!((c.seed, c.difficulty), (2026, Difficulty::Normal));
+    }
+
+    /// Task 20: `seed` (a bare unsigned integer) and `difficulty` (a quoted
+    /// preset name); anything malformed keeps 2026 and Normal.
+    #[test]
+    fn match_config_parses_seed_and_difficulty_and_falls_back() {
+        let c = parse_match_config(
+            r#"{"scenario":"kestrel","seed":7,"difficulty":"hard","fog":true}"#,
+            Scenario::Survival,
+        );
+        assert_eq!(c.scenario, Scenario::KestrelReach);
+        assert_eq!((c.seed, c.difficulty), (7, Difficulty::Hard));
+        let c = parse_match_config(
+            r#"{"seed":2147483646,"difficulty":"easy"}"#,
+            Scenario::KestrelReach,
+        );
+        assert_eq!((c.seed, c.difficulty), (2_147_483_646, Difficulty::Easy));
+        for bad in [
+            r#"{"seed":"7"}"#,
+            r#"{"seed":-5}"#,
+            r#"{"seed":1.5}"#,
+            r#"{"seed":abc}"#,
+            r#"{"seed":}"#,
+            r#"{"seed":184467440737095516160}"#,
+            r#"{"scenario":"kestrel"}"#,
+        ] {
+            let c = parse_match_config(bad, Scenario::KestrelReach);
+            assert_eq!(c.seed, 2026, "{bad}");
+        }
+        for bad in [
+            r#"{"difficulty":"brutal"}"#,
+            r#"{"difficulty":"Hard"}"#,
+            r#"{"difficulty":2}"#,
+            r#"{"difficulty":""}"#,
+            r#"{"scenario":"kestrel"}"#,
+        ] {
+            let c = parse_match_config(bad, Scenario::KestrelReach);
+            assert_eq!(c.difficulty, Difficulty::Normal, "{bad}");
+        }
+        let c = parse_match_config("[1,2]", Scenario::KestrelReach);
+        assert_eq!((c.seed, c.difficulty), (2026, Difficulty::Normal));
+    }
+
+    /// Task 20: the bridge builds the match `match.json` asks for: Kestrel at
+    /// its seed and preset, Survival at its seed (the preset ignored).
+    #[test]
+    fn the_bridge_builds_the_configured_seed_and_difficulty() {
+        use rts_core::game::scenario::{kestrel_reach_with, MatchOptions};
+        let cfg = parse_match_config(
+            r#"{"scenario":"kestrel","seed":99,"difficulty":"easy","fog":true}"#,
+            Scenario::Survival,
+        );
+        let sim = build_match(&cfg);
+        let want = kestrel_reach_with(
+            99,
+            MatchOptions {
+                difficulty: Difficulty::Easy,
+            },
+        );
+        assert_eq!(sim.state_hash(), {
+            let mut w = want;
+            w.set_balance(rts_data::load_default());
+            w.state_hash()
+        });
+        assert_eq!((sim.seed(), sim.difficulty()), (99, Difficulty::Easy));
+        let cfg = parse_match_config(
+            r#"{"scenario":"survival","seed":5,"difficulty":"hard"}"#,
+            Scenario::KestrelReach,
+        );
+        let sim = build_match(&cfg);
+        let mut want = Scenario::Survival.build(5);
+        want.set_balance(rts_data::load_default());
+        assert_eq!(sim.state_hash(), want.state_hash());
+        // The boot match (no match.json) is the old `build(2026)`.
+        let boot = MatchConfig::boot(Scenario::KestrelReach);
+        let mut old = Scenario::KestrelReach.build(2026);
+        old.set_balance(rts_data::load_default());
+        assert_eq!(build_match(&boot).state_hash(), old.state_hash());
+    }
+
+    /// Task 20: the Kestrel depth block ends with the match's difficulty and
+    /// seed; Survival's snapshot never carries either.
+    #[test]
+    fn kestrel_depth_block_reports_difficulty_and_seed() {
+        use rts_core::game::scenario::{kestrel_reach_with, MatchOptions};
+        let json = snapshot_json(&kestrel_reach_with(
+            9,
+            MatchOptions {
+                difficulty: Difficulty::Hard,
+            },
+        ));
+        assert!(
+            json.contains(",\"refinery_cost\":200,\"difficulty\":\"hard\",\"seed\":9},"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        let json = snapshot_json(&Scenario::KestrelReach.build(2026));
+        assert!(json.contains(",\"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026},"));
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("\"difficulty\""));
+        assert!(!survival.contains("\"seed\""));
     }
 
     #[test]
@@ -2451,7 +2592,7 @@ mod tests {
         assert!(
             json.contains(
                 ",\"depth\":{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
-                 \"refinery_cost\":200}"
+                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026}"
             ),
             "{}",
             &json[json.len().saturating_sub(300)..]
@@ -2466,7 +2607,7 @@ mod tests {
         assert!(
             json.contains(
                 ",\"depth\":{\"upgrades\":[3,0,1],\"upgrade_costs\":[null,150,250],\
-                 \"refinery_cost\":200}"
+                 \"refinery_cost\":200,\"difficulty\":\"normal\",\"seed\":2026}"
             ),
             "{}",
             &json[json.len().saturating_sub(300)..]
@@ -2484,7 +2625,7 @@ mod tests {
         let json = snapshot_json(&sim);
         // One refinery stands at the start, so the next costs 150 + 50.
         assert!(
-            json.contains(",\"upgrade_costs\":[150,150,150],\"refinery_cost\":200}"),
+            json.contains(",\"upgrade_costs\":[150,150,150],\"refinery_cost\":200,"),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
@@ -2537,7 +2678,7 @@ mod tests {
             building: cc,
         }]);
         let json = snapshot_json(&sim);
-        assert!(json.contains(",\"refinery_cost\":250}"));
+        assert!(json.contains(",\"refinery_cost\":250,"));
         assert!(
             entity_object(&json, cc.0).ends_with(",\"repair_cd\":449}"),
             "{}",
@@ -3667,7 +3808,15 @@ mod tests {
         // fixtures with the hash masked; the firefight steps with no
         // commands, so no AI, raid or wave runs in it). Was
         // (27265, 0xb9cd_e28f_e163_370f) and (28515, 0x7f04_e3f7_5668_c2de).
-        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x4bec_637c_99ae_933b));
+        //
+        // Re-pinned by Task 20 (difficulty and seed): the depth state now
+        // hashes the difficulty preset (Normal here), so only the `hash`
+        // value changed (same length at tick 0); the depth block that gained
+        // `"difficulty"` and `"seed"` is stripped above, and every other byte
+        // is identical (both snapshots compared against Task 19's with the
+        // hash masked; mid-firefight the hash is one digit shorter). Was
+        // (27265, 0x4bec_637c_99ae_933b) and (28516, 0xd3c8_02cc_1bbc_0b45).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0x6c7d_bcf2_78f9_0971));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3687,7 +3836,9 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xd3c8_02cc_1bbc_0b45));
+        // Task 20: the state hash in it is one digit shorter (28516 -> 28515);
+        // with `"hash"` masked both snapshots are byte-identical to Task 19's.
+        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x97e0_4af7_95bc_21c3));
     }
 
     #[test]
