@@ -475,7 +475,12 @@ pub const fn command_min_autonomy(command: &crate::game::sim::Command) -> u8 {
         | Command::FoundSector { .. }
         | Command::AssignColonyToSector { .. }
         | Command::SetSectorDoctrine { .. }
-        | Command::GovernColony { .. } => u8::MAX,
+        | Command::GovernColony { .. }
+        // Kestrel depth unit orders (Task 13): player-only, never colony-emitted.
+        | Command::Stop { .. }
+        | Command::HoldPosition { .. }
+        | Command::SetStance { .. }
+        | Command::AttackTarget { .. } => u8::MAX,
     }
 }
 

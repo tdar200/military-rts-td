@@ -2982,7 +2982,14 @@ mod tests {
         // state (anchor, engagement) is now hashed, so the tick-0 `hash` value
         // changed again (same length); every other byte is identical. Was
         // (27266, 0x3fbb_4c7d_dbd5_fa57) and (28516, 0xee0f_54cf_6c06_7e37).
-        assert_eq!((off.len(), fnv1a(&off)), (27266, 0xda83_524c_dd7e_782f));
+        //
+        // Re-pinned by Task 13 (orders): each unit's stance and forced target
+        // are now hashed, so the tick-0 `hash` value changed again (same
+        // length); every other byte is identical (checked against the
+        // committed fixtures with the hash masked). Was
+        // (27266, 0xda83_524c_dd7e_782f) and (28515, 0x17d2_6a57_4400_cc38);
+        // the mid-firefight hash is one digit longer, nothing else moved.
+        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x39f8_16c8_d6c2_8b72));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3002,7 +3009,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x17d2_6a57_4400_cc38));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0x75a7_17ec_27d9_da19));
     }
 
     #[test]

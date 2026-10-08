@@ -33,6 +33,60 @@ pub(super) const REPATH_PERIOD: u64 = 20;
 /// Task 12: same-owner units on the same layer closer than this are pushed
 /// apart after movement (half the overlap each).
 pub(super) const SEPARATION: Fixed = Fixed::from_ratio(45, 100);
+/// Task 13: the leash of a Defensive unit (an Aggressive one uses [`LEASH`]).
+pub(super) const DEFENSIVE_LEASH: Fixed = Fixed::from_int(3);
+/// Task 13: a forced target (`AttackTarget`) stays tracked while the chaser or
+/// any other entity of its side is within this distance of it (the widest
+/// unit sight the client's fog uses, a Gunship's 10); past that the target is
+/// lost and the order ends where the chaser stands.
+pub(super) const FORCED_TRACK: Fixed = Fixed::from_int(10);
+
+/// How a Kestrel depth unit fights when nobody is ordering it (Task 13).
+/// Set by [`super::Command::SetStance`] (and `HoldPosition`); kept by `Stop`
+/// and by every move order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Stance {
+    /// Acquires anything in its ring, chases on a leash of 6, answers hits on
+    /// itself and on allies within 6. The default.
+    #[default]
+    Aggressive,
+    /// Never goes looking: fires at what walks into weapon range, answers a hit
+    /// on itself or an ally within 6, and stays within 3 of its anchor.
+    Defensive,
+    /// Never moves on its own: fires at targets in weapon range only. Player
+    /// move orders still move it, and it holds where they end.
+    Hold,
+}
+
+impl Stance {
+    /// The protocol and HUD name: "aggressive", "defensive" or "hold".
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Aggressive => "aggressive",
+            Self::Defensive => "defensive",
+            Self::Hold => "hold",
+        }
+    }
+
+    /// The stance with this exact (lower case) name, if any.
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        [Self::Aggressive, Self::Defensive, Self::Hold]
+            .into_iter()
+            .find(|st| st.name() == s)
+    }
+
+    /// Stable hash tag. Never renumber.
+    #[must_use]
+    pub const fn tag(self) -> u64 {
+        match self {
+            Self::Aggressive => 0,
+            Self::Defensive => 1,
+            Self::Hold => 2,
+        }
+    }
+}
 
 /// Unit push axes for coincident units, one per hex direction (60 degrees
 /// apart, starting at 30 degrees), picked by the higher index `j % 6`.
@@ -57,6 +111,14 @@ pub(super) struct DepthUnit {
     /// call for help). Dropped by `clear_dead` the tick its target dies, so a
     /// freed and reused entity slot is never chased.
     pub(super) engaged: Option<EntityId>,
+    /// Task 13: how this unit fights on its own (Aggressive by default).
+    pub(super) stance: Stance,
+    /// Task 13: the enemy a player `AttackTarget` order focuses. While it is set
+    /// the unit walks into weapon range of it and `run_combat` fires at nothing
+    /// else; it is cleared (and the unit stops where it stands) when the target
+    /// dies, is lost from track, turns untargetable or cannot be reached, and
+    /// by any new order.
+    pub(super) forced: Option<EntityId>,
 }
 
 impl DepthUnit {
@@ -71,6 +133,15 @@ impl DepthUnit {
             None => h.write_u64(0),
         }
         match self.engaged {
+            Some(id) => {
+                h.write_u64(1);
+                h.write_u64(u64::from(id.0));
+            }
+            None => h.write_u64(0),
+        }
+        // Task 13 (appended).
+        h.write_u64(self.stance.tag());
+        match self.forced {
             Some(id) => {
                 h.write_u64(1);
                 h.write_u64(u64::from(id.0));
@@ -272,6 +343,11 @@ impl Sim {
             let Some(profile) = self.depth_fighter(i) else {
                 continue;
             };
+            if self.entities[i].dp.forced.is_some() {
+                // Task 13: a player-chosen target overrides everything below.
+                self.depth_pursue_forced(i, profile, &grid, &mut scratch);
+                continue;
+            }
             let e = &self.entities[i];
             let (pos, owner, idle) = (e.pos, e.owner, e.move_target.is_none());
             let anchor = match e.dp.anchor {
@@ -283,6 +359,12 @@ impl Sim {
                 // Moving on a player or AI order: not ours to steer here.
                 None => continue,
             };
+            if self.entities[i].dp.stance == Stance::Hold {
+                // Task 13: Hold never moves on its own (no acquisition, no
+                // chase, no walk home); `run_combat` fires at anything in range.
+                self.entities[i].dp.engaged = None;
+                continue;
+            }
             let e = &self.entities[i];
             let armed = e.ammunition > 0;
             let range = profile.range;
@@ -391,14 +473,207 @@ impl Sim {
         }
     }
 
-    /// `clear_dead` hook: forget engagements whose target slot was just freed,
-    /// before production or waves can hand the slot to a new entity.
+    /// `clear_dead` hook: forget engagements and forced targets whose target
+    /// slot was just freed, before production or waves can hand the slot to a
+    /// new entity. A unit whose forced target died stops where it stands.
     pub(super) fn depth_drop_dangling(&mut self, freed: &[u32]) {
-        for e in &mut self.entities {
+        for i in 0..self.entities.len() {
+            let e = &mut self.entities[i];
             if e.dp.engaged.is_some_and(|t| freed.contains(&t.0)) {
                 e.dp.engaged = None;
             }
+            if e.dp.forced.is_some_and(|t| freed.contains(&t.0)) {
+                self.depth_halt(i);
+            }
         }
+    }
+
+    /// The stance of living unit `id` under Kestrel depth; `None` when depth is
+    /// off, for buildings and for unknown or dead ids. Read-only.
+    #[must_use]
+    pub fn stance_of(&self, id: EntityId) -> Option<Stance> {
+        if !self.is_depth() {
+            return None;
+        }
+        self.entities
+            .get(id.0 as usize)
+            .filter(|e| e.alive && matches!(e.kind, Kind::Unit(_)))
+            .map(|e| e.dp.stance)
+    }
+
+    /// Index of `unit` when it is a living unit owned by `owner`.
+    fn depth_own_unit(&self, owner: PlayerId, unit: EntityId) -> Option<usize> {
+        let i = unit.0 as usize;
+        self.entities
+            .get(i)
+            .is_some_and(|e| e.alive && e.owner == owner && matches!(e.kind, Kind::Unit(_)))
+            .then_some(i)
+    }
+
+    /// Unit `i` drops every order and engagement and stands where it is, its
+    /// anchor here (its stance is kept). Shared by `Stop` and the end of a
+    /// forced target.
+    fn depth_halt(&mut self, i: usize) {
+        let e = &mut self.entities[i];
+        e.move_target = None;
+        e.order_goal = None;
+        e.path.clear();
+        e.attack_move = false;
+        e.dp.engaged = None;
+        e.dp.forced = None;
+        e.dp.anchor = Some(e.pos);
+    }
+
+    /// [`super::Command::Stop`]: depth only; the owner's living unit drops its
+    /// orders and holds its current spot as the new anchor.
+    pub(super) fn apply_depth_stop(&mut self, owner: PlayerId, unit: EntityId) {
+        if !self.is_depth() {
+            return;
+        }
+        if let Some(i) = self.depth_own_unit(owner, unit) {
+            self.depth_halt(i);
+        }
+    }
+
+    /// [`super::Command::HoldPosition`]: `Stop`, then the Hold stance.
+    pub(super) fn apply_depth_hold(&mut self, owner: PlayerId, unit: EntityId) {
+        if !self.is_depth() {
+            return;
+        }
+        if let Some(i) = self.depth_own_unit(owner, unit) {
+            self.depth_halt(i);
+            self.entities[i].dp.stance = Stance::Hold;
+        }
+    }
+
+    /// [`super::Command::SetStance`]: depth only. Switching to Hold while the
+    /// unit is out on its own business (an acquisition chase or a walk home)
+    /// stops it on the spot; a player order or a forced target keeps going and
+    /// the unit holds where it ends.
+    pub(super) fn apply_depth_stance(&mut self, owner: PlayerId, unit: EntityId, stance: Stance) {
+        if !self.is_depth() {
+            return;
+        }
+        let Some(i) = self.depth_own_unit(owner, unit) else {
+            return;
+        };
+        let dp = &self.entities[i].dp;
+        if stance == Stance::Hold && dp.anchor.is_some() && dp.forced.is_none() {
+            self.depth_halt(i);
+        }
+        self.entities[i].dp.stance = stance;
+    }
+
+    /// [`super::Command::AttackTarget`]: depth only. Valid when the unit is the
+    /// owner's living armed unit (not a Harvester) and the target is alive,
+    /// owned by someone else and on a layer the unit's weapon reaches. The
+    /// unit forgets its other orders and walks toward the target at once.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "entity index fits u32 for any real game"
+    )]
+    pub(super) fn apply_depth_attack_target(
+        &mut self,
+        owner: PlayerId,
+        unit: EntityId,
+        target: EntityId,
+    ) {
+        if !self.is_depth() {
+            return;
+        }
+        let Some(i) = self.depth_own_unit(owner, unit) else {
+            return;
+        };
+        let e = &self.entities[i];
+        if matches!(e.kind, Kind::Unit(UnitKind::Harvester)) {
+            return;
+        }
+        let Some(profile) = attack_of(&self.balance, e.kind) else {
+            return;
+        };
+        let j = target.0 as usize;
+        if !self.depth_can_hit(profile, owner, j) {
+            return;
+        }
+        self.depth_halt(i);
+        let e = &mut self.entities[i];
+        e.dp.anchor = None;
+        e.dp.forced = Some(EntityId(j as u32));
+        self.depth_close_on(i, j, profile.range, true);
+    }
+
+    /// Whether the side `owner` still tracks a forced target at `tpos`: the
+    /// chaser `i` itself or any other entity of that side within
+    /// [`FORCED_TRACK`] of it.
+    fn depth_tracked(
+        &self,
+        grid: &DepthGrid,
+        scratch: &mut Vec<usize>,
+        i: usize,
+        tpos: Vec2,
+    ) -> bool {
+        let track_sq = FORCED_TRACK * FORCED_TRACK;
+        let e = &self.entities[i];
+        if (e.pos - tpos).length_squared() <= track_sq {
+            return true;
+        }
+        grid.gather(tpos, FORCED_TRACK, scratch);
+        scratch.iter().any(|&k| {
+            let o = &self.entities[k];
+            o.alive && o.owner == e.owner && (o.pos - tpos).length_squared() <= track_sq
+        })
+    }
+
+    /// Unit `i` with forced target `j` (weapon `range`): it stands still while
+    /// the target is in weapon range and otherwise walks toward it, re-pathing
+    /// every [`REPATH_PERIOD`] ticks while the target moves (`now` re-paths at
+    /// once). A target that cannot be reached ends the order.
+    fn depth_close_on(&mut self, i: usize, j: usize, range: Fixed, now: bool) {
+        let tpos = self.entities[j].pos;
+        let e = &mut self.entities[i];
+        if (tpos - e.pos).length_squared() <= range * range {
+            e.move_target = None;
+            e.order_goal = None;
+            e.path.clear();
+            e.attack_move = false;
+            return;
+        }
+        let due = now || (self.tick + i as u64).is_multiple_of(REPATH_PERIOD);
+        if e.move_target.is_some() && !(due && e.order_goal != Some(tpos)) {
+            return;
+        }
+        e.move_target = None;
+        e.path.clear();
+        e.attack_move = false;
+        self.order_unit_to(i, tpos, false);
+        if self.entities[i].move_target.is_none() {
+            self.depth_halt(i);
+        }
+    }
+
+    /// Task 13 per-tick step for a unit on a forced target (called from
+    /// [`Sim::run_depth_acquire`] in ascending index): the order ends where the
+    /// unit stands when the target is no longer a living, targetable enemy or
+    /// is lost from track; otherwise the unit closes on it.
+    fn depth_pursue_forced(
+        &mut self,
+        i: usize,
+        profile: AttackProfile,
+        grid: &DepthGrid,
+        scratch: &mut Vec<usize>,
+    ) {
+        let Some(t) = self.entities[i].dp.forced else {
+            return;
+        };
+        let j = t.0 as usize;
+        let owner = self.entities[i].owner;
+        if !self.depth_can_hit(profile, owner, j)
+            || !self.depth_tracked(grid, scratch, i, self.entities[j].pos)
+        {
+            self.depth_halt(i);
+            return;
+        }
+        self.depth_close_on(i, j, profile.range, false);
     }
 
     /// Re-issues unit `i`'s current order from where it stands (its path no
@@ -445,11 +720,13 @@ impl Sim {
                     .then(|| is_air_of(&self.balance, e.kind))
             })
             .collect();
+        // A unit that advanced this tick, or (Task 13) one holding position,
+        // keeps its ground: the other unit of the pair steps aside.
         let moved: Vec<bool> = self
             .entities
             .iter()
             .enumerate()
-            .map(|(i, e)| before.get(i).is_some_and(|&p| p != e.pos))
+            .map(|(i, e)| before.get(i).is_some_and(|&p| p != e.pos) || e.dp.stance == Stance::Hold)
             .collect();
         let grid = DepthGrid::build(self);
         let mut scratch = Vec::new();
@@ -639,47 +916,33 @@ pub(super) fn ground_step(map: &Map, pos: Vec2, subgoal: Vec2, speed: Fixed) -> 
 /// order always ends exactly on the anchor; the slack only absorbs drift).
 const HOME_SLACK: Fixed = Fixed::ONE;
 
-/// Stance hook (Task 13): how far this unit may stray from its anchor
-/// (Defensive will use 3).
-#[allow(
-    clippy::missing_const_for_fn,
-    reason = "Task 13 reads the appended stance field here"
-)]
-fn leash_of(dp: &DepthUnit) -> Fixed {
-    let _ = dp;
-    LEASH
+/// Stance hook: how far this unit may stray from its anchor (Aggressive 6,
+/// Defensive 3, Hold 0: it never leaves).
+const fn leash_of(dp: &DepthUnit) -> Fixed {
+    match dp.stance {
+        Stance::Aggressive => LEASH,
+        Stance::Defensive => DEFENSIVE_LEASH,
+        Stance::Hold => Fixed::ZERO,
+    }
 }
 
-/// Stance hook (Task 13): whether this unit picks fights on sight. Defensive
-/// will answer only calls for help; Hold only targets already in range.
-#[allow(
-    clippy::missing_const_for_fn,
-    reason = "Task 13 reads the appended stance field here"
-)]
-fn may_acquire(dp: &DepthUnit) -> bool {
-    let _ = dp;
-    true
+/// Stance hook: whether this unit picks fights on sight. Only Aggressive does
+/// (Defensive and Hold still fire at whatever enters weapon range, through
+/// `run_combat`); a unit on a forced target never looks elsewhere.
+const fn may_acquire(dp: &DepthUnit) -> bool {
+    matches!(dp.stance, Stance::Aggressive) && dp.forced.is_none()
 }
 
-/// Stance hook (Task 13): whether this unit answers a call for help.
-#[allow(
-    clippy::missing_const_for_fn,
-    reason = "Task 13 reads the appended stance field here"
-)]
-fn may_respond(dp: &DepthUnit) -> bool {
-    let _ = dp;
-    true
+/// Stance hook: whether this unit answers a hit on itself or an ally within
+/// [`ASSIST_RADIUS`]. Hold never moves for one; a forced unit keeps its target.
+const fn may_respond(dp: &DepthUnit) -> bool {
+    !matches!(dp.stance, Stance::Hold) && dp.forced.is_none()
 }
 
-/// Stance hook (Task 13): whether this unit may leave its spot to chase (Hold
-/// never moves on its own).
-#[allow(
-    clippy::missing_const_for_fn,
-    reason = "Task 13 reads the appended stance field here"
-)]
-fn may_chase(dp: &DepthUnit) -> bool {
-    let _ = dp;
-    true
+/// Stance hook: whether this unit may leave its spot to chase (Hold never
+/// moves on its own).
+const fn may_chase(dp: &DepthUnit) -> bool {
+    !matches!(dp.stance, Stance::Hold)
 }
 
 /// Living entities bucketed by the combat grid (`COMBAT_CELL` tiles), each
@@ -751,14 +1014,14 @@ impl DepthGrid {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_air_of, Kind, ACQUIRE_BONUS, LEASH};
+    use super::{is_air_of, EntityId, Kind, ACQUIRE_BONUS, DEFENSIVE_LEASH, FORCED_TRACK, LEASH};
     use crate::fixed::Fixed;
     use crate::game::hex;
     use crate::game::map::Map;
     use crate::game::scenario::{
         kestrel_reach, kestrel_reach_classic, lane_defense, survival, Scenario,
     };
-    use crate::game::sim::{Command, EntityKindView, PlayerId, Sim};
+    use crate::game::sim::{Command, EntityKindView, PlayerId, Sim, Stance};
     use crate::game::stats::{BuildingKind, UnitKind};
     use crate::vec::Vec2;
     use alloc::vec::Vec;
@@ -807,6 +1070,47 @@ mod tests {
                     target: hex::center(20, 10),
                 });
             }
+        }
+        // Task 13: stance, stop, hold and a forced target between ticks 900
+        // and 1200 (on the lowest-id living rifles; the target is the
+        // lowest-id living alien unit, valid or not, deterministic either way).
+        let rifles: Vec<_> = s
+            .views()
+            .into_iter()
+            .filter(|v| {
+                v.owner == PlayerId(0) && matches!(v.kind, EntityKindView::Unit(UnitKind::Infantry))
+            })
+            .map(|v| v.id)
+            .collect();
+        let alien = s
+            .views()
+            .into_iter()
+            .find(|v| v.owner == PlayerId(1) && matches!(v.kind, EntityKindView::Unit(_)))
+            .map(|v| v.id);
+        match (s.tick(), rifles.first(), rifles.get(1)) {
+            (900, Some(&unit), _) => out.push(Command::SetStance {
+                owner: PlayerId(0),
+                unit,
+                stance: Stance::Defensive,
+            }),
+            (1000, Some(&unit), _) => out.push(Command::Stop {
+                owner: PlayerId(0),
+                unit,
+            }),
+            (1100, _, Some(&unit)) => out.push(Command::HoldPosition {
+                owner: PlayerId(0),
+                unit,
+            }),
+            (1200, Some(&unit), _) => {
+                if let Some(target) = alien {
+                    out.push(Command::AttackTarget {
+                        owner: PlayerId(0),
+                        unit,
+                        target,
+                    });
+                }
+            }
+            _ => {}
         }
         out
     }
@@ -1753,6 +2057,592 @@ mod tests {
         assert_eq!(r.state_hash(), a);
     }
 
+    // ---- Task 13: Stop, HoldPosition, SetStance, AttackTarget ----
+
+    /// Hit points of a living entity (zero once it is gone).
+    fn hp_of(s: &Sim, id: EntityId) -> Fixed {
+        s.views()
+            .iter()
+            .find(|x| x.id == id)
+            .map_or(Fixed::ZERO, |x| x.hp)
+    }
+
+    #[test]
+    fn stop_clears_orders_and_hold_never_moves() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: a,
+            target: v(30, 20),
+        }]);
+        for _ in 0..20 {
+            s.step(&[]);
+        }
+        s.step(&[Command::Stop { owner: P0, unit: a }]);
+        let here = s.position(a).unwrap();
+        assert!(here.x > Fixed::from_int(10), "never marched");
+        for _ in 0..60 {
+            s.step(&[]);
+        }
+        assert_eq!(s.position(a), Some(here));
+        s.step(&[Command::HoldPosition { owner: P0, unit: a }]);
+        let r = UnitKind::Infantry.stats().attack.range;
+        // Inside the acquisition ring, outside weapon range. Dry, so the duel
+        // cannot kill the holder (which would also read as "moved").
+        let passer = s.add_unit(
+            P1,
+            UnitKind::Infantry,
+            here + Vec2::new(r + Fixed::from_int(2), Fixed::ZERO),
+        );
+        s.entities[passer.0 as usize].ammunition = 0;
+        for _ in 0..200 {
+            s.step(&[]);
+            assert_eq!(s.position(a), Some(here), "hold moved");
+        }
+        assert_eq!(s.stance_of(a), Some(Stance::Hold));
+        // Hold still fires at an enemy that stands inside weapon range.
+        let inside = s.add_unit(
+            P1,
+            UnitKind::Infantry,
+            here + Vec2::new(r - Fixed::ONE, Fixed::ZERO),
+        );
+        s.entities[inside.0 as usize].ammunition = 0;
+        for _ in 0..60 {
+            s.step(&[]);
+        }
+        assert!(
+            hp_of(&s, inside) < UnitKind::Infantry.stats().max_hp,
+            "hold never fired"
+        );
+        assert_eq!(s.position(a), Some(here), "hold moved");
+    }
+
+    /// Hold never moves on its own: not for an enemy hitting it from outside its
+    /// weapon range, not for a hit on an ally beside it, not for a same-owner
+    /// crowd pressing on it; a player Move still moves it, and it holds where
+    /// the order ends.
+    #[test]
+    fn hold_never_moves() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        let ally = s.add_unit(P0, UnitKind::Infantry, v(10, 21));
+        // Two more rifles dropped right on top of the holder.
+        let crowd = [
+            s.add_unit(P0, UnitKind::Infantry, v(10, 20)),
+            s.add_unit(P0, UnitKind::Infantry, v(10, 20)),
+        ];
+        s.step(&[Command::HoldPosition { owner: P0, unit: a }]);
+        let home = s.position(a).unwrap();
+        // A tank shoots from range 4, beyond the rifle's 3.
+        let tank = s.add_unit(
+            P1,
+            UnitKind::Tank,
+            home + Vec2::new(Fixed::from_int(4), Fixed::ZERO),
+        );
+        s.entities[tank.0 as usize].ammunition = 1;
+        for _ in 0..300 {
+            s.step(&[]);
+            assert_eq!(s.position(a), Some(home), "hold moved");
+        }
+        // The others (not holding) answered the shell and spread out.
+        assert!(
+            [ally, crowd[0], crowd[1]]
+                .iter()
+                .any(|&u| s.position(u) != Some(v(10, 20)) && s.position(u) != Some(v(10, 21))),
+            "control: the aggressive rifles never moved"
+        );
+        // A player Move is obeyed; the unit then holds where it arrives.
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: a,
+            target: v(10, 30),
+        }]);
+        for _ in 0..400 {
+            s.step(&[]);
+        }
+        let there = s.position(a).unwrap();
+        assert!(
+            (there - v(10, 30)).length_squared() < Fixed::ONE,
+            "ended at {there:?}"
+        );
+        assert_eq!(s.stance_of(a), Some(Stance::Hold));
+        let p1 = s.add_unit(
+            P1,
+            UnitKind::Infantry,
+            there + Vec2::new(Fixed::from_int(5), Fixed::ZERO),
+        );
+        s.entities[p1.0 as usize].ammunition = 0;
+        s.step(&[Command::Move {
+            owner: P1,
+            unit: p1,
+            target: there + Vec2::new(Fixed::from_int(5), Fixed::from_int(6)),
+        }]);
+        for _ in 0..200 {
+            s.step(&[]);
+            assert_eq!(s.position(a), Some(there), "hold chased a passer-by");
+        }
+    }
+
+    #[test]
+    fn attack_target_focuses_the_chosen_enemy() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+        let near = s.add_unit(P1, UnitKind::Infantry, v(12, 20));
+        let far = s.add_unit(P1, UnitKind::Infantry, v(13, 21));
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: far,
+        }]);
+        for _ in 0..300 {
+            if s.position(far).is_none() {
+                break;
+            }
+            s.step(&[]);
+        }
+        assert!(s.position(far).is_none(), "forced target survived");
+        assert!(
+            s.position(near).is_some(),
+            "fired at the nearer enemy first"
+        );
+        assert_eq!(
+            hp_of(&s, near),
+            UnitKind::Infantry.stats().max_hp,
+            "a shot went to the nearer enemy"
+        );
+    }
+
+    /// A forced target out of weapon range is walked to (not just waited for),
+    /// past a nearer enemy that does not halt the walk, and the order ends
+    /// (no chase, no forced id) once it dies.
+    #[test]
+    fn attack_target_walks_into_range_and_ends_when_the_target_dies() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+        let far = s.add_unit(P1, UnitKind::Infantry, v(20, 20));
+        s.entities[far.0 as usize].ammunition = 0;
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: far,
+        }]);
+        for _ in 0..600 {
+            if s.position(far).is_none() {
+                break;
+            }
+            s.step(&[]);
+        }
+        assert!(s.position(far).is_none(), "never reached its target");
+        let stood = s.position(a).unwrap();
+        assert!(stood.x > Fixed::from_int(14), "fired from {stood:?}");
+        assert!(s.entities[a.0 as usize].dp.forced.is_none());
+        for _ in 0..120 {
+            s.step(&[]);
+        }
+        assert_eq!(s.position(a), Some(stood), "kept walking after the kill");
+    }
+
+    /// A later `Move` or `AttackMove` replaces the forced target outright.
+    #[test]
+    fn a_move_order_replaces_a_forced_target() {
+        for attack in [false, true] {
+            let mut s = depth_arena();
+            let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+            let t = s.add_unit(P1, UnitKind::Infantry, v(16, 20));
+            s.entities[t.0 as usize].ammunition = 0;
+            s.step(&[Command::AttackTarget {
+                owner: P0,
+                unit: a,
+                target: t,
+            }]);
+            assert_eq!(s.entities[a.0 as usize].dp.forced, Some(t), "precondition");
+            let order = if attack {
+                Command::AttackMove {
+                    owner: P0,
+                    unit: a,
+                    target: v(10, 34),
+                }
+            } else {
+                Command::Move {
+                    owner: P0,
+                    unit: a,
+                    target: v(10, 34),
+                }
+            };
+            s.step(&[order]);
+            assert!(s.entities[a.0 as usize].dp.forced.is_none());
+            for _ in 0..600 {
+                s.step(&[]);
+            }
+            let end = s.position(a).unwrap();
+            assert!(
+                (end - v(10, 34)).length_squared() < Fixed::ONE,
+                "ended at {end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_target_is_dropped_when_its_slot_is_reused() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Tank, v(10, 20));
+        let t = s.add_unit(P1, UnitKind::Infantry, v(12, 20));
+        s.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: t,
+        }]);
+        // Fixed step count (never `while alive`): the kill takes a few shots.
+        for _ in 0..300 {
+            if s.position(t).is_none() {
+                break;
+            }
+            s.step(&[]);
+        }
+        assert!(s.position(t).is_none(), "precondition: the target died");
+        let ally = s.add_unit(P0, UnitKind::Infantry, v(25, 25)); // reuses the freed slot
+        assert_eq!(ally, t);
+        let hp = hp_of(&s, ally);
+        for _ in 0..200 {
+            s.step(&[]);
+        }
+        assert_eq!(hp_of(&s, ally), hp);
+        assert!(
+            (s.position(a).unwrap() - v(25, 25)).length_squared() > Fixed::from_int(4),
+            "chased the recycled slot"
+        );
+    }
+
+    /// A target that outruns every unit of the chaser's side (no friendly
+    /// entity within [`FORCED_TRACK`]) is lost: the order ends where the chaser
+    /// stands instead of hunting it across the map.
+    #[test]
+    fn attack_target_ends_when_the_target_slips_out_of_track() {
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Tank, v(5, 20));
+        let runner = s.add_unit(P1, UnitKind::Infantry, v(10, 20));
+        s.entities[runner.0 as usize].ammunition = 0;
+        s.entities[a.0 as usize].ammunition = 0; // dry: it chases but never kills
+        s.step(&[
+            Command::AttackTarget {
+                owner: P0,
+                unit: a,
+                target: runner,
+            },
+            Command::Move {
+                owner: P1,
+                unit: runner,
+                target: v(38, 20),
+            },
+        ]);
+        let mut lost_at = None;
+        for t in 0..900 {
+            s.step(&[]);
+            if lost_at.is_none() && s.entities[a.0 as usize].dp.forced.is_none() {
+                lost_at = Some((t, s.position(a).unwrap()));
+            }
+        }
+        let (_, at) = lost_at.expect("the chase never ended");
+        let gap = (s.position(runner).unwrap() - at).length();
+        assert!(
+            gap >= FORCED_TRACK - Fixed::ONE,
+            "dropped too early: {gap:?}"
+        );
+        assert!(at.x > Fixed::from_int(6), "it never chased");
+        assert_eq!(
+            s.position(a),
+            Some(at),
+            "kept moving after losing the target"
+        );
+    }
+
+    #[test]
+    fn attack_target_rejects_friends_untargetable_layers_and_other_owners() {
+        let setup = || {
+            let mut s = depth_arena();
+            let ids = [
+                s.add_unit(P0, UnitKind::Infantry, v(10, 20)),
+                s.add_unit(P0, UnitKind::Infantry, v(14, 20)),
+                s.add_unit(P1, UnitKind::Helicopter, v(16, 20)),
+                // Out of everyone's ring, but within track (7.2) of `friend`.
+                s.add_unit(P1, UnitKind::Infantry, v(18, 26)),
+            ];
+            s.entities[ids[2].0 as usize].ammunition = 0;
+            s.entities[ids[3].0 as usize].ammunition = 0;
+            (s, ids)
+        };
+        let (mut t, [a, friend, heli, rifle]) = setup();
+        let (mut twin, _) = setup();
+        twin.step(&[]);
+        t.step(&[
+            // A friend, a helicopter a rifle cannot shoot, an order in another
+            // player's name and unknown ids: all no-ops.
+            Command::AttackTarget {
+                owner: P0,
+                unit: a,
+                target: friend,
+            },
+            Command::AttackTarget {
+                owner: P0,
+                unit: a,
+                target: heli,
+            },
+            Command::AttackTarget {
+                owner: P1,
+                unit: a,
+                target: rifle,
+            },
+            Command::AttackTarget {
+                owner: P0,
+                unit: a,
+                target: EntityId(99),
+            },
+            Command::Stop { owner: P1, unit: a },
+            Command::HoldPosition { owner: P1, unit: a },
+            Command::SetStance {
+                owner: P1,
+                unit: a,
+                stance: Stance::Hold,
+            },
+            Command::Stop {
+                owner: P0,
+                unit: EntityId(99),
+            },
+        ]);
+        assert_eq!(
+            t.state_hash(),
+            twin.state_hash(),
+            "an invalid order changed the world"
+        );
+        assert_eq!(t.stance_of(a), Some(Stance::Aggressive));
+        // A valid one does.
+        t.step(&[Command::AttackTarget {
+            owner: P0,
+            unit: a,
+            target: rifle,
+        }]);
+        assert_eq!(t.entities[a.0 as usize].dp.forced, Some(rifle));
+    }
+
+    #[test]
+    fn stances_cycle_by_name_and_stop_keeps_the_stance() {
+        assert_eq!(Stance::default(), Stance::Aggressive);
+        for st in [Stance::Aggressive, Stance::Defensive, Stance::Hold] {
+            assert_eq!(Stance::from_name(st.name()), Some(st));
+        }
+        assert_eq!(Stance::from_name("Hold"), None, "names are lower case");
+        assert_eq!(Stance::from_name("charge"), None);
+        assert_ne!(Stance::Aggressive.tag(), Stance::Defensive.tag());
+        assert_ne!(Stance::Defensive.tag(), Stance::Hold.tag());
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        let b = s.add_building(P0, BuildingKind::Barracks, 20, 20);
+        assert_eq!(s.stance_of(a), Some(Stance::Aggressive));
+        assert_eq!(s.stance_of(b), None, "buildings have no stance");
+        s.step(&[Command::SetStance {
+            owner: P0,
+            unit: a,
+            stance: Stance::Defensive,
+        }]);
+        s.step(&[Command::Stop { owner: P0, unit: a }]);
+        assert_eq!(s.stance_of(a), Some(Stance::Defensive));
+        s.step(&[Command::SetStance {
+            owner: P0,
+            unit: b,
+            stance: Stance::Hold,
+        }]);
+        assert_eq!(s.stance_of(b), None);
+    }
+
+    /// One Defensive-stance run: a dry P1 rifle marches past at weapon range + 2
+    /// with a Move order (inside the acquisition ring). Returns whether the P0
+    /// rifle left its spot.
+    fn passer_by(stance: Stance) -> bool {
+        let mut s = depth_arena();
+        let r = UnitKind::Infantry.stats().attack.range;
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        s.step(&[Command::SetStance {
+            owner: P0,
+            unit: a,
+            stance,
+        }]);
+        let home = s.position(a).unwrap();
+        let lane = home.x + r + Fixed::from_int(2);
+        let p = s.add_unit(P1, UnitKind::Infantry, Vec2::new(lane, Fixed::from_int(8)));
+        s.entities[p.0 as usize].ammunition = 0;
+        s.step(&[Command::Move {
+            owner: P1,
+            unit: p,
+            target: Vec2::new(lane, Fixed::from_int(36)),
+        }]);
+        let mut moved = false;
+        for _ in 0..500 {
+            s.step(&[]);
+            moved |= s.position(a) != Some(home);
+        }
+        moved
+    }
+
+    #[test]
+    fn defensive_ignores_a_passer_by_but_answers_a_hit() {
+        assert!(
+            passer_by(Stance::Aggressive),
+            "control: aggressive gives chase"
+        );
+        assert!(!passer_by(Stance::Defensive), "defensive left its spot");
+        // Now an enemy tank shoots it from range 4 (beyond the rifle's 3): the
+        // defensive rifle answers, closes in, damages it, and never strays more
+        // than 3 from its anchor.
+        let mut s = depth_arena();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        s.step(&[Command::SetStance {
+            owner: P0,
+            unit: a,
+            stance: Stance::Defensive,
+        }]);
+        let anchor = s.position(a).unwrap();
+        let tank = s.add_unit(
+            P1,
+            UnitKind::Tank,
+            anchor + Vec2::new(Fixed::from_int(4), Fixed::ZERO),
+        );
+        // One round: a single 30-damage shell leaves the 50 hp rifle standing.
+        s.entities[tank.0 as usize].ammunition = 1;
+        let tank_hp = hp_of(&s, tank);
+        let mut furthest = Fixed::ZERO;
+        for _ in 0..600 {
+            s.step(&[]);
+            let p = s.position(a).expect("the rifle died");
+            furthest = furthest.max((p - anchor).length());
+        }
+        assert!(hp_of(&s, tank) < tank_hp, "never answered the hit");
+        assert!(furthest > Fixed::ZERO, "never closed in");
+        assert!(
+            furthest <= DEFENSIVE_LEASH,
+            "strayed {furthest:?} from its anchor"
+        );
+        let end = s.position(a).unwrap();
+        assert!(
+            (end - anchor).length() <= DEFENSIVE_LEASH,
+            "ended at {end:?}"
+        );
+    }
+
+    #[test]
+    fn depth_commands_are_ignored_without_depth() {
+        let mut s = Sim::new(Map::new(40, 40), 1, Fixed::ZERO);
+        s.enable_earthfront();
+        let a = s.add_unit(P0, UnitKind::Infantry, v(10, 20));
+        let e = s.add_unit(P1, UnitKind::Infantry, v(38, 38));
+        s.step(&[Command::Move {
+            owner: P0,
+            unit: a,
+            target: v(30, 20),
+        }]);
+        let mut twin = s.clone();
+        s.step(&[
+            Command::Stop { owner: P0, unit: a },
+            Command::HoldPosition { owner: P0, unit: a },
+            Command::SetStance {
+                owner: P0,
+                unit: a,
+                stance: Stance::Hold,
+            },
+            Command::AttackTarget {
+                owner: P0,
+                unit: a,
+                target: e,
+            },
+        ]);
+        twin.step(&[]);
+        assert_eq!(
+            s.state_hash(),
+            twin.state_hash(),
+            "a depth order acted without depth"
+        );
+        for _ in 0..60 {
+            s.step(&[]);
+        }
+        assert!(s.position(a).unwrap().x > Fixed::from_int(11));
+        assert_eq!(s.stance_of(a), None);
+    }
+
+    /// The four orders replay: a busy skirmish with every order (and the
+    /// stances in play) run twice gives one hash, and the recorded log
+    /// reproduces it.
+    #[test]
+    fn depth_orders_are_deterministic_and_replay() {
+        let setup = || {
+            let mut s = depth_arena();
+            let mut mine = Vec::new();
+            let mut theirs = Vec::new();
+            for i in 0..8 {
+                mine.push(s.add_unit(P0, UnitKind::Infantry, v(8, 14 + i)));
+                theirs.push(s.add_unit(P1, UnitKind::Infantry, v(24, 14 + i)));
+            }
+            mine.push(s.add_unit(P0, UnitKind::Tank, v(6, 18)));
+            (s, mine, theirs)
+        };
+        let orders = |t: u32, mine: &[EntityId], theirs: &[EntityId]| -> Vec<Command> {
+            let mut c = Vec::new();
+            match t {
+                10 => {
+                    for (k, &unit) in mine.iter().enumerate() {
+                        let stance = [Stance::Aggressive, Stance::Defensive, Stance::Hold][k % 3];
+                        c.push(Command::SetStance {
+                            owner: P0,
+                            unit,
+                            stance,
+                        });
+                    }
+                }
+                40 => {
+                    for &unit in mine {
+                        c.push(Command::AttackMove {
+                            owner: P0,
+                            unit,
+                            target: v(26, 18),
+                        });
+                    }
+                }
+                120 => c.push(Command::Stop {
+                    owner: P0,
+                    unit: mine[0],
+                }),
+                130 => c.push(Command::HoldPosition {
+                    owner: P0,
+                    unit: mine[1],
+                }),
+                140 => c.push(Command::AttackTarget {
+                    owner: P0,
+                    unit: mine[8],
+                    target: theirs[7],
+                }),
+                _ => {}
+            }
+            c
+        };
+        let run = || {
+            let (mut s, mine, theirs) = setup();
+            let mut log = Vec::new();
+            for t in 0..1200u32 {
+                let c = orders(t, &mine, &theirs);
+                s.step(&c);
+                log.push(c);
+            }
+            (s.state_hash(), log)
+        };
+        let (a, log) = run();
+        let (b, _) = run();
+        assert_eq!(a, b);
+        let (mut r, _, _) = setup();
+        for c in &log {
+            r.step(c);
+        }
+        assert_eq!(r.state_hash(), a);
+    }
+
     /// The bridge budget at 80 units on Kestrel: a 30 Hz tick must stay far
     /// under its 33 ms, with separation and acquisition both running.
     #[test]
@@ -1826,5 +2716,57 @@ mod tests {
             assert!(mean < std::time::Duration::from_millis(5));
             assert!(worst < std::time::Duration::from_millis(15));
         }
+    }
+
+    /// Task 13 tick cost: the same two 40-rifle lines 6 apart on Kestrel, the
+    /// human line split into thirds (every rifle on a forced target, a third
+    /// holding, a third defensive), against the plain Task 11/12 run.
+    #[test]
+    #[ignore = "bench: cargo test --release -p rts-core --offline depth_orders_tick_cost -- --ignored --nocapture"]
+    fn depth_orders_tick_cost() {
+        let bench = |orders: bool| {
+            let mut s = kestrel_reach(3);
+            let mine: Vec<_> = (0..40u16)
+                .map(|i| s.add_unit(P0, UnitKind::Infantry, hex::center(12, 5 + (i % 15))))
+                .collect();
+            let theirs: Vec<_> = (0..40u16)
+                .map(|i| s.add_unit(P1, UnitKind::Infantry, hex::center(20, 5 + (i % 15))))
+                .collect();
+            let mut first = Vec::new();
+            if orders {
+                for (k, (&unit, &target)) in mine.iter().zip(&theirs).enumerate() {
+                    let stance = [Stance::Aggressive, Stance::Hold, Stance::Defensive][k % 3];
+                    first.push(Command::SetStance {
+                        owner: P0,
+                        unit,
+                        stance,
+                    });
+                    first.push(Command::AttackTarget {
+                        owner: P0,
+                        unit,
+                        target,
+                    });
+                }
+            }
+            let t = std::time::Instant::now();
+            let mut worst = std::time::Duration::ZERO;
+            for step in 0..900 {
+                let mut c = Scenario::KestrelReach.host_commands(&s);
+                if step == 0 {
+                    c.extend(first.iter().cloned());
+                }
+                let t0 = std::time::Instant::now();
+                s.step(&c);
+                worst = worst.max(t0.elapsed());
+            }
+            (t.elapsed() / 900, worst)
+        };
+        let (mean, worst) = bench(true);
+        let (pmean, pworst) = bench(false);
+        std::eprintln!(
+            "orders: mean {mean:?} worst {worst:?}; plain: mean {pmean:?} worst {pworst:?}"
+        );
+        assert!(mean < std::time::Duration::from_millis(5));
+        assert!(worst < std::time::Duration::from_millis(15));
     }
 }

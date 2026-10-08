@@ -12,6 +12,7 @@ mod earthfront;
 pub use earthfront::{EconomyView, SupplyLink, SupplyState};
 #[path = "depth.rs"]
 mod depth;
+pub use depth::Stance;
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
@@ -584,6 +585,42 @@ pub enum Command {
         colony: ColonyId,
         /// The doctrine to govern it with.
         doctrine: SectorDoctrine,
+    },
+    /// Kestrel depth only (a no-op elsewhere): the unit drops its orders,
+    /// engagement and forced target and stands where it is (its new anchor).
+    /// Its stance is kept.
+    Stop {
+        /// Owning player.
+        owner: PlayerId,
+        /// The unit entity.
+        unit: EntityId,
+    },
+    /// Kestrel depth only: [`Command::Stop`] plus the [`Stance::Hold`] stance.
+    HoldPosition {
+        /// Owning player.
+        owner: PlayerId,
+        /// The unit entity.
+        unit: EntityId,
+    },
+    /// Kestrel depth only: sets how the unit fights on its own.
+    SetStance {
+        /// Owning player.
+        owner: PlayerId,
+        /// The unit entity.
+        unit: EntityId,
+        /// The new stance.
+        stance: Stance,
+    },
+    /// Kestrel depth only: the unit walks into weapon range of `target` and
+    /// fires at nothing else while it lives. Ignored unless the target is a
+    /// living enemy on a layer the unit's weapon reaches.
+    AttackTarget {
+        /// Owning player.
+        owner: PlayerId,
+        /// The attacking unit.
+        unit: EntityId,
+        /// The enemy entity to focus.
+        target: EntityId,
     },
 }
 
@@ -1979,6 +2016,7 @@ impl Sim {
             e.alive
                 && matches!(e.kind, Kind::Unit(u) if u != UnitKind::Harvester)
                 && e.move_target.is_none()
+                && e.dp.forced.is_none()
                 && e.path.is_empty()
                 && !e.harvest_returning
                 && e.cargo == 0
@@ -2904,9 +2942,11 @@ impl Sim {
                 });
                 if valid {
                     if self.is_depth() {
-                        // A direct order supersedes any auto-engagement and its anchor.
+                        // A direct order supersedes any auto-engagement and its
+                        // anchor, and (Task 13) any forced target.
                         self.entities[idx].dp.anchor = None;
                         self.entities[idx].dp.engaged = None;
+                        self.entities[idx].dp.forced = None;
                     }
                     // Plain move clears any standing attack-move stance.
                     self.order_unit_to(idx, target, false);
@@ -2923,9 +2963,11 @@ impl Sim {
                 });
                 if valid {
                     if self.is_depth() {
-                        // A direct order supersedes any auto-engagement and its anchor.
+                        // A direct order supersedes any auto-engagement and its
+                        // anchor, and (Task 13) any forced target.
                         self.entities[idx].dp.anchor = None;
                         self.entities[idx].dp.engaged = None;
+                        self.entities[idx].dp.forced = None;
                     }
                     self.order_unit_to(idx, target, true);
                 }
@@ -3017,6 +3059,18 @@ impl Sim {
                 colony,
                 doctrine,
             } => self.apply_govern_colony(owner, colony, doctrine),
+            Command::Stop { owner, unit } => self.apply_depth_stop(owner, unit),
+            Command::HoldPosition { owner, unit } => self.apply_depth_hold(owner, unit),
+            Command::SetStance {
+                owner,
+                unit,
+                stance,
+            } => self.apply_depth_stance(owner, unit, stance),
+            Command::AttackTarget {
+                owner,
+                unit,
+                target,
+            } => self.apply_depth_attack_target(owner, unit, target),
         }
     }
 
@@ -4375,6 +4429,8 @@ impl Sim {
             }
         }
 
+        // Kestrel depth (also gates the forced-target filter below).
+        let depth = self.is_depth();
         // (target index, attacker index, damage, pierces-shields).
         let mut damage: Vec<(usize, usize, Fixed, bool)> = Vec::new();
         // Seats whose lethal blow this tick captures (not destroys) them:
@@ -4438,9 +4494,16 @@ impl Sim {
             // index order and we only replace on a strict improvement), keeping
             // the simulation bit-for-bit deterministic.
             let mut best: Option<(usize, Fixed, Fixed)> = None;
+            // Kestrel depth (Task 13): a unit on a forced target fires at it
+            // alone (never set when depth is off).
+            let forced = if depth {
+                e.dp.forced.map(|t| t.0 as usize)
+            } else {
+                None
+            };
             for &j in &candidates {
                 let t = snap[j];
-                if t.1 == e.owner.0 {
+                if t.1 == e.owner.0 || forced.is_some_and(|f| f != j) {
                     continue;
                 }
                 // Respect air/ground targeting: AA hits only air, most weapons
@@ -4545,7 +4608,6 @@ impl Sim {
         // Kestrel depth: (victim, attacker) in damage order, for the
         // under-attack response once every hit has landed.
         let mut hits: Vec<(usize, usize)> = Vec::new();
-        let depth = self.is_depth();
         for (j, attacker, dmg, pierces) in damage {
             if depth {
                 hits.push((j, attacker));
