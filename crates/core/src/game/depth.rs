@@ -20,6 +20,7 @@ use crate::game::balance::Balance;
 use crate::game::hex;
 use crate::game::map::Map;
 use crate::game::path::find_path_weighted;
+use crate::game::perk;
 use crate::game::stats::{AttackProfile, BuildingKind, UnitKind};
 use crate::hash::Fnv;
 use crate::vec::Vec2;
@@ -508,6 +509,17 @@ pub(super) struct DepthGlobal {
     /// filled by `apply_sell` and emptied by that same tick's first
     /// `clear_dead`, so it is always empty between ticks and is not hashed.
     pub(super) sold: Vec<u32>,
+    /// Task 23: this match is a roguelite run ([`Sim::is_run`]): twelve
+    /// cleared waves win, and each cleared wave drafts three perks.
+    pub(super) run: bool,
+    /// Task 23: the perks the run may draft, one bit per perk id, masked to
+    /// [`perk::FULL_RUN_POOL`] (0 outside a run).
+    pub(super) perk_pool: u32,
+    /// Task 23: the pending draft, three perk ids ([`perk::NO_PERK`] fills the
+    /// slots a short pool could not), until the human takes one.
+    pub(super) draft: Option<[u8; 3]>,
+    /// Task 23: drafts offered so far.
+    pub(super) drafted: u32,
 }
 
 impl DepthGlobal {
@@ -524,6 +536,20 @@ impl DepthGlobal {
         for v in self.destroyed.iter().chain(&self.lost) {
             h.write_i64(*v);
         }
+        // Task 23 (appended): run mode, its pool, the pending draft and the
+        // drafts offered.
+        h.write_u64(u64::from(self.run));
+        h.write_u64(u64::from(self.perk_pool));
+        match self.draft {
+            Some(d) => {
+                h.write_u64(1);
+                for id in d {
+                    h.write_u64(u64::from(id));
+                }
+            }
+            None => h.write_u64(0),
+        }
+        h.write_u64(u64::from(self.drafted));
     }
 }
 
@@ -533,8 +559,18 @@ pub const SCORE_PER_WAVE: i64 = 500;
 /// minutes, the end of the match window).
 pub const SCORE_VICTORY_TICKS: i64 = 45_000;
 /// Task 22: the least total for each grade, S first; below the last is D.
+/// Task 23 (controller ruling): doubled from 12,000 / 8,000 / 5,000 / 2,500,
+/// so the Task 22 playtest totals grade Easy win (10,952) B, Normal win
+/// (17,504) A and Hard loss (8,182) C.
 pub const GRADE_THRESHOLDS: [(i64, char); 4] =
-    [(12_000, 'S'), (8_000, 'A'), (5_000, 'B'), (2_500, 'C')];
+    [(24_000, 'S'), (16_000, 'A'), (10_000, 'B'), (5_000, 'C')];
+
+/// Task 23: cleared waves that win a run.
+pub const RUN_WAVES: u32 = 12;
+/// Task 23: points a run victory adds to the score (in its victory bonus).
+pub const RUN_VICTORY_BONUS: i64 = 1000;
+/// Task 23: perks offered by one draft (fewer when the pool runs short).
+pub const DRAFT_SIZE: usize = 3;
 
 /// Task 22: the score of a Kestrel depth match so far, from the human's side.
 /// Derived from hashed sim state only ([`Sim::depth_score`]), so a replay that
@@ -548,7 +584,8 @@ pub struct DepthScore {
     /// Money value of the human's own units and structures lost.
     pub lost: i64,
     /// A tenth of the ticks left before [`SCORE_VICTORY_TICKS`] on a human
-    /// win, else 0.
+    /// win, plus [`RUN_VICTORY_BONUS`] when the win ends a run (Task 23),
+    /// else 0.
     pub victory_bonus: i64,
     /// `max(0, waves_held * 500 + destroyed - lost / 2 + victory_bonus)`
     /// times the preset's [`Difficulty::score_pct`] / 100.
@@ -557,8 +594,8 @@ pub struct DepthScore {
     pub grade: char,
 }
 
-/// Task 22: the grade a score total earns: S at 12,000, A at 8,000, B at
-/// 5,000, C at 2,500, else D.
+/// Task 22: the grade a score total earns: S at 24,000, A at 16,000, B at
+/// 10,000, C at 5,000, else D (Task 23 thresholds).
 #[must_use]
 pub const fn depth_grade(total: i64) -> char {
     let mut i = 0;
@@ -699,8 +736,10 @@ impl Sim {
         let lost = self.dg.lost[human];
         let won = self.winner().is_some_and(|w| usize::from(w.0) == human);
         let tick = i64::try_from(self.tick).unwrap_or(i64::MAX);
+        // Task 23: a run victory adds RUN_VICTORY_BONUS to the time bonus.
         let victory_bonus = if won {
             (SCORE_VICTORY_TICKS - tick).max(0) / 10
+                + if self.dg.run { RUN_VICTORY_BONUS } else { 0 }
         } else {
             0
         };
@@ -755,6 +794,8 @@ impl Sim {
     /// Task 21: whether the Core Node (the waves' attacker's Command Center)
     /// ignores damage: under depth, while any of the attacker's relays is
     /// operational or fewer than [`CORE_EXPOSED_WAVES`] waves have spawned.
+    /// Task 23: always in a run, whose objective is [`RUN_WAVES`] cleared
+    /// waves (so a run ends at twelve waves or when the human base falls).
     /// Always false without depth (Survival and classic Kestrel). Derived
     /// from hashed state only, so it adds nothing to the hash.
     #[must_use]
@@ -763,7 +804,8 @@ impl Sim {
             return false;
         };
         self.is_depth()
-            && (self.alien_relay_count(cfg.attacker, true) > 0
+            && (self.dg.run
+                || self.alien_relay_count(cfg.attacker, true) > 0
                 || self.wave_count < CORE_EXPOSED_WAVES)
     }
 
@@ -793,7 +835,18 @@ impl Sim {
             }
         }
         let cleared = alive[1..].iter().filter(|&&a| !a).count();
+        let before = self.dg.waves_cleared;
         self.dg.waves_cleared = u32::try_from(cleared).unwrap_or(u32::MAX);
+        // Task 23: a run drafts on each increase, unless a draft is still
+        // pending (a pick the player ignores stays offered, and the waves
+        // cleared meanwhile queue nothing) or the run is won.
+        if self.dg.run
+            && self.dg.waves_cleared > before
+            && self.dg.draft.is_none()
+            && self.dg.waves_cleared < RUN_WAVES
+        {
+            self.depth_draw_draft();
+        }
     }
 
     /// Task 19: whether unit `i` of `player` is idle enough to join a raid: a
@@ -2044,16 +2097,15 @@ impl Sim {
     }
 
     /// The cooldown an ability of base cooldown `base` starts for `owner`
-    /// under depth. The perk hook of Task 23; `base` for now.
+    /// under depth: `base`, or three quarters of it (rounded down) with
+    /// Task 23's Rapid Cycle.
     #[must_use]
-    #[allow(
-        clippy::unused_self,
-        clippy::missing_const_for_fn,
-        reason = "Task 23 reads the owner's perks here"
-    )]
     pub(super) fn depth_ability_cooldown(&self, owner: PlayerId, base: u32) -> u32 {
-        let _ = owner;
-        base
+        if self.depth_has_perk(owner, perk::RAPID_CYCLE) {
+            base * 3 / 4
+        } else {
+            base
+        }
     }
 
     /// `owner`'s Upgrades levels: weapons, armour, vitality.
@@ -2117,7 +2169,11 @@ impl Sim {
     #[must_use]
     pub fn depth_building_cost(&self, owner: PlayerId, kind: BuildingKind) -> Fixed {
         let base = self.building_cost(kind);
-        if !self.is_depth() || kind != BuildingKind::Refinery {
+        // Task 23: Refinery Discount removes the escalation.
+        if !self.is_depth()
+            || kind != BuildingKind::Refinery
+            || self.depth_has_perk(owner, perk::REFINERY_DISCOUNT)
+        {
             return base;
         }
         let refineries = self
@@ -2134,16 +2190,17 @@ impl Sim {
     }
 
     /// The money `owner` pays up front for a depth repair of a `kind`
-    /// building: a tenth of its price, at least [`REPAIR_MIN_COST`].
+    /// building: a tenth of its price, at least [`REPAIR_MIN_COST`]; half of
+    /// that with Task 23's Field Repair.
     #[must_use]
     pub fn depth_repair_cost(&self, owner: PlayerId, kind: BuildingKind) -> Fixed {
-        let _ = owner;
         let tenth = self.balance.building(kind).money_cost / Fixed::from_int(10);
         let floor = Fixed::from_int(REPAIR_MIN_COST);
-        if tenth > floor {
-            tenth
+        let cost = if tenth > floor { tenth } else { floor };
+        if self.depth_has_perk(owner, perk::FIELD_REPAIR) {
+            cost / Fixed::from_int(2)
         } else {
-            floor
+            cost
         }
     }
 
@@ -2226,16 +2283,183 @@ impl Sim {
     }
 }
 
+/// Task 23: run mode (twelve cleared waves, seeded three-perk drafts) and the
+/// depth perks. Every hook checks the depth rules; a perk can only be taken
+/// from a run's draft, so outside a run the hooks never fire.
+impl Sim {
+    /// Makes this depth match a run drafting out of `pool` (masked to
+    /// [`perk::FULL_RUN_POOL`]). Only [`crate::game::scenario::kestrel_reach_with`]
+    /// calls it, after [`Sim::enable_depth`].
+    pub(crate) const fn set_run(&mut self, pool: u32) {
+        self.dg.run = true;
+        self.dg.perk_pool = pool & perk::FULL_RUN_POOL;
+    }
+
+    /// Whether this match is a Kestrel run (false without depth).
+    #[must_use]
+    pub const fn is_run(&self) -> bool {
+        self.is_depth() && self.dg.run
+    }
+
+    /// The run's perk pool, one bit per perk id (0 outside a run).
+    #[must_use]
+    pub const fn perk_pool(&self) -> u32 {
+        if self.is_run() {
+            self.dg.perk_pool
+        } else {
+            0
+        }
+    }
+
+    /// The pending draft: three perk ids, [`perk::NO_PERK`] in the slots a
+    /// short pool could not fill. `None` outside a run and once a pick is
+    /// taken. The core never pauses for it; the client does.
+    #[must_use]
+    pub const fn depth_draft(&self) -> Option<[u8; 3]> {
+        if self.is_run() {
+            self.dg.draft
+        } else {
+            None
+        }
+    }
+
+    /// Drafts the run has offered so far (0 outside a run).
+    #[must_use]
+    pub const fn drafts_offered(&self) -> u32 {
+        if self.is_run() {
+            self.dg.drafted
+        } else {
+            0
+        }
+    }
+
+    /// Whether `owner` holds depth perk `id`: depth on, a known id and the
+    /// bit set. A malformed owner holds nothing.
+    #[must_use]
+    pub(super) fn depth_has_perk(&self, owner: PlayerId, id: u32) -> bool {
+        self.is_depth()
+            && id < perk::DEPTH_PERK_COUNT
+            && self
+                .civs
+                .get(usize::from(owner.0))
+                .is_some_and(|c| c.active_perks & (1 << id) != 0)
+    }
+
+    /// [`Sim::depth_has_perk`] for every player, indexed by player id (for
+    /// the passes that hold `entities` mutably).
+    #[must_use]
+    pub(super) fn depth_perk_holders(&self, id: u32) -> Vec<bool> {
+        (0..self.civs.len())
+            .map(|p| self.depth_has_perk(PlayerId(u16::try_from(p).unwrap_or(u16::MAX)), id))
+            .collect()
+    }
+
+    /// Draws a draft for the run's human (the waves' defender): up to
+    /// [`DRAFT_SIZE`] distinct perks from the pool that the human does not
+    /// already hold, each by one `next_below` over the remaining candidates
+    /// in ascending id order. No draft when nothing is left to draw.
+    pub(super) fn depth_draw_draft(&mut self) {
+        let Some(human) = self.waves.map(|c| c.defender) else {
+            return;
+        };
+        let held = self
+            .civs
+            .get(usize::from(human.0))
+            .map_or(0, |c| c.active_perks);
+        let mut open: Vec<u8> = (0..perk::DEPTH_PERK_COUNT)
+            .filter(|&id| self.dg.perk_pool & (1 << id) != 0 && held & (1 << id) == 0)
+            .filter_map(|id| u8::try_from(id).ok())
+            .collect();
+        if open.is_empty() {
+            return;
+        }
+        let mut draft = [perk::NO_PERK; DRAFT_SIZE];
+        for slot in &mut draft {
+            if open.is_empty() {
+                break;
+            }
+            let bound = u32::try_from(open.len()).unwrap_or(u32::MAX);
+            let k = usize::try_from(self.rng.next_below(bound)).unwrap_or(0);
+            *slot = open.remove(k.min(open.len() - 1));
+        }
+        self.dg.draft = Some(draft);
+        self.dg.drafted += 1;
+    }
+
+    /// `ChoosePerk` under depth: accepted only from the run's human for an
+    /// id in the pending draft (anything else, malformed ids and foreign
+    /// owners included, is ignored). The perk joins the human's bitmask, the
+    /// draft closes, and the two one-shot perks act at once: Field Upgrade
+    /// buys a free level on the lowest Upgrades track (ties to the lowest
+    /// track; nothing at the cap), Early Tooling completes tech 1 (and ends
+    /// it if it was the running project).
+    pub(super) fn apply_depth_choose_perk(&mut self, owner: PlayerId, id: u32) {
+        let Some(draft) = self.depth_draft() else {
+            return;
+        };
+        if self.waves.map(|c| c.defender) != Some(owner) {
+            return;
+        }
+        let Ok(pick) = u8::try_from(id) else {
+            return;
+        };
+        if pick == perk::NO_PERK || !draft.contains(&pick) || id >= perk::DEPTH_PERK_COUNT {
+            return;
+        }
+        let p = usize::from(owner.0);
+        let Some(civ) = self.civs.get_mut(p) else {
+            return;
+        };
+        civ.active_perks |= 1 << id;
+        self.dg.draft = None;
+        match id {
+            perk::FIELD_UPGRADE => {
+                let levels = self.upgrade_levels(owner);
+                let mut track = 0;
+                for t in 1..levels.len() {
+                    if levels[t] < levels[track] {
+                        track = t;
+                    }
+                }
+                self.apply_depth_upgrade(owner, u8::try_from(track).unwrap_or(0), true);
+            }
+            perk::EARLY_TOOLING => {
+                if matches!(self.civs[p].active_research, Some((1, _))) {
+                    self.civs[p].active_research = None;
+                }
+                if !self.civs[p].researched_techs.get(1) {
+                    self.civs[p].researched_techs.set(1);
+                    self.unlock_earthfront_tech(p, 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The money `owner` pays to train `kind`: the balance price, a quarter
+    /// off the Capital with Capital Discount (depth only).
+    #[must_use]
+    pub fn depth_unit_cost(&self, owner: PlayerId, kind: UnitKind) -> Fixed {
+        let base = self.balance.unit(kind).money_cost;
+        if kind == UnitKind::Capital && self.depth_has_perk(owner, perk::CAPITAL_DISCOUNT) {
+            base * Fixed::from_int(3) / Fixed::from_int(4)
+        } else {
+            base
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        depth_air_damage_pct, is_air_of, EntityId, Kind, ACQUIRE_BONUS, AT_AIR_PCT,
+        depth_air_damage_pct, is_air_of, tile_center, EntityId, Kind, ACQUIRE_BONUS, AT_AIR_PCT,
         DEFENSIVE_LEASH, FORCED_TRACK, LEASH, QUEUE_CAP,
     };
     use crate::fixed::Fixed;
     use crate::game::ability::AbilityKind;
     use crate::game::hex;
     use crate::game::map::Map;
+    use crate::game::perk;
     use crate::game::scenario::{
         kestrel_reach, kestrel_reach_classic, kestrel_reach_with, lane_defense, survival,
         MatchOptions, Scenario,
@@ -6480,7 +6704,13 @@ mod tests {
             (Difficulty::Normal, 10, 18, 28),
             (Difficulty::Hard, 7 + 4, 17 + 4, 30 + 4),
         ] {
-            let s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            let s = kestrel_reach_with(
+                3,
+                MatchOptions {
+                    difficulty: d,
+                    ..MatchOptions::default()
+                },
+            );
             assert_eq!(s.depth_expedition_size(0), first, "{d:?}");
             assert_eq!(s.depth_expedition_size(4), fifth, "{d:?}");
             assert_eq!(s.depth_expedition_size(9), capped, "{d:?}");
@@ -7032,15 +7262,20 @@ mod tests {
     fn grades_follow_the_score_thresholds() {
         for (total, grade) in [
             (50_000, 'S'),
-            (12_000, 'S'),
-            (11_999, 'A'),
-            (8_000, 'A'),
-            (7_999, 'B'),
-            (5_000, 'B'),
-            (4_999, 'C'),
-            (2_500, 'C'),
-            (2_499, 'D'),
+            (24_000, 'S'),
+            (23_999, 'A'),
+            (16_000, 'A'),
+            (15_999, 'B'),
+            (10_000, 'B'),
+            (9_999, 'C'),
+            (5_000, 'C'),
+            (4_999, 'D'),
             (0, 'D'),
+            // Task 23 ruling: the Task 22 playtest totals grade Easy win B,
+            // Normal win A and Hard loss C.
+            (10_952, 'B'),
+            (17_504, 'A'),
+            (8_182, 'C'),
         ] {
             assert_eq!(super::depth_grade(total), grade, "{total}");
         }
@@ -7057,7 +7292,13 @@ mod tests {
     /// Task 22: `kestrel_reach_with(3, d)` with a crafted ledger: 4 waves
     /// cleared, 3000 destroyed and 1000 lost by the human.
     fn crafted(d: Difficulty) -> Sim {
-        let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+        let mut s = kestrel_reach_with(
+            3,
+            MatchOptions {
+                difficulty: d,
+                ..MatchOptions::default()
+            },
+        );
         s.dg.waves_cleared = 4;
         s.dg.destroyed = [3000, 700];
         s.dg.lost = [1000, 3000];
@@ -7076,13 +7317,13 @@ mod tests {
                 lost: 1000,
                 victory_bonus: 0,
                 total: 4500,
-                grade: 'C',
+                grade: 'D',
             }
         );
         let hard = crafted(Difficulty::Hard).depth_score().unwrap();
-        assert_eq!((hard.total, hard.grade), (6750, 'B'), "Hard is x1.5");
+        assert_eq!((hard.total, hard.grade), (6750, 'C'), "Hard is x1.5");
         let easy = crafted(Difficulty::Easy).depth_score().unwrap();
-        assert_eq!((easy.total, easy.grade), (3375, 'C'), "Easy is x0.75");
+        assert_eq!((easy.total, easy.grade), (3375, 'D'), "Easy is x0.75");
         // Heavy losses never push the score below zero.
         let mut broke = crafted(Difficulty::Hard);
         broke.dg.lost[0] = 20_000;
@@ -7149,5 +7390,544 @@ mod tests {
         ledger.dg.destroyed = [5, 6];
         ledger.dg.lost = [7, 8];
         assert_eq!(plain.state_hash(), ledger.state_hash());
+    }
+
+    // Task 23: run mode (twelve waves, seeded three-perk drafts, the depth
+    // perks, Logistics and Conscription under depth).
+
+    fn run_opts(pool: u32) -> MatchOptions {
+        MatchOptions {
+            run: true,
+            perk_pool: pool,
+            ..MatchOptions::default()
+        }
+    }
+
+    /// Marks `waves` waves as spawned and steps once: no wave unit is alive,
+    /// so the ledger counts every one of them cleared this tick.
+    fn clear_waves(s: &mut Sim, waves: u32) {
+        s.wave_count = waves;
+        s.step(&[]);
+    }
+
+    fn choose(perk: u32) -> [Command; 1] {
+        [Command::ChoosePerk { owner: P0, perk }]
+    }
+
+    fn with_perk(mut s: Sim, id: u32) -> Sim {
+        s.civs[0].active_perks |= 1 << id;
+        s
+    }
+
+    /// Puts `id` alone into a pending draft and takes it.
+    fn draft_and_take(s: &mut Sim, id: u32) {
+        s.dg.draft = Some([u8::try_from(id).unwrap(), perk::NO_PERK, perk::NO_PERK]);
+        s.step(&choose(id));
+        assert!(s.perks(P0) & (1 << id) != 0, "perk {id} was not taken");
+        assert_eq!(s.depth_draft(), None);
+    }
+
+    /// The run's first draft for `seed` and `pool`, and the drafts offered.
+    fn first_draft(seed: u64, pool: u32) -> (Option<[u8; 3]>, u32) {
+        let mut s = kestrel_reach_with(seed, run_opts(pool));
+        assert_eq!(s.depth_draft(), None, "a draft before any cleared wave");
+        clear_waves(&mut s, 1);
+        assert_eq!(s.waves_cleared(), 1);
+        (s.depth_draft(), s.drafts_offered())
+    }
+
+    #[test]
+    fn run_drafts_are_seeded_distinct_and_inside_the_pool() {
+        let mut seen = Vec::new();
+        for seed in 1..=8u64 {
+            let (draft, offered) = first_draft(seed, perk::DEFAULT_RUN_POOL);
+            let d = draft.expect("a cleared wave offers a draft");
+            assert_eq!(offered, 1);
+            assert_eq!(
+                first_draft(seed, perk::DEFAULT_RUN_POOL).0,
+                Some(d),
+                "seed {seed}"
+            );
+            for (k, &id) in d.iter().enumerate() {
+                assert!(id < 8, "seed {seed}: {id} is outside the default pool");
+                assert!(!d[..k].contains(&id), "seed {seed}: {d:?} repeats an id");
+            }
+            seen.push(d);
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        assert!(seen.len() > 1, "every seed drew {seen:?}");
+        // A narrow pool: only its ids; fewer when it runs short; none when empty.
+        let pool = (1 << perk::BULWARK)
+            | (1 << perk::LONG_SIGHT)
+            | (1 << perk::FIELD_REPAIR)
+            | (1 << perk::CAPITAL_DISCOUNT);
+        let d = first_draft(4, pool).0.unwrap();
+        assert!(d.iter().all(|&id| pool & (1 << id) != 0), "{d:?}");
+        let (d, offered) = first_draft(4, (1 << perk::OVERCHARGE) | (1 << perk::EARLY_TOOLING));
+        let mut d = d.unwrap();
+        assert_eq!((d[2], offered), (perk::NO_PERK, 1));
+        d[..2].sort_unstable();
+        assert_eq!(&d[..2], &[0, 8]);
+        assert_eq!(first_draft(4, 0), (None, 0));
+        assert_eq!(first_draft(4, 0xFFFF_F000), (None, 0), "bits past perk 11");
+    }
+
+    #[test]
+    fn a_pending_draft_holds_until_chosen_and_never_stacks() {
+        let mut s = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        clear_waves(&mut s, 1);
+        let d = s.depth_draft().unwrap();
+        // Ignored through two more cleared waves: the same draft, one offer.
+        clear_waves(&mut s, 3);
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        assert_eq!(s.waves_cleared(), 3);
+        assert_eq!((s.depth_draft(), s.drafts_offered()), (Some(d), 1));
+        // Outside the draft, malformed ids and foreign owners: ignored, no panic.
+        let outside = (0..12u32)
+            .find(|&id| !d.contains(&u8::try_from(id).unwrap()))
+            .unwrap();
+        let first = u32::from(d[0]);
+        let hostile = [
+            Command::ChoosePerk {
+                owner: P0,
+                perk: outside,
+            },
+            Command::ChoosePerk {
+                owner: P0,
+                perk: 12,
+            },
+            Command::ChoosePerk {
+                owner: P0,
+                perk: 255,
+            },
+            Command::ChoosePerk {
+                owner: P0,
+                perk: 256 + first,
+            },
+            Command::ChoosePerk {
+                owner: P0,
+                perk: u32::MAX,
+            },
+            Command::ChoosePerk {
+                owner: P1,
+                perk: first,
+            },
+            Command::ChoosePerk {
+                owner: PlayerId(999),
+                perk: first,
+            },
+            Command::ChoosePerk {
+                owner: PlayerId(u16::MAX),
+                perk: u32::from(d[1]),
+            },
+        ];
+        s.step(&hostile);
+        assert_eq!((s.perks(P0), s.perks(P1)), (0, 0));
+        assert_eq!(s.depth_draft(), Some(d));
+        // A drafted id is taken and the draft closes; asking again does nothing.
+        s.step(&choose(u32::from(d[1])));
+        assert_eq!(s.perks(P0), 1 << d[1]);
+        assert_eq!(s.depth_draft(), None);
+        s.step(&choose(first));
+        assert_eq!(s.perks(P0), 1 << d[1]);
+        // The waves cleared while the draft was pending queue nothing: the next
+        // draft comes with the next cleared wave, without the perk taken.
+        for _ in 0..10 {
+            s.step(&[]);
+        }
+        assert_eq!(s.depth_draft(), None);
+        clear_waves(&mut s, 4);
+        let next = s.depth_draft().expect("the next cleared wave drafts again");
+        assert!(
+            !next.contains(&d[1]),
+            "{next:?} offers the perk already taken"
+        );
+        assert_eq!(s.drafts_offered(), 2);
+    }
+
+    #[test]
+    fn without_a_run_no_draft_is_offered_and_every_pick_is_refused() {
+        let mut s = kestrel_reach(3);
+        clear_waves(&mut s, 1);
+        assert_eq!(s.waves_cleared(), 1);
+        assert_eq!((s.depth_draft(), s.drafts_offered()), (None, 0));
+        for id in 0..12 {
+            s.step(&choose(id));
+        }
+        assert_eq!(s.perks(P0), 0);
+        // Survival and classic Kestrel keep refusing every perk.
+        for build in [survival, kestrel_reach_classic] {
+            let mut e = build(3);
+            for id in 0..12 {
+                e.step(&choose(id));
+            }
+            assert_eq!(e.perks(P0), 0);
+            assert_eq!(e.depth_draft(), None);
+        }
+        // The legacy lane map takes the four survival perks only: id 5 is
+        // still refused and `perks()` reads the same bitmask as before.
+        assert_eq!(perk::PERK_COUNT, 4);
+        let mut l = lane_defense(3);
+        l.step(&choose(5));
+        assert_eq!(l.perks(P0), 0);
+        l.step(&choose(perk::CONSCRIPTION));
+        assert_eq!(l.perks(P0), 1 << perk::CONSCRIPTION);
+        for id in [4, 11, 12, u32::MAX] {
+            l.step(&choose(id));
+        }
+        assert_eq!(l.perks(P0), 1 << perk::CONSCRIPTION);
+    }
+
+    #[test]
+    fn field_upgrade_grants_a_free_level_on_the_lowest_track() {
+        let mut s = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        s.step(&[upgrade(P0, 0), upgrade(P0, 2)]);
+        assert_eq!(s.upgrade_levels(P0), [1, 0, 1]);
+        let mut twin = s.clone();
+        draft_and_take(&mut s, perk::FIELD_UPGRADE);
+        twin.step(&[]);
+        assert_eq!(s.upgrade_levels(P0), [1, 1, 1], "armour was the lowest");
+        assert_eq!(s.money(P0), twin.money(P0), "the level was free");
+        // Ties go to the lowest track.
+        let mut t = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        draft_and_take(&mut t, perk::FIELD_UPGRADE);
+        assert_eq!(t.upgrade_levels(P0), [1, 0, 0]);
+    }
+
+    #[test]
+    fn rapid_cycle_cuts_ability_cooldowns_by_a_quarter() {
+        let emp_cd = |rapid: bool| {
+            let mut s = depth_arena();
+            if rapid {
+                s = with_perk(s, perk::RAPID_CYCLE);
+            }
+            let heli = s.add_unit(P0, UnitKind::Helicopter, v(3, 10));
+            clump(&mut s);
+            s.step(&[cast(P0, heli, v(8, 10))]);
+            (
+                s.entities[heli.0 as usize].ability_cd,
+                s.depth_ability_cooldown(P0, 600),
+            )
+        };
+        let (plain, base) = emp_cd(false);
+        let (rapid, cut) = emp_cd(true);
+        std::eprintln!("EMP cooldown: plain {plain}, Rapid Cycle {rapid}");
+        assert_eq!((base, cut), (600, 450));
+        assert!(plain > 0);
+        assert_eq!(rapid, plain * 3 / 4);
+    }
+
+    #[test]
+    fn refinery_discount_removes_the_escalation() {
+        let mut s = with_perk(kestrel_reach(3), perk::REFINERY_DISCOUNT);
+        let base = s.building_cost(BuildingKind::Refinery);
+        assert_eq!(refineries(&s, P0).len(), 1);
+        assert_eq!(s.depth_building_cost(P0, BuildingKind::Refinery), base);
+        s.grant_money(P0, Fixed::from_int(2000));
+        for n in [2, 3] {
+            let (x, y) = first_build_tile(&s, P0);
+            let build = [Command::Build {
+                owner: P0,
+                kind: BuildingKind::Refinery,
+                x,
+                y,
+            }];
+            assert_eq!(spent(&mut s, &build), base, "refinery {n} costs base");
+            assert_eq!(refineries(&s, P0).len(), n);
+        }
+        assert_eq!(s.depth_building_cost(P0, BuildingKind::Refinery), base);
+        // Without the perk the third one costs base + 100.
+        let plain = kestrel_reach(3);
+        assert_eq!(
+            plain.depth_building_cost(P0, BuildingKind::Refinery),
+            base + Fixed::from_int(50)
+        );
+    }
+
+    /// A powered P0 Gun Turret and a P1 Wall on the first tile east of it
+    /// whose centre lies past the turret's range but within range + 1.
+    /// Returns the Wall's HP lost in 150 ticks.
+    fn turret_on_a_far_wall(long_sight: bool) -> Fixed {
+        let mut s = depth_arena();
+        if long_sight {
+            s = with_perk(s, perk::LONG_SIGHT);
+        }
+        s.add_building(P0, BuildingKind::PowerPlant, 2, 2);
+        let turret = s.add_building(P0, BuildingKind::GunTurret, 10, 10);
+        let range = super::attack_of(&s.balance, Kind::Building(BuildingKind::GunTurret))
+            .unwrap()
+            .range;
+        let at = s.entities[turret.0 as usize].pos;
+        let x = (11..30u16)
+            .find(|&x| {
+                let d = (tile_center(x, 10) - at).length_squared();
+                d > range * range && d <= (range + Fixed::ONE) * (range + Fixed::ONE)
+            })
+            .expect("a tile just past the range");
+        let wall = s.add_building(P1, BuildingKind::Wall, x, 10);
+        let full = s.entities[wall.0 as usize].hp;
+        for _ in 0..150 {
+            s.step(&[]);
+        }
+        full - s.entities[wall.0 as usize].hp
+    }
+
+    #[test]
+    fn long_sight_lets_turrets_reach_one_tile_further() {
+        let plain = turret_on_a_far_wall(false);
+        let long = turret_on_a_far_wall(true);
+        std::eprintln!("wall just past turret range, HP lost in 150 ticks: plain {plain:?}, Long Sight {long:?}");
+        assert_eq!(plain, Fixed::ZERO, "out of range without the perk");
+        assert!(long > Fixed::ZERO, "Long Sight never reached the wall");
+    }
+
+    #[test]
+    fn early_tooling_completes_tech_one_at_once() {
+        let mut s = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        assert!(!s.civs[0].researched_techs.get(1));
+        assert!(!s.unit_unlocked(P0, UnitKind::Tank));
+        s.civs[0].active_research = Some((1, 900));
+        draft_and_take(&mut s, perk::EARLY_TOOLING);
+        assert!(s.civs[0].researched_techs.get(1));
+        assert!(s.unit_unlocked(P0, UnitKind::Tank));
+        assert!(s.civs[0].unlocked_buildings & (1 << BuildingKind::VehicleFactory.index()) != 0);
+        assert_eq!(
+            s.civs[0].active_research, None,
+            "the running tech 1 is done"
+        );
+        // Another project in progress keeps running.
+        let mut t = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        t.civs[0].active_research = Some((0, 900));
+        draft_and_take(&mut t, perk::EARLY_TOOLING);
+        assert!(t.civs[0].researched_techs.get(1));
+        assert!(matches!(t.civs[0].active_research, Some((0, _))));
+    }
+
+    /// A P0 Wall beside a P1 rifle squad on Hold; the Wall's HP lost in 90 ticks.
+    fn rifles_on_a_wall(hardened: bool) -> Fixed {
+        let mut s = depth_arena();
+        if hardened {
+            s = with_perk(s, perk::HARDENED_WALLS);
+        }
+        let wall = s.add_building(P0, BuildingKind::Wall, 10, 10);
+        let rifle = s.add_unit(P1, UnitKind::Infantry, tile_center(11, 10));
+        s.entities[rifle.0 as usize].dp.stance = Stance::Hold;
+        let full = s.entities[wall.0 as usize].hp;
+        for _ in 0..90 {
+            s.step(&[]);
+        }
+        assert!(s.entities[wall.0 as usize].alive);
+        full - s.entities[wall.0 as usize].hp
+    }
+
+    #[test]
+    fn hardened_walls_take_a_third_less_damage() {
+        let plain = rifles_on_a_wall(false);
+        let hard = rifles_on_a_wall(true);
+        std::eprintln!("wall HP lost in 90 ticks: plain {plain:?}, Hardened Walls {hard:?}");
+        assert!(plain > Fixed::ZERO);
+        let off = hard * Fixed::from_int(3) - plain * Fixed::from_int(2);
+        let eps = Fixed::from_ratio(1, 100);
+        assert!(
+            off < eps && Fixed::ZERO - eps < off,
+            "{hard:?} is not two thirds of {plain:?}"
+        );
+    }
+
+    #[test]
+    fn field_repair_halves_the_repair_price() {
+        let (mut s, cc) = repair_arena(1000);
+        s = with_perk(s, perk::FIELD_REPAIR);
+        assert_eq!(spent(&mut s, &repair(cc)), Fixed::from_ratio(25, 2));
+        let plain = depth_arena();
+        let field = with_perk(depth_arena(), perk::FIELD_REPAIR);
+        for kind in [
+            BuildingKind::CommandCenter,
+            BuildingKind::Barracks,
+            BuildingKind::GunTurret,
+            BuildingKind::VehicleFactory,
+        ] {
+            assert_eq!(
+                field.depth_repair_cost(P0, kind) * Fixed::from_int(2),
+                plain.depth_repair_cost(P0, kind),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capital_discount_makes_the_capital_a_quarter_cheaper() {
+        let capital = |discount: bool| {
+            let (mut s, factory) = factory_arena(true);
+            if discount {
+                s = with_perk(s, perk::CAPITAL_DISCOUNT);
+            }
+            s.civs[0].researched_techs.set(7);
+            s.unlock_earthfront_tech(0, 7);
+            let cmd = [Command::Train {
+                owner: P0,
+                barracks: factory,
+                kind: UnitKind::Capital,
+            }];
+            let paid = spent(&mut s, &cmd);
+            assert!(s.entities[factory.0 as usize]
+                .build_queue
+                .contains(&UnitKind::Capital));
+            (paid, s.depth_unit_cost(P0, UnitKind::Tank))
+        };
+        let (full, tank) = capital(false);
+        let (cheap, tank_cheap) = capital(true);
+        assert_eq!(full, depth_arena().unit_cost(UnitKind::Capital));
+        assert_eq!(cheap * Fixed::from_int(4), full * Fixed::from_int(3));
+        assert_eq!(tank, tank_cheap, "only the Capital is discounted");
+    }
+
+    #[test]
+    fn logistics_and_conscription_reach_earthfront_under_depth_only() {
+        let both = (1 << perk::LOGISTICS) | (1 << perk::CONSCRIPTION);
+        // Kestrel depth: +8 supply and half again the refinery credits.
+        let base = kestrel_reach(3);
+        let mut plain = base.clone();
+        let mut perks = base.clone();
+        perks.civs[0].active_perks |= both;
+        assert_eq!(plain.supply_cap(P0), 60);
+        assert_eq!(perks.supply_cap(P0), 68);
+        for _ in 0..1800 {
+            plain.step(&[]);
+            perks.step(&[]);
+        }
+        let gain_plain = plain.money(P0) - base.money(P0);
+        let gain_perks = perks.money(P0) - base.money(P0);
+        std::eprintln!(
+            "Kestrel 1800 ticks, money gained: plain {gain_plain:?}, Logistics {gain_perks:?}"
+        );
+        assert!(gain_perks > gain_plain, "Logistics added no credits");
+        // Survival and classic Kestrel: the bits change neither cap nor purse.
+        for build in [survival, kestrel_reach_classic] {
+            let start = build(7);
+            let mut a = start.clone();
+            let mut b = start.clone();
+            b.civs[0].active_perks |= both;
+            assert_eq!(a.supply_cap(P0), b.supply_cap(P0));
+            for _ in 0..1800 {
+                a.step(&[]);
+                b.step(&[]);
+            }
+            assert_eq!(a.money(P0), b.money(P0));
+            assert_eq!(a.supply_cap(P0), b.supply_cap(P0));
+        }
+    }
+
+    #[test]
+    fn a_run_is_won_once_twelve_waves_are_cleared() {
+        let mut s = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        clear_waves(&mut s, 11);
+        assert_eq!((s.waves_cleared(), s.winner()), (11, None));
+        let d = s.depth_draft().unwrap();
+        s.step(&choose(u32::from(d[0])));
+        clear_waves(&mut s, 12);
+        assert_eq!(s.winner(), Some(P0));
+        assert_eq!(s.drafts_offered(), 1, "the winning clear drafts nothing");
+        assert_eq!(s.depth_draft(), None);
+        let t = i64::try_from(s.tick()).unwrap();
+        let sc = s.depth_score().unwrap();
+        assert_eq!(
+            sc.victory_bonus,
+            (45_000 - t) / 10 + super::RUN_VICTORY_BONUS
+        );
+        // A decided run stops.
+        let tick = s.tick();
+        s.step(&[]);
+        assert_eq!(s.tick(), tick);
+        // Twelve cleared waves win nothing outside a run.
+        let mut plain = kestrel_reach(3);
+        clear_waves(&mut plain, 12);
+        assert_eq!((plain.waves_cleared(), plain.winner()), (12, None));
+        // In a run the Core Node shield never drops: the twelve waves are the
+        // objective (relays gone and wave 6 spawned still leave it whole).
+        let (before, after, shielded) = fire_on_the_core(
+            kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL)),
+            false,
+            6,
+        );
+        assert!(shielded);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn run_state_is_hashed_under_depth_only() {
+        let plain = kestrel_reach(3);
+        let run = kestrel_reach_with(3, run_opts(perk::DEFAULT_RUN_POOL));
+        assert_ne!(plain.state_hash(), run.state_hash());
+        assert!(run.is_run() && !plain.is_run());
+        assert_eq!((run.perk_pool(), plain.perk_pool()), (0xFF, 0));
+        let edits: [fn(&mut Sim); 3] = [
+            |s| s.dg.perk_pool = 0x7,
+            |s| s.dg.draft = Some([1, 2, 3]),
+            |s| s.dg.drafted = 1,
+        ];
+        for edit in edits {
+            let mut e = run.clone();
+            edit(&mut e);
+            assert_ne!(e.state_hash(), run.state_hash());
+        }
+        // A plain match records no pool, whatever the options carry.
+        let opts = MatchOptions {
+            perk_pool: 5,
+            ..MatchOptions::default()
+        };
+        assert_eq!(kestrel_reach_with(3, opts).state_hash(), plain.state_hash());
+        // Survival never hashes run state, and its builder ignores the options.
+        let surv = survival(7);
+        let mut x = surv.clone();
+        x.dg.run = true;
+        x.dg.perk_pool = 1;
+        x.dg.draft = Some([1, 2, 3]);
+        x.dg.drafted = 4;
+        assert_eq!(x.state_hash(), surv.state_hash());
+        assert_eq!(
+            Scenario::Survival
+                .build_with(7, run_opts(perk::DEFAULT_RUN_POOL))
+                .state_hash(),
+            surv.state_hash()
+        );
+        assert_eq!(
+            MatchOptions::default(),
+            MatchOptions {
+                difficulty: Difficulty::Normal,
+                run: false,
+                perk_pool: perk::DEFAULT_RUN_POOL,
+            }
+        );
+    }
+
+    #[test]
+    fn depth_perks_have_names_and_descriptions() {
+        assert_eq!(perk::DEPTH_PERK_COUNT, 12);
+        assert_eq!(perk::DEFAULT_RUN_POOL, 0xFF);
+        let names: Vec<&str> = (0..perk::DEPTH_PERK_COUNT).map(perk::name).collect();
+        assert_eq!(
+            names,
+            [
+                "Overcharge",
+                "Logistics",
+                "Conscription",
+                "Bulwark",
+                "Field Upgrade",
+                "Rapid Cycle",
+                "Refinery Discount",
+                "Long Sight",
+                "Early Tooling",
+                "Hardened Walls",
+                "Field Repair",
+                "Capital Discount",
+            ]
+        );
+        for id in 0..perk::DEPTH_PERK_COUNT {
+            assert!(!perk::description(id).is_empty(), "{id}");
+        }
     }
 }

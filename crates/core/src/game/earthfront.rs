@@ -793,6 +793,8 @@ impl Sim {
                 .iter()
                 .map(|e| self.refinery_near_ore(e))
                 .collect();
+            // Task 23: Logistics reaches Earthfront under depth only.
+            let logistics = self.depth_perk_holders(crate::game::perk::LOGISTICS);
             for (e, near) in self.entities.iter_mut().zip(near_ore) {
                 if !e.alive
                     || e.construction_remaining > 0
@@ -807,6 +809,11 @@ impl Sim {
                     let c = &mut self.civs[usize::from(e.owner.0)];
                     let material = ore / 5 * 4;
                     let material = if near { material * 120 / 100 } else { material };
+                    let material = if logistics[usize::from(e.owner.0)] {
+                        material * 3 / 2
+                    } else {
+                        material
+                    };
                     c.money = c.money + Fixed::from_int(i32::try_from(material).unwrap_or(0));
                 }
             }

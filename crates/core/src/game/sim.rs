@@ -1914,10 +1914,16 @@ impl Sim {
     #[must_use]
     pub fn supply_cap(&self, player: PlayerId) -> u32 {
         if self.earthfront {
-            return if self.civs[usize::from(player.0)].researched_techs.get(11) {
+            let cap = if self.civs[usize::from(player.0)].researched_techs.get(11) {
                 90
             } else {
                 60
+            };
+            // Task 23: Conscription reaches Earthfront under depth only.
+            return if self.depth_has_perk(player, crate::game::perk::CONSCRIPTION) {
+                cap + 8
+            } else {
+                cap
             };
         }
         let mut cap =
@@ -2132,6 +2138,10 @@ impl Sim {
         if self.survival {
             if !has_cc[usize::from(self.human_civ.0)] {
                 return Some(PlayerId(1));
+            }
+            // Task 23: a Kestrel run is won by clearing its twelfth wave.
+            if self.is_run() && self.dg.waves_cleared >= depth::RUN_WAVES {
+                return Some(self.human_civ);
             }
             let hostile_base_alive = has_cc
                 .iter()
@@ -2859,6 +2869,9 @@ impl Sim {
             return;
         }
         let st = self.balance.unit(kind);
+        // Task 23: the depth price (Capital Discount); the balance price
+        // otherwise.
+        let money_cost = self.depth_unit_cost(owner, kind);
         let p = usize::from(owner.0);
         let ok = self.entity(barracks).is_some_and(|e| {
             let correct_producer = if self.earthfront {
@@ -2886,11 +2899,11 @@ impl Sim {
         if ok
             && unlocked
             && has_supply
-            && self.civs[p].money >= st.money_cost
+            && self.civs[p].money >= money_cost
             && (self.earthfront || self.civs[p].energy >= st.energy_cost)
             && (self.earthfront || self.civs[p].labour >= st.labour_cost)
         {
-            self.civs[p].money = self.civs[p].money - st.money_cost;
+            self.civs[p].money = self.civs[p].money - money_cost;
             if !self.earthfront {
                 self.civs[p].energy = self.civs[p].energy - st.energy_cost;
                 self.civs[p].labour = self.civs[p].labour - st.labour_cost;
@@ -3072,6 +3085,11 @@ impl Sim {
             }
             Command::Research { owner, tech_id } => self.apply_research(owner, tech_id),
             Command::ChoosePerk { owner, perk } => {
+                // Task 23: under depth only a run's pending draft is taken.
+                if self.is_depth() {
+                    self.apply_depth_choose_perk(owner, perk);
+                    return;
+                }
                 if self.earthfront {
                     return;
                 }
@@ -4566,6 +4584,10 @@ impl Sim {
 
         // Kestrel depth (also gates the forced-target filter below).
         let depth = self.is_depth();
+        // Task 23: Long Sight (turret range +1) and Hardened Walls (a third
+        // less damage to walls), by player; all false without depth.
+        let long_sight = self.depth_perk_holders(crate::game::perk::LONG_SIGHT);
+        let hardened = self.depth_perk_holders(crate::game::perk::HARDENED_WALLS);
         // (target index, attacker index, damage, pierces-shields).
         let mut damage: Vec<(usize, usize, Fixed, bool)> = Vec::new();
         // Seats whose lethal blow this tick captures (not destroys) them:
@@ -4588,9 +4610,17 @@ impl Sim {
                 continue;
             }
             // Kestrel depth (Task 15): AntiArmor teams also target air.
-            let Some(profile) = depth::weapon_of(&self.balance, e.kind, depth) else {
+            let Some(mut profile) = depth::weapon_of(&self.balance, e.kind, depth) else {
                 continue;
             };
+            if long_sight[usize::from(e.owner.0)]
+                && matches!(
+                    e.kind,
+                    Kind::Building(BuildingKind::GunTurret | BuildingKind::AaTurret)
+                )
+            {
+                profile.range = profile.range + Fixed::ONE;
+            }
             if e.cooldown > 0 {
                 e.cooldown -= 1;
                 continue;
@@ -4778,6 +4808,14 @@ impl Sim {
                 }
             } else {
                 dmg
+            };
+            // Task 23: Hardened Walls take a third off the net hit.
+            let net = if hardened[usize::from(owner.0)]
+                && self.entities[j].kind == Kind::Building(BuildingKind::Wall)
+            {
+                net * Fixed::from_int(2) / Fixed::from_int(3)
+            } else {
+                net
             };
             let killed = {
                 let e = &mut self.entities[j];

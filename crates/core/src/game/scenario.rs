@@ -376,10 +376,27 @@ pub fn kestrel_reach(seed: u64) -> Sim {
 
 /// Task 20: what the title chooses for a match besides the map and the seed.
 /// The default is the Normal preset, the match as it was before presets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MatchOptions {
     /// The difficulty preset (Kestrel Reach only).
     pub difficulty: Difficulty,
+    /// Task 23: a roguelite run (Kestrel Reach only): twelve cleared waves
+    /// win, and each cleared wave drafts three perks out of `perk_pool`.
+    pub run: bool,
+    /// Task 23: the perks a run may draft, one bit per perk id (bits past
+    /// [`crate::game::perk::FULL_RUN_POOL`] are ignored). Read only when
+    /// `run` is set.
+    pub perk_pool: u32,
+}
+
+impl Default for MatchOptions {
+    fn default() -> Self {
+        Self {
+            difficulty: Difficulty::Normal,
+            run: false,
+            perk_pool: crate::game::perk::DEFAULT_RUN_POOL,
+        }
+    }
 }
 
 /// Task 20: Kestrel Reach at a difficulty preset.
@@ -402,6 +419,9 @@ pub fn kestrel_reach_with(seed: u64, opts: MatchOptions) -> Sim {
     );
     sim.enable_depth();
     sim.set_difficulty(d);
+    if opts.run {
+        sim.set_run(opts.perk_pool);
+    }
     sim
 }
 
@@ -2496,7 +2516,10 @@ mod tests {
     fn depth_match_length_table() {
         for seed in [3, 5] {
             for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
-                let opts = MatchOptions { difficulty: d };
+                let opts = MatchOptions {
+                    difficulty: d,
+                    ..MatchOptions::default()
+                };
                 let mut s = kestrel_reach_with(seed, opts);
                 while s.winner().is_none() && s.tick() < 60_000 {
                     let c = Scenario::KestrelReach.host_commands(&s);
@@ -2556,7 +2579,13 @@ mod tests {
     fn depth_score_table() {
         for seed in [3, 5] {
             for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
-                let mut s = kestrel_reach_with(seed, MatchOptions { difficulty: d });
+                let mut s = kestrel_reach_with(
+                    seed,
+                    MatchOptions {
+                        difficulty: d,
+                        ..MatchOptions::default()
+                    },
+                );
                 for _ in 0..60_000 {
                     if s.winner().is_some() {
                         break;
@@ -2578,6 +2607,135 @@ mod tests {
                     sc.victory_bonus,
                     sc.total,
                     sc.grade
+                );
+            }
+        }
+    }
+
+    /// Task 23: one Kestrel run played by the playtest AI (the human side,
+    /// `ai_commands(P0)`, which drafts the first offered perk each time)
+    /// against the hosted alien, for at most [`RUN_STEPS`] fixed steps.
+    struct RunPlaytest {
+        winner: Option<PlayerId>,
+        tick: u64,
+        spawned: u32,
+        cleared: u32,
+        offered: u32,
+        taken: Vec<u8>,
+        score: crate::game::sim::DepthScore,
+        events: Vec<alloc::string::String>,
+    }
+
+    /// Task 23: the run playtest's step budget (55 minutes of sim time).
+    const RUN_STEPS: u64 = 100_000;
+
+    fn run_playtest(seed: u64, d: Difficulty) -> RunPlaytest {
+        let opts = MatchOptions {
+            difficulty: d,
+            run: true,
+            ..MatchOptions::default()
+        };
+        let mut s = kestrel_reach_with(seed, opts);
+        let mut taken = Vec::new();
+        let mut events = Vec::new();
+        let mut cleared = 0;
+        for _ in 0..RUN_STEPS {
+            if s.winner().is_some() {
+                break;
+            }
+            let mut c = s.ai_commands(PlayerId(0));
+            c.extend(Scenario::KestrelReach.host_commands(&s));
+            if let Some(draft) = s.depth_draft() {
+                taken.push(draft[0]);
+                c.push(Command::ChoosePerk {
+                    owner: PlayerId(0),
+                    perk: u32::from(draft[0]),
+                });
+            }
+            s.step(&c);
+            if s.waves_cleared() != cleared {
+                cleared = s.waves_cleared();
+                events.push(alloc::format!(
+                    "c{cleared}@{} (spawned {}, m{} u{}/{})",
+                    s.tick(),
+                    s.waves_survived(),
+                    s.money(PlayerId(0)).to_int_floor(),
+                    s.unit_count(PlayerId(0)),
+                    s.unit_count(PlayerId(1)),
+                ));
+            }
+        }
+        RunPlaytest {
+            winner: s.winner(),
+            tick: s.tick(),
+            spawned: s.waves_survived(),
+            cleared: s.waves_cleared(),
+            offered: s.drafts_offered(),
+            taken,
+            score: s.depth_score().expect("a depth match"),
+            events,
+        }
+    }
+
+    /// Task 23: a Normal run on seed 3, the playtest AI drafting the first
+    /// offered perk each time, clears its twelfth wave and wins at t=64390
+    /// (wave 12 spawned at 63901). It is offered 8 drafts, the whole default
+    /// pool (perks 0 to 7), so waves 9 to 11 draft nothing. Measured in the
+    /// Task 23 report (`run_playtest_table`): Normal wins on seeds 1, 2, 3, 7
+    /// and 11 near t=64300 and is overrun at wave 11 (10 cleared, t=59320)
+    /// on seeds 5 and 2026; Easy wins at t=75070 on seeds 3 and 5; Hard is
+    /// overrun at wave 4 near t=18000.
+    #[test]
+    fn a_normal_run_playtest_clears_twelve_waves_and_wins() {
+        let r = run_playtest(3, Difficulty::Normal);
+        std::eprintln!(
+            "run seed 3 Normal: {:?} at t={} after {} cleared, drafts {} taken {:?}, {:?}",
+            r.winner,
+            r.tick,
+            r.cleared,
+            r.offered,
+            r.taken,
+            r.score
+        );
+        assert_eq!(
+            r.winner,
+            Some(PlayerId(0)),
+            "fell after {} cleared",
+            r.cleared
+        );
+        assert_eq!((r.spawned, r.cleared), (12, 12));
+        assert_eq!(r.offered, 8);
+        assert_eq!(r.taken, [5, 3, 6, 4, 0, 7, 1, 2]);
+        assert_eq!(r.score.waves_held, 12);
+        assert_eq!(r.score.victory_bonus, 1000, "a run win after t=45000");
+    }
+
+    /// Task 23: the run playtest per seed (3, 5) and preset, for the report.
+    #[test]
+    #[ignore = "table: cargo test --release -p rts-core --offline run_playtest_table -- --ignored --nocapture"]
+    fn run_playtest_table() {
+        let mut runs: Vec<(u64, Difficulty)> = Vec::new();
+        for seed in [3, 5] {
+            for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                runs.push((seed, d));
+            }
+        }
+        // More Normal seeds: how often the playtest reaches twelve waves.
+        runs.extend([1, 2, 7, 11, 2026].map(|seed| (seed, Difficulty::Normal)));
+        {
+            for (seed, d) in runs {
+                let r = run_playtest(seed, d);
+                std::eprintln!(
+                    "seed {seed} {d:?}: {:?} at t={} | spawned {} cleared {} | drafts offered {} \
+                     taken {:?} | score {:?} | {}",
+                    r.winner,
+                    r.tick,
+                    r.spawned,
+                    r.cleared,
+                    r.offered,
+                    r.taken,
+                    r.score,
+                    r.events.join(" "),
                 );
             }
         }
@@ -2687,7 +2845,13 @@ mod tests {
     #[test]
     fn each_preset_sets_the_purse_and_the_wave_clock() {
         for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
-            let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            let mut s = kestrel_reach_with(
+                3,
+                MatchOptions {
+                    difficulty: d,
+                    ..MatchOptions::default()
+                },
+            );
             assert_eq!(s.difficulty(), d);
             assert_eq!(s.seed(), 3);
             assert_eq!(
@@ -2714,18 +2878,21 @@ mod tests {
             3,
             MatchOptions {
                 difficulty: Difficulty::Easy,
+                ..MatchOptions::default()
             },
         );
         let hard = kestrel_reach_with(
             3,
             MatchOptions {
                 difficulty: Difficulty::Hard,
+                ..MatchOptions::default()
             },
         );
         assert_ne!(easy.state_hash(), hard.state_hash());
         assert_ne!(easy.state_hash(), kestrel_reach(3).state_hash());
         let opts = MatchOptions {
             difficulty: Difficulty::Hard,
+            ..MatchOptions::default()
         };
         assert_eq!(
             Scenario::Survival.build_with(7, opts).state_hash(),
@@ -2762,7 +2929,13 @@ mod tests {
             (Difficulty::Normal, 3),
             (Difficulty::Hard, 2),
         ] {
-            let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            let mut s = kestrel_reach_with(
+                3,
+                MatchOptions {
+                    difficulty: d,
+                    ..MatchOptions::default()
+                },
+            );
             assert_eq!(
                 s.money(PlayerId(0)).to_int_floor(),
                 i64::from(d.start_credits())
@@ -2776,7 +2949,13 @@ mod tests {
                 Some(PlayerId(1)),
                 "{d:?}: undefended base never fell"
             );
-            let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            let mut s = kestrel_reach_with(
+                3,
+                MatchOptions {
+                    difficulty: d,
+                    ..MatchOptions::default()
+                },
+            );
             while s.winner().is_none() && s.tick() < 140_000 {
                 let mut c = s.ai_commands(PlayerId(0));
                 c.extend(Scenario::KestrelReach.host_commands(&s));
@@ -2806,7 +2985,10 @@ mod tests {
     fn difficulty_outcome_table() {
         for seed in [3, 2026] {
             for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
-                let opts = MatchOptions { difficulty: d };
+                let opts = MatchOptions {
+                    difficulty: d,
+                    ..MatchOptions::default()
+                };
                 let mut s = kestrel_reach_with(seed, opts);
                 let credits = s.money(PlayerId(0)).to_int_floor();
                 let first = s.ticks_until_next_wave();
