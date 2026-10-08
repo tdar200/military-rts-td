@@ -5,7 +5,8 @@ extends RefCounted
 ## (with_settings); the map picker draws a fresh seed on every open (random_seed) and the debrief's Restart replays the
 ## running match's seed and preset, which the bridge reports in the Kestrel depth block (from_snapshot). The config of
 ## the running match and the "deploy after this reload" request live in Engine meta, so they survive the scene reload a
-## restart does (a static var alone is not promised to).
+## restart does (a static var alone is not promised to). Task 24: a Kestrel match.json also names `replay_dir`, the
+## absolute path of user://replays, where the bridge records the match (it refuses any other kind of path).
 const Settings = preload("res://scripts/ui/settings.gd")
 const SCENARIOS := ["kestrel", "survival"]
 const NAMES := {"kestrel": "Kestrel Reach", "survival": "Earthfront Survival"}
@@ -18,6 +19,8 @@ const DIFFICULTY_NAMES := {"easy": "Easy", "normal": "Normal", "hard": "Hard"}
 const SEED_MAX := 2147483647
 const DEFAULT_SEED := 2026
 const META := "match_config"
+## Task 24: the bridge records Kestrel replays here (sent globalized; nothing in the client creates it).
+const REPLAY_DIR := "user://replays"
 const AUTO_META := "auto_deploy"
 
 ## The running match's config: the defaults until one is chosen. Reading returns a copy; assigning stores a copy.
@@ -33,8 +36,9 @@ static func defaults() -> Dictionary:
 
 
 ## Flat JSON in a fixed key order. Missing keys take the defaults and an unknown map falls back to Kestrel Reach, so the
-## bridge never sees a value it would have to reject.
-static func to_json(cfg: Dictionary) -> String:
+## bridge never sees a value it would have to reject. Task 24: a Kestrel match ends with `replay_dir` when `replays` is
+## given (write passes replay_dir()); Survival never records, so its JSON is unchanged.
+static func to_json(cfg: Dictionary, replays := "") -> String:
 	var base := defaults()
 	var out := {}
 	for key in KEYS:
@@ -44,6 +48,8 @@ static func to_json(cfg: Dictionary) -> String:
 	out.seed = clean_seed(out.seed)
 	out.difficulty = clean_difficulty(out.difficulty)
 	out.fog = bool(out.fog)
+	if out.scenario == "kestrel" and replays != "":
+		out["replay_dir"] = replays
 	return JSON.stringify(out, "", false)
 
 
@@ -56,7 +62,7 @@ static func write(runtime_dir: String, cfg: Dictionary) -> bool:
 	var file := FileAccess.open(next, FileAccess.WRITE)
 	if file == null:
 		return false
-	file.store_string(to_json(cfg))
+	file.store_string(to_json(cfg, replay_dir()))
 	file.close()
 	return DirAccess.rename_absolute(next, ProjectSettings.globalize_path(runtime_dir.path_join("match.json"))) == OK
 
@@ -67,6 +73,11 @@ static func with_settings(cfg: Dictionary, settings_path := Settings.PATH) -> Di
 	var out := cfg.duplicate()
 	out["fog"] = bool(Settings.get_value("game/fog", settings_path))
 	return out
+
+
+## Task 24: the absolute path of user://replays (the bridge takes only an absolute replay directory).
+static func replay_dir() -> String:
+	return ProjectSettings.globalize_path(REPLAY_DIR)
 
 
 static func display_name(scenario: String) -> String:

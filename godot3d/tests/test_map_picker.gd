@@ -350,3 +350,32 @@ func test_title_deploy_rebuilds_when_the_preset_differs(t) -> void:
 	t.ok(int(_parsed("match.json").seed) != 2026, "with a fresh seed")
 	t.ok(FileAccess.file_exists(DIR.path_join("restart.flag")), "and restart.flag rebuilds it")
 	_drop(p)
+
+
+# ------------------------------------------------------------------ Task 24: replays
+
+## Kestrel's match.json names the replay directory: user://replays globalized (the bridge refuses user://, res:// and
+## relative paths, and reads strings raw, so the path must arrive unescaped). Survival's match.json is unchanged. Only the
+## string is computed: nothing is created under user://replays.
+func test_kestrel_match_json_names_the_absolute_replay_dir(t) -> void:
+	var replays := MatchConfig.replay_dir()
+	var existed := DirAccess.dir_exists_absolute(replays)
+	t.eq(replays, ProjectSettings.globalize_path("user://replays"), "user://replays, globalized")
+	t.ok(replays.is_absolute_path() and not replays.begins_with("user://") and not replays.begins_with("res://"), "an absolute path")
+	t.ok(replays.find("\\") < 0, "no backslash for the bridge's raw parser")
+	t.eq(MatchConfig.to_json(MatchConfig.defaults(), "/x/replays"), "{\"scenario\":\"kestrel\",\"seed\":2026,\"difficulty\":\"normal\",\"fog\":true,\"replay_dir\":\"/x/replays\"}", "replay_dir last, after the fog")
+	var survival := MatchConfig.defaults()
+	survival.scenario = "survival"
+	t.eq(MatchConfig.to_json(survival, "/x/replays"), "{\"scenario\":\"survival\",\"seed\":2026,\"difficulty\":\"normal\",\"fog\":true}", "Survival never records")
+	t.eq(MatchConfig.to_json({"scenario": "mars"}, "/x/replays").ends_with(",\"replay_dir\":\"/x/replays\"}"), true, "an unknown map falls back to Kestrel, which records")
+	_clean()
+	DirAccess.make_dir_recursive_absolute(DIR)
+	t.ok(MatchConfig.write(DIR, MatchConfig.defaults()))
+	var text := FileAccess.get_file_as_string(DIR.path_join("match.json"))
+	t.ok(text.ends_with(",\"replay_dir\":\"%s\"}" % replays), "written unescaped: %s" % text)
+	t.eq(_parsed("match.json").replay_dir, replays, "and parses back")
+	survival.fog = false
+	t.ok(MatchConfig.write(DIR, survival))
+	t.eq(FileAccess.get_file_as_string(DIR.path_join("match.json")), "{\"scenario\":\"survival\",\"seed\":2026,\"difficulty\":\"normal\",\"fog\":false}", "Survival's match.json as before")
+	t.eq(DirAccess.dir_exists_absolute(replays), existed, "the client creates no replay directory")
+	_clean()
