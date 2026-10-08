@@ -9,7 +9,7 @@ use crate::fixed::Fixed;
 use crate::game::kestrel;
 use crate::game::map::{Deposit, DepositKind, Map, Tile};
 use crate::game::procgen;
-use crate::game::sim::{Command, EntityId, EntityKindView, PlayerId, Sim, WaveConfig};
+use crate::game::sim::{Command, Difficulty, EntityId, EntityKindView, PlayerId, Sim, WaveConfig};
 use crate::game::stats::{BuildingKind, UnitKind};
 use crate::vec::Vec2;
 use alloc::vec::Vec;
@@ -367,11 +367,41 @@ const KESTREL_PROBE_IDS: [u32; 3] = [9, 10, 11];
 /// [`kestrel_probe_commands`]) makes first contact just before 2:00.
 ///
 /// Kestrel Reach is the only scenario that turns on the depth rules
-/// ([`Sim::enable_depth`]), as the last step of construction.
+/// ([`Sim::enable_depth`]), as the last step of construction. It is the
+/// Normal preset: `kestrel_reach_with(seed, MatchOptions::default())`.
 #[must_use]
 pub fn kestrel_reach(seed: u64) -> Sim {
-    let mut sim = kestrel_reach_world(seed);
+    kestrel_reach_with(seed, MatchOptions::default())
+}
+
+/// Task 20: what the title chooses for a match besides the map and the seed.
+/// The default is the Normal preset, the match as it was before presets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MatchOptions {
+    /// The difficulty preset (Kestrel Reach only).
+    pub difficulty: Difficulty,
+}
+
+/// Task 20: Kestrel Reach at a difficulty preset.
+///
+/// The preset sets the human
+/// purse ([`Difficulty::start_credits`]), the wave clock
+/// ([`Difficulty::first_wave_ticks`], [`Difficulty::wave_interval_ticks`]) and,
+/// through the depth state, the wave size ([`Difficulty::wave_size_pct`]).
+/// Normal is exactly [`KESTREL_START_CREDITS`], [`KESTREL_FIRST_WAVE_TICKS`]
+/// and [`KESTREL_WAVE_INTERVAL_TICKS`], so `kestrel_reach(seed)` is this at the
+/// default.
+#[must_use]
+pub fn kestrel_reach_with(seed: u64, opts: MatchOptions) -> Sim {
+    let d = opts.difficulty;
+    let mut sim = kestrel_reach_world(
+        seed,
+        d.start_credits(),
+        d.first_wave_ticks(),
+        d.wave_interval_ticks(),
+    );
     sim.enable_depth();
+    sim.set_difficulty(d);
     sim
 }
 
@@ -380,15 +410,26 @@ pub fn kestrel_reach(seed: u64) -> Sim {
 #[cfg(test)]
 #[must_use]
 pub(crate) fn kestrel_reach_classic(seed: u64) -> Sim {
-    kestrel_reach_world(seed)
+    kestrel_reach_world(
+        seed,
+        KESTREL_START_CREDITS,
+        KESTREL_FIRST_WAVE_TICKS,
+        KESTREL_WAVE_INTERVAL_TICKS,
+    )
 }
 
-/// The Kestrel Reach world as built before the depth rules existed.
-fn kestrel_reach_world(seed: u64) -> Sim {
+/// Ticks between Kestrel expeditions (3:00): the Normal preset's interval.
+pub const KESTREL_WAVE_INTERVAL_TICKS: u64 = 5_400;
+
+/// The Kestrel Reach world as built before the depth rules existed, with the
+/// human purse and the wave clock given (the classic world and the Normal
+/// preset pass [`KESTREL_START_CREDITS`], [`KESTREL_FIRST_WAVE_TICKS`] and
+/// [`KESTREL_WAVE_INTERVAL_TICKS`]).
+fn kestrel_reach_world(seed: u64, credits: i32, first_wave: u64, interval: u64) -> Sim {
     // Both sides are created with Earthfront's usual 1800; only the human purse
-    // shrinks to `KESTREL_START_CREDITS` (the alien economy is left as it was).
+    // shrinks to `credits` (the alien economy is left as it was).
     let mut sim = Sim::new(kestrel::build_map(), seed, Fixed::from_int(1800));
-    sim.grant_money(HUMAN, Fixed::from_int(KESTREL_START_CREDITS - 1800));
+    sim.grant_money(HUMAN, Fixed::from_int(credits - 1800));
     let at = |(x, y): (u16, u16)| crate::game::hex::center(x, y);
 
     sim.set_starting_unlocks(
@@ -477,8 +518,8 @@ fn kestrel_reach_world(seed: u64) -> Sim {
     // Escalating waves from the holdfast toward the player (`survival`'s config,
     // with the first wave moved behind the probe).
     sim.set_waves(WaveConfig {
-        first_delay: KESTREL_FIRST_WAVE_TICKS,
-        interval: 5_400,
+        first_delay: first_wave,
+        interval,
         base_size: 6,
         growth: 2,
         spawn: at(kestrel::HOLDFAST),
@@ -989,6 +1030,17 @@ impl Scenario {
         commands
     }
 
+    /// Task 20: [`Scenario::build`] with the title's options. Only Kestrel
+    /// Reach reads them ([`kestrel_reach_with`]); every other scenario
+    /// ignores them and builds exactly as [`Scenario::build`].
+    #[must_use]
+    pub fn build_with(self, seed: u64, opts: MatchOptions) -> Sim {
+        match self {
+            Self::KestrelReach => kestrel_reach_with(seed, opts),
+            other => other.build(seed),
+        }
+    }
+
     /// Builds the scenario's starting world, seeded for deterministic randomness.
     #[must_use]
     pub fn build(self, seed: u64) -> Sim {
@@ -1005,12 +1057,14 @@ impl Scenario {
 #[cfg(test)]
 mod tests {
     use super::{
-        conquest, crossroads, kestrel_reach, lane_defense, open_clash, survival, Scenario,
+        conquest, crossroads, kestrel_reach, kestrel_reach_with, lane_defense, open_clash,
+        survival, MatchOptions, Scenario,
     };
     use crate::game::civ::ColonyId;
     use crate::game::map::Map;
     use crate::game::path::find_path;
     use crate::game::planet::PlanetId;
+    use crate::game::sim::Difficulty;
     use crate::game::sim::{Command, PlayerId};
     use crate::game::stats::{BuildingKind, UnitKind};
     use alloc::vec::Vec;
@@ -2164,8 +2218,8 @@ mod tests {
         assert_eq!(s.waves_survived(), 0, "the probe lands before wave one");
     }
 
-    /// Task 19: with the alien AI awake from tick 0 (and raiding at era 0),
-    /// the undefended `kestrel_reach(3)`, hosted as the bridge hosts it for a
+    /// Task 19: with the alien AI awake from tick 0 (raiding at era 0 from
+    /// wave one, Task 20), the undefended `kestrel_reach(3)`, hosted as the bridge hosts it for a
     /// fixed 6000 steps, still meets nothing before tick 3000 and still falls.
     #[test]
     fn first_contact_is_not_earlier_than_tick_3000_on_normal() {
@@ -2297,6 +2351,17 @@ mod tests {
     ///   the host commands, as the shell does; its old harness (raw alien AI
     ///   plus the probe script) gives t=4799 after 1 wave both before and
     ///   after this task.
+    /// - Task 20 (difficulty presets; the alien buys no Upgrades and makes no
+    ///   raid before wave one): the undefended base falls at t=4121 -> 4915,
+    ///   after wave one again (first contact still the probe at t=3435). The
+    ///   playtest AI now holds 3 waves and is overrun at t=17127 (waves at
+    ///   4501, 9901 and 15301), where it won at t=13048 after 2 waves: the
+    ///   alien keeps its pre-wave money for its army and Upgrades it from
+    ///   wave one. With the Upgrades gate alone the alien reached 12 supply by
+    ///   tick 2700, raided, and made first contact at t=2908. Per preset
+    ///   (`difficulty_outcome_table`): Easy falls at 5843 / is overrun at
+    ///   19028 after 3 waves; Hard falls at 4006 / is overrun at 13141 after
+    ///   3 waves.
     const KESTREL_DEFENDED_WAVES: u32 = 3;
 
     #[test]
@@ -2306,8 +2371,9 @@ mod tests {
         // period expires) must take the base so the run resolves with no
         // soft-lock. Kestrel Reach opens with the base already founded at HOME_CC,
         // so there is no founding step. Hosted as the shell hosts it (Task 19:
-        // the alien AI is awake from tick 0). Measured: it falls at t=4121,
-        // before wave one (4930 before Task 19; unchanged by the Task 18
+        // the alien AI is awake from tick 0). Measured: it falls at t=4915,
+        // after wave one (4121 before wave one at Task 19, when the alien
+        // bought Upgrades from tick 0; 4930 before Task 19; unchanged by the Task 18
         // economy; 4995 before abilities and Upgrades, Task 17; 4975
         // at Task 12; 4980 before depth separation, Task 12; 4959 before
         // depth auto-acquire, Task 11; before the rework it fell at t=3159).
@@ -2412,6 +2478,198 @@ mod tests {
             s.winner(),
             s.waves_survived()
         );
+    }
+
+    // ---- Task 20: difficulty presets and the match seed.
+
+    #[test]
+    fn normal_difficulty_equals_the_plain_builder() {
+        assert_eq!(
+            kestrel_reach_with(5, MatchOptions::default()).state_hash(),
+            kestrel_reach(5).state_hash()
+        );
+        assert_eq!(MatchOptions::default().difficulty, Difficulty::Normal);
+        // Normal is today's constants.
+        let n = Difficulty::Normal;
+        assert_eq!(n.start_credits(), super::KESTREL_START_CREDITS);
+        assert_eq!(n.first_wave_ticks(), super::KESTREL_FIRST_WAVE_TICKS);
+        assert_eq!(n.wave_interval_ticks(), super::KESTREL_WAVE_INTERVAL_TICKS);
+        assert_eq!(n.wave_size_pct(), 100);
+        assert_eq!(
+            Scenario::KestrelReach
+                .build_with(5, MatchOptions::default())
+                .state_hash(),
+            kestrel_reach(5).state_hash()
+        );
+    }
+
+    #[test]
+    fn difficulty_presets_carry_the_brief_values_and_names() {
+        let table = [
+            (Difficulty::Easy, "easy", 1500, 5400, 6300, 75),
+            (Difficulty::Normal, "normal", 1200, 4500, 5400, 100),
+            (Difficulty::Hard, "hard", 1000, 3600, 4500, 125),
+        ];
+        for (d, name, credits, first, interval, pct) in table {
+            assert_eq!(d.name(), name);
+            assert_eq!(Difficulty::from_name(name), Some(d));
+            assert_eq!(d.start_credits(), credits);
+            assert_eq!(d.first_wave_ticks(), first);
+            assert_eq!(d.wave_interval_ticks(), interval);
+            assert_eq!(d.wave_size_pct(), pct);
+        }
+        assert_eq!(Difficulty::from_name("Normal"), None);
+        assert_eq!(Difficulty::from_name("brutal"), None);
+        assert_eq!(Difficulty::from_name(""), None);
+        assert_eq!(Difficulty::default(), Difficulty::Normal);
+    }
+
+    #[test]
+    fn each_preset_sets_the_purse_and_the_wave_clock() {
+        for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+            let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            assert_eq!(s.difficulty(), d);
+            assert_eq!(s.seed(), 3);
+            assert_eq!(
+                s.money(PlayerId(0)).to_int_floor(),
+                i64::from(d.start_credits())
+            );
+            assert_eq!(s.money(PlayerId(1)).to_int_floor(), 1800, "the alien purse");
+            assert_eq!(s.ticks_until_next_wave(), Some(d.first_wave_ticks()));
+            // No orders at all: the wave lands on its tick, and the next one
+            // is a full interval away.
+            for _ in 0..d.first_wave_ticks() {
+                s.step(&[]);
+            }
+            assert_eq!(s.waves_survived(), 0, "{d:?}");
+            s.step(&[]);
+            assert_eq!(s.waves_survived(), 1, "{d:?}");
+            assert_eq!(s.ticks_until_next_wave(), Some(d.wave_interval_ticks() - 1));
+        }
+    }
+
+    #[test]
+    fn the_difficulty_is_hashed_and_other_scenarios_ignore_it() {
+        let easy = kestrel_reach_with(
+            3,
+            MatchOptions {
+                difficulty: Difficulty::Easy,
+            },
+        );
+        let hard = kestrel_reach_with(
+            3,
+            MatchOptions {
+                difficulty: Difficulty::Hard,
+            },
+        );
+        assert_ne!(easy.state_hash(), hard.state_hash());
+        assert_ne!(easy.state_hash(), kestrel_reach(3).state_hash());
+        let opts = MatchOptions {
+            difficulty: Difficulty::Hard,
+        };
+        assert_eq!(
+            Scenario::Survival.build_with(7, opts).state_hash(),
+            survival(7).state_hash()
+        );
+        assert_eq!(
+            Scenario::Survival.build_with(7, opts).difficulty(),
+            Difficulty::Normal
+        );
+        assert_eq!(
+            Scenario::LaneDefense.build_with(7, opts).state_hash(),
+            lane_defense(7).state_hash()
+        );
+        assert_eq!(
+            Scenario::KestrelReach.build_with(7, opts).state_hash(),
+            kestrel_reach_with(7, opts).state_hash()
+        );
+    }
+
+    /// Task 20: on every preset the undefended base (hosted as the shell hosts
+    /// it) falls, and the playtest AI holds its floor (3 waves on Easy and
+    /// Normal, 2 on Hard) or wins. Measured per preset in the Task 20 report.
+    #[test]
+    fn each_difficulty_resolves_and_the_playtest_ai_survives_its_floor() {
+        for (d, floor) in [
+            (Difficulty::Easy, 3),
+            (Difficulty::Normal, 3),
+            (Difficulty::Hard, 2),
+        ] {
+            let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            assert_eq!(
+                s.money(PlayerId(0)).to_int_floor(),
+                i64::from(d.start_credits())
+            );
+            while s.winner().is_none() && s.tick() < 60_000 {
+                let c = Scenario::KestrelReach.host_commands(&s);
+                s.step(&c);
+            }
+            assert_eq!(
+                s.winner(),
+                Some(PlayerId(1)),
+                "{d:?}: undefended base never fell"
+            );
+            let mut s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            while s.winner().is_none() && s.tick() < 140_000 {
+                let mut c = s.ai_commands(PlayerId(0));
+                c.extend(Scenario::KestrelReach.host_commands(&s));
+                s.step(&c);
+            }
+            assert!(
+                s.waves_survived() >= floor || s.winner() == Some(PlayerId(0)),
+                "{d:?} overrun after {}",
+                s.waves_survived()
+            );
+        }
+    }
+
+    /// Task 20: per preset, the undefended fall and the defended playtest
+    /// (start credits, first wave tick, waves and result), for the report.
+    #[test]
+    #[ignore = "table: cargo test --release -p rts-core --offline difficulty_outcome_table -- --ignored --nocapture"]
+    fn difficulty_outcome_table() {
+        for seed in [3, 2026] {
+            for d in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                let opts = MatchOptions { difficulty: d };
+                let mut s = kestrel_reach_with(seed, opts);
+                let credits = s.money(PlayerId(0)).to_int_floor();
+                let first = s.ticks_until_next_wave();
+                let mut contact = None;
+                while s.winner().is_none() && s.tick() < 60_000 {
+                    let c = Scenario::KestrelReach.host_commands(&s);
+                    s.step(&c);
+                    if contact.is_none() {
+                        contact = kestrel_hostile_in_range_of_the_base(&s).map(|_| s.tick());
+                    }
+                }
+                std::eprintln!(
+                    "seed {seed} {d:?}: credits {credits} first wave {first:?}; undefended \
+                     contact {contact:?} winner {:?} at t={} after {} waves, alien upgrades {:?}",
+                    s.winner(),
+                    s.tick(),
+                    s.waves_survived(),
+                    s.upgrade_levels(PlayerId(1)),
+                );
+                let mut s = kestrel_reach_with(seed, opts);
+                let mut last = 0;
+                let mut waves = Vec::new();
+                while s.winner().is_none() && s.tick() < 140_000 {
+                    let mut c = s.ai_commands(PlayerId(0));
+                    c.extend(Scenario::KestrelReach.host_commands(&s));
+                    s.step(&c);
+                    if s.waves_survived() != last {
+                        last = s.waves_survived();
+                        waves.push((s.tick(), s.money(PlayerId(0)).to_int_floor()));
+                    }
+                }
+                std::eprintln!(
+                    "seed {seed} {d:?}: defended winner {:?} at t={} waves {} {waves:?}",
+                    s.winner(),
+                    s.tick(),
+                    s.waves_survived()
+                );
+            }
+        }
     }
 
     #[test]

@@ -105,9 +105,6 @@ pub(super) const AI_SURPLUS_REFINERIES: usize = 4;
 /// Task 19: the most units an expedition's wave table supplies before the
 /// relays add theirs (`6 + 2w`, capped here; reached at wave 10).
 pub const WAVE_SIZE_CAP: u32 = 24;
-/// Task 19: the percent of the table size a wave brings. Normal is 100;
-/// Task 20's difficulty presets replace this.
-pub(super) const WAVE_SIZE_PCT: u32 = 100;
 /// Task 19: the zero-based index of the elite wave (wave 6), which opens with
 /// a Capital and [`ELITE_ESCORT_TANKS`] Tanks before its doctrine's mix.
 pub const ELITE_WAVE: u32 = 5;
@@ -259,6 +256,90 @@ impl Stance {
     }
 }
 
+/// Task 20: the Kestrel difficulty preset, chosen on the title and carried by
+/// `match.json`. Normal is the match as it was before presets existed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Difficulty {
+    /// More money, a later first wave, longer gaps and smaller waves.
+    Easy,
+    /// The reference match (Kestrel's constants before Task 20).
+    #[default]
+    Normal,
+    /// Less money, an earlier first wave, shorter gaps and bigger waves.
+    Hard,
+}
+
+impl Difficulty {
+    /// The human player's starting money.
+    #[must_use]
+    pub const fn start_credits(self) -> i32 {
+        match self {
+            Self::Easy => 1500,
+            Self::Normal => 1200,
+            Self::Hard => 1000,
+        }
+    }
+
+    /// Ticks before the first wave (3:00, 2:30, 2:00 at 30 ticks a second).
+    #[must_use]
+    pub const fn first_wave_ticks(self) -> u64 {
+        match self {
+            Self::Easy => 5400,
+            Self::Normal => 4500,
+            Self::Hard => 3600,
+        }
+    }
+
+    /// Ticks between waves (3:30, 3:00, 2:30).
+    #[must_use]
+    pub const fn wave_interval_ticks(self) -> u64 {
+        match self {
+            Self::Easy => 6300,
+            Self::Normal => 5400,
+            Self::Hard => 4500,
+        }
+    }
+
+    /// The percent of the wave table's size a wave brings (rounded down),
+    /// before the relays add theirs.
+    #[must_use]
+    pub const fn wave_size_pct(self) -> u32 {
+        match self {
+            Self::Easy => 75,
+            Self::Normal => 100,
+            Self::Hard => 125,
+        }
+    }
+
+    /// The protocol name: "easy", "normal" or "hard".
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Normal => "normal",
+            Self::Hard => "hard",
+        }
+    }
+
+    /// The preset with this exact (lower case) name, if any.
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        [Self::Easy, Self::Normal, Self::Hard]
+            .into_iter()
+            .find(|d| d.name() == s)
+    }
+
+    /// Stable hash tag. Never renumber.
+    #[must_use]
+    pub const fn tag(self) -> u64 {
+        match self {
+            Self::Easy => 0,
+            Self::Normal => 1,
+            Self::Hard => 2,
+        }
+    }
+}
+
 /// Unit push axes for coincident units, one per hex direction (60 degrees
 /// apart, starting at 30 degrees), picked by the higher index `j % 6`.
 const HEX_AXES: [(i64, i64); 6] = [
@@ -386,6 +467,10 @@ pub(super) struct DepthGlobal {
     /// Task 19: spawned waves none of whose units are alive any more,
     /// recounted at the end of every depth tick ([`Sim::waves_cleared`]).
     pub(super) waves_cleared: u32,
+    /// Task 20: the match's difficulty preset (Normal unless
+    /// [`crate::game::scenario::kestrel_reach_with`] chose another). It scales
+    /// the wave size here; the purse and the wave clock are set at build time.
+    pub(super) difficulty: Difficulty,
 }
 
 impl DepthGlobal {
@@ -396,6 +481,8 @@ impl DepthGlobal {
             h.write_u64(u64::from(d));
         }
         h.write_u64(u64::from(self.waves_cleared));
+        // Task 20 (appended).
+        h.write_u64(self.difficulty.tag());
     }
 }
 
@@ -442,15 +529,53 @@ impl Sim {
     }
 
     /// Task 19: the force zero-based wave `w` brings before the supply
-    /// ceiling: `min(6 + 2w, 24)` at the difficulty's percent (100 until
-    /// Task 20) plus 2 per operational relay of the waves' attacker.
+    /// ceiling: `min(6 + 2w, 24)` at the difficulty's percent (Task 20,
+    /// [`Difficulty::wave_size_pct`], rounded down) plus 2 per operational
+    /// relay of the waves' attacker.
     #[must_use]
     pub(super) fn depth_expedition_size(&self, w: u32) -> u32 {
         let Some(cfg) = self.waves else {
             return 0;
         };
         let table = 6_u32.saturating_add(w.saturating_mul(2)).min(WAVE_SIZE_CAP);
-        table * WAVE_SIZE_PCT / 100 + 2 * self.alien_relay_count(cfg.attacker, true)
+        table * self.dg.difficulty.wave_size_pct() / 100
+            + 2 * self.alien_relay_count(cfg.attacker, true)
+    }
+
+    /// Task 20: the seed the match was built with (the bridge reports it, so
+    /// the debrief can show it and Restart can replay it).
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
+        self.field_seed
+    }
+
+    /// Task 20: the match's difficulty preset (Normal without depth).
+    #[must_use]
+    pub const fn difficulty(&self) -> Difficulty {
+        if self.is_depth() {
+            self.dg.difficulty
+        } else {
+            Difficulty::Normal
+        }
+    }
+
+    /// Task 20: records the difficulty preset the match was built with (the
+    /// purse and the wave clock are the builder's; this scales the waves and
+    /// joins the hash). Only [`crate::game::scenario::kestrel_reach_with`]
+    /// calls it, after [`Sim::enable_depth`].
+    pub(crate) const fn set_difficulty(&mut self, difficulty: Difficulty) {
+        self.dg.difficulty = difficulty;
+    }
+
+    /// Task 20 (the Task 19 carry-over): whether `player` may buy Upgrades
+    /// now. The waves' attacker waits until wave one has spawned, so its
+    /// pre-wave probe stays a probe (bought from tick 0, Upgrades let the
+    /// probe alone take an undefended base at t=4121); every other player
+    /// always may. Its raids wait for wave one too ([`Sim::depth_raid`]).
+    #[must_use]
+    pub(super) fn depth_ai_may_upgrade(&self, player: PlayerId) -> bool {
+        self.waves
+            .is_none_or(|cfg| cfg.attacker != player || self.wave_count > 0)
     }
 
     /// Task 19: spawned waves with no living unit left (0 without depth).
@@ -500,12 +625,16 @@ impl Sim {
     /// [`RAID_SUPPLY`], the lowest-index half of its idle combat units
     /// ([`Sim::depth_raider`]) and the defender's structure nearest `base`
     /// (ties to the lowest index) that they attack-move at. Only the waves'
-    /// attacker raids, and only under depth.
+    /// attacker raids, and only under depth. Task 20: never before wave one
+    /// has spawned (the probe is the only pre-wave contact; without its
+    /// pre-wave Upgrades the alien reached 12 supply by tick 2700 and its raid
+    /// made first contact at t=2908).
     #[must_use]
     pub(super) fn depth_raid(&self, player: PlayerId, base: Vec2) -> Option<(Vec<usize>, Vec2)> {
         let cfg = self.waves?;
         if !self.is_depth()
             || player != cfg.attacker
+            || self.wave_count == 0
             || !self.tick.is_multiple_of(RAID_PERIOD)
             || self.player_era(player) != 0
             || self.supply_used(player) < RAID_SUPPLY
@@ -4960,8 +5089,9 @@ mod tests {
             s.add_building(P0, BuildingKind::Wall, x, y);
         }
         // Task 19: with the alien AI buying Upgrades from tick 0 the probe
-        // alone takes the undefended base before wave one (t=4121 on seed 3),
-        // so it is cleared; this test reads only the wave's composition.
+        // alone took the undefended base before wave one (t=4121 on seed 3),
+        // so it is cleared. Task 20 holds those Upgrades until wave one; the
+        // probe stays cleared because this test reads only the composition.
         for id in crate::game::scenario::kestrel_probe_units(&s) {
             s.entities[id.0 as usize].hp = Fixed::ZERO;
         }
@@ -6147,6 +6277,72 @@ mod tests {
         assert_eq!(s.next_expedition_size(), s.depth_expedition_size(0));
     }
 
+    /// Task 20: the preset's percent scales the table size (rounded down),
+    /// before the relays add theirs (2 relays on seed 3: +4).
+    #[test]
+    fn the_preset_scales_the_expedition_before_the_relays() {
+        use crate::game::scenario::{kestrel_reach_with, MatchOptions};
+        use crate::game::sim::Difficulty;
+        for (d, first, fifth, capped) in [
+            (Difficulty::Easy, 4 + 4, 10 + 4, 18 + 4),
+            (Difficulty::Normal, 10, 18, 28),
+            (Difficulty::Hard, 7 + 4, 17 + 4, 30 + 4),
+        ] {
+            let s = kestrel_reach_with(3, MatchOptions { difficulty: d });
+            assert_eq!(s.depth_expedition_size(0), first, "{d:?}");
+            assert_eq!(s.depth_expedition_size(4), fifth, "{d:?}");
+            assert_eq!(s.depth_expedition_size(9), capped, "{d:?}");
+            assert_eq!(s.depth_expedition_size(30), capped, "{d:?}");
+        }
+    }
+
+    /// Task 20 (the Task 19 carry-over): the waves' attacker buys no Upgrades
+    /// level before wave one has spawned (an upgraded probe alone used to
+    /// take an undefended base at t=4121); it buys from wave one on, and the
+    /// human-side AI is never held back.
+    #[test]
+    fn the_alien_ai_buys_upgrades_only_once_wave_one_has_spawned() {
+        let mut s = kestrel_reach(3);
+        while s.waves_survived() == 0 && s.winner().is_none() && s.tick() < 6000 {
+            let c = Scenario::KestrelReach.host_commands(&s);
+            assert!(
+                !c.iter()
+                    .any(|c| matches!(c, Command::Ascend { owner, .. } if *owner == P1)),
+                "alien Upgrades order before wave one at t={}",
+                s.tick()
+            );
+            s.step(&c);
+        }
+        assert_eq!(s.waves_survived(), 1, "wave one never came");
+        assert_eq!(s.upgrade_levels(P1), [0, 0, 0]);
+        let mut bought = false;
+        for _ in 0..3000 {
+            let c = Scenario::KestrelReach.host_commands(&s);
+            bought |= c
+                .iter()
+                .any(|c| matches!(c, Command::Ascend { owner, .. } if *owner == P1));
+            s.step(&c);
+        }
+        assert!(bought, "the alien never bought a level after wave one");
+        // The human-side AI buys before any wave when it has the money.
+        let mut s = kestrel_reach(3);
+        let mut human = false;
+        for _ in 0..4400 {
+            let mut c = s.ai_commands(P0);
+            human |= c
+                .iter()
+                .any(|c| matches!(c, Command::Ascend { owner, .. } if *owner == P0));
+            c.extend(Scenario::KestrelReach.host_commands(&s));
+            s.step(&c);
+        }
+        assert!(human, "the playtest AI bought no level before wave one");
+        // Classic rules never reach this branch: no depth, no alien orders
+        // before wave one at all.
+        assert!(Scenario::KestrelReach
+            .host_commands(&kestrel_reach_classic(3))
+            .is_empty());
+    }
+
     #[test]
     fn waves_cleared_counts_a_wave_once_its_last_unit_dies() {
         let mut s = kestrel_reach(3);
@@ -6217,13 +6413,15 @@ mod tests {
         assert_eq!(orders, 2 * probe.len());
     }
 
-    /// An alien garrison of `n` idle rifles near its Command Center, at `tick`.
+    /// An alien garrison of `n` idle rifles near its Command Center, at `tick`,
+    /// with wave one already spawned (Task 20: no raid before it).
     fn raid_setup(n: u16, tick: u64) -> Sim {
         let mut s = kestrel_reach(3);
         for i in 0..n {
             s.add_unit(P1, UnitKind::Infantry, hex::center(33, 4 + i % 10));
         }
         s.tick = tick;
+        s.wave_count = 1;
         s
     }
 
@@ -6268,6 +6466,10 @@ mod tests {
         // defender, and without depth there is no raid.
         assert!(raid_orders(&raid_setup(4, super::RAID_PERIOD + 30)).is_empty());
         assert!(raid_orders(&raid_setup(0, super::RAID_PERIOD)).is_empty());
+        // Task 20: before wave one the alien never raids.
+        let mut early = raid_setup(4, super::RAID_PERIOD);
+        early.wave_count = 0;
+        assert!(raid_orders(&early).is_empty());
         let mut late = raid_setup(4, super::RAID_PERIOD);
         late.civs[1].era = 1;
         assert!(raid_orders(&late).is_empty());

@@ -1237,9 +1237,11 @@ impl Sim {
         }
         // Kestrel depth (Task 17): the money left after building, science and
         // training buys the cheapest Upgrades level (lowest track on a tie),
-        // keeping a reserve; at most one level per AI pass.
+        // keeping a reserve; at most one level per AI pass. Task 20: the waves'
+        // attacker waits for wave one (`depth_ai_may_upgrade`).
         if self.is_depth() {
             let cheapest = (0..super::depth::UPGRADE_TRACKS)
+                .filter(|_| self.depth_ai_may_upgrade(player))
                 .filter_map(|t| self.upgrade_cost(player, t).map(|c| (c.to_bits(), t)))
                 .min();
             if let Some((bits, track)) = cheapest {

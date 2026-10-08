@@ -12,7 +12,7 @@ mod earthfront;
 pub use earthfront::{EconomyView, SupplyLink, SupplyState};
 #[path = "depth.rs"]
 mod depth;
-pub use depth::Stance;
+pub use depth::{Difficulty, Stance};
 
 use crate::fixed::Fixed;
 use crate::game::balance::Balance;
