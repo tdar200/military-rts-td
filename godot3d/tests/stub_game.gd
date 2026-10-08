@@ -69,6 +69,9 @@ var runtime_directory := ""
 var settings_path := "user://test_stub_settings/settings.cfg"
 ## Mirrors earthfront_3d.records_path. Empty: the debrief records no score (tests that submit set a user://test_... path).
 var records_path := ""
+## Task 26: a real earthfront_3d.gd (not in the tree) the pause, draft, perk and speed calls also reach, so a test sees the
+## files the bridge would read; null (the default) records only.
+var forward: Object = null
 ## The UI applies volumes and the window mode to these recorders instead of the AudioServer and the DisplayServer
 ## (the real game has no such members, so it gets the servers).
 var audio_server := BusRecorder.new()
@@ -149,6 +152,28 @@ func _restart_mission() -> void:
 
 func set_sim_paused(on: bool) -> void:
 	calls.append(["pause", on])
+	if forward != null:
+		forward.set_sim_paused(on)
+
+
+## Task 26: the run draft's hold on the bridge, the perk pick and the replay speed. Recorded; with `forward` set (a real
+## earthfront_3d.gd out of the tree) the real game writes the files too.
+func set_draft_hold(on: bool) -> void:
+	calls.append(["draft_hold", on])
+	if forward != null:
+		forward.set_draft_hold(on)
+
+
+func choose_perk(id: int) -> void:
+	calls.append(["perk", id])
+	if forward != null:
+		forward.choose_perk(id)
+
+
+func write_replay_speed(speed: String) -> void:
+	calls.append(["speed", speed])
+	if forward != null:
+		forward.write_replay_speed(speed)
 
 
 func mouse_position() -> Vector2:

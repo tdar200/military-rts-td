@@ -99,6 +99,10 @@ class UnitMotion:
 	var side := 1.0  # the side of the path the next puff rises on
 	var wash := 0.0  # seconds since the last rotor-wash ring
 var sim_paused := false  # set_sim_paused: the bridge holds the sim still, the effects hold their time
+## Task 26: pause.flag has two holders, the pause menu (set_sim_paused) and a pending run draft (set_draft_hold); the bridge
+## stays still while either holds it.
+var _menu_paused := false
+var draft_hold := false
 ## Kestrel sound (plan 2026-10-06-kestrel-next-level, Task 5): the AudioDirector deciding every cue (a test puts a
 ## recording stub here) and the AudioPool playing them (made only in the tree). Both stay null in Survival, which keeps
 ## its generated tones (_cue falls back to _play_tone with the legacy arguments).
@@ -1734,6 +1738,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventKey and event.pressed and event.keycode in [Keybinds.CANCEL, Keybinds.SCIENCE]:
 			science_overlay.visible = false
 		return
+	if replay_mode():
+		_replay_input(event)
+		return
 	if event is InputEventMouseMotion and dragging:
 		_update_selection_box(event.position)
 		return
@@ -2104,7 +2111,7 @@ func _coach_event(event: String) -> void:
 ## The coach card for the HUD ({} when nothing shows): the lesson's hint with the objective line it serves, its number
 ## and the lesson count. Kestrel only, in a running match (deployed, no winner), until hidden or never shown again.
 func coach_card() -> Dictionary:
-	if coach_hidden or not mission_deployed or bridge_winner >= 0 or not KestrelCoach.visible(coach_step, coach_never, world_art_on):
+	if coach_hidden or not mission_deployed or bridge_winner >= 0 or replay_mode() or not KestrelCoach.visible(coach_step, coach_never, world_art_on):
 		return {}
 	var card := KestrelCoach.hint_for(coach_step, kestrel_objectives)
 	card["index"] = KestrelCoach.STEPS.find(coach_step) + 1
@@ -2523,7 +2530,30 @@ func _destroy_unit(unit: Node3D, material: Material) -> void:
 	unit.queue_free()
 
 
+## Task 26: true while the bridge plays a recording back (its snapshot carries the `replay` block). The client then sends
+## no order at all: the recording plays only its own lines (the bridge drops client packets too).
+func replay_mode() -> bool:
+	return bridge_snapshot.get("replay", null) is Dictionary
+
+
+## Playback input: only the camera (wheel zoom and the middle-button pan; the keyboard pan and the edge pan run in
+## _update_camera_controls). Selection, orders, building and every hotkey are ignored; the speed bar is HUD.
+func _replay_input(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton) or not event.pressed:
+		return
+	if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+		camera_focus_zoom = maxf(_zoom_limits().x, camera_focus_zoom - 1.25)
+	elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		camera_focus_zoom = minf(_zoom_limits().y, camera_focus_zoom + 1.25)
+	elif event.button_index == MOUSE_BUTTON_MIDDLE:
+		_end_follow()
+		pan_drag_from = event.position
+
+
+## Every order packet goes through here; in playback nothing is written (replay_mode).
 func _append_bridge_command(line: String) -> void:
+	if replay_mode():
+		return
 	var directory := runtime_directory.path_join("commands")
 	DirAccess.make_dir_recursive_absolute(directory)
 	command_sequence += 1
@@ -2788,7 +2818,7 @@ func _write_bridge_train(kind_name: String) -> void:
 		producers.push_front(selected)
 	for node in producers:
 		if is_instance_valid(node) and int(node.get_meta("team", -1)) == HUMAN and String(node.get_meta("kind_name", "")) == producer_kind and int(node.get_meta("construction", 0)) == 0:
-			if world_art_on and not _funds_ok(FeedbackEvents.unit_cost(kind_name), kind_name):
+			if world_art_on and not _funds_ok(FeedbackEvents.unit_cost(kind_name, bridge_snapshot), kind_name):
 				return
 			_append_bridge_command("train,%d,%s" % [int(node.get_meta("bridge_id")), kind_name])
 			objective_label.text = "%s ORDER SENT TO %s" % [_kind_text(kind_name), _kind_text(producer_kind)]
@@ -4557,7 +4587,10 @@ func _orders_armed() -> bool:
 
 ## The pause menu's real effect. The bridge stops stepping the simulation while `pause.flag` exists in the runtime
 ## directory (godot-bridge.rs), the same file-flag channel as start.flag and restart.flag; removing it resumes the run.
+## Task 26: the menu's request; the flag stays while a run draft also holds it (set_draft_hold).
 func set_sim_paused(on: bool) -> void:
+	_menu_paused = on
+	on = _menu_paused or draft_hold
 	sim_paused = on
 	if audio != null:
 		audio.set_paused(on)
@@ -4570,6 +4603,37 @@ func set_sim_paused(on: bool) -> void:
 			flag.store_line("pause")
 	elif FileAccess.file_exists(path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+## Task 26: a pending run draft holds the bridge through the same pause.flag (the core never pauses itself); the pick
+## lifts it. The pause menu opened over a draft and closed again leaves the draft's hold, and the other way round.
+func set_draft_hold(on: bool) -> void:
+	draft_hold = on
+	set_sim_paused(_menu_paused)
+
+
+## Task 26: the player's pick from a run draft, `perk,<id>` (the bridge applies it when the sim steps again, so the packet
+## is written before the draft's hold is lifted). Ids are 0 to 11 (perk.rs); nothing in playback.
+func choose_perk(id: int) -> void:
+	if id < 0 or id > 11:
+		return
+	_append_bridge_command("perk,%d" % id)
+
+
+## Task 26: the replay speed bar: replay_speed.txt beside the snapshot ("0" pauses, "0.5" to "8"; the bridge reads 1x for
+## anything else or a missing file), written through a .next file and a rename. "" removes the file.
+func write_replay_speed(speed: String) -> void:
+	var path := ProjectSettings.globalize_path(runtime_directory.path_join("replay_speed.txt"))
+	if speed == "":
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+		return
+	var file := FileAccess.open(path + ".next", FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_line(speed)
+	file.close()
+	DirAccess.rename_absolute(path + ".next", path)
 
 
 ## Back to a fresh title: restart.flag makes the bridge rebuild (from runtime/match.json when the UI wrote one), then the

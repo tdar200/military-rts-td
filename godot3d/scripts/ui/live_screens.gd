@@ -4,6 +4,7 @@ extends RefCounted
 const SPR := "res://assets/ui/sprites/"
 const UNIT_ROWS := [["Infantry", "Infantry"], ["AntiArmor", "Anti-armour"], ["Tank", "Battle tanks"], ["Helicopter", "Gunships"], ["Harvester", "Harvesters"], ["Capital", "Capital units"]]
 const SessionLog = preload("res://scripts/ui/session_log.gd")
+const PerkDraft = preload("res://scripts/ui/sections/perk_draft.gd")
 const MatchConfig = preload("res://scripts/match_config.gd")
 const FixturesChapters := [
 	{"tag": "Eras 3-4", "tag_color": "f0b040", "name": "Solar", "blurb": "Orbital industry, launch mass and transfer windows.", "status": "Design / Locked"},
@@ -43,6 +44,7 @@ static func title_vm(deploy_enabled: bool, research_projects: int, fogged := fal
 			{"id": "deploy", "action": "pick_map", "label": "New operation", "icon": "plus", "emphasis": "primary", "disabled": not deploy_enabled},
 			{"id": "skirmish", "label": "Skirmish sandbox", "icon": "crosshair", "disabled": true},
 			{"id": "research", "label": "Research archive", "hint": "%d projects" % research_projects if research_projects > 0 else "", "icon": "flask_title", "disabled": true},
+			{"id": "replays", "action": "replays", "label": "Replays", "icon": "clock_alt"},
 			{"id": "settings", "label": "Settings", "icon": "cog"},
 			{"id": "quit", "label": "Quit", "icon": "restart"},
 		],
@@ -73,7 +75,7 @@ const SURVIVAL_DIFFICULTY := "Presets apply to Kestrel Reach. Survival keeps its
 
 ## The map picker (sections/map_picker.gd): one card per map, `selected` marked, then the difficulty presets
 ## (`difficulty` selected) and the match seed (Task 20).
-static func picker_vm(selected: String, difficulty := "normal", seed := MatchConfig.DEFAULT_SEED) -> Dictionary:
+static func picker_vm(selected: String, difficulty := "normal", seed := MatchConfig.DEFAULT_SEED, mode := "operation", pool := MatchConfig.DEFAULT_POOL) -> Dictionary:
 	var cards: Array = []
 	for c in MAP_CARDS:
 		var card: Dictionary = c.duplicate(true)
@@ -84,10 +86,70 @@ static func picker_vm(selected: String, difficulty := "normal", seed := MatchCon
 	var options: Array = []
 	for id in MatchConfig.DIFFICULTIES:
 		options.append({"id": id, "label": MatchConfig.difficulty_name(id), "selected": id == preset})
+	var run := mode == "run" and selected == "kestrel"
+	var modes: Array = []
+	for id in MatchConfig.MODES:
+		modes.append({"id": id, "label": MatchConfig.MODE_NAMES[id], "selected": id == ("run" if run else "operation")})
 	return {"cap": "New operation", "title": "Choose a battlefield", "cards": cards, "back": "Back", "confirm": "Deploy forces",
-		"note": "The bridge rebuilds the chosen map, then the operation starts.",
+		"note": "The bridge rebuilds the chosen map, then the %s starts." % ("run" if run else "operation"),
 		"difficulty": {"cap": "Difficulty", "options": options, "detail": DIFFICULTY_DETAIL[preset] if selected != "survival" else SURVIVAL_DIFFICULTY},
-		"seed": {"cap": "Seed", "value": str(seed), "hint": "New each operation"}}
+		"mode": {"cap": "Mode", "options": modes, "detail": run_detail(pool) if run else (OPERATION_DETAIL if selected != "survival" else SURVIVAL_MODE)},
+		"seed": {"cap": "Seed", "value": str(seed), "hint": "New each operation", "daily": "Daily seed"}}
+
+
+## Task 26: the picker's words for the two modes. A run's line names the perk pool: how many of the twelve perks it
+## draws from, which depth perks the player unlocked, and the next one wave 6 unlocks.
+const OPERATION_DETAIL := "Break the Core Node. Score and personal bests per preset."
+const SURVIVAL_MODE := "Runs are Kestrel Reach only. Survival is always an operation."
+
+
+static func run_detail(pool: int) -> String:
+	var clean := MatchConfig.clean_pool(pool)
+	var unlocked: Array = []
+	var next := ""
+	for bit in range(8, 12):
+		if clean & (1 << bit):
+			unlocked.append(PerkDraft.perk_name(bit))
+		elif next == "":
+			next = PerkDraft.perk_name(bit)
+	var text := "Hold twelve waves; after each cleared wave, draft one of three perks. Pool: %d of 12 perks" % MatchConfig.pool_size(clean)
+	text += " (unlocked: %s)." % ", ".join(unlocked) if not unlocked.is_empty() else "."
+	text += " Reach wave 6 in a run to unlock %s." % next if next != "" else " Every perk is unlocked."
+	return text
+
+
+## Task 26: the Replays list (sections/replay_list.gd) from ReplayList.scan(): a row per recording (label: map, seed,
+## preset, Run or Operation; detail: length, final score, when it was recorded), the skipped files in the note, and
+## `error` (a refused directory, or a replay the bridge could not play) above the rows.
+static func replays_vm(scan: Dictionary, error := "") -> Dictionary:
+	var rows: Array = []
+	for r in scan.get("rows", []):
+		var label := "%s, seed %d, %s, %s" % [MatchConfig.display_name(str(r.scenario)), int(r.seed), MatchConfig.difficulty_name(r.difficulty), "Run" if bool(r.run) else "Operation"]
+		var when := ""
+		if int(r.get("unix", 0)) > 0:
+			var d := Time.get_datetime_dict_from_unix_time(int(r.unix))
+			when = " / Recorded %04d-%02d-%02d %02d:%02d UTC" % [d.year, d.month, d.day, d.hour, d.minute]
+		var detail := "%s ticks (%s) / Score %s%s" % [thousands(int(r.ticks)), clock(int(r.ticks) / 30.0), thousands(int(r.score)), when]
+		rows.append({"label": label, "detail": detail, "path": str(r.path)})
+	var notes: Array = []
+	if int(scan.get("older", 0)) > 0:
+		notes.append("%d older not shown" % int(scan.older))
+	if int(scan.get("skipped", 0)) > 0:
+		notes.append("%d unreadable %s skipped" % [int(scan.skipped), "file" if int(scan.skipped) == 1 else "files"])
+	var err := error if error != "" else str(scan.get("error", ""))
+	return {"cap": "Replays", "title": "Recorded matches", "rows": rows, "error": err, "back": "Back",
+		"empty": "No replays yet. Every Kestrel Reach match is recorded as you play it.",
+		"note": ". ".join(notes) if not notes.is_empty() else "Playback runs the recorded orders; you can move the camera and change the speed."}
+
+
+## Task 26: the debrief title and lede for a decided run (twelve waves held, or the base lost on the way).
+static func _run_story(vm: Dictionary, victory: bool, run: Dictionary) -> void:
+	var cleared := int(run.get("wave", 0))
+	if victory:
+		vm["title"] = "Twelve waves held"
+		vm["lede"] = "The run is complete: %d of %d waves cleared and Earth holds the Earthfront." % [cleared, MatchConfig.RUN_WAVES]
+	else:
+		vm["lede"] = "The Command Nexus fell after %d of %d waves cleared." % [cleared, MatchConfig.RUN_WAVES]
 
 
 static func clock(seconds: float) -> String:
@@ -154,6 +216,10 @@ static func debrief_vm(g, log, record := {}) -> Dictionary:
 	else:
 		vm["lede"] = "The Command Nexus fell at %s." % clock(elapsed)
 		_defeat_record(vm, log, elapsed)
+	var run := MatchConfig.run_state(g.get("bridge_snapshot"))
+	if not run.is_empty():
+		vm["operation"] = "Kestrel run"
+		_run_story(vm, victory, run)
 	var score := score_vm(g.get("bridge_snapshot"), record)
 	if not score.is_empty():
 		vm["score"] = score
@@ -179,8 +245,19 @@ static func score_vm(snapshot: Variant, record := {}) -> Dictionary:
 		{"label": "Enemy value destroyed", "value": _signed(int(sc.get("destroyed", 0)))},
 		{"label": "Losses (half of %s)" % thousands(lost), "value": _signed(-floori(lost / 2.0))},
 	]
+	var run: Variant = depth.get("run", null)
+	if run is Dictionary:
+		# Task 26: a run's rows: the waves cleared of twelve and the perks drafted (the bridge's held bitmask).
+		var held := int(run.get("held", 0))
+		var picks := 0
+		for bit in 12:
+			if held & (1 << bit):
+				picks += 1
+		rows.push_front({"label": "Perks drafted", "value": str(picks)})
+		rows.push_front({"label": "Run waves cleared", "value": "%d / %d" % [int(run.get("wave", 0)), MatchConfig.RUN_WAVES]})
 	if bonus > 0:
-		rows.append({"label": "Victory bonus", "value": _signed(bonus)})
+		var won_run: bool = run is Dictionary and int(snapshot.get("winner", -1)) == 0
+		rows.append({"label": "Victory bonus (run +1,000)" if won_run else "Victory bonus", "value": _signed(bonus)})
 	rows.append({"label": "%s difficulty" % MatchConfig.difficulty_name(difficulty), "value": SCORE_MULTIPLIERS[difficulty]})
 	var out := {"total": thousands(int(sc.get("total", 0))), "grade": str(sc.get("grade", "D")), "rows": rows, "new_best": bool(record.get("new_best", false))}
 	if record.has("best"):

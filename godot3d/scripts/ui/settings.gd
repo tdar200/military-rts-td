@@ -1,6 +1,6 @@
 extends RefCounted
 ## The player's settings: the only code that opens `user://settings.cfg` (sections audio, video, game and coach, the
-## Kestrel coach's "never show again" read by kestrel_coach.gd; a later task adds run). Every function takes the file
+## Kestrel coach's "never show again" read by kestrel_coach.gd; Task 26 adds run/perk_pool). Every function takes the file
 ## path so tests use their own (user://test_<name>/...); nothing is ever written under res://. Values are flat keys "section/name" with the defaults() shape: a missing or corrupt file reads
 ## as the defaults, a wrong type falls back to the default and a volume is clamped to 0..1.
 ##
@@ -17,6 +17,11 @@ const WINDOW_MODES := ["windowed", "fullscreen"]
 const DIFFICULTIES := ["easy", "normal", "hard"]
 ## A muted bus keeps this level under its mute flag (linear_to_db(0) is -inf).
 const SILENT_DB := -80.0
+## Task 26: the run perk pool (perk.rs DEFAULT_RUN_POOL / FULL_RUN_POOL; MatchConfig repeats them, it preloads this module).
+## The first eight perks are always in; a run that reaches wave 6 unlocks the next depth perk, up to all twelve.
+const DEFAULT_POOL := 0xFF
+const FULL_POOL := 0xFFF
+const UNLOCK_WAVE := 6
 ## Per audio server object: {bus: dB the player chose} and the pool's current duck (Object meta, so a test stub never
 ## shares state with the real AudioServer).
 const LEVELS_META := "settings_bus_db"
@@ -24,7 +29,7 @@ const DUCK_META := "settings_duck_db"
 
 
 static func defaults() -> Dictionary:
-	return {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false, "game/difficulty": "normal"}
+	return {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false, "game/difficulty": "normal", "run/perk_pool": DEFAULT_POOL}
 
 
 ## The file's values over the defaults. Missing file, unreadable or malformed text: the defaults.
@@ -152,7 +157,32 @@ static func _clean(key: String, value: Variant) -> Variant:
 		return value if typeof(value) == TYPE_STRING and value in WINDOW_MODES else base
 	if key == "game/difficulty":
 		return value if typeof(value) == TYPE_STRING and value in DIFFICULTIES else base
+	if key == "run/perk_pool":
+		if typeof(value) != TYPE_INT:
+			return base
+		return value if value >= DEFAULT_POOL and value <= FULL_POOL and (value & DEFAULT_POOL) == DEFAULT_POOL else base
 	return value if typeof(value) == typeof(base) else base
+
+
+## Task 26: `pool` with the next locked depth perk unlocked (the lowest bit from 8 to 11 not yet set); a full pool stays
+## as it is.
+static func next_pool(pool: int) -> int:
+	for bit in range(8, 12):
+		if not (pool & (1 << bit)):
+			return (pool | (1 << bit)) & FULL_POOL
+	return pool & FULL_POOL
+
+
+## Task 26: a run reached `waves_cleared`; at UNLOCK_WAVE or more the saved pool gains one perk. True when it grew. The
+## caller makes this once per run.
+static func unlock_after_run(waves_cleared: int, path := PATH) -> bool:
+	if waves_cleared < UNLOCK_WAVE:
+		return false
+	var pool: int = get_value("run/perk_pool", path)
+	var grown := next_pool(pool)
+	if grown == pool:
+		return false
+	return set_value("run/perk_pool", grown, path) == OK
 
 
 ## True when every line is blank, a ; or # comment, a [section] header or a `key=value` with a scalar value (a number,

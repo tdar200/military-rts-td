@@ -7,6 +7,9 @@ extends RefCounted
 ## the running match and the "deploy after this reload" request live in Engine meta, so they survive the scene reload a
 ## restart does (a static var alone is not promised to). Task 24: a Kestrel match.json also names `replay_dir`, the
 ## absolute path of user://replays, where the bridge records the match (it refuses any other kind of path).
+## Task 26: a config may also hold `mode` ("operation" or "run": a Kestrel run sends `"run":true` and the remembered
+## `perk_pool`) and `replay` (the absolute path of a recording the bridge plays back instead of a live match). Both are
+## optional, so defaults() and the JSON of an operation are what they were.
 const Settings = preload("res://scripts/ui/settings.gd")
 const SCENARIOS := ["kestrel", "survival"]
 const NAMES := {"kestrel": "Kestrel Reach", "survival": "Earthfront Survival"}
@@ -22,6 +25,17 @@ const META := "match_config"
 ## Task 24: the bridge records Kestrel replays here (sent globalized; nothing in the client creates it).
 const REPLAY_DIR := "user://replays"
 const AUTO_META := "auto_deploy"
+## Task 26: set once this process wrote a match.json (so the bridge's boot match is the only one it ever built without one).
+const WRITTEN_META := "match_written"
+## Task 26: the two ways to play Kestrel Reach. A run holds twelve waves with a perk draft after each cleared one.
+const MODES := ["operation", "run"]
+const MODE_NAMES := {"operation": "Operation", "run": "Run"}
+## The perk pool a run may draw from (perk.rs DEFAULT_RUN_POOL and FULL_RUN_POOL): the first eight perks always, one more
+## per run that reached wave 6 (Settings "run/perk_pool").
+const DEFAULT_POOL := 0xFF
+const FULL_POOL := 0xFFF
+## A run ends at this many cleared waves (core RUN_WAVES).
+const RUN_WAVES := 12
 
 ## The running match's config: the defaults until one is chosen. Reading returns a copy; assigning stores a copy.
 static var current: Dictionary:
@@ -48,9 +62,49 @@ static func to_json(cfg: Dictionary, replays := "") -> String:
 	out.seed = clean_seed(out.seed)
 	out.difficulty = clean_difficulty(out.difficulty)
 	out.fog = bool(out.fog)
+	if out.scenario == "kestrel" and is_run(cfg):
+		out["run"] = true
+		out["perk_pool"] = clean_pool(cfg.get("perk_pool", DEFAULT_POOL))
 	if out.scenario == "kestrel" and replays != "":
 		out["replay_dir"] = replays
+	var replay := str(cfg.get("replay", ""))
+	if out.scenario == "kestrel" and replay.is_absolute_path():
+		out["replay"] = replay
 	return JSON.stringify(out, "", false)
+
+
+## Task 26: a Kestrel run (`mode` "run"); anything else, or a missing mode, is an operation.
+static func is_run(cfg: Dictionary) -> bool:
+	return str(cfg.get("scenario", "kestrel")) == "kestrel" and str(cfg.get("mode", "operation")) == "run"
+
+
+## A perk pool the bridge accepts from the client: the default eight bits set, nothing past the twelfth; else the default.
+static func clean_pool(value: Variant) -> int:
+	var n := int(value) if typeof(value) in [TYPE_INT, TYPE_FLOAT] else -1
+	return n if n >= DEFAULT_POOL and n <= FULL_POOL and (n & DEFAULT_POOL) == DEFAULT_POOL else DEFAULT_POOL
+
+
+## How many perks a pool holds.
+static func pool_size(pool: int) -> int:
+	var count := 0
+	for bit in 12:
+		if pool & (1 << bit):
+			count += 1
+	return count
+
+
+## `cfg` with no replay in it: every path that starts a live match goes through this.
+static func live(cfg: Dictionary) -> Dictionary:
+	var out := cfg.duplicate()
+	out.erase("replay")
+	return out
+
+
+## Task 26: the daily seed, the UTC date of `unix_time` as YYYYMMDD (20261007): everyone who plays the daily run on the
+## same UTC day plays the same match, whatever their time zone.
+static func daily_seed(unix_time: int) -> int:
+	var d := Time.get_datetime_dict_from_unix_time(unix_time)
+	return int(d.year) * 10000 + int(d.month) * 100 + int(d.day)
 
 
 ## Writes `match.json` atomically (`match.json.next`, then a rename), so the bridge never reads half a file. False when
@@ -64,7 +118,15 @@ static func write(runtime_dir: String, cfg: Dictionary) -> bool:
 		return false
 	file.store_string(to_json(cfg, replay_dir()))
 	file.close()
-	return DirAccess.rename_absolute(next, ProjectSettings.globalize_path(runtime_dir.path_join("match.json"))) == OK
+	var ok := DirAccess.rename_absolute(next, ProjectSettings.globalize_path(runtime_dir.path_join("match.json"))) == OK
+	if ok:
+		Engine.set_meta(WRITTEN_META, true)
+	return ok
+
+
+## Task 26: true once this process wrote a match.json (write); the bridge's boot match was built without one.
+static func written() -> bool:
+	return bool(Engine.get_meta(WRITTEN_META, false))
 
 
 ## `cfg` for the next match: the fog follows the player's setting (Settings "game/fog" in `settings_path`), so the
@@ -113,7 +175,7 @@ static func difficulty_name(difficulty: Variant) -> String:
 
 
 ## The running match's {seed, difficulty} from a bridge snapshot's Kestrel depth block; {} when there is none (no
-## snapshot yet, or Survival, which has no presets).
+## snapshot yet, or Survival, which has no presets). Task 26: a run adds {mode: "run", perk_pool}, so Restart replays it.
 static func from_snapshot(snapshot: Variant) -> Dictionary:
 	if not (snapshot is Dictionary):
 		return {}
@@ -123,7 +185,31 @@ static func from_snapshot(snapshot: Variant) -> Dictionary:
 	var seed: Variant = depth["seed"]
 	if typeof(seed) == TYPE_FLOAT:
 		seed = int(seed)  # JSON numbers parse as floats
-	return {"seed": clean_seed(seed), "difficulty": clean_difficulty(depth.get("difficulty", "normal"))}
+	var out := {"seed": clean_seed(seed), "difficulty": clean_difficulty(depth.get("difficulty", "normal"))}
+	var run: Variant = depth.get("run", null)
+	if run is Dictionary:
+		out["mode"] = "run"
+		out["perk_pool"] = clean_pool(run.get("pool", DEFAULT_POOL))
+	return out
+
+
+## Task 26: the snapshot's run block ({wave, draft, pool, held}), or {} for an operation, Survival or no snapshot.
+static func run_state(snapshot: Variant) -> Dictionary:
+	if not (snapshot is Dictionary):
+		return {}
+	var depth: Variant = snapshot.get("depth", null)
+	if not (depth is Dictionary):
+		return {}
+	var run: Variant = depth.get("run", null)
+	return run if run is Dictionary else {}
+
+
+## Task 26: the bridge's replay block ({speed, tick, end}) while it plays a recording back, else {}.
+static func replay_state(snapshot: Variant) -> Dictionary:
+	if not (snapshot is Dictionary):
+		return {}
+	var replay: Variant = snapshot.get("replay", null)
+	return replay if replay is Dictionary else {}
 
 
 ## The map a bridge snapshot comes from ("" when there is none yet): only Kestrel Reach sends its Core Node.
@@ -146,6 +232,6 @@ static func set_auto_deploy(on: bool) -> void:
 
 ## Forgets the chosen config and any pending auto deploy (tests; a new process starts this way anyway).
 static func reset() -> void:
-	for key in [META, AUTO_META]:
+	for key in [META, AUTO_META, WRITTEN_META]:
 		if Engine.has_meta(key):
 			Engine.remove_meta(key)

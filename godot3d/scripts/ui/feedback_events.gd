@@ -18,6 +18,9 @@ const VmGameplay := preload("res://scripts/ui/vm_gameplay.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 
 const HUMAN := 0
+## Task 26: the Capital's price (balance.ron) and the perk that takes a quarter off it (perk.rs CAPITAL_DISCOUNT).
+const CAPITAL_COST := 500
+const CAPITAL_DISCOUNT := 11
 const TICKS_PER_SECOND := 30
 ## The 45 s wave warning (the HUD's "Enemy signal detected" window opens at the same tick count).
 const WAVE_WARNING_TICKS := 45 * TICKS_PER_SECOND
@@ -47,7 +50,14 @@ static func build_cost(kind: String, snap: Dictionary) -> int:
 
 
 ## A unit's material cost from the units deck (LiveAdapter.UNIT_CARDS); -1 for a kind without a card.
-static func unit_cost(kind: String) -> int:
+## Task 26: `snap` (the bridge snapshot, optional) prices the Capital, which has no units-deck card (X trains it): 500
+## (balance.ron), a quarter off once the run holds Capital Discount (perk 11; Sim::depth_unit_cost).
+static func unit_cost(kind: String, snap: Dictionary = {}) -> int:
+	if kind == "Capital":
+		var depth = snap.get("depth", null)
+		var run = depth.get("run", null) if depth is Dictionary else null
+		var held := int(run.get("held", 0)) if run is Dictionary else 0
+		return CAPITAL_COST * 3 / 4 if held & (1 << CAPITAL_DISCOUNT) else CAPITAL_COST
 	for spec in LiveAdapter.UNIT_CARDS:
 		if String(spec[3]) == kind:
 			return int(spec[4])

@@ -60,7 +60,7 @@ func test_corrupt_file_gives_defaults(t) -> void:
 
 
 func test_defaults_missing_file_and_bad_values(t) -> void:
-	t.eq(Settings.defaults(), {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false, "game/difficulty": "normal"}, "the brief's defaults, plus Task 9's coach bit and Task 20's preset")
+	t.eq(Settings.defaults(), {"audio/master": 1.0, "audio/sfx": 1.0, "audio/ui": 1.0, "audio/ambient": 1.0, "audio/music": 1.0, "game/fog": true, "video/window_mode": "windowed", "coach/never_show": false, "game/difficulty": "normal", "run/perk_pool": 0xFF}, "the brief's defaults, plus Task 9's coach bit, Task 20's preset and Task 26's perk pool")
 	t.eq(Settings.load_from("user://test_settings/none.cfg"), Settings.defaults(), "a missing file reads as the defaults")
 	DirAccess.make_dir_recursive_absolute("user://test_settings")
 	var f := FileAccess.open(P, FileAccess.WRITE)
@@ -313,6 +313,21 @@ func test_title_deploy_relaunches_only_when_the_fog_differs(t) -> void:
 	var p := _make(t, true)  # a fogged Kestrel start frame is on screen
 	var g = p[0]
 	var ui = p[1]
+	# Task 26: the bridge's boot match (no match.json from this process yet) is rebuilt once at the same seed and preset,
+	# from a match.json that names replay_dir, so it is recorded.
+	_press(ui.title, "Deploy forces")
+	t.eq(g.calls, [], "the boot match is rebuilt with a replay directory first")
+	t.eq(int(_match_json().seed), 2026, "at the boot match's seed")
+	t.eq(_match_json().difficulty, "normal", "and preset")
+	t.ok(str(_match_json().get("replay_dir", "")).is_absolute_path(), "naming replay_dir")
+	DirAccess.remove_absolute(UI_DIR.path_join("restart.flag"))
+	ui.process(0.2)
+	t.eq(g.calls, [["deploy"]], "then it deploys")
+	_drop(p)
+	p = _make(t, true)
+	g = p[0]
+	ui = p[1]
+	MatchConfig.write(UI_DIR, MatchConfig.current)  # a match.json was written this process: no rebuild
 	_press(ui.title, "Deploy forces")
 	t.eq(g.calls, [["deploy"]], "fog on and a fogged map: deploys at once, as before")
 	_drop(p)

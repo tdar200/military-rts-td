@@ -219,7 +219,8 @@ func test_costs_come_from_the_deck_and_prefer_the_depth_refinery_price(t) -> voi
 	t.eq(FE.build_cost("Refinery", {"depth": {"refinery_cost": 230}}), 230, "Task 18's rising refinery price wins")
 	t.eq(FE.build_cost("PowerPlant", {"depth": {"refinery_cost": 230}}), 100, "only for the refinery")
 	t.eq(FE.build_cost("Refinery", {"depth": {}}), 150, "no price in the depth block: the card")
-	t.eq(FE.unit_cost("Capital"), -1, "a kind with no card is unknown (never denied)")
+	t.eq(FE.unit_cost("Scout"), -1, "a kind with no card is unknown (never denied)")
+	t.eq(FE.unit_cost("Capital"), 500, "Task 26: the Capital (no card, X trains it) is priced from balance.ron")
 	t.eq(FE.build_cost("CommandCenter", {}), -1)
 
 

@@ -26,6 +26,8 @@ const MatchConfig = preload("res://scripts/match_config.gd")
 const Settings = preload("res://scripts/ui/settings.gd")
 const SettingsScreen = preload("res://scripts/ui/sections/settings_screen.gd")
 const Records = preload("res://scripts/records.gd")
+const PerkDraft = preload("res://scripts/ui/sections/perk_draft.gd")
+const ReplayList = preload("res://scripts/ui/sections/replay_list.gd")
 
 const VM_INTERVAL := 0.1
 ## The bridge may step a frame or two after pause.flag is written; more ticks than this while paused mean it still runs
@@ -45,6 +47,11 @@ const MINIMAP_SPAN := 35.0
 ## After the bridge took restart.flag (it removes the file, then writes the new sim's first snapshot), the picker waits this
 ## long (seconds) before it deploys, so start.flag never lands before that snapshot.
 const LAUNCH_SETTLE := 0.1
+## Task 26: after a replay was asked for, the bridge's playback snapshot (with its `replay` block) must arrive within this
+## many seconds of the bridge taking restart.flag; otherwise the bridge could not play it (it builds a live match then).
+const REPLAY_TIMEOUT := 3.0
+## A run draft answered but still in the snapshot after this many ticks was not taken by the bridge: it opens again.
+const DRAFT_RETRY_TICKS := 30
 
 var g  # earthfront_3d.gd, or a stub with the same members in tests
 var layer: CanvasLayer
@@ -99,6 +106,19 @@ var picker_difficulty := "normal"  # Task 20: the preset the picker has selected
 var picker_seed := 0  # Task 20: the seed the next operation runs at, drawn fresh on every open (the player may type one)
 var _launch_wait := -1.0  # >= 0 while a confirmed pick waits for the bridge: seconds since restart.flag disappeared
 var settings_layer: Control  # the Settings screen, over everything (the title's Settings entry or the pause menu's)
+## Task 26: the run's perk draft (under the pause menu), the replay speed bar, and the Replays list over the title.
+var draft_layer: Control
+var _draft_ids: Array = []  # the perk ids on the cards; [] while no draft is up
+var _draft_answered: Array = []  # the draft last picked, until the snapshot shows another (or none)
+var _draft_answered_tick := -1
+var _run_unlocked := false  # this run already grew the perk pool (once per run; each match is a fresh scene)
+var replay_layer: Control
+var _replay_hash := 0
+var _replay_speed := "1"
+var replays_layer: Control
+var replays_open := false
+var replays_dir := ReplayList.DIR  # tests point the list at their own user:// directory
+var picker_mode := "operation"  # Task 26: Operation or Run (Kestrel only)
 var settings_open := false
 var _settings_from_pause := false
 
@@ -136,11 +156,14 @@ func setup(game) -> void:
 	research.visible = false
 	research.action.connect(_on_research_action)
 	layer.add_child(research)
+	draft_layer = _full_rect_layer("DraftLayer")
+	replay_layer = _full_rect_layer("ReplayLayer")
 	pause_layer = _full_rect_layer("PauseLayer")
 	title = TitleScreen.new()
 	title.action.connect(_on_title_action)
 	layer.add_child(title)
 	picker_layer = _full_rect_layer("PickerLayer")  # after the title, so the picker draws over it
+	replays_layer = _full_rect_layer("ReplaysLayer")
 	settings_layer = _full_rect_layer("SettingsLayer")  # last: over the title, the picker and the pause menu
 	_refresh_title(true)
 	title.focus_first()
@@ -301,6 +324,8 @@ func process(delta: float) -> void:
 		_minimap_release_due = false
 		_minimap_drag = false
 	_sync_minimap_input()
+	_refresh_run()
+	_refresh_replay_bar()
 	_refresh_hud(delta)
 	_pulse_pings()
 
@@ -360,7 +385,7 @@ func _refresh_title(force := false) -> void:
 	var snap = g.get("bridge_snapshot")
 	if not _title_fogged and snap is Dictionary and VmGameplay.fogged(snap):
 		_title_fogged = true
-	var busy := picker_open or _launch_wait >= 0.0 or MatchConfig.pending_auto_deploy()
+	var busy := picker_open or replays_open or _launch_wait >= 0.0 or MatchConfig.pending_auto_deploy()
 	var key := [_title_fogged, shown_scenario(), busy]
 	if not force and key == _title_key:
 		return
@@ -397,6 +422,7 @@ func open_picker() -> void:
 	picker_choice = shown_scenario()
 	picker_difficulty = MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
 	picker_seed = MatchConfig.random_seed()  # a new operation never reuses the last match's seed
+	picker_mode = "operation"
 	_build_picker()
 	_refresh_title()
 
@@ -413,7 +439,7 @@ func _build_picker() -> void:
 	for child in picker_layer.get_children():
 		picker_layer.remove_child(child)
 		child.queue_free()
-	var vm := LiveScreens.picker_vm(picker_choice, picker_difficulty, picker_seed)
+	var vm := LiveScreens.picker_vm(picker_choice, picker_difficulty, picker_seed, picker_mode, _perk_pool())
 	var confirm: Control = MapPicker.build(picker_layer, vm, Callable(self, "_on_picker_action"))
 	if confirm != null and confirm.is_inside_tree():
 		confirm.grab_focus()
@@ -424,6 +450,8 @@ func _on_picker_action(name: String, arg: Variant = null) -> void:
 		"pick":
 			if str(arg) in MatchConfig.SCENARIOS and str(arg) != picker_choice:
 				picker_choice = str(arg)
+				if picker_choice != "kestrel":
+					picker_mode = "operation"
 				_build_picker()
 		"difficulty":
 			if str(arg) in MatchConfig.DIFFICULTIES and str(arg) != picker_difficulty:
@@ -432,6 +460,17 @@ func _on_picker_action(name: String, arg: Variant = null) -> void:
 		"seed":
 			# Typed into the seed field: no redraw (the field keeps focus); an empty or invalid entry keeps the last seed.
 			picker_seed = MatchConfig.clean_seed(arg, picker_seed)
+		"mode":
+			# Task 26: a run is Kestrel only, so Run picks Kestrel Reach and Survival is always an operation.
+			if str(arg) in MatchConfig.MODES and str(arg) != picker_mode:
+				picker_mode = str(arg)
+				if picker_mode == "run":
+					picker_choice = "kestrel"
+				_build_picker()
+		"daily":
+			# Task 26: today's UTC date as the seed, the same match for everyone today.
+			picker_seed = MatchConfig.daily_seed(int(Time.get_unix_time_from_system()))
+			_build_picker()
 		"back":
 			close_picker()
 		"confirm":
@@ -448,7 +487,9 @@ func confirm_picker() -> void:
 	cfg["scenario"] = picker_choice
 	cfg["seed"] = picker_seed
 	cfg["difficulty"] = picker_difficulty
-	cfg = MatchConfig.with_settings(cfg, _settings_path())
+	cfg["mode"] = picker_mode if picker_choice == "kestrel" else "operation"
+	cfg["perk_pool"] = _perk_pool()
+	cfg = MatchConfig.live(MatchConfig.with_settings(cfg, _settings_path()))
 	MatchConfig.current = cfg
 	MatchConfig.write(_runtime_dir(), cfg)
 	if Settings.get_value("game/difficulty", _settings_path()) != picker_difficulty:
@@ -482,24 +523,35 @@ func _relaunch_in_place() -> void:
 ## The campaign card's Deploy forces: the map the bridge already serves. When the player's fog setting or remembered
 ## difficulty preset differs from the Kestrel frame on screen (changed since the bridge built it), match.json asks for the
 ## match with the settings (and a fresh seed: a new operation) and the bridge rebuilds it first; otherwise the mission
-## deploys at once, as before.
+## deploys at once, as before. Task 26: a Kestrel match the bridge booted without any match.json from this client (its
+## boot match) is rebuilt once, at the same seed and preset, from a match.json that names replay_dir, so the bridge
+## records it like any picked match.
 func deploy_from_title() -> void:
 	var snap = g.get("bridge_snapshot")
-	if snap is Dictionary and MatchConfig.running(snap) == "kestrel":
+	if snap is Dictionary and MatchConfig.running(snap) == "kestrel" and MatchConfig.replay_state(snap).is_empty():
 		var want_fog := bool(Settings.get_value("game/fog", _settings_path()))
 		var want_preset := MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
 		var served: Dictionary = MatchConfig.from_snapshot(snap)
-		if VmGameplay.fogged(snap) != want_fog or str(served.get("difficulty", want_preset)) != want_preset:
+		var fresh := VmGameplay.fogged(snap) != want_fog or str(served.get("difficulty", want_preset)) != want_preset
+		if fresh or (not MatchConfig.written() and _runtime_dir() != ""):
 			var cfg := MatchConfig.current
 			cfg["scenario"] = "kestrel"
-			cfg["seed"] = MatchConfig.random_seed()
-			cfg["difficulty"] = want_preset
-			cfg = MatchConfig.with_settings(cfg, _settings_path())
+			if fresh:
+				cfg["seed"] = MatchConfig.random_seed()
+				cfg["difficulty"] = want_preset
+			else:
+				cfg.merge(served, true)  # the boot match again: same seed, same preset (and a run stays a run)
+			cfg = MatchConfig.live(MatchConfig.with_settings(cfg, _settings_path()))
 			MatchConfig.current = cfg
 			MatchConfig.write(_runtime_dir(), cfg)
 			_relaunch_in_place()
 			return
 	g._deploy_mission()
+
+
+## Task 26: the player's run perk pool (Settings "run/perk_pool").
+func _perk_pool() -> int:
+	return MatchConfig.clean_pool(Settings.get_value("run/perk_pool", _settings_path()))
 
 
 ## Every frame while the title is up. A confirmed pick deploys LAUNCH_SETTLE seconds after the bridge removed restart.flag.
@@ -514,10 +566,17 @@ func _tick_launch(delta: float) -> void:
 			return
 		_launch_wait += delta
 		if _launch_wait >= LAUNCH_SETTLE:
+			if _awaiting_replay():
+				_await_replay()
+				return
 			_launch_wait = -1.0
 			g._deploy_mission()
 		return
 	if not MatchConfig.pending_auto_deploy() or _restart_pending():
+		return
+	if _awaiting_replay():
+		_launch_wait = 0.0  # a reload that asked for a replay: wait for the playback snapshot as above
+		MatchConfig.set_auto_deploy(false)
 		return
 	var snap = g.get("bridge_snapshot")
 	if not (snap is Dictionary) or snap.is_empty() or int(snap.get("tick", -1)) != 0:
@@ -528,6 +587,31 @@ func _tick_launch(delta: float) -> void:
 	g._deploy_mission()
 
 
+## Task 26: the next match is a replay (MatchConfig.current names one).
+func _awaiting_replay() -> bool:
+	return str(MatchConfig.current.get("replay", "")) != ""
+
+
+## The bridge took restart.flag for a replay: deploy (start.flag starts the playback, at 1x) once its playback snapshot
+## is here; after REPLAY_TIMEOUT without one the bridge could not play the file and built a live match instead, so the
+## list comes back with the reason and the config is live again.
+func _await_replay() -> void:
+	if not MatchConfig.replay_state(g.get("bridge_snapshot")).is_empty():
+		_launch_wait = -1.0
+		_replay_speed = "1"
+		if g.has_method("write_replay_speed"):
+			g.write_replay_speed("1")
+		g._deploy_mission()
+		return
+	if _launch_wait < REPLAY_TIMEOUT:
+		return
+	_launch_wait = -1.0
+	var cfg := MatchConfig.live(MatchConfig.current)
+	MatchConfig.current = cfg
+	MatchConfig.write(_runtime_dir(), cfg)  # the bridge already runs the live match; the next restart stays live
+	open_replays("That replay could not be played (the bridge rejected the file). A live match is ready instead.")
+
+
 ## Keys on the title (the game's input handler sends them here before deploy): Esc closes the Settings screen or the map
 ## picker, the ui_left and ui_right actions (the arrow keys) move the picker's selection. True when the key was used.
 func route_title_key(event: InputEvent) -> bool:
@@ -536,6 +620,11 @@ func route_title_key(event: InputEvent) -> bool:
 	if settings_open:
 		if event.keycode == Keybinds.CANCEL:
 			close_settings()
+			return true
+		return false
+	if replays_open:
+		if event.keycode == Keybinds.CANCEL:
+			close_replays()
 			return true
 		return false
 	if not picker_open:
@@ -657,6 +746,8 @@ func _on_title_action(name: String, _arg: Variant) -> void:
 	match name:
 		"pick_map":
 			open_picker()
+		"replays":
+			open_replays()
 		"settings":
 			open_settings()
 		"deploy":
@@ -668,8 +759,8 @@ func _on_title_action(name: String, _arg: Variant) -> void:
 ## Victory or defeat debrief over a scrim. "review" removes it so the battlefield can be inspected; "restart" replays the
 ## same map and seed and deploys again; "menu" returns to the title; "quit" closes the game.
 func show_debrief() -> void:
-	if scrim != null:
-		return
+	if scrim != null or replay_mode():
+		return  # Task 26: a replay that ends says so on its speed bar; Leave goes back to the title
 	close_region()  # the debrief owns the screen; Esc under its scrim must not reach a map left open behind it
 	scrim = ColorRect.new()
 	(scrim as ColorRect).color = T.SCRIM
@@ -691,7 +782,7 @@ func record_score() -> Dictionary:
 	if _score_recorded:
 		return _score_record
 	var snap = g.get("bridge_snapshot")
-	if not (snap is Dictionary) or int(g.bridge_winner) < 0:
+	if not (snap is Dictionary) or int(g.bridge_winner) < 0 or replay_mode():
 		return {}
 	var depth: Variant = snap.get("depth", null)
 	if not (depth is Dictionary) or not (depth.get("score", null) is Dictionary):
@@ -722,7 +813,9 @@ func _on_debrief_action(name: String, _arg: Variant) -> void:
 			if running != "":
 				cfg["scenario"] = running
 			cfg.merge(MatchConfig.from_snapshot(snap), true)
-			cfg = MatchConfig.with_settings(cfg, _settings_path())
+			if MatchConfig.is_run(cfg):
+				cfg["perk_pool"] = _perk_pool()  # a run restarted draws from the pool as it is now
+			cfg = MatchConfig.live(MatchConfig.with_settings(cfg, _settings_path()))
 			MatchConfig.current = cfg
 			MatchConfig.write(_runtime_dir(), cfg)
 			MatchConfig.set_auto_deploy(true)
@@ -737,7 +830,8 @@ func _on_debrief_action(name: String, _arg: Variant) -> void:
 				cfg["scenario"] = running
 			cfg["seed"] = MatchConfig.random_seed()
 			cfg["difficulty"] = MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
-			cfg = MatchConfig.with_settings(cfg, _settings_path())
+			cfg["mode"] = "operation"  # Task 26: the title's Deploy forces is an operation; a run starts from the picker
+			cfg = MatchConfig.live(MatchConfig.with_settings(cfg, _settings_path()))
 			MatchConfig.current = cfg
 			MatchConfig.write(_runtime_dir(), cfg)
 			MatchConfig.set_auto_deploy(false)
@@ -756,7 +850,7 @@ func paused() -> bool:
 ## True when the world must take no input: a paused game, or the strategic map covering the screen (the simulation keeps
 ## running behind the map, so the camera and orders just do not react to it).
 func world_blocked() -> bool:
-	return paused() or region_open
+	return paused() or region_open or draft_open()
 
 
 ## What Esc does right now, most specific first: close the Settings screen, close the controls screen, close the terrain guide, close the confirm panel,
@@ -790,6 +884,16 @@ func route_key(event: InputEvent, armed := false) -> bool:
 		return false
 	if settings_open and event.keycode != Keybinds.CANCEL:
 		return false  # the Settings screen covers everything: F1 and M wait until it closes
+	if draft_open() and not paused():
+		# Task 26: the draft owns the number keys while it is up (in play they are the control groups): 1 to 3 take a
+		# card, the rest are swallowed. Esc and F1 still reach the pause menu and the controls; M waits.
+		var n := _number_key(event)
+		if n > 0:
+			if n <= _draft_ids.size():
+				choose_draft(n - 1)
+			return true
+		if event.keycode == Keybinds.REGION_MAP:
+			return true
 	if event.keycode == Keybinds.CONTROLS:
 		# The Science modal owns the screen: F1 must not open the controls over it (the game's handler lets Esc close it).
 		if scrim != null or not hud.visible or research.visible:
@@ -1054,6 +1158,9 @@ func _on_pause_action(name: String, _arg: Variant = null) -> void:
 			_refresh_pause(true)
 		"restart":
 			close_pause()
+			if replay_mode():
+				leave_replay()  # Task 26: a replay restarts as the live title, never as the recording again
+				return
 			g._restart_mission()  # the existing restart: restart.flag for the bridge, then the scene reloads to the title
 		"quit":
 			get_tree().quit()
@@ -1220,3 +1327,209 @@ func _on_briefing_action(name: String, _arg: Variant = null) -> void:
 		adapter.briefing_up = false
 		_since_vm = VM_INTERVAL
 		_refresh_briefing()
+
+
+# ---------------------------------------------------------------- Task 26: run drafts
+
+## True while a run's perk draft is up (the bridge held by pause.flag until the pick).
+func draft_open() -> bool:
+	return not _draft_ids.is_empty()
+
+
+## 1 to 9 for the number-row keys (the control-group keys), else 0.
+static func _number_key(event: InputEvent) -> int:
+	if not (event is InputEventKey):
+		return 0
+	return Keybinds.GROUPS.find(event.keycode) + 1
+
+
+## Every frame the HUD runs (never while the pause menu is up). A run's pending draft (snapshot depth.run.draft) opens
+## the modal and holds the bridge; once picked, the same draft never opens again unless the bridge still offers it
+## DRAFT_RETRY_TICKS later (the pick did not land). A replay never drafts (the recording plays its own pick), nor does a
+## decided match or one under the debrief. Reaching wave 6 in a run grows the perk pool once.
+func _refresh_run() -> void:
+	var snap = g.get("bridge_snapshot")
+	var run := MatchConfig.run_state(snap)
+	var replay := replay_mode()
+	if not run.is_empty() and not replay and not _run_unlocked and int(run.get("wave", 0)) >= Settings.UNLOCK_WAVE:
+		_run_unlocked = true
+		if Settings.unlock_after_run(int(run.get("wave", 0)), _settings_path()):
+			var pool := _perk_pool()
+			notify("Perk unlocked", "%s joins the run pool (%d of 12)" % [_newest_perk(pool), MatchConfig.pool_size(pool)], T.GOOD)
+	var ids: Array = []
+	if not replay and hud.visible and scrim == null and int(g.bridge_winner) < 0:
+		var draft: Variant = run.get("draft", null)
+		if draft is Array:
+			for id in draft:
+				ids.append(int(id))
+			ids = ids.slice(0, 3)
+	if ids.is_empty() or ids != _draft_answered:
+		_draft_answered = []
+	elif int(g.bridge_tick) - _draft_answered_tick <= DRAFT_RETRY_TICKS:
+		ids = []
+	if ids == _draft_ids:
+		return
+	_draft_ids = ids
+	_clear_draft_layer()
+	if g.has_method("set_draft_hold"):
+		g.set_draft_hold(not ids.is_empty())
+	if not ids.is_empty():
+		var vm := PerkDraft.vm(run)
+		vm["cards"] = (vm.get("cards", []) as Array).slice(0, ids.size())
+		PerkDraft.build(draft_layer, vm, Callable(self, "_on_draft_action"))
+
+
+## The highest unlocked depth perk's name (the one a pool unlock just added).
+static func _newest_perk(pool: int) -> String:
+	for bit in range(11, 7, -1):
+		if pool & (1 << bit):
+			return PerkDraft.perk_name(bit)
+	return "A perk"
+
+
+func _on_draft_action(name: String, arg: Variant = null) -> void:
+	if name == "perk":
+		choose_draft(int(arg))
+
+
+## Takes card `index`: `perk,<id>` to the bridge first, then the hold is lifted, so the pick lands on the next step.
+func choose_draft(index: int) -> void:
+	if index < 0 or index >= _draft_ids.size():
+		return
+	var id: int = _draft_ids[index]
+	_draft_answered = _draft_ids.duplicate()
+	_draft_answered_tick = int(g.bridge_tick)
+	if g.has_method("choose_perk"):
+		g.choose_perk(id)
+	_draft_ids = []
+	_clear_draft_layer()
+	if g.has_method("set_draft_hold"):
+		g.set_draft_hold(false)
+	notify("Perk drafted", "%s: %s" % [PerkDraft.perk_name(id), PerkDraft.perk_description(id)], T.CYAN_HI)
+	_since_vm = VM_INTERVAL  # the HUD's run line redraws on the next frame
+
+
+func _clear_draft_layer() -> void:
+	for child in draft_layer.get_children():
+		draft_layer.remove_child(child)
+		child.queue_free()
+
+
+# ---------------------------------------------------------------- Task 26: replay viewer
+
+## True while the bridge plays a recording back (the snapshot's `replay` block).
+func replay_mode() -> bool:
+	return not MatchConfig.replay_state(g.get("bridge_snapshot")).is_empty()
+
+
+## The speed bar while a replay plays (rebuilt when what it shows changed, never between a press and its release).
+func _refresh_replay_bar() -> void:
+	var rs := MatchConfig.replay_state(g.get("bridge_snapshot"))
+	var vm := {}
+	if not rs.is_empty() and hud.visible:
+		var tick := int(rs.get("tick", 0))
+		var end := int(rs.get("end", 0))
+		var status := "Playing"
+		if int(g.bridge_winner) >= 0:
+			status = "Ended: " + ("victory" if int(g.bridge_winner) == 0 else "defeat")
+		elif tick >= end:
+			status = "Ended"
+		elif _replay_speed == "0":
+			status = "Paused"
+		vm = {"tick": tick, "end": end, "speed": _replay_speed, "status": status}
+	var h := hash(vm)
+	if h == _replay_hash and (replay_layer.get_child_count() > 0) == not vm.is_empty():
+		return
+	if _left_down and not vm.is_empty() and replay_layer.get_child_count() > 0:
+		return
+	_replay_hash = h
+	for child in replay_layer.get_children():
+		replay_layer.remove_child(child)
+		child.queue_free()
+	ReplayList.build_bar(replay_layer, vm, Callable(self, "_on_replay_action"))
+
+
+func _on_replay_action(name: String, arg: Variant = null) -> void:
+	match name:
+		"speed":
+			_replay_speed = str(arg)
+			if g.has_method("write_replay_speed"):
+				g.write_replay_speed(_replay_speed)
+			_replay_hash = 0
+			_refresh_replay_bar()
+		"leave":
+			leave_replay()
+
+
+## Back to the title with a live match: match.json without the replay (a fresh seed at the remembered preset, an
+## operation), the speed file removed, then the existing restart (restart.flag and a scene reload).
+func leave_replay() -> void:
+	var cfg := MatchConfig.live(MatchConfig.current)
+	cfg["scenario"] = "kestrel"
+	cfg["seed"] = MatchConfig.random_seed()
+	cfg["difficulty"] = MatchConfig.clean_difficulty(Settings.get_value("game/difficulty", _settings_path()))
+	cfg["mode"] = "operation"
+	cfg = MatchConfig.with_settings(cfg, _settings_path())
+	MatchConfig.current = cfg
+	MatchConfig.write(_runtime_dir(), cfg)
+	MatchConfig.set_auto_deploy(false)
+	if g.has_method("write_replay_speed"):
+		g.write_replay_speed("")
+	g._restart_mission()
+
+
+# ---------------------------------------------------------------- Task 26: Replays list (title)
+
+## The title's Replays entry: the recordings in user://replays (replays_dir), newest first. `error` is shown above them.
+func open_replays(error := "") -> void:
+	if title == null:
+		return
+	if picker_open:
+		close_picker()
+	replays_open = true
+	for child in replays_layer.get_children():
+		replays_layer.remove_child(child)
+		child.queue_free()
+	var focus: Control = ReplayList.build(replays_layer, LiveScreens.replays_vm(ReplayList.scan(replays_dir), error), Callable(self, "_on_replays_action"))
+	if focus != null and focus.is_inside_tree():
+		focus.grab_focus()
+	_refresh_title()
+
+
+func close_replays() -> void:
+	replays_open = false
+	for child in replays_layer.get_children():
+		replays_layer.remove_child(child)
+		child.queue_free()
+	_refresh_title()
+	if title != null and title.visible and _launch_wait < 0.0:
+		title.focus_first()
+
+
+func _on_replays_action(name: String, arg: Variant = null) -> void:
+	match name:
+		"watch":
+			watch_replay(str(arg))
+		"back":
+			close_replays()
+
+
+## Plays the recording at `path` (absolute, from the list): match.json names it, the bridge rebuilds (in place, or after
+## a reload when another map is on screen) and _await_replay deploys once the playback snapshot is there.
+func watch_replay(path: String) -> void:
+	if not path.is_absolute_path() or _launch_wait >= 0.0:
+		return
+	var cfg := MatchConfig.current
+	cfg["scenario"] = "kestrel"
+	cfg["replay"] = path
+	MatchConfig.current = cfg
+	MatchConfig.write(_runtime_dir(), cfg)
+	close_replays()
+	var snap = g.get("bridge_snapshot")
+	var on_screen := MatchConfig.running(snap) if snap is Dictionary else ""
+	if on_screen != "" and on_screen != "kestrel":
+		MatchConfig.set_auto_deploy(true)
+		_refresh_title()
+		g._restart_mission()
+		return
+	_relaunch_in_place()

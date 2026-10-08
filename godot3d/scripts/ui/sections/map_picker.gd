@@ -2,7 +2,8 @@ extends RefCounted
 ## Map picker (New operation on the title): a scrim over the title, then one panel with a card per map, the difficulty
 ## presets and the match seed (Task 20, when the vm has them) and the Back and Deploy forces buttons. Built from
 ## LiveScreens.picker_vm() with the pause menu's kit; `emit` is Callable(name, arg) and receives pick (the card's map id),
-## difficulty (the preset id), seed (the seed field's text, digits only), back and confirm. Each card is one invisible click target named after its map (QA
+## difficulty (the preset id), seed (the seed field's text, digits only), mode (Task 26: "operation" or "run"), daily
+## (Task 26: the Daily seed button), back and confirm. Each card is one invisible click target named after its map (QA
 ## and tests find it by that name). Builds nothing for {}; returns the Deploy forces button (the host focuses it).
 const T = preload("res://scripts/ui/tokens.gd")
 const K = preload("res://scripts/ui/kit.gd")
@@ -60,6 +61,8 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> Contro
 	y += card_h + 22.0
 	if vm.has("difficulty"):
 		y = _options(parent, vm, cx, y, cw, emit) + 22.0
+	if vm.has("mode"):
+		y = _modes(parent, vm, cx, y, cw, emit) + 22.0
 	var note := K.text(parent, str(vm.get("note", "")), {"x": cx, "y": y, "px": 14, "col": T.DIM})
 	var confirm := K.button(parent, str(vm.get("confirm", "Deploy forces")), 0, 0, {"primary": true, "px": 20, "sp": 0.1, "pad": 20.0, "spread": true, "min_h": BTN_H})
 	var back := K.button(parent, str(vm.get("back", "Back")), 0, 0, {"px": 20, "sp": 0.1, "pad": 20.0, "spread": true, "min_h": BTN_H, "key": "Esc"})
@@ -126,6 +129,38 @@ static func _options(parent: Control, vm: Dictionary, x: float, y: float, w: flo
 		edit.text_changed.connect(func(text: String) -> void: _seed_typed(edit, text, emit))
 		var hint := K.text(parent, str(sv.get("hint", "")), {"x": seed_x, "y": top + SEED_H + 10.0, "w": SEED_W, "px": 14, "col": T.DIM})
 		bottom = maxf(bottom, hint.position.y + hint.size.y)
+	return bottom
+
+
+## Task 26: the Mode row under the presets: the Mode caption, Operation and Run tabs (the chosen one on) and the mode's
+## detail (a run's names the perk pool) on the left; the Daily seed button in the seed column. Returns the row's bottom.
+static func _modes(parent: Control, vm: Dictionary, x: float, y: float, w: float, emit: Callable) -> float:
+	var m: Dictionary = vm.get("mode", {})
+	var cap_o := {"f": "mono", "px": 12, "sp": 0.12, "col": T.DIM, "up": true}
+	var cap := K.text(parent, str(m.get("cap", "Mode")), cap_o.merged({"x": x, "y": y}))
+	var top := y + cap.size.y + 8.0
+	var tx := x
+	var tab_h := 0.0
+	for o in m.get("options", []):
+		var tab := K.button(parent, str(o.get("label", "")), tx, top, {"variant": "tab", "on": bool(o.get("selected", false)), "px": 16, "pad": 22.0, "min_h": SEED_H})
+		tab.size.x = maxf(120.0, tab.size.x)
+		tab.custom_minimum_size = tab.size
+		if emit.is_valid():
+			tab.pressed.connect(emit.bind("mode", str(o.get("id", ""))))
+		tx += tab.size.x + 8.0
+		tab_h = maxf(tab_h, tab.size.y)
+	var seed_x := x + w - SEED_W
+	var detail := K.text(parent, str(m.get("detail", "")), {"x": tx + 16.0, "y": top, "w": seed_x - 24.0 - tx - 16.0, "px": 14, "col": T.DIM, "wrap": true})
+	var bottom := maxf(top + tab_h, detail.position.y + detail.size.y)
+	var daily := str((vm.get("seed", {}) as Dictionary).get("daily", ""))
+	if daily != "":
+		var b := K.button(parent, daily, seed_x, top, {"px": 16, "pad": 18.0, "min_h": SEED_H})
+		b.size.x = SEED_W
+		b.custom_minimum_size = b.size
+		b.tooltip_text = "Today's UTC date as the seed: the same match for everyone today"
+		if emit.is_valid():
+			b.pressed.connect(emit.bind("daily", null))
+		bottom = maxf(bottom, top + b.size.y)
 	return bottom
 
 

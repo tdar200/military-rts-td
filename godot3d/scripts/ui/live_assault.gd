@@ -78,7 +78,7 @@ func vm(now: float, alerts: Array, tabs: Array, selection: Dictionary, attack_ar
 	var core := core_node()
 	var out := {
 		"as_top": _top(core),
-		"as_objective": {"cap": "Objective", "tag": "Operation Dawnshield", "title": "Destroy the Core Node", "body": _objective_body()},
+		"as_objective": {"cap": "Objective", "tag": "Operation Dawnshield", "title": _objective_title(), "body": _objective_body()},
 		"as_bottom": {"layers": [], "slot_fill": "#1f2219", "alerts": _alerts(now, alerts)},
 		"as_selection": _selection(selection),
 		"deck": {"body": {"kind": "assault_orders", "tabs": tabs, "orders": _orders(attack_armed), "hint": "Right-click a target while Attack-move is armed."}},
@@ -103,8 +103,16 @@ func _shielded() -> bool:
 
 
 ## The objective card's body: classic Kestrel keeps its line; under depth it names the shield gate, or that it is down.
+## Task 26: a run is won by holding twelve waves (its Core Node never drops its shield).
+func _objective_title() -> String:
+	var snap = g.get("bridge_snapshot")
+	return "Hold twelve waves" if snap is Dictionary and KestrelObjectives.is_run(snap) else "Destroy the Core Node"
+
+
 func _objective_body() -> String:
 	var snap = g.get("bridge_snapshot")
+	if snap is Dictionary and KestrelObjectives.is_run(snap):
+		return "%s. A perk draft follows each cleared wave." % KestrelObjectives.run_detail(snap)
 	if not (snap is Dictionary and KestrelObjectives.relays_required(snap)):
 		return "Ends the Earth operation. Relay destruction cuts reinforcements but is optional."
 	if KestrelObjectives.core_shielded(snap):

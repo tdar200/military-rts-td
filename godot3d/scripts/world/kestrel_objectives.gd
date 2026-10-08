@@ -42,6 +42,9 @@ const IDS := ["power", "economy", "squad", "ford", "core"]
 const TITLES := ["Power the base", "Start the economy", "Raise a squad", "Hold the ford", "Break the Core Node"]
 ## Stage 5's detail while the Core Node is shielded (kestrel-depth Task 21).
 const CORE_SHIELDED_DETAIL := "Destroy both relays and outlast the sixth expedition to expose the Core Node"
+## Task 26: a run (snapshot depth.run) ends at twelve cleared waves, not at the Core Node (always shielded in a run).
+const RUN_TITLE := "Hold twelve waves"
+const RUN_WAVES := 12
 
 
 ## {stage: 1..5, title, detail (the current objective's), complete, failed, economy_seen, ford_spawn_tick, ford_threat_tick,
@@ -101,18 +104,18 @@ static func evaluate(snap: Dictionary, previous: Dictionary = {}) -> Dictionary:
 		_economy_detail(done[1], refineries, harvesters),
 		_squad_detail(done[2], barracks, combat),
 		ford_detail,
-		"Core Node destroyed" if done[4] else _core_detail(snap),
+		_last_detail(snap, done[4]),
 	]
 	var objectives: Array = []
 	var stage := 0
 	for i in IDS.size():
-		objectives.append({"id": IDS[i], "title": TITLES[i], "detail": details[i], "done": done[i]})
+		objectives.append({"id": IDS[i], "title": title_for(i, snap), "detail": details[i], "done": done[i]})
 		if stage == 0 and not done[i]:
 			stage = i + 1
 	if stage == 0:
 		stage = IDS.size()
 	return {
-		"stage": stage, "title": TITLES[stage - 1], "detail": details[stage - 1], "complete": complete, "failed": failed,
+		"stage": stage, "title": title_for(stage - 1, snap), "detail": details[stage - 1], "complete": complete, "failed": failed,
 		"economy_seen": economy_seen, "ford_spawn_tick": spawn_tick, "ford_threat_tick": threat_tick, "ford_held": beaten,
 		"objectives": objectives,
 	}
@@ -206,6 +209,31 @@ static func core_shielded(snap: Dictionary) -> bool:
 static func relays_required(snap: Dictionary) -> bool:
 	var depth = snap.get("depth", null)
 	return depth is Dictionary and depth.has("core_shielded")
+
+
+## Task 26: objective `i`'s title; a run's last one is RUN_TITLE.
+static func title_for(i: int, snap: Dictionary) -> String:
+	return RUN_TITLE if i == IDS.size() - 1 and is_run(snap) else TITLES[i]
+
+
+## A run match: the depth block carries `run`.
+static func is_run(snap: Dictionary) -> bool:
+	var depth = snap.get("depth", null)
+	return depth is Dictionary and depth.get("run", null) is Dictionary
+
+
+## A run's wave counter, "Wave 4 of 12 cleared".
+static func run_detail(snap: Dictionary) -> String:
+	var depth = snap.get("depth", null)
+	var run = depth.get("run", null) if depth is Dictionary else null
+	var cleared := int(run.get("wave", 0)) if run is Dictionary else 0
+	return "Wave %d of %d cleared" % [cleared, RUN_WAVES]
+
+
+static func _last_detail(snap: Dictionary, done: bool) -> String:
+	if is_run(snap):
+		return "Twelve waves held" if done else run_detail(snap)
+	return "Core Node destroyed" if done else _core_detail(snap)
 
 
 static func _core_detail(snap: Dictionary) -> String:

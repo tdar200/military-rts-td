@@ -720,8 +720,28 @@ func _kestrel_card() -> Dictionary:
 	elif g.bridge_relays > 0:
 		var powered := "Disable alien relays (%d active)" if required else "Optional: disable alien relays (%d active)"
 		items.append({"t": powered % g.bridge_active_relays, "state": "done" if g.bridge_active_relays == 0 or complete else ("active" if stage >= 4 else "todo")})
+	var run := run_line()  # a run's counter replaces its "Hold twelve waves" row, so the card is no taller than an operation's
+	if run != "":
+		for item in items:
+			if str(item["t"]) in [KestrelObjectives.RUN_TITLE, KestrelObjectives.run_detail(snap)]:
+				item["t"] = run
 	var cap := str(snap.get("map_name", "")) if snap is Dictionary else ""
 	return {"cap": cap if cap != "" else "Kestrel Reach", "items": items}
+
+
+## Task 26: a run's row on the objectives card, "Hold twelve waves: 4 of 12 cleared, 2 perks" (the bridge's depth.run:
+## waves cleared and the held perks); "" outside a run.
+func run_line() -> String:
+	var snap = g.get("bridge_snapshot")
+	if not (snap is Dictionary) or not KestrelObjectives.is_run(snap):
+		return ""
+	var run: Dictionary = snap["depth"]["run"]
+	var held := int(run.get("held", 0))
+	var picks := 0
+	for bit in 12:
+		if held & (1 << bit):
+			picks += 1
+	return "%s: %d of %d cleared, %d %s" % [KestrelObjectives.RUN_TITLE, int(run.get("wave", 0)), KestrelObjectives.RUN_WAVES, picks, "perk" if picks == 1 else "perks"]
 
 
 # ------------------------------------------------------------------ minimap
