@@ -963,6 +963,14 @@ fn snapshot_json_with(
             EntityKindView::Building(_) => Ok(()),
         }
         .expect("writing to String cannot fail");
+        // Kestrel depth (Task 18): the player's own buildings carry the ticks
+        // until they may be repaired again. Never on Survival or the aliens.
+        if let Some(cd) = sim
+            .repair_cooldown(entity.id)
+            .filter(|_| entity.owner == human)
+        {
+            write!(out, ",\"repair_cd\":{cd}").expect("writing to String cannot fail");
+        }
         out.push('}');
         fog.remember_entity(entity, &out[start..]);
     }
@@ -1040,7 +1048,8 @@ fn snapshot_json_with(
     out.push(']');
     write_additive_fields(&mut out, sim);
     // Kestrel depth (Task 17): the human's Upgrades levels and the price of
-    // each next level (null at the era cap). Never on Survival.
+    // each next level (null at the era cap); Task 18 appends the price of the
+    // human's next Refinery. Never on Survival.
     if sim.is_depth() {
         let levels = sim.upgrade_levels(human);
         write!(
@@ -1058,7 +1067,13 @@ fn snapshot_json_with(
                 None => out.push_str("null"),
             }
         }
-        out.push_str("]}");
+        write!(
+            out,
+            "],\"refinery_cost\":{}}}",
+            sim.depth_building_cost(human, BuildingKind::Refinery)
+                .to_int_floor()
+        )
+        .expect("string write");
     }
     out.push_str(",\"supply_links\":");
     out.push_str(supply_links);
@@ -1837,10 +1852,12 @@ mod tests {
         // Additive and last: at tick 0 the Command Center holds no stock yet, so the
         // three prebuilt structures beside it are not served until the first supply beat.
         // The presentation fog mask (Task 6) sits between the supply links and the shots.
-        // The depth Upgrades block (Task 17) sits between the core node and the links.
+        // The depth Upgrades block (Task 17) sits between the core node and the links;
+        // Task 18 appends the next refinery's price to it.
         let fog = extract_str(&json, "fog");
         assert!(json.ends_with(&format!(
-            "\"core_node\":[37,8],\"depth\":{{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150]}},\
+            "\"core_node\":[37,8],\"depth\":{{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
+             \"refinery_cost\":200}},\
              \"supply_links\":[],\"fog\":\"{fog}\",\"shots\":[]}}"
         )));
         assert!(json.starts_with("{\"schema\":5,"));
@@ -2432,7 +2449,10 @@ mod tests {
         let mut sim = Scenario::KestrelReach.build(2026);
         let json = snapshot_json(&sim);
         assert!(
-            json.contains(",\"depth\":{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150]}"),
+            json.contains(
+                ",\"depth\":{\"upgrades\":[0,0,0],\"upgrade_costs\":[150,150,150],\
+                 \"refinery_cost\":200}"
+            ),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
@@ -2444,13 +2464,102 @@ mod tests {
         }
         let json = snapshot_json(&sim);
         assert!(
-            json.contains(",\"depth\":{\"upgrades\":[3,0,1],\"upgrade_costs\":[null,150,250]}"),
+            json.contains(
+                ",\"depth\":{\"upgrades\":[3,0,1],\"upgrade_costs\":[null,150,250],\
+                 \"refinery_cost\":200}"
+            ),
             "{}",
             &json[json.len().saturating_sub(300)..]
         );
         let survival = snapshot_json(&Scenario::Survival.build(2026));
         assert!(!survival.contains("\"depth\""));
         assert!(!survival.contains("upgrade"));
+    }
+
+    #[test]
+    fn kestrel_depth_block_prices_the_next_refinery_and_buildings_carry_their_repair_cooldown() {
+        use rts_core::game::sim::EntityKindView;
+        use rts_core::game::stats::BuildingKind;
+        let mut sim = Scenario::KestrelReach.build(2026);
+        let json = snapshot_json(&sim);
+        // One refinery stands at the start, so the next costs 150 + 50.
+        assert!(
+            json.contains(",\"upgrade_costs\":[150,150,150],\"refinery_cost\":200}"),
+            "{}",
+            &json[json.len().saturating_sub(300)..]
+        );
+        let cc = sim
+            .views()
+            .into_iter()
+            .find(|v| {
+                v.owner == PlayerId(0)
+                    && matches!(
+                        v.kind,
+                        EntityKindView::Building(BuildingKind::CommandCenter)
+                    )
+            })
+            .expect("home command center")
+            .id;
+        assert!(entity_object(&json, cc.0).ends_with(",\"repair_cd\":0}"));
+        let (x, y) = (0..sim.map().height())
+            .flat_map(|y| (0..sim.map().width()).map(move |x| (x, y)))
+            .find(|&(x, y)| sim.construction_allowed_at(PlayerId(0), x, y))
+            .expect("a build site");
+        sim.grant_money(PlayerId(0), rts_core::fixed::Fixed::from_int(2000));
+        sim.step(&[Command::Build {
+            owner: PlayerId(0),
+            kind: BuildingKind::Refinery,
+            x,
+            y,
+        }]);
+        // An alien squad beside the Command Center scratches it, then a repair.
+        let cc_view = |sim: &rts_core::game::sim::Sim| {
+            sim.views().into_iter().find(|v| v.id == cc).expect("cc")
+        };
+        let at = cc_view(&sim).pos
+            + rts_core::vec::Vec2::new(
+                rts_core::fixed::Fixed::from_int(1),
+                rts_core::fixed::Fixed::ZERO,
+            );
+        sim.add_unit(PlayerId(1), UnitKind::Tank, at);
+        for _ in 0..300 {
+            if cc_view(&sim).hp < cc_view(&sim).max_hp {
+                break;
+            }
+            sim.step(&[]);
+        }
+        assert!(
+            cc_view(&sim).hp < cc_view(&sim).max_hp,
+            "the CC was never hit"
+        );
+        sim.step(&[Command::Repair {
+            owner: PlayerId(0),
+            building: cc,
+        }]);
+        let json = snapshot_json(&sim);
+        assert!(json.contains(",\"refinery_cost\":250}"));
+        assert!(
+            entity_object(&json, cc.0).ends_with(",\"repair_cd\":449}"),
+            "{}",
+            entity_object(&json, cc.0)
+        );
+        // Units and the alien side's buildings carry no repair cooldown.
+        let mut checked = 0;
+        for v in sim.views() {
+            let own_building =
+                v.owner == PlayerId(0) && matches!(v.kind, EntityKindView::Building(_));
+            let shown = json.contains(&format!("{{\"id\":{},\"owner\"", v.id.0));
+            if !shown {
+                continue;
+            }
+            let obj = entity_object(&json, v.id.0);
+            assert_eq!(obj.contains("repair_cd"), own_building, "{obj}");
+            checked += 1;
+        }
+        assert!(checked > 5);
+        let survival = snapshot_json(&Scenario::Survival.build(2026));
+        assert!(!survival.contains("refinery_cost"));
+        assert!(!survival.contains("repair_cd"));
     }
 
     #[test]
@@ -3450,15 +3559,17 @@ mod tests {
             // `"route"`); both are additive, so they are stripped here like
             // the mask and every other byte must still match the pins below.
             // Task 17's `"depth"` Upgrades block is additive too, and goes the
-            // same way.
+            // same way, with Task 18's `"refinery_cost"` inside it and the
+            // `"repair_cd":0` on the player's buildings (no repair runs here).
             let json = ["aggressive", "defensive", "hold"]
                 .iter()
                 .fold(json.replacen(&all_visible, "", 1), |acc, name| {
                     acc.replace(&format!(",\"stance\":\"{name}\""), "")
                 })
-                .replace(",\"queue\":0", "");
+                .replace(",\"queue\":0", "")
+                .replace(",\"repair_cd\":0", "");
             let start = json.find(",\"depth\":{").expect("the depth block");
-            let end = start + json[start..].find("]}").expect("its end") + 2;
+            let end = start + json[start..].find('}').expect("its end") + 1;
             format!("{}{}", &json[..start], &json[end..])
         };
         let sim = Scenario::KestrelReach.build(2026);
@@ -3504,7 +3615,14 @@ mod tests {
         // changed again; every other byte is identical (both old pins still
         // match with those two hash writes removed). Was
         // (27265, 0x955e_5aec_e12d_4c8b) and (28514, 0x0d21_e3c2_ea31_b1a6).
-        assert_eq!((off.len(), fnv1a(&off)), (27266, 0x3e21_0ade_88ab_a2db));
+        //
+        // Re-pinned by Task 18 (depth economy): each entity's repair job and
+        // cooldown are now hashed under depth, so the `hash` value changed
+        // again (one digit shorter at tick 0 and mid-firefight); the additive
+        // `"refinery_cost"` and `"repair_cd":0` are stripped above, and both
+        // old pins still match with those two hash writes removed. Was
+        // (27266, 0x3e21_0ade_88ab_a2db) and (28516, 0xa8bc_08e9_df4f_5ff5).
+        assert_eq!((off.len(), fnv1a(&off)), (27265, 0xb9cd_e28f_e163_370f));
         // Mid-firefight, with shots in the window, the same holds. Since Task 11
         // the fight also moves one alien rifle (id 20, about 5.8 from its hit
         // ally): it answers the hit and steps toward the human shooter, so its
@@ -3524,7 +3642,7 @@ mod tests {
             &mut FogState::new(false),
         );
         let fight = strip(&fight);
-        assert_eq!((fight.len(), fnv1a(&fight)), (28516, 0xa8bc_08e9_df4f_5ff5));
+        assert_eq!((fight.len(), fnv1a(&fight)), (28515, 0x7f04_e3f7_5668_c2de));
     }
 
     #[test]
