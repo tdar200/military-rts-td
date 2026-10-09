@@ -178,3 +178,83 @@ How to:
   `EARTHFRONT_FOG=0 python3 tools/qa/world_capture.py <dir> --software --display :94`, then
   `python3 tools/ui/world_diff.py run --mocks <mocks> --live <dir> --out <side dir> --check tools/ui/world_scores.json`.
   Never pass `--gpu` without `--allow-user-display` (it opens a window on the user's display).
+
+## Kestrel depth (2026-10-07, branch `kestrel-depth`)
+
+State: plan `docs/superpowers/plans/2026-10-07-kestrel-depth.md` is built (Tasks 1 to 30). Kestrel Reach is the default
+map and the game is version 0.2.0. Behind a core `depth` flag (on for the hosted Kestrel match only) it adds unit stances,
+Stop, Hold and focus fire, Shift-queued waypoints, breach pathing and siege, abilities and Upgrades, repair over time,
+a ten-wave alien table with an elite sixth wave and a shielded Core Node, Easy / Normal / Hard with a match seed, a score
+and grade with personal bests, a twelve-wave run mode with perk drafts and a daily seed, RPL1 replays with an in-game viewer
+and `verify-run`, a client that starts its own bridge, export presets and a packaging script, an onboarding coach, building
+damage states and music hooks with no tracks. Survival, the golden hash and the classic Kestrel hash are unchanged
+(pinned by tests). The per-task record is `.superpowers/sdd/2026-10-07-kestrel-depth/` (local, not in git); UI choices
+that differ from the mocks are in `docs/ascension/ui-deviations.md`.
+
+Owed to you (an agent cannot or must not do these):
+- **Listening pass.** No person has heard any of the 26 sounds; every agent run used `--headless` or the Dummy audio
+  driver. Run `python3 tools/audio/listen_pass.py --notes listen-notes.txt` from a terminal (it asks for `yes`, then plays
+  one sound at a time; `--list` plays nothing).
+- **GPU run.** Every frame time, draw call count and capture is software GL (llvmpipe) on a private Xvfb. Run
+  `tools/perf/gpu_frametime.sh --allow-user-display` on the RTX 3050 (it opens a window on your display; `--dry-run` with
+  the flag only prints the plan). Its GPU launch path has never been executed, so the first run may need small fixes.
+- **Export templates and the Windows test.** Install the Godot 4.7.2 export templates, then
+  `tools/release/package.sh linux` and the template smoke from `docs/release/itch-checklist.md`; the Windows build also
+  needs the `x86_64-pc-windows-gnu` Rust target and MinGW, and a test on a Windows machine (a hard-killed game there leaves
+  the bridge running: `--exit-with-parent` is a no-op on Windows). Only `--export-pack` was tried (575 files, 32.1 MB).
+- **Music tracks.** There are none. `godot3d/scripts/audio/music_director.gd` already picks menu, calm, combat (on a seen
+  shot, held 8 s after the last one), victory or defeat on Kestrel; add a `res://` path per state to its `TRACKS` table and
+  it plays on the Music bus (ducked by the SFX director, scaled by the Music volume). The test that pins "no player" must
+  change with it.
+- **Art approvals.** `docs/release/art-approvals.md`: the buildings that still read as recolours and every new visual of
+  this program, each with how to see it and a Pass / Fail column.
+- **License decision and notices.** There is no LICENSE file and Cargo says `Proprietary`. Before a public upload add the
+  full SIL OFL 1.1 text for Rajdhani and IBM Plex and Godot's MIT notice with its third-party notices to `licenses/`
+  (itch checklist section 8).
+- **Asset provenance audit.** Confirm the origin and license of every shipped asset (Kenney CC0 kits, fonts, generated
+  sprites and sounds) before upload.
+- **itch upload.** `docs/release/itch-checklist.md`, after the items above.
+- **Merge order.** The repository has no git remote, so neither branch exists anywhere but this machine. `master`
+  (b0757db) is an ancestor of `kestrel-next-level` (67e6355, 164 commits ahead), which is an ancestor of `kestrel-depth`
+  (56 commits ahead of it). Merge `kestrel-next-level` into `master` first, then `kestrel-depth`; both are fast-forwards.
+  Add a remote and push both branches as a backup before anything else.
+- **macOS export.** Later: it needs a preset, signing and notarisation, and the bridge's parent watch is untested there.
+
+Owed from the program's task record (small, found and left on purpose):
+- Run mode: the alien base is razed by waves 3 to 4 in automated runs (its Upgrades stall at [3, 3, 3]); the default
+  perk pool runs out after 8 drafts, so waves 9 to 11 offer none; the AI ignores Capital Discount; Early Tooling and Field
+  Upgrade can be drafted with no effect; an idle new player never sees a draft and the coach has no lesson for runs.
+- The Units deck has no Capital card (the `X` key only).
+- The Replays list cannot show victory or defeat (RPL1 has no result field); `verify-run` certifies consistency and score,
+  not fog legality or authorship (the END line is unsigned); `match.json` keeps the picker seed beside a replay.
+- Stance can show on harvesters in the selection panel; the core ignores stance commands for them.
+- Repair: the client checks only the cooldown before sending, not the price or a building already at full HP (the core
+  refuses those with no on-screen reason).
+- Hold units stay stacked; units ordered together travel stacked until they stop; the target marker is static.
+- The assault layout and the Orders deck have no Stop / Hold cards; the Controls screen has no row for Shift-queue.
+- The last queued leg's path is not drawn; path lines are thin.
+- The client combat preview ignores the air / ground split (AntiArmor does 80% to air under depth, not the shown figure).
+- The `core_shielded` flag and the stage-5 text can reveal an unseen relay loss under fog once wave 6 has spawned, and
+  the stage-5 Core Node text is wrong for runs.
+- Score: a death credits the opponent even for friendly fire; the first record is always "New best" (even 0); records
+  are keyed by map and difficulty, not seed; no real victory was ever captured (the screenshot is crafted).
+- Hard cannot reach the 15 to 25 minute window (the playtest is overrun after 4 waves); the playtest human banks 8,000 to
+  14,000 credits late; the result does not depend on the seed (the AI's anti-armour override).
+- Feedback: a locked Units card has no hit area, so no "denied" cue on click; a full producer queue drops silently;
+  `wave_cleared` may stay silent under fog; the HUD layout can mismatch after a debrief Restart.
+- Coach: no Settings toggle to re-enable it after "Never show again"; the combat preview can float over its card; a
+  group double tap posts two toasts.
+- Title and picker: Quit stays focusable under the picker; no timeout if `restart.flag` is never cleared; the debrief
+  says Operation Dawnshield on both maps; Tab can reach buttons under Settings.
+- Building states: an HP bar can show on an unseen live building; the fog check runs per snapshot.
+- Debrief (seen in the Task 30 playthrough): after "Headquarters lost" the What failed panel still reads HQ integrity
+  INTACT, Power BALANCED and Depot ammo STOCKED, and the title says Operation Dawnshield on Kestrel.
+- Bridge: the breach cache can go stale if a route opens on the same tile; the replay fingerprint cannot see sim changes
+  that no probe run reaches; Armour and Bulwark do not stop Barrage (documented).
+- Music: with tracks added, combat starts on any shot the player can see, including a lone turret plinking a probe; tune
+  `COMBAT_ENTER_S` and `COMBAT_HOLD_S` by ear.
+
+How to (kestrel-depth):
+- Verify a replay: `target/release/verify-run <file.rpl>` prints MATCH (exit 0), MISMATCH (exit 1) or why the file is
+  unverifiable (exit 2). Replays are in `user://replays` (on Linux `~/.local/share/godot/app_userdata/Ascension- Earthfront 3D/replays`).
+- Package: `tools/release/package.sh [linux|windows|all]` (needs the export templates); `--export-pack` works without them.

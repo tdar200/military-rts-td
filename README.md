@@ -45,6 +45,35 @@ The title screen's New operation opens a map picker (Kestrel Reach or Earthfront
 
 Wave timing differs by map. On Kestrel Reach the briefing and objectives name the first wave at 2:30 (4500 ticks), and an alien probe may strike sooner. On Survival the objective chain (Operation Dawnshield) guides the real opening dependency chain and the first wave arrives 90 seconds after founding. Both announce unit, research and combat events and end with match statistics and instant redeployment. Survival shows the whole battlefield. Kestrel Reach has a presentation-only fog of war (since 2026-10-06): unseen ground is shrouded, explored ground is dimmed, enemies appear only in sight and enemy structures stay as dimmed memories once seen; the simulation and the AI still see everything. Start the bridge with `EARTHFRONT_FOG=0` to turn it off.
 
+### Kestrel Reach: difficulty, score, run mode and replays (0.2.0)
+
+- **Difficulty and seed.** The picker offers Easy, Normal (the default) and Hard and shows the match seed (a fresh one
+  each operation; it can be typed, and Daily seed puts in today's UTC date as `YYYYMMDD`). Easy starts with 1,500 credits
+  and the first wave at 3:00, Normal 1,200 and 2:30, Hard 1,000 and 2:00; waves come every 3:30 / 3:00 / 2:30 and are
+  75% / 100% / 125% the size. Restart on the debrief replays the same map, difficulty and seed.
+- **The operation.** A ten-row wave table that grows with each wave (later waves repeat the tenth); the sixth is an
+  elite wave led by a Capital unit. The alien Core Node is shielded (a pink ring) until both relay
+  outposts have fallen and the sixth wave has spawned; destroy it to win, lose your Command Centre to lose.
+- **Score and grade.** The debrief shows a score (500 a cleared wave, plus the value of enemy losses, minus half your
+  own, plus a time bonus on a win: a tenth of the ticks left before 25:00; then times 0.75 on Easy and 1.5 on Hard) and
+  a grade: S from 24,000, A from 16,000, B from 10,000, C from 5,000, else D. The best score per map and difficulty is
+  kept in `user://records.cfg`.
+- **Run mode.** The picker's Operation / Run toggle (Kestrel only). A run is twelve waves to hold; after each cleared
+  wave the game pauses on a draft of three perks (keys `1` to `3` or a click). The pool starts at 8 of 12 perks; reaching
+  wave 6 in a run unlocks the next one (Early Tooling, Hardened Walls, Field Repair, Capital Discount, in that order). A
+  run win adds 1,000 to the score.
+- **Replays.** Every Kestrel match is recorded to `user://replays/*.rpl` (RPL1: the seed, the options and only the orders
+  the simulation accepted, with the final tick, hash and score). The title's Replays entry lists the newest eight; Watch
+  plays one back with a speed bar (0.5x, 1x, 2x, 4x, 8x, Pause, Leave) and sends no orders.
+  `target/release/verify-run <file.rpl>` re-simulates a replay and prints MATCH (exit 0) or MISMATCH (exit 1); a file it
+  cannot check exits 2. A MATCH certifies that the orders lead to that end state and score, not that they were legal
+  under fog.
+- **Help for new players.** On the first deploy a coach card in the right column teaches five lessons (select the squad,
+  move, place a building, train, attack-move); Hide closes it for the match and Never show again (or finishing it)
+  keeps it closed. Double-tap a control group number to centre on it; hold `F` to follow the selection (any pan stops it).
+- **Music.** None ships yet. The game already chooses menu, calm, combat, victory or defeat on Kestrel, but every state's
+  track is empty, so nothing plays (`godot3d/scripts/audio/music_director.gd`).
+
 ### Scenarios and bridge flags
 
 `./run-3d.sh` starts the bridge with the default scenario, **Kestrel Reach**. **Survival** is the original generated map. Kestrel Reach is a

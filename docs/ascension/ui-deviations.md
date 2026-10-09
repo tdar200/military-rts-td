@@ -1129,3 +1129,24 @@ new art, no node or material per building. Survival never builds the state track
   a target"; Rotate is dropped (the yaw is locked) and Defences fold back into Build, packed as Camera over Selection,
   Build over System, Orders over Production (column ends 945, 913, 952 of 990). Survival and the gallery gp10 board keep
   the old rows and packing (828, 952, 963), so their pixel gates are unchanged.
+
+## Kestrel depth program close (kestrel-depth Task 30, 2026-10-09)
+
+- Music: no mock covers music. `scripts/audio/music_director.gd` picks menu, calm, combat, victory or defeat on Kestrel
+  only (combat on a shot the player can see within 3 s, held until 8 s pass without one; victory and defeat are terminal),
+  but every state's track is empty, so no AudioStreamPlayer is ever created and nothing plays. Survival has no music hook.
+- Screens this program added that no board draws, built from the deck's tokens and fonts rather than a mock: the onboarding
+  coach card (Task 9, in the right column's coach slot), the picker's Difficulty, Seed and Operation / Run rows (Tasks 20
+  and 26), the debrief's score, grade, best and run rows (Tasks 22 and 26), the perk draft's three cards over a dimmed play
+  area (Task 26), the Replays list and the replay viewer's speed bar (Task 26), the "Simulation core stopped / missing"
+  notices (Task 27), the Core Node shield ring (Task 21) and the queued path markers (Task 14). Each is in
+  `docs/release/art-approvals.md` for a person to pass or fail.
+- Earlier notes in this file that later tasks overtook (kept above as the record of their day):
+  - Section 4's debrief buttons: the live debrief offers Review battlefield, Restart (same map, difficulty and seed), Main
+    menu and Quit. The mock's "Replay" and "Review replay" are still not on the debrief; replays are watched from the
+    title's Replays entry.
+  - Section 4's title menu: Settings is live (Task 4) and a Replays entry was added (Task 26); Continue campaign, Skirmish
+    sandbox and Research archive stay disabled.
+  - Section 4's missing orders: Stop and Hold exist on Kestrel (keys S and D and the selection panel's order grid, Task 13)
+    and Esc's pause menu really pauses (Task 4). There is still no Resupply order and no speed control in a live match (the
+    replay viewer has one).

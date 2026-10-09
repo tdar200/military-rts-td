@@ -20,6 +20,58 @@ Launch from the repository with `./run-3d.sh`. The script builds the authoritati
 
 Godot: the arrow keys pan (so do the cursor at a screen edge and a middle-button drag), Z/E rotates, wheel zooms, F focuses selection, Home returns to base. Left-click or drag selects; right-click issues contextual orders; A issues attack-move (an on-screen banner shows it is armed; right-click the destination, Esc or the roster's Cancel button disarms); the structure panel's Set rally button arms the next left click as the rally point (no new key); F2 selects the whole army; Ctrl with 1 to 9 saves a control group and 1 to 9 recalls it; Esc (with nothing armed) opens the pause menu, which really stops the simulation (the client writes `pause.flag`, the bridge skips stepping while it exists) and offers Resume, Controls, Terrain guide (the ground table as cards), Settings (volumes, fog of war, window mode), Restart mission (returns to the title with a fresh mission) and Quit game, the last two after a confirmation; M opens the strategic map (the real ground layer, regions, borders and the expected wave route; the simulation keeps running; Esc or M closes it); F1 opens the controls reference, which lists exactly the keys in `godot3d/scripts/ui/keybinds.gd`; . selects the next idle crew and centres the camera on it. Use Build, Units, Orders and Science panels for the full roster. U repairs and Delete sells. Survival has no fog of war; Kestrel Reach has a presentation-only one (2026-10-06), off with `EARTHFRONT_FOG=0`.
 
+Kestrel Reach adds (0.2.0): `S` stops the selection, `D` holds position, `Z` cycles the stance (aggressive, defensive,
+hold; the yaw is locked there, so Z does not rotate), a right click on an enemy in sight focuses fire on it, `Shift` +
+right-click (after `A` too) queues up to eight waypoint legs drawn as a thin path, `Q` casts the first ready ability in the
+selection at the cursor (Barrage, EMP burst, Nanite field), the Science screen sells Upgrades (weapons, armour, vitality),
+a double tap on a control group number centres on it and holding `F` follows the selection. During a run's perk draft
+`1` to `3` pick a perk. The README's Kestrel section lists the same.
+
+## Kestrel Reach depth (0.2.0, branch kestrel-depth, 2026-10-07)
+
+Kestrel Reach is the default map. A core `depth` flag, on only for the hosted Kestrel match, gates every rule below, so
+Survival, the lane maps and classic Kestrel keep their pinned hashes (golden 2081234273307305018, Survival(7)
+1622883436588820810, classic Kestrel 2849524003663712283).
+
+- **Combat orders.** Units auto-acquire inside range + 3 and leash 6 tiles; units at rest spread apart; Stop, Hold
+  position, stances and focus fire; Shift-queued waypoints (eight legs a unit); waves breach walls through a weighted path
+  and lay siege behind Tanks once three or more walls block them; Anti-armour teams hit aircraft (80%).
+- **Abilities and Upgrades.** Battle tank Barrage (after Precision Manufacturing), Gunship EMP burst, Capital unit
+  Nanite field (the Capital trains at a Vehicle factory from era 2). Upgrades cost 150 + 100 a level in money, three
+  levels a track in era 1 and six from era 2.
+- **Economy.** Each Refinery costs 50 more than the last; repair heals over time (150 ticks, a tenth of the price, at
+  least 25) with a 450-tick cooldown.
+- **Waves and the Core Node.** A ten-row wave table (6 + 2 units a wave, capped at 24, plus 2 per working relay), a
+  seeded doctrine order from wave 5, an elite wave 6 led by a Capital, alien raids, and an alien AI that plays from tick 0
+  but buys no Upgrades and makes no raid before wave one. The Core Node takes no damage until both relays have fallen and
+  wave 6 has spawned.
+- **Difficulty and seed.** Easy / Normal / Hard: 1,500 / 1,200 / 1,000 credits, first wave at 5,400 / 4,500 / 3,600
+  ticks, then every 6,300 / 5,400 / 4,500, waves 75% / 100% / 125%. The seed is shown, typed or set to the UTC date (Daily
+  seed); Restart reuses both.
+- **Score.** 500 a cleared wave + the value of enemy losses - half the value of your own + on a win a tenth of the ticks
+  left before 45,000 (+1,000 for a run), times 0.75 / 1 / 1.5 by difficulty, floored at 0. Grades S 24,000, A 16,000,
+  B 10,000, C 5,000, else D. Bests per map and difficulty in `user://records.cfg`.
+- **Run mode.** Twelve waves to hold; a seeded three-perk draft after each cleared wave (the bridge pauses meanwhile);
+  8 of 12 perks at first, one more unlocked by reaching wave 6 in a run.
+- **Replays.** RPL1 files in `user://replays` (header, accepted orders by tick, a final END line with tick, hash and
+  score). The Replays list shows the newest eight; the viewer plays at 0.5x to 8x and sends no orders. `verify-run`
+  re-simulates a file: MATCH (exit 0), MISMATCH (exit 1), unverifiable (exit 2). It certifies consistency and score, not
+  fog legality; the file is unsigned.
+- **Client.** It starts its own bridge when run without `--runtime-dir=` (the exported game's path), shows building
+  damage (smoke under half HP, fire under a quarter) and working puffs, an onboarding coach (five lessons), a stance chip,
+  path markers and the Core Node's shield ring. Music hooks pick menu, calm, combat (8 s hold), victory or defeat, but no
+  track exists, so nothing plays.
+- **Release.** Version 0.2.0; Linux and Windows x86_64 export presets and `tools/release/package.sh`. No export template
+  build, Windows build or itch upload has been done (see `docs/release/itch-checklist.md`).
+
+Automated outcomes (the hosted playtest AI on seed 3, Normal unless noted; not human balance): Normal win at tick 32,857
+after 6 waves (about 18 minutes), Easy win 39,366, Hard overrun 17,738 after 4 waves; an undefended base falls at 4,951
+(Normal). Run mode: seeds 3, 1, 2, 7 and 11 win all twelve waves at about 64,300 ticks; seeds 5 and 2026 are overrun
+after 10. In the Task 30 scripted playthrough (the real client and its own bridge, Normal, seed 1851371552) a simple
+scripted defence holding the home approach west of the ford cleared five waves and lost at tick 32,196 (17:53), score
+6,220, grade C; `verify-run` on its replay printed MATCH. All of it is software-rendered and unheard; no person has
+played the 0.2.0 build.
+
 ## Technical boundaries
 
 The ruleset lives in `crates/core/src/game/earthfront.rs`, integrated with the deterministic simulation. The Earthfront project registry is separate from the legacy sandbox technology grid. Snapshot schema 5 carries economy services and construction geometry. The native shell and Godot remain presentation/input clients. Both show prototype queue reservations; Godot also shows local ore capacity and depot ammunition. The native tank hotkey no longer opens planetary governance in Earthfront.
