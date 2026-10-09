@@ -58,16 +58,28 @@ shows none of those. Start Survival with the `SCENARIO` pass-through, which keep
 SCENARIO=survival ./run-3d.sh
 ```
 
-Or run the bridge yourself, then the client, which reads `godot3d/runtime/snapshot.json`:
+Or run the bridge yourself, then the client, both naming the same runtime directory (where the snapshot, `match.json`,
+the flags and the command packets live):
 
 ```bash
 cargo build --release -p rts-server --bin godot-bridge
-target/release/godot-bridge godot3d/runtime/snapshot.json &
-tools/godot/Godot_v4.7.2-stable_linux.x86_64 --path godot3d
+target/release/godot-bridge --runtime-dir godot3d/runtime &
+tools/godot/Godot_v4.7.2-stable_linux.x86_64 --path godot3d -- --runtime-dir="$PWD/godot3d/runtime"
 ```
 
-`godot-bridge [--scenario kestrel|survival] [--dump-snapshot <path>] <snapshot path> [frame limit]`: `--scenario` defaults to
-`kestrel` and an unknown value exits with status 2; `--dump-snapshot` writes the scenario's first snapshot to that path and exits (used for test fixtures). QA runs never touch your
+Without `--runtime-dir=` the client starts and supervises its own bridge, the way the exported game does: it runs
+`godot-bridge` (`godot-bridge.exe` on Windows) from the directory of the Godot executable with
+`--runtime-dir <user://runtime/<pid>> --exit-with-parent`, cleans that directory's exchange files first, checks once a
+second that the bridge still runs (a dead one shows "Simulation core stopped" with a Restart button; a missing binary shows
+"Simulation core missing"), and kills it on quit. From a source checkout there is no bridge next to the Godot binary, so use
+`./run-3d.sh` or the commands above.
+
+`godot-bridge [--scenario kestrel|survival] [--dump-snapshot <path>] [--replay <file>] [--runtime-dir <dir>]
+[--exit-with-parent] [<snapshot path> [frame limit]]`: `--scenario` defaults to `kestrel` and an unknown value exits with
+status 2; `--dump-snapshot` writes the scenario's first snapshot to that path and exits (used for test fixtures);
+`--runtime-dir <dir>` writes `<dir>/snapshot.json` and takes no positional snapshot path beside it (both together exit
+with status 2); `--exit-with-parent` ends the bridge within a second once the process that started it is gone (Linux and
+other Unix systems; a no-op on Windows). QA runs never touch your
 display or speakers: `python3 tools/qa/launch_ui.py <dir> [--software] [--scenario kestrel|survival]` starts an isolated
 bridge and client (Godot always gets `--audio-driver Dummy`), prints the owned PIDs and writes them to `<dir>/pids.json`;
 drive it with `tools/qa/ui_client.py` and stop it by those PIDs.

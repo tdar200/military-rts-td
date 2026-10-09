@@ -32,6 +32,7 @@ const Settings := preload("res://scripts/ui/settings.gd")
 const Records := preload("res://scripts/records.gd")
 const FeedbackEvents := preload("res://scripts/ui/feedback_events.gd")
 const KestrelCoach := preload("res://scripts/ui/kestrel_coach.gd")
+const BridgeLauncher := preload("res://scripts/bridge_launcher.gd")
 const ERA_NAMES := [
 	"CONTEMPORARY HUMANITY", "ADVANCED INDUSTRIAL", "FUSION", "SOLAR",
 	"INTERSTELLAR", "STELLAR ENGINEERING", "POST-BIOLOGICAL OPTIONS",
@@ -178,7 +179,11 @@ var bridge_labour := 0
 var bridge_supply_used := 0
 var bridge_supply_cap := 0
 var bridge_era := 0
-var runtime_directory := "res://runtime"
+## Where the bridge and this client exchange files. Task 27: always BridgeLauncher.resolve_runtime (an external bridge's
+## --runtime-dir=, else this game's own user://runtime/<pid>); _ready resolves it again before anything reads it.
+var runtime_directory := BridgeLauncher.resolve_runtime(OS.get_cmdline_user_args())
+## Task 27: the launcher supervising this game's own bridge (null when dev or QA run an external one).
+var bridge_launcher: Node = null
 ## The player's settings file (Settings.PATH, under user://; QA isolates it with its own XDG_DATA_HOME).
 var settings_path := Settings.PATH
 ## Task 22: the personal bests file (Records.PATH, under user://; QA isolates it the same way).
@@ -272,9 +277,12 @@ var coach_never := false
 
 
 func _ready() -> void:
-	for argument in OS.get_cmdline_user_args():
-		if argument.begins_with("--runtime-dir="):
-			runtime_directory = argument.trim_prefix("--runtime-dir=")
+	# Task 27: one resolution for the runtime directory. With --runtime-dir= a developer or QA launcher runs the bridge;
+	# otherwise the game launched as the main scene starts its own (a scene a test or tool instances never spawns one).
+	var user_args := OS.get_cmdline_user_args()
+	runtime_directory = BridgeLauncher.resolve_runtime(user_args)
+	if BridgeLauncher.should_spawn(user_args) and get_tree().current_scene == self:
+		_supervise_bridge()
 	# A pause.flag left by a crash or a force-quit while paused would hold the bridge still on the next launch; a fresh scene
 	# is never paused. Same path logic as set_sim_paused.
 	set_sim_paused(false)
@@ -292,6 +300,20 @@ func _ready() -> void:
 	_build_terrain()
 	_build_ui()
 	_update_camera()
+
+
+## Task 27: the launcher under the tree root (so a restart's scene reload keeps the bridge): found again after a reload,
+## else created once per game process, which cleans the runtime directory and starts the bridge shipped next to the
+## executable. A missing bridge shows its notice instead of a frozen title.
+func _supervise_bridge() -> void:
+	var root := get_tree().root
+	var launcher = root.get_node_or_null(BridgeLauncher.NODE_NAME)
+	if launcher == null:
+		launcher = BridgeLauncher.new()
+		launcher.name = BridgeLauncher.NODE_NAME
+		root.add_child.call_deferred(launcher)
+		launcher.start(BridgeLauncher.binary_path(OS.get_name(), OS.get_executable_path().get_base_dir()), runtime_directory)
+	bridge_launcher = launcher
 
 
 func _create_materials() -> void:

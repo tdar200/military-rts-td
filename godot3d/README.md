@@ -12,12 +12,17 @@ river, the Wyllow Ford, highland, forest and a bay, world sprites and props, a t
 Logistics lenses, briefing and objectives, and a presentation-only fog of war. **Earthfront Survival** is the original
 generated map and shows the whole battlefield. Existing vehicle and alien models remain prototype assets.
 
-Start it from the repository root with `./run-3d.sh`, which builds and starts the bridge first. To start only the client
-(the bridge must already be writing `runtime/snapshot.json`):
+Start it from the repository root with `./run-3d.sh`, which builds and starts the bridge first (both name
+`godot3d/runtime` with `--runtime-dir`). To start only the client against a bridge you already run
+(`target/release/godot-bridge --runtime-dir godot3d/runtime`):
 
 ```bash
-../tools/godot/Godot_v4.7.2-stable_linux.x86_64 --path .
+../tools/godot/Godot_v4.7.2-stable_linux.x86_64 --path . -- --runtime-dir="$PWD/runtime"
 ```
+
+Without `--runtime-dir=` the client starts its own bridge (`scripts/bridge_launcher.gd`): the `godot-bridge` binary next to
+the executable, writing into `user://runtime/<pid>`, supervised once a second and killed on quit. That is the exported
+game's path; a source checkout has no bridge next to the Godot binary and says "Simulation core missing".
 
 Controls: the arrow keys pan (the cursor at a screen edge and a middle-button drag pan too), Z/E rotate, mouse wheel zoom,
 left-click or drag-select, right-click to move units or set producer rally points (the structure panel's Set rally button

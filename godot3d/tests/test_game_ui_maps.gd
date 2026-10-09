@@ -302,10 +302,10 @@ func test_the_hud_drops_its_objectives_while_the_briefing_is_up(t) -> void:
 func test_pause_flag_is_cleared_when_the_game_starts(t) -> void:
 	var src: String = (load("res://scripts/earthfront_3d.gd") as GDScript).source_code
 	var ready_at := src.find("func _ready() -> void:")
-	var arg_at := src.find("runtime_directory = argument.trim_prefix", ready_at)
+	var arg_at := src.find("runtime_directory = BridgeLauncher.resolve_runtime(user_args)", ready_at)  # Task 27
 	var clear_at := src.find("set_sim_paused(false)", ready_at)
 	var next_func := src.find("\nfunc ", ready_at + 10)
-	t.ok(arg_at > 0 and clear_at > arg_at and clear_at < next_func, "_ready removes a stale pause.flag after reading --runtime-dir, with the same path logic as set_sim_paused")
+	t.ok(arg_at > 0 and clear_at > arg_at and clear_at < next_func, "_ready removes a stale pause.flag after resolving the runtime directory, with the same path logic as set_sim_paused")
 	var dir := OS.get_cache_dir().path_join("rts_pause_flag_ready_test")
 	DirAccess.make_dir_recursive_absolute(dir)
 	var flag := FileAccess.open(dir.path_join("pause.flag"), FileAccess.WRITE)

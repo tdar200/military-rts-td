@@ -4,7 +4,9 @@ set -euo pipefail
 GAME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GODOT_BIN="$GAME_ROOT/tools/godot/Godot_v4.7.2-stable_linux.x86_64"
 BRIDGE_BIN="$GAME_ROOT/target/release/godot-bridge"
-SNAPSHOT="$GAME_ROOT/godot3d/runtime/snapshot.json"
+# The development runtime directory. The bridge and the client both name it (--runtime-dir), so the client reads
+# this bridge instead of starting its own under user://runtime (what the exported game does).
+RUNTIME_DIR="$GAME_ROOT/godot3d/runtime"
 
 if [[ ! -x "$GODOT_BIN" ]]; then
   echo "Godot 4.7.2 is missing at: $GODOT_BIN" >&2
@@ -27,7 +29,7 @@ if [[ -n "${SCENARIO:-}" ]]; then
   BRIDGE_ARGS+=(--scenario "$SCENARIO")
 fi
 
-"$BRIDGE_BIN" "${BRIDGE_ARGS[@]}" "$SNAPSHOT" &
+"$BRIDGE_BIN" "${BRIDGE_ARGS[@]}" --runtime-dir "$RUNTIME_DIR" &
 BRIDGE_PID=$!
 cleanup() {
   kill "$BRIDGE_PID" 2>/dev/null || true
@@ -35,4 +37,4 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-"$GODOT_BIN" --path "$GAME_ROOT/godot3d" "$@"
+"$GODOT_BIN" --path "$GAME_ROOT/godot3d" "$@" -- "--runtime-dir=$RUNTIME_DIR"

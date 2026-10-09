@@ -362,8 +362,9 @@ Built: `scripts/ui/vm_maps.gd` (view-model slices `region_map`, `terrain_guide`,
   (`LiveAdapter.briefing_up`). Not built: the "Mission updated" and "Reactor site is valid" toasts, the placement card and the
   tile inspector of the board (their data is the other boards' own screens), the board's survey wording.
 - F1 over the Science modal (14A hardening). F1 no longer opens the controls over the open Science modal (`research.visible`).
-- Stale pause flag (14A hardening). `earthfront_3d.gd` `_ready` calls `set_sim_paused(false)` after reading `--runtime-dir`,
-  so a `pause.flag` left by a crash cannot hold the next run still. Same path logic as the pause itself.
+- Stale pause flag (14A hardening). `earthfront_3d.gd` `_ready` calls `set_sim_paused(false)` after resolving the runtime
+  directory (`BridgeLauncher.resolve_runtime`: `--runtime-dir=`, else the game's own `user://runtime/<pid>`, Task 27), so a
+  `pause.flag` left by a crash cannot hold the next run still. Same path logic as the pause itself.
 - Harness: gp06, gp11 and gp12 gallery arms use the committed Kestrel snapshot (`fixtures_gp.gd` `region_board`, `guide_board`,
   `early_board`, `briefing_board`). The battlefield (the board's painted art) is masked, with chrome rects after it: gp06
   briefing_card 15.95 (18.95), briefing_head 8.47 (11.47), tactical_head 14.68 (17.68); gp11 title_bar 6.62 (9.62), panel_head

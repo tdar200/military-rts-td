@@ -1346,16 +1346,24 @@ struct Options {
     dump_snapshot: Option<PathBuf>,
     /// Task 25: a replay file to play back as the boot match.
     replay: Option<PathBuf>,
+    /// Task 27: end the bridge once the process that started it is gone
+    /// (the game client that spawned it crashed or was killed).
+    exit_with_parent: bool,
 }
 
-/// Parses `[--scenario S] [--dump-snapshot P] [--replay F] [output [frame_limit]]`. Flags (also
-/// as `--flag=value`) may appear anywhere; they are stripped before the positional
-/// arguments (arg 1 = output path, arg 2 = frame limit) are read.
+/// Parses `[--scenario S] [--dump-snapshot P] [--replay F] [--runtime-dir D]
+/// [--exit-with-parent] [output [frame_limit]]`. Flags (also as
+/// `--flag=value`) may appear anywhere; they are stripped before the positional
+/// arguments (arg 1 = output path, arg 2 = frame limit) are read. Task 27:
+/// `--runtime-dir D` puts the snapshot (and so every exchanged file) in `D`;
+/// it takes no positional argument beside it.
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut positional = Vec::new();
     let mut scenario = Scenario::KestrelReach;
     let mut dump_snapshot = None;
     let mut replay = None;
+    let mut runtime_dir: Option<PathBuf> = None;
+    let mut exit_with_parent = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -1365,25 +1373,43 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             _ => (arg.clone(), None),
         };
         match flag.as_str() {
-            "--scenario" | "--dump-snapshot" | "--replay" => {
+            "--scenario" | "--dump-snapshot" | "--replay" | "--runtime-dir" => {
                 let value = inline
                     .or_else(|| args.next())
                     .ok_or_else(|| format!("{flag} needs a value"))?;
                 match flag.as_str() {
                     "--scenario" => scenario = parse_scenario(&value)?,
                     "--dump-snapshot" => dump_snapshot = Some(PathBuf::from(value)),
+                    "--runtime-dir" => {
+                        if value.is_empty() {
+                            return Err("--runtime-dir needs a value".to_owned());
+                        }
+                        if runtime_dir.is_some() {
+                            return Err("--runtime-dir given twice".to_owned());
+                        }
+                        runtime_dir = Some(PathBuf::from(value));
+                    }
                     _ => replay = Some(PathBuf::from(value)),
                 }
             }
-            _ if flag.starts_with("--") => return Err(format!("unknown flag '{flag}'")),
+            "--exit-with-parent" if inline.is_none() => exit_with_parent = true,
+            _ if flag.starts_with("--") => return Err(format!("unknown flag '{arg}'")),
             _ => positional.push(arg),
         }
     }
+    let output = match (runtime_dir, positional.first()) {
+        (Some(_), Some(extra)) => {
+            return Err(format!(
+                "--runtime-dir names the snapshot directory; the positional argument '{extra}' \
+                 cannot be given with it"
+            ))
+        }
+        (Some(dir), None) => dir.join("snapshot.json"),
+        (None, Some(path)) => PathBuf::from(path),
+        (None, None) => PathBuf::from("godot3d/runtime/snapshot.json"),
+    };
     Ok(Options {
-        output: positional.first().map_or_else(
-            || PathBuf::from("godot3d/runtime/snapshot.json"),
-            PathBuf::from,
-        ),
+        output,
         frame_limit: positional
             .get(1)
             .and_then(|value| value.parse::<u64>().ok())
@@ -1391,7 +1417,57 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
         scenario,
         dump_snapshot,
         replay,
+        exit_with_parent,
     })
+}
+
+/// Task 27: the id of this process's parent, where the platform has one to
+/// read (Unix); `None` elsewhere.
+#[cfg_attr(unix, allow(clippy::unnecessary_wraps))] // `None` off Unix
+fn parent_id() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        Some(std::os::unix::process::parent_id())
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// Task 27: `--exit-with-parent`. The game client spawns the bridge as its
+/// child; when the game crashes or is killed outright it cannot stop the
+/// bridge itself, and the orphaned bridge is re-parented, so its parent id
+/// changes. The bridge checks once a second and ends then. Best effort: on a
+/// platform with no parent id to read (Windows), it never fires.
+#[derive(Clone, Copy, Debug)]
+struct ParentWatch {
+    /// The parent id the bridge started under; `None` when not watching.
+    initial: Option<u32>,
+}
+
+impl ParentWatch {
+    const fn new(enabled: bool, initial: Option<u32>) -> Self {
+        Self {
+            initial: if enabled { initial } else { None },
+        }
+    }
+
+    /// True once the parent id `now` differs from the one the bridge started
+    /// under.
+    const fn orphaned(self, now: Option<u32>) -> bool {
+        matches!((self.initial, now), (Some(initial), Some(now)) if initial != now)
+    }
+
+    /// Checked on every 30th frame (once a second): true, after saying why,
+    /// once the game that started this bridge is gone.
+    fn gone(self, frame: u64) -> bool {
+        let gone = frame.is_multiple_of(30) && self.orphaned(parent_id());
+        if gone {
+            eprintln!("godot-bridge: the game that started this bridge is gone; exiting");
+        }
+        gone
+    }
 }
 
 /// Task 25: what a playback snapshot's `replay` block reports besides the tick.
@@ -1571,6 +1647,18 @@ fn frame_snapshot(
     }
 }
 
+/// Never let an order left by a previous closed match disable opening AI, and
+/// never let a previous session's match choice hijack this session's first
+/// restart.
+fn clear_previous_session(paths: &RuntimePaths) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(&paths.commands);
+    let _ = std::fs::remove_file(&paths.start);
+    let _ = std::fs::remove_file(&paths.restart);
+    let _ = std::fs::remove_file(&paths.pause);
+    let _ = std::fs::remove_file(&paths.match_config);
+    clear_command_packets(&paths.commands)
+}
+
 fn main() -> std::io::Result<()> {
     let options = match parse_args(std::env::args().skip(1)) {
         Ok(options) => options,
@@ -1585,7 +1673,9 @@ fn main() -> std::io::Result<()> {
         mut scenario,
         dump_snapshot,
         replay,
+        exit_with_parent,
     } = options;
+    let parent = ParentWatch::new(exit_with_parent, parent_id());
 
     // The presentation fog kill switch is read once, here; a running bridge never re-reads it.
     let fog_enabled = fog_enabled_from(std::env::var_os("EARTHFRONT_FOG").as_deref());
@@ -1610,14 +1700,7 @@ fn main() -> std::io::Result<()> {
     // P4 review I1: the sim fingerprint (probe runs) is warmed off the frame loop.
     std::thread::spawn(sim_fingerprint);
     let paths = RuntimePaths::from_output(&output);
-    // Never let an order left by a previous closed match disable opening AI, and never
-    // let a previous session's match choice hijack this session's first restart.
-    let _ = std::fs::remove_file(&paths.commands);
-    let _ = std::fs::remove_file(&paths.start);
-    let _ = std::fs::remove_file(&paths.restart);
-    let _ = std::fs::remove_file(&paths.pause);
-    let _ = std::fs::remove_file(&paths.match_config);
-    clear_command_packets(&paths.commands)?;
+    clear_previous_session(&paths)?;
     let mut mission_started = false;
     let mut supply_cache = SupplyLinkCache::new();
     let mut shots = ShotWindow::new();
@@ -1626,7 +1709,12 @@ fn main() -> std::io::Result<()> {
     let mut recorder = ReplayRecorder::new();
     let mut backlog = Vec::new(); // P4 review M3: orders past a tick's cap, for the next frame.
 
-    for _ in 0..frame_limit {
+    for frame in 0..frame_limit {
+        // Task 27: a spawned bridge whose game is gone ends (finishing the
+        // running replay below).
+        if parent.gone(frame) {
+            break;
+        }
         if paths.restart.exists() {
             let _ = std::fs::remove_file(&paths.restart);
             // A rapid second Deploy click must not auto-start the next mission.
@@ -1706,10 +1794,11 @@ fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_match, fog_enabled_from, frame_snapshot, parse_args, playback_frame, replay_view,
-        sight_radius, sight_radius_with, snapshot_json, snapshot_json_with, supply_links_json,
-        with_replay_block, BuildingKind, Command, EntityId, FogState, PlayerId, ReplayView,
-        RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind, SHOT_WINDOW_TICKS,
+        build_match, fog_enabled_from, frame_snapshot, parent_id, parse_args, playback_frame,
+        replay_view, sight_radius, sight_radius_with, snapshot_json, snapshot_json_with,
+        supply_links_json, with_replay_block, BuildingKind, Command, EntityId, FogState,
+        ParentWatch, PlayerId, ReplayView, RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind,
+        SHOT_WINDOW_TICKS,
     };
     use rts_core::game::scenario::Scenario;
     use rts_core::game::sim::Difficulty;
@@ -2261,6 +2350,66 @@ mod tests {
         assert!(parse_args(args(&["--scenario"])).is_err());
         assert!(parse_args(args(&["--dump-snapshot"])).is_err());
         assert!(parse_args(args(&["--bogus"])).is_err());
+    }
+
+    /// Task 27: `--runtime-dir <dir>` (or `--runtime-dir=<dir>`) names the
+    /// directory every exchanged file lives in, so the snapshot is
+    /// `<dir>/snapshot.json`; a positional output beside it is an error (one
+    /// place decides where the files go), and so is an empty or repeated one.
+    #[test]
+    fn runtime_dir_flag_names_the_snapshot_directory() {
+        let o = parse_args(args(&["--runtime-dir", "/x"])).unwrap();
+        assert_eq!(o.output, std::path::PathBuf::from("/x/snapshot.json"));
+        assert_eq!(o.frame_limit, u64::MAX);
+        assert!(!o.exit_with_parent);
+        let paths = RuntimePaths::from_output(&o.output);
+        assert_eq!(
+            paths.match_config,
+            std::path::PathBuf::from("/x/match.json")
+        );
+        assert_eq!(paths.start, std::path::PathBuf::from("/x/start.flag"));
+        assert_eq!(paths.commands, std::path::PathBuf::from("/x/commands.txt"));
+        let o = parse_args(args(&["--scenario=survival", "--runtime-dir=/r/u"])).unwrap();
+        assert_eq!(o.output, std::path::PathBuf::from("/r/u/snapshot.json"));
+        assert_eq!(o.scenario, Scenario::Survival);
+        let o = parse_args(args(&["--runtime-dir", "/x", "--exit-with-parent"])).unwrap();
+        assert!(o.exit_with_parent);
+        for bad in [
+            &["--runtime-dir", "/x", "out.json"][..],
+            &["out.json", "--runtime-dir=/x"],
+            &["--runtime-dir", "/x", "out.json", "5"],
+            &["--runtime-dir"],
+            &["--runtime-dir="],
+            &["--runtime-dir", "/x", "--runtime-dir", "/y"],
+            &["--exit-with-parent=yes"],
+        ] {
+            assert!(parse_args(args(bad)).is_err(), "{bad:?} must be refused");
+        }
+        let err = parse_args(args(&["--runtime-dir", "/x", "out.json"])).unwrap_err();
+        assert!(err.contains("--runtime-dir"), "{err}");
+        // The historical forms are untouched.
+        assert!(
+            !parse_args(args(&["out.json", "5"]))
+                .unwrap()
+                .exit_with_parent
+        );
+    }
+
+    /// Task 27: a bridge started with `--exit-with-parent` ends once its
+    /// parent (the game that spawned it) is gone: the parent id it started
+    /// under changed. Without the flag, or where the platform reports no
+    /// parent id, it never decides it was orphaned.
+    #[test]
+    fn a_watched_bridge_notices_its_parent_is_gone() {
+        let watch = ParentWatch::new(true, Some(4242));
+        assert!(!watch.orphaned(Some(4242)));
+        assert!(watch.orphaned(Some(1)));
+        assert!(!watch.orphaned(None));
+        let off = ParentWatch::new(false, Some(4242));
+        assert!(!off.orphaned(Some(1)));
+        assert!(!ParentWatch::new(true, None).orphaned(Some(1)));
+        #[cfg(unix)]
+        assert_eq!(parent_id(), Some(std::os::unix::process::parent_id()));
     }
 
     /// Task 23: the bridge builds a run when `match.json` asks for one, and
