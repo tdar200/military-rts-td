@@ -25,6 +25,7 @@ const LiveAdapter := preload("res://scripts/ui/live_adapter.gd")
 const LiveResearch := preload("res://scripts/ui/live_research.gd")
 const AudioDirector := preload("res://scripts/audio/audio_director.gd")
 const AudioPool := preload("res://scripts/audio/audio_pool.gd")
+const MusicDirector := preload("res://scripts/audio/music_director.gd")
 const FogView := preload("res://scripts/world/fog_view.gd")
 const BuildingStates := preload("res://scripts/world/building_states.gd")
 const AlertPings := preload("res://scripts/ui/alert_pings.gd")
@@ -109,6 +110,12 @@ var draft_hold := false
 ## its generated tones (_cue falls back to _play_tone with the legacy arguments).
 var audio: RefCounted
 var audio_pool: Node
+## Kestrel music hooks (kestrel-depth Task 30): the MusicDirector's state from the title, the winner and the last shot the
+## player could see (music_shot_at, on the time_alive clock). No track exists yet, so music_player stays null.
+var music := MusicDirector.new()
+var music_state := "menu"
+var music_shot_at := -INF
+var music_player: AudioStreamPlayer
 ## Kestrel fog of war (plan 2026-10-06-kestrel-next-level, Task 7), presentation only: the sim and its AI stay omniscient.
 ## The bridge's `fog` mask (FogView) shades the ground and the props and gates effects and world sounds; entities the bridge
 ## omits are out of sight. `fog_seen_ids` holds every enemy id seen this sim, so one walking back into sight is revived
@@ -4140,12 +4147,28 @@ func _update_audio() -> void:
 		return
 	if is_inside_tree() and camera != null:
 		audio.set_view(view_ground_rect())
+	_update_music()
 	var levels: Dictionary = audio.loops(_audio_moving())
 	if audio_pool == null:
 		return
 	audio_pool.set_loops(levels)
 	audio_pool.set_duck(audio.duck_db(time_alive))
 	_hover_control(get_viewport().gui_get_hovered_control())
+
+
+## Kestrel music (Task 30), from _update_audio: the director's state for this frame; on a change the state's track is
+## played on the Music bus. Every track is "" today, so play is a no-op and no player is made.
+func _update_music() -> void:
+	var ctx := {"on_title": not mission_deployed, "winner": bridge_winner, "recent_combat_s": time_alive - music_shot_at}
+	var next: String = music.update(ctx, time_alive)
+	if next == music_state:
+		return
+	music_state = next
+	var player: AudioStreamPlayer = music.play(music.track_for(next), self)
+	if player != null:
+		if music_player != null:
+			music_player.queue_free()
+		music_player = player
 
 
 ## The ground positions of the units moving now (UnitMotion at dust speed or faster), by the loop bed they add.
@@ -4320,6 +4343,8 @@ func _dispatch_shots(snapshot: Dictionary) -> int:
 		record.drew = true
 		drawn += 1
 		shots_drawn_total += 1
+		if fog_view.seen_recently(a) or fog_view.seen_recently(b):
+			music_shot_at = time_alive  # the music's combat clock: only a fight the player can see
 		_sfx(AudioDirector.weapon_for(kind, owner), a if fog_view.seen_recently(a) else b, delay)
 		if String(shooter.get("category", "")) == "unit":
 			var node := bridge_nodes.get(int(shooter.get("id", -1))) as Node3D
