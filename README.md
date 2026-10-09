@@ -75,7 +75,8 @@ second that the bridge still runs (a dead one shows "Simulation core stopped" wi
 `./run-3d.sh` or the commands above.
 
 `godot-bridge [--scenario kestrel|survival] [--dump-snapshot <path>] [--replay <file>] [--runtime-dir <dir>]
-[--exit-with-parent] [<snapshot path> [frame limit]]`: `--scenario` defaults to `kestrel` and an unknown value exits with
+[--exit-with-parent] [--version] [<snapshot path> [frame limit]]`: `--version` prints the build version (`0.2.0`, the
+Cargo workspace version, also `config/version` in `godot3d/project.godot` and the title footer) and exits; `--scenario` defaults to `kestrel` and an unknown value exits with
 status 2; `--dump-snapshot` writes the scenario's first snapshot to that path and exits (used for test fixtures);
 `--runtime-dir <dir>` writes `<dir>/snapshot.json` and takes no positional snapshot path beside it (both together exit
 with status 2); `--exit-with-parent` ends the bridge within a second once the process that started it is gone (Linux and
@@ -83,6 +84,12 @@ other Unix systems; a no-op on Windows). QA runs never touch your
 display or speakers: `python3 tools/qa/launch_ui.py <dir> [--software] [--scenario kestrel|survival]` starts an isolated
 bridge and client (Godot always gets `--audio-driver Dummy`), prints the owned PIDs and writes them to `<dir>/pids.json`;
 drive it with `tools/qa/ui_client.py` and stop it by those PIDs.
+
+Release packages: `tools/release/package.sh [linux|windows|all]` exports with `godot3d/export_presets.cfg` and writes
+`build/ascension-<version>-linux-x86_64.tar.gz` (and the Windows zip) with `godot-bridge` beside the game. It needs the
+Godot 4.7.2 export templates (and, for Windows, the `x86_64-pc-windows-gnu` Rust target and MinGW) and says what is
+missing. The itch.io steps, what has and has not been verified, and the open license decision are in
+[docs/release/itch-checklist.md](docs/release/itch-checklist.md).
 
 ## Run it
 

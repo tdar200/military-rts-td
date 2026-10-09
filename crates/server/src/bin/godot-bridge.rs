@@ -1349,10 +1349,16 @@ struct Options {
     /// Task 27: end the bridge once the process that started it is gone
     /// (the game client that spawned it crashed or was killed).
     exit_with_parent: bool,
+    /// Task 28: print the build's version (`VERSION`) and exit.
+    version: bool,
 }
 
+/// Task 28: the build's version, the Cargo workspace version, which
+/// `godot3d/project.godot` (`config/version`) and the title footer carry too.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Parses `[--scenario S] [--dump-snapshot P] [--replay F] [--runtime-dir D]
-/// [--exit-with-parent] [output [frame_limit]]`. Flags (also as
+/// [--exit-with-parent] [--version] [output [frame_limit]]`. Flags (also as
 /// `--flag=value`) may appear anywhere; they are stripped before the positional
 /// arguments (arg 1 = output path, arg 2 = frame limit) are read. Task 27:
 /// `--runtime-dir D` puts the snapshot (and so every exchanged file) in `D`;
@@ -1364,6 +1370,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
     let mut replay = None;
     let mut runtime_dir: Option<PathBuf> = None;
     let mut exit_with_parent = false;
+    let mut version = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -1393,6 +1400,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
                 }
             }
             "--exit-with-parent" if inline.is_none() => exit_with_parent = true,
+            "--version" if inline.is_none() => version = true,
             _ if flag.starts_with("--") => return Err(format!("unknown flag '{arg}'")),
             _ => positional.push(arg),
         }
@@ -1418,6 +1426,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
         dump_snapshot,
         replay,
         exit_with_parent,
+        version,
     })
 }
 
@@ -1659,14 +1668,24 @@ fn clear_previous_session(paths: &RuntimePaths) -> std::io::Result<()> {
     clear_command_packets(&paths.commands)
 }
 
-fn main() -> std::io::Result<()> {
-    let options = match parse_args(std::env::args().skip(1)) {
+/// The parsed command line. Task 28: `--version` prints `VERSION` and exits
+/// 0 instead; a bad line still exits 2 with its message.
+fn options_or_exit() -> Options {
+    match parse_args(std::env::args().skip(1)) {
+        Ok(options) if options.version => {
+            println!("{VERSION}");
+            std::process::exit(0);
+        }
         Ok(options) => options,
         Err(message) => {
             eprintln!("godot-bridge: {message}");
             std::process::exit(2);
         }
-    };
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let options = options_or_exit();
     let Options {
         output,
         frame_limit,
@@ -1674,6 +1693,7 @@ fn main() -> std::io::Result<()> {
         dump_snapshot,
         replay,
         exit_with_parent,
+        version: _,
     } = options;
     let parent = ParentWatch::new(exit_with_parent, parent_id());
 
@@ -1798,7 +1818,7 @@ mod tests {
         replay_view, sight_radius, sight_radius_with, snapshot_json, snapshot_json_with,
         supply_links_json, with_replay_block, BuildingKind, Command, EntityId, FogState,
         ParentWatch, PlayerId, ReplayView, RuntimePaths, ShotWindow, SupplyLinkCache, UnitKind,
-        SHOT_WINDOW_TICKS,
+        SHOT_WINDOW_TICKS, VERSION,
     };
     use rts_core::game::scenario::Scenario;
     use rts_core::game::sim::Difficulty;
@@ -2350,6 +2370,30 @@ mod tests {
         assert!(parse_args(args(&["--scenario"])).is_err());
         assert!(parse_args(args(&["--dump-snapshot"])).is_err());
         assert!(parse_args(args(&["--bogus"])).is_err());
+    }
+
+    /// Task 28: `--version` asks for the build's version (the workspace
+    /// version, which `godot3d/project.godot` and the title footer carry too),
+    /// anywhere on the line; nothing else about the command line changes.
+    #[test]
+    fn version_flag_reports_the_project_version() {
+        assert!(parse_args(args(&["--version"])).unwrap().version);
+        assert!(
+            parse_args(args(&["--scenario", "kestrel", "--version"]))
+                .unwrap()
+                .version
+        );
+        assert!(!parse_args(args(&[])).unwrap().version);
+        assert!(parse_args(args(&["--version=1"])).is_err());
+        assert_eq!(VERSION, "0.2.0");
+        let project = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../godot3d/project.godot"),
+        )
+        .unwrap();
+        assert!(
+            project.contains(&format!("config/version=\"{VERSION}\"")),
+            "project.godot names another version than the bridge ({VERSION})"
+        );
     }
 
     /// Task 27: `--runtime-dir <dir>` (or `--runtime-dir=<dir>`) names the

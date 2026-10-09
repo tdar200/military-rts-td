@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "tools"
 BINARY = "Godot_v4.7.2-stable_linux.x86_64"
 SUFFIXES = {".sh", ".bash", ".py", ".gd"}
-KNOWN = {"tools/ui/run_cap.sh", "tools/qa/launch_ui.py", "tools/audio/build_sfx.py"}
+KNOWN = {"tools/ui/run_cap.sh", "tools/qa/launch_ui.py", "tools/audio/build_sfx.py", "tools/release/package.sh"}
 QUIET = re.compile(r"--headless|--audio-driver['\"]?\s*,?\s*['\"]?Dummy")
 # a Godot launch line: it hands Godot a project (--path) next to the binary or the shell variable holding it
 LAUNCH = re.compile(r"--path")

@@ -43,6 +43,19 @@ func test_fonts_load_with_real_metrics(t) -> void:
 	t.eq(T.font("mono"), T.font("mono"), "fonts are cached")
 
 
+## Task 28: an exported pack carries the fonts only as imported resources (.fontdata), never the raw .ttf, so the UI
+## fonts come from the imported FontFile. Its bytes are the .ttf's own bytes, so the faces (and every pixel gate) are
+## the ones load_dynamic_font gave from source.
+func test_fonts_come_from_the_imported_resource_with_the_ttf_bytes(t) -> void:
+	for name in ["Rajdhani-SemiBold.ttf", "Rajdhani-Bold.ttf", "IBMPlexSans-VF.ttf", "IBMPlexMono-Regular.ttf", "IBMPlexMono-Medium.ttf"]:
+		var raw := FileAccess.get_file_as_bytes(T.FONT_DIR + name)
+		var made: FontFile = T._file(name)
+		t.ok(raw.size() > 0, name + " source file read")
+		t.ok(made.data == raw, name + ": the font carries the .ttf's bytes")
+	var src := FileAccess.get_file_as_string("res://scripts/ui/tokens.gd")
+	t.ok(not src.contains("load_dynamic_" + "font("), "no raw font read, which an exported pack cannot serve")
+
+
 func test_icons_rasterise_and_unknown_icon_is_reported(t) -> void:
 	t.ok(Icons.has("power"), "power icon is in the set")
 	t.ok(not Icons.has("no-such-icon"), "unknown icon is not in the set")

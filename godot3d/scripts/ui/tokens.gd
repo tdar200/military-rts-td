@@ -72,9 +72,14 @@ static func font(kind: String, weight := 0) -> Font:
 	return made
 
 
+## Task 28: the bytes come from the imported FontFile, because an exported pack carries no raw .ttf. A fresh FontFile
+## holding those bytes is what FontFile.load_dynamic_font made from the source file, so the import options never apply
+## and every face renders as before.
 static func _file(name: String) -> FontFile:
 	var file := FontFile.new()
-	file.load_dynamic_font(FONT_DIR + name)
+	var imported := load(FONT_DIR + name) as FontFile
+	if imported:
+		file.data = imported.data
 	return file
 
 

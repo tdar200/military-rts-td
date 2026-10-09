@@ -13,6 +13,10 @@ members = [
 ]
 
 [workspace.package]
+# The build's one version (Task 28): rts-server takes it, and it must equal
+# godot3d/project.godot config/version (tools/release/test_package.py checks).
+# core, data and render-shell keep their own 0.1.0.
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.96"
 license = "Proprietary"
@@ -20,7 +24,7 @@ publish = false
 
 # Strictest-compiler posture, applied to every crate that opts in with
 # `[lints] workspace = true`. The determinism-critical `clippy::float_arithmetic`
-# deny is added per-crate (core only) — the shells legitimately use floats to draw.
+# deny is added per-crate (core only); the shells legitimately use floats to draw.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 warnings = "deny"

@@ -1,4 +1,6 @@
 /target
+# Release packages (tools/release/package.sh)
+/build/
 # Generated web bundle (built by web/build.sh from crate + assets/)
 /web/rts.wasm
 /web/mq_js_bundle.js
@@ -24,3 +26,4 @@ tools/qa/__pycache__/
 tools/ui/__pycache__/
 tools/audio/__pycache__/
 tools/ci/__pycache__/
+tools/release/__pycache__/

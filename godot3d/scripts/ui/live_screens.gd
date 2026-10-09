@@ -60,8 +60,15 @@ static func title_vm(deploy_enabled: bool, research_projects: int, fogged := fal
 			"later_title": "Later chapters", "later_note": "Design only",
 			"chapters": FixturesChapters,
 		},
-		"footer_left": "Ascension", "footer_right": "",
+		"footer_left": "Ascension", "footer_right": version_label(),
 	}
+
+
+## Task 28: the build named on the title footer, from project.godot's config/version (the Cargo workspace version too,
+## tools/release/test_package.py); "" when a project carries no version.
+static func version_label() -> String:
+	var version := str(ProjectSettings.get_setting("application/config/version", ""))
+	return "v" + version if version != "" else ""
 
 
 ## Task 20: what each Kestrel preset means, in the picker's words (godot-bridge.rs builds rts_core Difficulty).

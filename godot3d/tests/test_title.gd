@@ -221,3 +221,19 @@ func test_menu_entry_emits_its_action_when_it_has_one(t) -> void:
 	s.menu_buttons()[1].pressed.emit()
 	t.eq(got, ["pick_map"], "New operation emits pick_map")
 	s.queue_free()
+
+
+## Task 28: the title's footer names the build, from project.godot's config/version (the Cargo workspace version too,
+## tools/release/test_package.py), and the live screen draws it bottom right.
+func test_title_footer_shows_the_version(t) -> void:
+	t.eq(ProjectSettings.get_setting("application/config/version", ""), "0.2.0", "project.godot config/version")
+	var vm := LiveScreens.title_vm(true, 0)
+	t.eq(vm.footer_right, "v0.2.0", "footer_right is v + the project version")
+	var s := _screen(t, vm)
+	var labels: Array = []
+	for n in s.layer("footer").get_children():
+		labels.append(n.text)
+	t.ok(labels.has("v0.2.0"), "the footer draws v0.2.0 (%s)" % [labels])
+	for right in s.layer("footer").get_children().filter(func(n): return n.text == "v0.2.0"):
+		t.near(right.position.x + right.size.x, 1844.0, 0.5, "right-aligned to the 1844 column")
+	s.queue_free()

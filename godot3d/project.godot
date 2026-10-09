@@ -1,5 +1,6 @@
 [application]
 config/name="Ascension: Earthfront 3D"
+config/version="0.2.0"
 run/main_scene="res://main.tscn"
 
 [display]
