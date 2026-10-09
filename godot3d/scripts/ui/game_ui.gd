@@ -1436,7 +1436,7 @@ func _refresh_replay_bar() -> void:
 			status = "Ended"
 		elif _replay_speed == "0":
 			status = "Paused"
-		vm = {"tick": tick, "end": end, "speed": _replay_speed, "status": status}
+		vm = {"tick": tick, "end": end, "speed": _replay_speed, "status": status, "notice": ReplayList.replay_notice(rs)}
 	var h := hash(vm)
 	if h == _replay_hash and (replay_layer.get_child_count() > 0) == not vm.is_empty():
 		return

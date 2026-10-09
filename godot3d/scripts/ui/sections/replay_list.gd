@@ -184,11 +184,39 @@ static func build(parent: Control, vm: Dictionary, emit := Callable()) -> Contro
 	return first if first != null else back
 
 
+## Task 27: what the bridge's replay block says about the file (P4 review I1): `stale` (recorded on another sim build,
+## so what plays may differ from what was played) and `check` ("pending" until END, then "match" or "mismatch" against
+## the recorded END). {} when there is nothing to say (a current file still playing, or an older bridge without the
+## keys); else {text, tone} with tone "warn" or "good".
+static func replay_notice(rs: Dictionary) -> Dictionary:
+	var parts: Array = []
+	var warn := false
+	if bool(rs.get("stale", false)):
+		parts.append("Replay is from another build")
+		warn = true
+	match str(rs.get("check", "pending")):
+		"match":
+			parts.append("Replay verified")
+		"mismatch":
+			parts.append("Replay does not match its recorded end")
+			warn = true
+	if parts.is_empty():
+		return {}
+	return {"text": ". ".join(parts), "tone": "warn" if warn else "good"}
+
+
 ## The playback bar: the Replay tag, tick / END with the clock, the speed, the six speed buttons (the current one on) and
-## Leave. `vm` is {tick, end, speed ("1"), status}.
+## Leave. `vm` is {tick, end, speed ("1"), status, notice}; Task 27's `notice` (replay_notice) is one small line just
+## over the bar.
 static func build_bar(parent: Control, vm: Dictionary, emit := Callable()) -> void:
 	if vm.is_empty():
 		return
+	var notice: Dictionary = vm.get("notice", {})
+	if not notice.is_empty():
+		var tone: Color = T.WARN if str(notice.get("tone", "")) == "warn" else T.GOOD
+		var line := K.text(parent, str(notice.get("text", "")), {"x": BAR_X + 1.0 + 18.0, "y": 0.0, "px": 13, "col": tone})
+		line.name = "ReplayNotice"
+		line.position.y = roundf(BAR_Y - 6.0 - line.size.y)
 	var panel := K.panel(parent, BAR_X, BAR_Y, BAR_W, 10.0)
 	panel.name = "ReplayBar"
 	var x := BAR_X + 1.0 + 18.0

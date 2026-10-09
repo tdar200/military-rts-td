@@ -224,6 +224,45 @@ func test_the_speed_bar_writes_replay_speed(t) -> void:
 	_drop(p)
 
 
+## Task 27: the bridge's replay block says whether the file came from another sim build (`stale`) and, at END, whether
+## the playback reproduced the recorded end (`check`). The viewer shows it in one small line over the speed bar.
+func test_the_viewer_says_whether_the_replay_holds(t) -> void:
+	t.eq(ReplayList.replay_notice({"speed": 1.0, "tick": 5.0, "end": 9.0}), {}, "an older bridge's block: no notice")
+	t.eq(ReplayList.replay_notice({"stale": false, "check": "pending"}), {}, "a current file still playing: no notice")
+	t.eq(str(ReplayList.replay_notice({"stale": true, "check": "pending"}).get("text")), "Replay is from another build", "stale")
+	t.eq(str(ReplayList.replay_notice({"stale": false, "check": "match"}).get("text")), "Replay verified", "match")
+	t.eq(str(ReplayList.replay_notice({"stale": false, "check": "mismatch"}).get("text")), "Replay does not match its recorded end", "mismatch")
+	t.eq(str(ReplayList.replay_notice({"stale": true, "check": "mismatch"}).get("text")), "Replay is from another build. Replay does not match its recorded end", "both")
+	t.eq(str(ReplayList.replay_notice({"stale": false, "check": "match"}).get("tone")), "good", "verified reads good")
+	t.eq(str(ReplayList.replay_notice({"stale": true, "check": "match"}).get("tone")), "warn", "another build warns")
+	var p := _make(t)
+	var g = p[0]
+	var ui = p[1]
+	ui.begin_operation()
+	g.bridge_snapshot["replay"] = {"speed": 1.0, "tick": 120.0, "end": 5400.0, "stale": true, "check": "pending"}
+	ui.process(0.2)
+	t.ok(U.has_text(ui.replay_layer, "Replay is from another build"), "the viewer shows a stale file")
+	var bar := ui.replay_layer.find_child("ReplayBar", true, false) as Control
+	var note := ui.replay_layer.find_child("ReplayNotice", true, false) as Control
+	t.ok(note != null, "in its own small line")
+	if note != null and bar != null:
+		var rect := Rect2(note.position, note.size)
+		t.ok(not rect.intersects(Rect2(bar.position, bar.size)), "over the bar, not on it")
+		for name in HUD_RECTS:
+			t.ok(not rect.intersects(HUD_RECTS[name]), "the notice %s clears the %s" % [rect, name])
+	g.bridge_snapshot["replay"] = {"speed": 1.0, "tick": 5400.0, "end": 5400.0, "stale": false, "check": "match"}
+	ui.process(0.2)
+	t.ok(U.has_text(ui.replay_layer, "Replay verified"), "a reproduced end is verified")
+	t.ok(not U.has_text(ui.replay_layer, "another build"), "and the stale line is gone")
+	g.bridge_snapshot["replay"] = {"speed": 1.0, "tick": 5400.0, "end": 5400.0, "stale": false, "check": "mismatch"}
+	ui.process(0.2)
+	t.ok(U.has_text(ui.replay_layer, "Replay does not match its recorded end"), "a different end says so")
+	g.bridge_snapshot["replay"] = {"speed": 1.0, "tick": 200.0, "end": 5400.0, "stale": false, "check": "pending"}
+	ui.process(0.2)
+	t.ok(ui.replay_layer.find_child("ReplayNotice", true, false) == null, "nothing while a current file plays")
+	_drop(p)
+
+
 func test_leave_returns_to_a_live_title(t) -> void:
 	var p := _make(t)
 	var g = p[0]
