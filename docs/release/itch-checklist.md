@@ -14,8 +14,8 @@ Each step below that needs the user's account, machine, ears or GPU is marked **
 | What was verified without templates | The same presets exported as a bare pack (`--export-pack`, which needs no template): 575 files, 32.1 MB, `pck.py check` clean, and the Linux and Windows packs hold the same files. That pack ran under the Godot 4.7.2 editor binary, renamed `ascension.x86_64`, with the release `godot-bridge` beside it, once headless and once on a private Xvfb display with the Dummy audio driver. Both runs: the game spawned the bridge, the snapshot appeared at `user://runtime/<game pid>/snapshot.json` (user:// redirected with `XDG_DATA_HOME`), the title drew its own fonts and `v0.2.0`, Deploy started the match (tick 367 after 15 s), and a replay was written under `user://replays`. The bridge exited about 1 s after the game was killed. The logs had 0 ERROR lines. The release template binary itself was never run. |
 | Windows package | **Not built and never run on Windows.** The templates, the `x86_64-pc-windows-gnu` Rust target and the MinGW linker are all missing on the dev machine. |
 | macOS | Later (open decision 4). |
-| Sound | Every effect is synthesised by `tools/audio/build_sfx.py`. There is no music. **Nobody has listened to the game on speakers yet**: the listening pass (`tools/audio/listen_pass.py`) is Task 29 and only you run it. |
-| Performance | **Never measured on a GPU.** Every agent run used software rendering on Xvfb. The GPU frame-time script (`tools/perf/gpu_frametime.sh`, idle, combat and zoomed-out p50/p95 against a 10 ms budget) is Task 29 and only you run it, on the RTX 3050. |
+| Sound | Every effect is synthesised by `tools/audio/build_sfx.py`. There is no music. **Nobody has listened to the game on speakers yet.** The listening pass exists and only you run it: `python3 tools/audio/listen_pass.py --list` (no sound), then `python3 tools/audio/listen_pass.py --notes listen-notes.txt` from a terminal (section 9). |
+| Performance | **Never measured on a GPU.** Every agent run used software rendering on Xvfb. The GPU frame-time script exists and only you run it, on the RTX 3050: `tools/perf/gpu_frametime.sh --allow-user-display --dry-run` shows the plan, then drop `--dry-run` (idle, zoomed-out and combat p50/p95 against a 10 ms budget; section 9). |
 | License | Open decision 5, still open (section 8). |
 
 ## 2. One-time setup on the build machine (you)
@@ -165,8 +165,17 @@ butler status <your-itch-user>/<game-slug>
 
 - [ ] (you) Install the export templates; run `tools/release/package.sh linux`; run the section 3 smoke run (an agent can do
       it once the templates exist).
-- [ ] (you) Listening pass, `tools/audio/listen_pass.py` (Task 29), and a first real session with sound.
-- [ ] (you) GPU frame times, `tools/perf/gpu_frametime.sh` (Task 29), on the RTX 3050.
+- [ ] (you) Listening pass and a first real session with sound. Turn the volume down first, then, in a terminal:
+      `python3 tools/audio/listen_pass.py --list` (ids and categories, no sound), then
+      `python3 tools/audio/listen_pass.py --notes listen-notes.txt` (all 26; it prints the category and id, plays the file,
+      and asks for a note after each; type `q` to stop). `--only weapon` or `--only rifle,cannon` plays part of the set.
+      It refuses unless stdin is a terminal and you type `yes`. Read `listen-notes.txt` back afterwards.
+- [ ] (you) GPU frame times on the RTX 3050, from a desktop terminal (the game opens a window on your display):
+      `tools/perf/gpu_frametime.sh --allow-user-display --dry-run` (plan only), then
+      `tools/perf/gpu_frametime.sh --allow-user-display` (about 3 to 10 minutes: idle, zoomed-out, then it waits for the
+      first wave to measure combat). Each scene must show a frame-time p50 of 10 ms or less; results are in
+      `build/perf/gpu_frametime-<timestamp>/results.txt` beside the 2026-10-05 baseline numbers. Hands off the mouse while
+      it runs. If a scene reports no contact, rerun with a larger `--combat-wait`.
 - [ ] (you) Decide the license (section 8). Add the OFL and Godot notices.
 - [ ] (you) Rust target and MinGW; `tools/release/package.sh windows`; the Windows test (section 4).
 - [ ] (you) Create the itch.io page with the section 5 copy and the section 6 screenshots. Keep it as a draft until the

@@ -44,6 +44,21 @@ class QuietLaunchers(unittest.TestCase):
         self.assertIn('"$G" --audio-driver Dummy', (ROOT / "tools/ui/run_cap.sh").read_text())
         self.assertIn("'--audio-driver','Dummy'", (ROOT / "tools/qa/launch_ui.py").read_text())
 
+    def test_user_only_tools_never_name_the_game_binary_and_keep_their_guards(self):
+        """tools/audio/listen_pass.py and tools/perf/gpu_frametime.sh are run by the user, never by an agent. Neither names the
+        Godot binary (so neither is a launcher that needs an audio-driver check): the GPU script reaches the game only through
+        launch_ui.py, which pins the Dummy driver, and each refuses unless the user opts in."""
+        listen = (ROOT / "tools/audio/listen_pass.py").read_text()
+        shell = (ROOT / "tools/perf/gpu_frametime.sh").read_text()
+        runner = (ROOT / "tools/perf/gpu_frametime_run.py").read_text()
+        for name, text in (("listen_pass.py", listen), ("gpu_frametime.sh", shell), ("gpu_frametime_run.py", runner)):
+            self.assertNotIn(BINARY, text, name)
+        self.assertIn("isatty()", listen)
+        self.assertIn('answer.strip().lower() != "yes"', listen)
+        self.assertIn("--allow-user-display", shell)
+        self.assertIn("launch_ui.py", runner)
+        self.assertNotIn('"--software"', runner)  # the GPU run must not fall back to llvmpipe on a private display
+
     def test_world_capture_launches_through_launch_ui(self):
         text = (ROOT / "tools/qa/world_capture.py").read_text()
         self.assertIn("launch_ui.py", text)

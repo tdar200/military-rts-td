@@ -27,3 +27,4 @@ tools/ui/__pycache__/
 tools/audio/__pycache__/
 tools/ci/__pycache__/
 tools/release/__pycache__/
+tools/perf/__pycache__/

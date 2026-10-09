@@ -123,7 +123,11 @@ jobs:
 
       - name: Audio tool tests
         working-directory: tools/audio
-        run: python -m unittest test_build_sfx test_quiet_launchers -v
+        run: python -m unittest test_build_sfx test_quiet_launchers test_listen_pass -v
+
+      - name: Perf tool tests (refusal and dry-run only; the script is never run here)
+        working-directory: tools/perf
+        run: python -m unittest test_gpu_frametime -v
 
       - name: CI workflow checker tests
         working-directory: tools/ci
